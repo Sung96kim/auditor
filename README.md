@@ -54,6 +54,7 @@ auditor scan . -f sarif              # --format: json | sarif | md | html
 auditor scan . -f html -o audit.html # --output: write the report to a file instead of stdout
 auditor scan . --serve               # render HTML and open it in a browser on a local port
 auditor scan . -p strict             # --profile: run any repo at strict strength (no config edits)
+auditor scan . -x '**/migrations/**' # --exclude: ad-hoc ignore glob (repeatable), on top of config
 auditor scan tests/ -t               # --strict-tests: audit test code at full production strength
 auditor report path/to/file.py       # single file, stateless (manifest + findings)
 auditor manifest path/to/file.py     # AST manifest only (no detectors)

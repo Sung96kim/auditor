@@ -236,14 +236,21 @@ async def audit_target(
     strict_tests: bool = False,
     allow_local_plugins: bool = False,
     profile: str | None = None,
+    exclude: tuple[str, ...] = (),
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
-    ``extends`` for the run (e.g. ``"strict"`` to enable the OOP/composition rules)."""
+    ``extends`` for the run (e.g. ``"strict"`` to enable the OOP/composition rules);
+    ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``."""
     root = find_root(target)
     settings = load_config(root, profile=profile, allow_local_plugins=allow_local_plugins)
+    updates: dict[str, object] = {}
     if strict_tests:
-        settings = settings.model_copy(update={"test_mode": "strict"})
+        updates["test_mode"] = "strict"
+    if exclude:
+        updates["exclude"] = [*settings.exclude, *exclude]
+    if updates:
+        settings = settings.model_copy(update=updates)
 
     async def _run(engine: ScanEngine) -> list[ScanResult]:
         if target.is_dir():

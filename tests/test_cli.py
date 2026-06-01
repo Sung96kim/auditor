@@ -61,6 +61,18 @@ def test_scan_html_short_flag(sample_repo):
     assert result.output.lstrip().startswith("<!doctype html>")
 
 
+def test_scan_exclude_glob(sample_repo):
+    src = str(sample_repo / "src")
+    full = _json(runner.invoke(app, ["scan", src, "--no-index"]))
+    excluded = _json(
+        runner.invoke(app, ["scan", src, "--no-index", "-x", "**/integrations.py"])
+    )
+    full_files = {f["file"] for f in full["files"]}
+    excl_files = {f["file"] for f in excluded["files"]}
+    assert any(f.endswith("integrations.py") for f in full_files)
+    assert not any(f.endswith("integrations.py") for f in excl_files)
+
+
 def test_scan_output_to_file(sample_repo, tmp_path):
     out = tmp_path / "report.json"
     result = runner.invoke(

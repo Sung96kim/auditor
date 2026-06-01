@@ -89,6 +89,10 @@ def scan(
         str | None,
         typer.Option("-p", "--profile", help="Override the profile for this run: base|strict|pydantic|all-strict."),
     ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option("-x", "--exclude", help="Glob to ignore (repeatable), on top of config."),
+    ] = None,
     serve: Annotated[
         bool,
         typer.Option("-s", "--serve", help="Render HTML and open it in a browser on a local port."),
@@ -108,6 +112,7 @@ def scan(
             strict_tests=strict_tests,
             allow_local_plugins=allow_local_plugins,
             profile=profile,
+            exclude=tuple(exclude or ()),
         ),
         f"auditing {target}…",
     )
