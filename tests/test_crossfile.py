@@ -42,7 +42,12 @@ async def test_duplicate_model_flags_both(tmp_path):
     (pkg / "c.py").write_text(_UNIQUE)
     settings = load_config(tmp_path)
     async with await IndexStore.connect(tmp_path / ".auditor" / "index.db") as index:
-        results = {r.file: r for r in await ScanEngine.for_target(pkg, settings=settings, index=index).scan_path(pkg)}
+        results = {
+            r.file: r
+            for r in await ScanEngine.for_target(
+                pkg, settings=settings, index=index
+            ).scan_path(pkg)
+        }
     a_rules = {f.rule_id for f in results["pkg/a.py"].findings}
     b_rules = {f.rule_id for f in results["pkg/b.py"].findings}
     c_rules = {f.rule_id for f in results["pkg/c.py"].findings}
@@ -62,6 +67,11 @@ async def test_within_role_scoping(tmp_path):
     )
     settings = load_config(tmp_path)
     async with await IndexStore.connect(tmp_path / ".auditor" / "index.db") as index:
-        results = {r.file: r for r in await ScanEngine.for_target(pkg, settings=settings, index=index).scan_path(pkg)}
+        results = {
+            r.file: r
+            for r in await ScanEngine.for_target(
+                pkg, settings=settings, index=index
+            ).scan_path(pkg)
+        }
     a_rules = {f.rule_id for f in results["pkg/a.py"].findings}
     assert "PY-XFILE-DUP-MODEL" not in a_rules

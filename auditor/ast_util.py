@@ -24,7 +24,9 @@ def dotted(node: ast.AST) -> str:
 
 
 def decorator_names(node: ast.ClassDef | _FuncDef) -> tuple[str, ...]:
-    return tuple(dotted(d.func if isinstance(d, ast.Call) else d) for d in node.decorator_list)
+    return tuple(
+        dotted(d.func if isinstance(d, ast.Call) else d) for d in node.decorator_list
+    )
 
 
 def class_field_count(cls: ast.ClassDef) -> int:
@@ -40,7 +42,9 @@ def function_flags(fn: _FuncDef, *, is_method: bool) -> tuple[str, ...]:
         flags.append("UNTYPED_RETURN")
     positional = fn.args.posonlyargs + fn.args.args
     untyped = [
-        p for i, p in enumerate(positional) if p.annotation is None and not (is_method and i == 0)
+        p
+        for i, p in enumerate(positional)
+        if p.annotation is None and not (is_method and i == 0)
     ]
     if untyped or any(p.annotation is None for p in fn.args.kwonlyargs):
         flags.append("UNTYPED_ARGS")
@@ -58,7 +62,8 @@ def class_flags(cls: ast.ClassDef) -> tuple[str, ...]:
         flags.append("DATACLASS")
     methods = [s for s in cls.body if isinstance(s, _FuncDef)]
     if methods and all(
-        any(dotted(d).split(".")[-1] == "staticmethod" for d in m.decorator_list) for m in methods
+        any(dotted(d).split(".")[-1] == "staticmethod" for d in m.decorator_list)
+        for m in methods
     ):
         flags.append("ALL_STATICMETHODS")
     return tuple(flags)

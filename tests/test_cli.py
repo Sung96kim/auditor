@@ -25,7 +25,9 @@ def test_rules_list_filtered():
     payload = _json(runner.invoke(app, ["rules", "list", "--category", "security"]))
     assert payload and all(r["category"] == "security" for r in payload)
     bandit = _json(runner.invoke(app, ["rules", "list", "--standard", "bandit"]))
-    assert all(any(ref.startswith("bandit:") for ref in r["standard_refs"]) for r in bandit)
+    assert all(
+        any(ref.startswith("bandit:") for ref in r["standard_refs"]) for r in bandit
+    )
 
 
 def test_scan_json(sample_repo):
@@ -46,13 +48,17 @@ def test_scan_sarif(sample_repo):
 
 
 def test_report_md(sample_repo):
-    result = runner.invoke(app, ["report", str(sample_repo / "src" / "web.py"), "--format", "md"])
+    result = runner.invoke(
+        app, ["report", str(sample_repo / "src" / "web.py"), "--format", "md"]
+    )
     assert result.exit_code == 0
     assert "# Audit report" in result.output
 
 
 def test_manifest(sample_repo):
-    payload = _json(runner.invoke(app, ["manifest", str(sample_repo / "src" / "models.py")]))
+    payload = _json(
+        runner.invoke(app, ["manifest", str(sample_repo / "src" / "models.py")])
+    )
     symbols = {e["symbol"] for e in payload}
     assert "OpportunityRecord" in symbols
 
@@ -99,6 +105,8 @@ def test_crossfile_command(sample_repo):
 
 
 def test_scan_strict_tests(sample_repo):
-    payload = _json(runner.invoke(app, ["scan", str(sample_repo / "tests"), "--strict-tests"]))
+    payload = _json(
+        runner.invoke(app, ["scan", str(sample_repo / "tests"), "--strict-tests"])
+    )
     rules = {x["rule_id"] for f in payload["files"] for x in f["findings"]}
     assert "PY-SEC-HARDCODED-SECRET" in rules

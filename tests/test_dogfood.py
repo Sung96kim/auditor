@@ -12,7 +12,12 @@ _AUDITOR_PKG = Path(__file__).resolve().parent.parent / "auditor"
 
 async def _findings_for_rule(rule_id: str) -> list[str]:
     results = await ScanEngine.for_target(_AUDITOR_PKG).scan_path(_AUDITOR_PKG)
-    return [f"{r.file}:{x.line}" for r in results for x in r.findings if x.rule_id == rule_id]
+    return [
+        f"{r.file}:{x.line}"
+        for r in results
+        for x in r.findings
+        if x.rule_id == rule_id
+    ]
 
 
 async def test_no_inline_imports_in_auditor_source():

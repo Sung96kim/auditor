@@ -32,9 +32,13 @@ mcp: FastMCP = FastMCP(
 
 
 @mcp.tool
-async def scan(path: str = ".", incremental: bool = False, strict_tests: bool = False) -> dict:
+async def scan(
+    path: str = ".", incremental: bool = False, strict_tests: bool = False
+) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}."""
-    results = await audit_target(Path(path), incremental=incremental, strict_tests=strict_tests)
+    results = await audit_target(
+        Path(path), incremental=incremental, strict_tests=strict_tests
+    )
     return json_payload(results)
 
 

@@ -5,10 +5,12 @@ is bridged with ``asyncio.run``.
 import ast
 import asyncio
 import json
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, TypeVar
 
 import typer
+from rich.console import Console
 
 from auditor import crossfile as crossfile_pass
 from auditor.aggregate import AuditAggregator
@@ -23,8 +25,12 @@ from auditor.registry import REGISTRY
 from auditor.reporters import render
 from auditor.roles import RoleClassifier
 
-app = typer.Typer(no_args_is_help=True, add_completion=False, help="A token-efficient repo auditor.")
-index_app = typer.Typer(no_args_is_help=True, help="Manage the audit-scope index + cache.")
+app = typer.Typer(
+    no_args_is_help=True, add_completion=False, help="A token-efficient repo auditor."
+)
+index_app = typer.Typer(
+    no_args_is_help=True, help="Manage the audit-scope index + cache."
+)
 config_app = typer.Typer(no_args_is_help=True, help="Inspect resolved configuration.")
 rules_app = typer.Typer(no_args_is_help=True, help="Inspect detector rules.")
 plugins_app = typer.Typer(no_args_is_help=True, help="Inspect loaded plugins.")
@@ -34,8 +40,22 @@ app.add_typer(rules_app, name="rules")
 app.add_typer(plugins_app, name="plugins")
 
 
+# Spinner goes to STDERR so it never corrupts the JSON/SARIF stdout that agents parse;
+# rich auto-disables the animation when stderr isn't a TTY (piped/captured output).
+_status = Console(stderr=True)
+
+
 def _echo_json(payload: object) -> None:
     typer.echo(json.dumps(payload, indent=2))
+
+
+_T = TypeVar("_T")
+
+
+def _run(coro: Coroutine[Any, Any, _T], message: str = "auditing…") -> _T:
+    """Run an async core call while showing a spinner on stderr."""
+    with _status.status(message, spinner="dots"):
+        return asyncio.run(coro)
 
 
 def _index_db(root: Path) -> Path:
@@ -47,22 +67,33 @@ def _index_db(root: Path) -> Path:
 
 @app.command()
 def scan(
-    target: Annotated[Path, typer.Argument(help="File or directory to audit.")] = Path("."),
-    incremental: Annotated[bool, typer.Option(help="Use/update the on-disk cache.")] = False,
-    no_index: Annotated[bool, typer.Option("--no-index", help="Force stateless (no cache).")] = False,
-    strict_tests: Annotated[bool, typer.Option(help="Audit tests at production strength.")] = False,
-    allow_local_plugins: Annotated[bool, typer.Option(help="Load .auditor/plugins/*.py.")] = False,
+    target: Annotated[Path, typer.Argument(help="File or directory to audit.")] = Path(
+        "."
+    ),
+    incremental: Annotated[
+        bool, typer.Option(help="Use/update the on-disk cache.")
+    ] = False,
+    no_index: Annotated[
+        bool, typer.Option("--no-index", help="Force stateless (no cache).")
+    ] = False,
+    strict_tests: Annotated[
+        bool, typer.Option(help="Audit tests at production strength.")
+    ] = False,
+    allow_local_plugins: Annotated[
+        bool, typer.Option(help="Load .auditor/plugins/*.py.")
+    ] = False,
     fmt: Annotated[str, typer.Option("--format", help="json | sarif | md")] = "json",
 ) -> None:
     """Audit a file or directory."""
-    results = asyncio.run(
+    results = _run(
         audit_target(
             target,
             incremental=incremental,
             no_index=no_index,
             strict_tests=strict_tests,
             allow_local_plugins=allow_local_plugins,
-        )
+        ),
+        f"auditing {target}…",
     )
     typer.echo(render(results, fmt))
 
@@ -84,7 +115,7 @@ def report(
     fmt: Annotated[str, typer.Option("--format", help="json | sarif | md")] = "json",
 ) -> None:
     """Audit one file (stateless) — manifest + findings in one call."""
-    result = asyncio.run(_report(file))
+    result = _run(_report(file), f"auditing {file.name}…")
     typer.echo(render([result], fmt))
 
 
@@ -107,7 +138,9 @@ def discover(
     out = []
     for path in FileDiscovery(root).files(target):
         rel = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
-        role = classifier.classify(rel, path.read_text(encoding="utf-8", errors="replace"))
+        role = classifier.classify(
+            rel, path.read_text(encoding="utf-8", errors="replace")
+        )
         out.append({"file": rel, "role": role.value})
     _echo_json(out)
 
@@ -118,11 +151,13 @@ def discover(
 @app.command()
 def aggregate(
     target: Annotated[Path, typer.Argument()] = Path("."),
-    out: Annotated[Path, typer.Option("-o", "--out", help="Write AUDIT.md here.")] = Path("AUDIT.md"),
+    out: Annotated[
+        Path, typer.Option("-o", "--out", help="Write AUDIT.md here.")
+    ] = Path("AUDIT.md"),
 ) -> None:
     """Roll up the index into AUDIT.md (run `scan --incremental` first)."""
     root = find_root(target)
-    path = asyncio.run(_aggregate(root, out))
+    path = _run(_aggregate(root, out), "aggregating…")
     typer.echo(f"wrote {path}")
 
 
@@ -138,7 +173,7 @@ async def _aggregate(root: Path, out: Path) -> Path:
 def crossfile(target: Annotated[Path, typer.Argument()] = Path(".")) -> None:
     """Recompute cross-file duplicate findings from the index."""
     root = find_root(target)
-    count = asyncio.run(_crossfile(root))
+    count = _run(_crossfile(root), "cross-file pass…")
     _echo_json({"cross_file_findings": count})
 
 
@@ -153,13 +188,17 @@ async def _crossfile(root: Path) -> int:
 
 @index_app.command("add")
 def index_add(
-    paths: Annotated[list[Path], typer.Argument(help="Files to register in the audit scope.")],
+    paths: Annotated[
+        list[Path], typer.Argument(help="Files to register in the audit scope.")
+    ],
     target: Annotated[Path, typer.Option("--root")] = Path("."),
 ) -> None:
     """Register files as the audit scope."""
     root = find_root(target)
-    rels = [str(p.relative_to(root)) if p.is_relative_to(root) else str(p) for p in paths]
-    asyncio.run(_index_add(root, rels))
+    rels = [
+        str(p.relative_to(root)) if p.is_relative_to(root) else str(p) for p in paths
+    ]
+    _run(_index_add(root, rels), "registering scope…")
     _echo_json({"added": rels})
 
 
@@ -172,7 +211,7 @@ async def _index_add(root: Path, rels: list[str]) -> None:
 def index_list(target: Annotated[Path, typer.Option("--root")] = Path(".")) -> None:
     """List the registered scope + per-file counts."""
     root = find_root(target)
-    _echo_json(asyncio.run(_index_list(root)))
+    _echo_json(_run(_index_list(root), "reading index…"))
 
 
 async def _index_list(root: Path) -> list[dict]:
@@ -193,7 +232,9 @@ def config_show(target: Annotated[Path, typer.Option("--root")] = Path(".")) -> 
 @rules_app.command("list")
 def rules_list(
     category: Annotated[str | None, typer.Option(help="Filter by category.")] = None,
-    standard: Annotated[str | None, typer.Option(help="bandit | owasp coverage.")] = None,
+    standard: Annotated[
+        str | None, typer.Option(help="bandit | owasp coverage.")
+    ] = None,
 ) -> None:
     """List every registered detector rule."""
     rows = []

@@ -9,7 +9,15 @@ def test_builtins_register_detectors():
     assert len(ids) >= 48  # 45 per-file + 3 cross-file repo-level rules
     # one representative from each category
     cats = {str(REGISTRY.detector(r).category) for r in ids}
-    assert {"security", "typing", "async", "config", "correctness", "oop-composition", "style"} <= cats
+    assert {
+        "security",
+        "typing",
+        "async",
+        "config",
+        "correctness",
+        "oop-composition",
+        "style",
+    } <= cats
 
 
 def test_builtins_register_language_and_reporters():

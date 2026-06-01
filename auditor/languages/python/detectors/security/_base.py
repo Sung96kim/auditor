@@ -24,16 +24,9 @@ def has_false_kwarg(call: ast.Call, name: str) -> bool:
     return isinstance(val, ast.Constant) and val.value is False
 
 
-def string_constants(tree: ast.AST):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node
-
-
 __all__ = [
     "SecurityDetector",
     "VerdictKind",
     "has_true_kwarg",
     "has_false_kwarg",
-    "string_constants",
 ]

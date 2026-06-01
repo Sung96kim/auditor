@@ -34,7 +34,10 @@ def find_root(start: Path) -> Path:
     """Walk up from ``start`` for a repo root (.git / pyproject.toml / .auditor)."""
     start = start if start.is_dir() else start.parent
     for parent in [start, *start.parents]:
-        if any((parent / marker).exists() for marker in (".git", "pyproject.toml", ".auditor")):
+        if any(
+            (parent / marker).exists()
+            for marker in (".git", "pyproject.toml", ".auditor")
+        ):
             return parent
     return start
 
@@ -53,9 +56,17 @@ class FileDiscovery:
 
         tracked = self._git_tracked()
         if tracked is not None:
-            candidates = [p for p in tracked if self._under(p, target) and p.suffix in self.suffixes]
+            candidates = [
+                p
+                for p in tracked
+                if self._under(p, target) and p.suffix in self.suffixes
+            ]
         else:
-            candidates = [p for p in target.rglob("*") if p.is_file() and p.suffix in self.suffixes]
+            candidates = [
+                p
+                for p in target.rglob("*")
+                if p.is_file() and p.suffix in self.suffixes
+            ]
 
         out = [p for p in candidates if not self._excluded(p)]
         return sorted(set(out))
@@ -116,4 +127,6 @@ def discover(
     exclude_globs: tuple[str, ...] = (),
 ) -> list[Path]:
     """Convenience: list auditable files under ``target``."""
-    return FileDiscovery(root or find_root(target), exclude_globs=exclude_globs).files(target)
+    return FileDiscovery(root or find_root(target), exclude_globs=exclude_globs).files(
+        target
+    )

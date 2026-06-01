@@ -6,6 +6,7 @@ Mostly ``candidate`` (the agent judges); ``PY-OOP-DATACLASS-IN-PYDANTIC`` is aut
 """
 
 import ast
+from collections.abc import Iterator
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext, Detector
@@ -20,7 +21,7 @@ class _OopCandidate(Detector):
     default_severity: ClassVar[Severity] = Severity.LOW
 
 
-def _functions(tree: ast.AST):
+def _functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             yield node
@@ -71,7 +72,9 @@ class ConstructorWall(_OopCandidate):
         for node in ast.walk(ctx.tree):
             if isinstance(node, ast.Call) and len(node.keywords) >= threshold:
                 func = node.func
-                name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+                name = (
+                    func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+                )
                 if name and name[:1].isupper():
                     kwargs = [kw.arg for kw in node.keywords if kw.arg]
                     out.append(
@@ -127,16 +130,34 @@ class ThinWrapper(_OopCandidate):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             body = [s for s in node.body if not _is_docstring(s)]
-            if len(body) == 1 and isinstance(body[0], ast.Return) and isinstance(body[0].value, ast.Call):
+            if (
+                len(body) == 1
+                and isinstance(body[0], ast.Return)
+                and _is_pure_forward(node, body[0].value)
+            ):
                 out.append(
                     self.make_finding(
                         ctx,
                         line=node.lineno,
-                        message=f"thin wrapper `{node.name}` delegates one call; consider deleting",
-                        suggestion="call the underlying directly, or keep only if it adds meaning",
+                        message=f"thin wrapper `{node.name}` forwards its args verbatim; call the underlying directly",
+                        suggestion="delete the wrapper, or keep only if the name adds real meaning",
                     )
                 )
         return out
+
+
+def _is_pure_forward(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef, value: ast.expr | None
+) -> bool:
+    """A do-nothing pass-through: ``def f(a, b): return g(a, b)`` — forwards exactly the
+    positional params, in order, to one call (no extra/keyword/star args)."""
+    if not isinstance(value, ast.Call) or value.keywords:
+        return False
+    if any(isinstance(a, ast.Starred) for a in value.args):
+        return False
+    params = [p.arg for p in fn.args.posonlyargs + fn.args.args]
+    forwarded = [a.id for a in value.args if isinstance(a, ast.Name)]
+    return len(forwarded) == len(value.args) and forwarded == params and bool(params)
 
 
 def _is_docstring(stmt: ast.stmt) -> bool:
@@ -151,9 +172,8 @@ _FACTORY_VERBS = {"build", "create", "make", "construct", "produce"}
 
 
 class BuilderClass(_OopCandidate):
-    """Flags a function-with-state: a class that stores inputs in ``__init__`` and exposes a
-    single public 'produce one output' method (build/create/make/…). Such a class is better
-    expressed as a factory classmethod on the result — ``Result.from_X(...)``."""
+    """A class that holds inputs and exposes one public produce-method (build/create/…) is a
+    function-with-state — better as a factory classmethod ``Result.from_X(...)``."""
 
     rule_id: ClassVar[str] = "PY-OOP-BUILDER-CLASS"
     checklist_item: ClassVar[int] = 9
@@ -163,12 +183,20 @@ class BuilderClass(_OopCandidate):
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            methods = [s for s in node.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            methods = [
+                s
+                for s in node.body
+                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
             public = [m.name for m in methods if not m.name.startswith("_")]
             has_init = any(m.name == "__init__" for m in methods)
             named_builder = node.name.endswith("Builder")
             # one public "produce" method, and the class either holds state or is *Builder
-            if len(public) == 1 and public[0] in _FACTORY_VERBS and (has_init or named_builder):
+            if (
+                len(public) == 1
+                and public[0] in _FACTORY_VERBS
+                and (has_init or named_builder)
+            ):
                 out.append(
                     self.make_finding(
                         ctx,
@@ -222,9 +250,16 @@ class StaticMethodClass(_OopCandidate):
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            methods = [s for s in node.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            methods = [
+                s
+                for s in node.body
+                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
             if methods and all(
-                any(dotted_name(d).split(".")[-1] == "staticmethod" for d in m.decorator_list)
+                any(
+                    dotted_name(d).split(".")[-1] == "staticmethod"
+                    for d in m.decorator_list
+                )
                 for m in methods
             ):
                 out.append(
@@ -274,7 +309,8 @@ class GodClass(_OopCandidate):
             methods = [
                 s
                 for s in node.body
-                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and not s.name.startswith("__")
+                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and not s.name.startswith("__")
             ]
             attrs = _instance_attrs(node)
             if len(methods) > eff.max_methods or len(attrs) > eff.max_attrs:
@@ -353,22 +389,47 @@ class FreeFnOrchestrator(_OopCandidate):
     checklist_item: ClassVar[int] = 19
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        top = [n for n in ctx.tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        if len(top) < 3:
-            return []
-        names = {fn.name for fn in top}
-        callers = 0
-        for fn in top:
-            called = {dotted_name(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
-            if called & names:
-                callers += 1
-        if callers >= 2:
-            return [
-                self.make_finding(
-                    ctx,
-                    line=top[0].lineno,
-                    message=f"{len(top)} free functions thread shared state; consider a coordinator class",
-                    suggestion="encapsulate the chain in an X-Coordinator/Index class",
-                )
-            ]
+        names = {
+            n.name
+            for n in ctx.tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        # The smell is a pipeline threading one value: 3+ functions sharing a param AND
+        # calling each other — not independent helpers or CLI handlers.
+        for param, group in _functions_by_shared_param(ctx.tree).items():
+            if len(group) < 3:
+                continue
+            callers = sum(
+                1
+                for fn in group
+                if {
+                    dotted_name(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)
+                }
+                & names
+            )
+            if callers >= 2:
+                return [
+                    self.make_finding(
+                        ctx,
+                        line=group[0].lineno,
+                        message=f"{len(group)} free functions thread `{param}` between them; use a coordinator class",
+                        suggestion="encapsulate the pipeline in an X-Coordinator/Index class that holds the state",
+                    )
+                ]
         return []
+
+
+def _functions_by_shared_param(
+    tree: ast.Module,
+) -> dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Group top-level functions by a parameter name they share (the threaded state)."""
+    groups: dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        a = node.args
+        for p in a.posonlyargs + a.args + a.kwonlyargs:
+            if p.arg in ("self", "cls"):
+                continue
+            groups.setdefault(p.arg, []).append(node)
+    return groups

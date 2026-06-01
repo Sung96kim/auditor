@@ -13,4 +13,7 @@ def test_sarif_reporter_valid():
     run = sarif["runs"][0]
     assert run["tool"]["driver"]["name"] == "auditor"
     assert "error" in {r["level"] for r in run["results"]}  # blocking -> error
-    assert run["results"][0]["locations"][0]["physicalLocation"]["region"]["startLine"] == 2
+    assert (
+        run["results"][0]["locations"][0]["physicalLocation"]["region"]["startLine"]
+        == 2
+    )

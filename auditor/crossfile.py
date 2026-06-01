@@ -33,7 +33,11 @@ async def run(index: IndexStore) -> dict[str, list[Finding]]:
             kind = group[0]["kind"]
             others = sorted({f"{r['path']}:{r['line']}" for r in group})
             for row in group:
-                elsewhere = [o for o in others if not o.startswith(f"{row['path']}:{row['line']}")]
+                elsewhere = [
+                    o
+                    for o in others
+                    if not o.startswith(f"{row['path']}:{row['line']}")
+                ]
                 per_file.setdefault(row["path"], []).append(
                     _finding(kind, row["symbol"], row["line"], elsewhere)
                 )

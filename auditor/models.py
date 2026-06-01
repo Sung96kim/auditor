@@ -26,7 +26,12 @@ class Severity(StrEnum):
     LOW = "low"
 
 
-_SEVERITY_ORDER = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.BLOCKING: 3}
+_SEVERITY_ORDER = {
+    Severity.LOW: 0,
+    Severity.MEDIUM: 1,
+    Severity.HIGH: 2,
+    Severity.BLOCKING: 3,
+}
 
 
 def severity_rank(severity: Severity) -> int:
@@ -119,7 +124,9 @@ class ManifestEntry(BaseModel):
         )
 
     @classmethod
-    def from_function(cls, fn: _FuncDef, *, owner: str | None, is_method: bool) -> "ManifestEntry":
+    def from_function(
+        cls, fn: _FuncDef, *, owner: str | None, is_method: bool
+    ) -> "ManifestEntry":
         a = fn.args
         return cls(
             line=fn.lineno,

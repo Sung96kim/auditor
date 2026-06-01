@@ -27,7 +27,9 @@ def _file_payload(r: ScanResult) -> dict:
         "cached": r.cached,
         "counts": {s.value: n for s, n in r.counts.items()},
         "findings": [_finding_payload(f) for f in r.findings],
-        "skipped_rules": [{"rule_id": s.rule_id, "reason": s.reason} for s in r.skipped_rules],
+        "skipped_rules": [
+            {"rule_id": s.rule_id, "reason": s.reason} for s in r.skipped_rules
+        ],
     }
 
 

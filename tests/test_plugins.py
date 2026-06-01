@@ -23,7 +23,10 @@ def _restore_registry():
     REGISTRY._plugin_categories = categories
     REGISTRY._sources = sources
 
-def _repo_with_plugin(tmp_path: Path, *, trust: bool, references_rule: bool = False) -> Path:
+
+def _repo_with_plugin(
+    tmp_path: Path, *, trust: bool, references_rule: bool = False
+) -> Path:
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
     auditor_dir = tmp_path / ".auditor"
     (auditor_dir / "plugins").mkdir(parents=True)

@@ -179,14 +179,17 @@ class IndexStore:
 
     async def file_sha(self, path: str) -> str | None:
         row = await self._worker.run(
-            lambda c: c.execute("SELECT sha256 FROM files WHERE path = ?", (path,)).fetchone()
+            lambda c: c.execute(
+                "SELECT sha256 FROM files WHERE path = ?", (path,)
+            ).fetchone()
         )
         return row["sha256"] if row and row["sha256"] else None
 
     async def rule_fingerprint(self, path: str, rule_id: str) -> str | None:
         row = await self._worker.run(
             lambda c: c.execute(
-                "SELECT fingerprint FROM file_rules WHERE path = ? AND rule_id = ?", (path, rule_id)
+                "SELECT fingerprint FROM file_rules WHERE path = ? AND rule_id = ?",
+                (path, rule_id),
             ).fetchone()
         )
         return row["fingerprint"] if row else None
@@ -224,7 +227,12 @@ class IndexStore:
         await self._worker.run(op)
 
     async def record_rule(
-        self, path: str, rule_id: str, fingerprint: str, findings: list[Finding], when: float
+        self,
+        path: str,
+        rule_id: str,
+        fingerprint: str,
+        findings: list[Finding],
+        when: float,
     ) -> None:
         """Store a rule's result for a file: ledger row + replace its findings (atomic)."""
         rows = [_finding_to_row(path, f) for f in findings]
@@ -236,9 +244,12 @@ class IndexStore:
                 "fingerprint=excluded.fingerprint, last_scanned=excluded.last_scanned",
                 (path, rule_id, fingerprint, when),
             )
-            conn.execute("DELETE FROM findings WHERE path = ? AND rule_id = ?", (path, rule_id))
+            conn.execute(
+                "DELETE FROM findings WHERE path = ? AND rule_id = ?", (path, rule_id)
+            )
             conn.executemany(
-                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})", rows
+                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})",
+                rows,
             )
             conn.commit()
 
@@ -246,7 +257,9 @@ class IndexStore:
 
     async def set_doc_path(self, path: str, doc_path: str) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            conn.execute("UPDATE files SET doc_path = ? WHERE path = ?", (doc_path, path))
+            conn.execute(
+                "UPDATE files SET doc_path = ? WHERE path = ?", (doc_path, path)
+            )
             conn.commit()
 
         await self._worker.run(op)
@@ -255,13 +268,17 @@ class IndexStore:
 
     async def all_findings(self) -> list[Finding]:
         rows = await self._worker.run(
-            lambda c: c.execute("SELECT * FROM findings ORDER BY path, line, rule_id").fetchall()
+            lambda c: c.execute(
+                "SELECT * FROM findings ORDER BY path, line, rule_id"
+            ).fetchall()
         )
         return [_row_to_finding(r) for r in rows]
 
     async def files(self) -> list[IndexEntry]:
         def op(conn: sqlite3.Connection) -> list[IndexEntry]:
-            rows = conn.execute("SELECT * FROM files WHERE sha256 != '' ORDER BY path").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM files WHERE sha256 != '' ORDER BY path"
+            ).fetchall()
             out = []
             for r in rows:
                 counts = {
@@ -296,7 +313,9 @@ class IndexStore:
         await self._worker.run(op)
 
     async def roles_by_path(self) -> dict[str, str]:
-        rows = await self._worker.run(lambda c: c.execute("SELECT path, role FROM files").fetchall())
+        rows = await self._worker.run(
+            lambda c: c.execute("SELECT path, role FROM files").fetchall()
+        )
         return {r["path"]: r["role"] for r in rows}
 
     async def clear_findings_for_rules(self, rule_ids: list[str]) -> None:
@@ -305,7 +324,9 @@ class IndexStore:
         placeholders = ",".join("?" for _ in rule_ids)
 
         def op(conn: sqlite3.Connection) -> None:
-            conn.execute(f"DELETE FROM findings WHERE rule_id IN ({placeholders})", rule_ids)
+            conn.execute(
+                f"DELETE FROM findings WHERE rule_id IN ({placeholders})", rule_ids
+            )
             conn.commit()
 
         await self._worker.run(op)
@@ -315,7 +336,8 @@ class IndexStore:
 
         def op(conn: sqlite3.Connection) -> None:
             conn.executemany(
-                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})", rows
+                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})",
+                rows,
             )
             conn.commit()
 
@@ -332,7 +354,8 @@ class IndexStore:
             for row in dup:
                 h = row["shape_hash"]
                 out[h] = conn.execute(
-                    "SELECT * FROM shapes WHERE shape_hash = ? ORDER BY path, line", (h,)
+                    "SELECT * FROM shapes WHERE shape_hash = ? ORDER BY path, line",
+                    (h,),
                 ).fetchall()
             return out
 
@@ -368,7 +391,9 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
         suggestion=row["suggestion"],
         detector=row["detector"],
         checklist_item=row["checklist_item"],
-        standard_refs=tuple(row["standard_refs"].split(",")) if row["standard_refs"] else (),
+        standard_refs=tuple(row["standard_refs"].split(","))
+        if row["standard_refs"]
+        else (),
     )
 
 

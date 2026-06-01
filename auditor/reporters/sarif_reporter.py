@@ -29,10 +29,14 @@ class SarifReporter(Reporter):
                         "driver": {
                             "name": "auditor",
                             "informationUri": "https://github.com/Sung96kim/auditor",
-                            "rules": [_rule_descriptor(rid) for rid in sorted(rule_ids)],
+                            "rules": [
+                                _rule_descriptor(rid) for rid in sorted(rule_ids)
+                            ],
                         }
                     },
-                    "results": [_result(r.file, f) for r in results for f in r.findings],
+                    "results": [
+                        _result(r.file, f) for r in results for f in r.findings
+                    ],
                 }
             ],
         }

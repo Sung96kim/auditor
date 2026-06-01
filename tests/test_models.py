@@ -26,8 +26,12 @@ def test_severity_rank_order():
 
 def _finding(sev=Severity.HIGH, rule="PY-X-Y") -> Finding:
     return Finding(
-        rule_id=rule, category=Category.SECURITY, severity=sev,
-        verdict_kind=VerdictKind.AUTO, line=1, message="m",
+        rule_id=rule,
+        category=Category.SECURITY,
+        severity=sev,
+        verdict_kind=VerdictKind.AUTO,
+        line=1,
+        message="m",
     )
 
 
@@ -39,8 +43,14 @@ def test_finding_is_frozen():
 
 def test_scanresult_counts():
     r = ScanResult(
-        file="x.py", language="python", role=FileRole.PRODUCTION,
-        findings=[_finding(Severity.HIGH), _finding(Severity.HIGH), _finding(Severity.LOW)],
+        file="x.py",
+        language="python",
+        role=FileRole.PRODUCTION,
+        findings=[
+            _finding(Severity.HIGH),
+            _finding(Severity.HIGH),
+            _finding(Severity.LOW),
+        ],
     )
     assert r.counts[Severity.HIGH] == 2
     assert r.counts[Severity.LOW] == 1
@@ -56,7 +66,11 @@ def test_skipped_rule_and_index_entry():
     sr = SkippedRule(rule_id="R", reason="why")
     assert sr.reason == "why"
     entry = IndexEntry(
-        path="a.py", sha256="abc", lines=10, language="python",
-        role=FileRole.TEST, last_scanned=1.0,
+        path="a.py",
+        sha256="abc",
+        lines=10,
+        language="python",
+        role=FileRole.TEST,
+        last_scanned=1.0,
     )
     assert entry.role is FileRole.TEST and entry.doc_path is None

@@ -4,7 +4,13 @@ import ast
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext
-from auditor.languages.python.detectors._util import call_attr, dotted_name, kwarg
+from auditor.languages.python.detectors._util import (
+    call_attr,
+    dotted_name,
+    function_params,
+    kwarg,
+    nearest_enclosing_function,
+)
 from auditor.languages.python.detectors.security._base import (
     SecurityDetector,
     has_true_kwarg,
@@ -40,7 +46,11 @@ class DangerousEval(SecurityDetector):
 class ShellInjection(SecurityDetector):
     rule_id: ClassVar[str] = "PY-SEC-SHELL-INJECTION"
     default_severity: ClassVar[Severity] = Severity.HIGH
-    standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B602", "bandit:B605", "owasp:A03")
+    standard_refs: ClassVar[tuple[str, ...]] = (
+        "bandit:B602",
+        "bandit:B605",
+        "owasp:A03",
+    )
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
@@ -51,12 +61,19 @@ class ShellInjection(SecurityDetector):
             if name in ("os.system", "os.popen"):
                 out.append(self._f(ctx, node, f"`{name}(...)` invokes a shell"))
             elif name.startswith("subprocess.") and has_true_kwarg(node, "shell"):
-                out.append(self._f(ctx, node, f"`{name}(..., shell=True)` is shell-injection prone"))
+                out.append(
+                    self._f(
+                        ctx, node, f"`{name}(..., shell=True)` is shell-injection prone"
+                    )
+                )
         return out
 
     def _f(self, ctx: AuditContext, node: ast.Call, msg: str) -> Finding:
         return self.make_finding(
-            ctx, line=node.lineno, message=msg, suggestion="pass an argv list; avoid shell=True"
+            ctx,
+            line=node.lineno,
+            message=msg,
+            suggestion="pass an argv list; avoid shell=True",
         )
 
 
@@ -68,6 +85,29 @@ def _is_string_build(node: ast.expr) -> bool:
     return bool(isinstance(node, ast.Call) and call_attr(node) == "format")
 
 
+def _dynamic_parts(node: ast.expr) -> list[ast.expr]:
+    """The interpolated/concatenated sub-expressions of a string build."""
+    if isinstance(node, ast.JoinedStr):
+        return [v.value for v in node.values if isinstance(v, ast.FormattedValue)]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        return [node.left, node.right]
+    if isinstance(node, ast.Call) and call_attr(node) == "format":
+        return list(node.args) + [kw.value for kw in node.keywords]
+    return []
+
+
+def _carries_external_data(node: ast.expr, params: set[str]) -> bool:
+    """True if the string build interpolates caller data — an enclosing-function parameter or
+    a subscript (``request.args['q']``). Constants/placeholder locals are not tainted."""
+    for part in _dynamic_parts(node):
+        for sub in ast.walk(part):
+            if isinstance(sub, ast.Name) and sub.id in params:
+                return True
+            if isinstance(sub, ast.Subscript):
+                return True
+    return False
+
+
 class SqlStringBuild(SecurityDetector):
     rule_id: ClassVar[str] = "PY-SEC-SQL-STRING-BUILD"
     default_severity: ClassVar[Severity] = Severity.HIGH
@@ -75,22 +115,28 @@ class SqlStringBuild(SecurityDetector):
     standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B608", "owasp:A03")
 
     def run(self, ctx: AuditContext) -> list[Finding]:
+        enclosing = nearest_enclosing_function(ctx.tree)
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if (
+            if not (
                 isinstance(node, ast.Call)
                 and call_attr(node) in ("execute", "executemany")
                 and node.args
                 and _is_string_build(node.args[0])
             ):
-                out.append(
-                    self.make_finding(
-                        ctx,
-                        line=node.lineno,
-                        message="SQL built by string formatting passed to .execute(); injection risk",
-                        suggestion="use parameterized queries (placeholders + params)",
-                    )
+                continue
+            fn = enclosing.get(id(node))
+            params = function_params(fn) if fn is not None else set()
+            if not _carries_external_data(node.args[0], params):
+                continue  # SQL assembled from constants/placeholders — not an injection risk
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=node.lineno,
+                    message="SQL built from a caller-supplied value passed to .execute(); injection risk",
+                    suggestion="use parameterized queries (placeholders + params)",
                 )
+            )
         return out
 
 
@@ -101,22 +147,28 @@ class DjangoRawSql(SecurityDetector):
     standard_refs: ClassVar[tuple[str, ...]] = ("owasp:A03",)
 
     def run(self, ctx: AuditContext) -> list[Finding]:
+        enclosing = nearest_enclosing_function(ctx.tree)
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if (
+            if not (
                 isinstance(node, ast.Call)
                 and call_attr(node) in ("raw", "extra")
                 and node.args
                 and _is_string_build(node.args[0])
             ):
-                out.append(
-                    self.make_finding(
-                        ctx,
-                        line=node.lineno,
-                        message=f".{call_attr(node)}(...) with interpolated SQL; injection risk",
-                        suggestion="use params= / ORM filters instead of string interpolation",
-                    )
+                continue
+            fn = enclosing.get(id(node))
+            params = function_params(fn) if fn is not None else set()
+            if not _carries_external_data(node.args[0], params):
+                continue
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=node.lineno,
+                    message=f".{call_attr(node)}(...) with a caller-supplied value; injection risk",
+                    suggestion="use params= / ORM filters instead of string interpolation",
                 )
+            )
         return out
 
 

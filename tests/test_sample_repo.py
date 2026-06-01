@@ -15,9 +15,15 @@ async def _scan(repo: Path) -> dict[str, dict]:
     """Return {rel_path: {"rules": set, "findings": list}} for the whole repo."""
     settings = load_config(repo)
     async with await IndexStore.connect(repo / ".auditor" / "index.db") as index:
-        results = await ScanEngine.for_target(repo, settings=settings, index=index).scan_path(repo)
+        results = await ScanEngine.for_target(
+            repo, settings=settings, index=index
+        ).scan_path(repo)
     return {
-        r.file: {"rules": {f.rule_id for f in r.findings}, "findings": r.findings, "result": r}
+        r.file: {
+            "rules": {f.rule_id for f in r.findings},
+            "findings": r.findings,
+            "result": r,
+        }
         for r in results
     }
 
@@ -55,7 +61,9 @@ async def test_security_cases(scanned):
 
 async def test_security_lookalikes_quiet(scanned):
     # exactly one eval finding (the dynamic one), not the constant eval
-    findings = next(d["findings"] for p, d in scanned.items() if p.endswith("src/integrations.py"))
+    findings = next(
+        d["findings"] for p, d in scanned.items() if p.endswith("src/integrations.py")
+    )
     eval_lines = [f.line for f in findings if f.rule_id == "PY-SEC-DANGEROUS-EVAL"]
     assert len(eval_lines) == 1  # parse_known_literal's eval("(1,2,3)") did NOT fire
 
@@ -75,10 +83,16 @@ async def test_async_cases(scanned):
 
 
 async def test_async_nested_sync_not_flagged(scanned):
-    findings = next(d["findings"] for p, d in scanned.items() if p.endswith("src/async_service.py"))
+    findings = next(
+        d["findings"] for p, d in scanned.items() if p.endswith("src/async_service.py")
+    )
     sync_io = [f.line for f in findings if f.rule_id == "PY-ASYNC-SYNC-IO"]
     # open() inside the nested sync helper must NOT add a sync-io finding
-    assert all("with_nested_sync" not in f.evidence for f in findings if f.rule_id == "PY-ASYNC-SYNC-IO")
+    assert all(
+        "with_nested_sync" not in f.evidence
+        for f in findings
+        if f.rule_id == "PY-ASYNC-SYNC-IO"
+    )
     assert len(sync_io) == 2  # requests.get + time.sleep only
 
 
@@ -121,7 +135,9 @@ async def test_web_cases(scanned):
 
 
 async def test_route_handler_dict_exempt(scanned):
-    findings = next(d["findings"] for p, d in scanned.items() if p.endswith("src/web.py"))
+    findings = next(
+        d["findings"] for p, d in scanned.items() if p.endswith("src/web.py")
+    )
     untyped = [f for f in findings if f.rule_id == "PY-TYPING-UNTYPED-DICT"]
     # serialize_widget fires; the @app.get("/health") handler does not
     assert untyped and all("health" not in f.message for f in untyped)
@@ -189,7 +205,9 @@ async def test_empty_file_is_clean(scanned):
 
 async def test_tricky_precision(scanned):
     rules = _rules(scanned, "edge/tricky.py")
-    findings = next(d["findings"] for p, d in scanned.items() if p.endswith("edge/tricky.py"))
+    findings = next(
+        d["findings"] for p, d in scanned.items() if p.endswith("edge/tricky.py")
+    )
     # exactly one unlocked lazy init (racy), not the lock-guarded one
     lazy = [f for f in findings if f.rule_id == "PY-ASYNC-UNLOCKED-LAZY-INIT"]
     assert len(lazy) == 1

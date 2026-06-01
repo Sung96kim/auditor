@@ -1,6 +1,7 @@
 """Typing-category detectors: missing type hints, dict[str, Any] boundaries."""
 
 import ast
+from collections.abc import Iterator
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext, Detector
@@ -12,13 +13,17 @@ _ROUTE_DECORATORS = ("get", "post", "put", "patch", "delete", "route", "websocke
 def _is_route_handler(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     for dec in fn.decorator_list:
         target = dec.func if isinstance(dec, ast.Call) else dec
-        attr = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", "")
+        attr = (
+            target.attr
+            if isinstance(target, ast.Attribute)
+            else getattr(target, "id", "")
+        )
         if attr in _ROUTE_DECORATORS:
             return True
     return False
 
 
-def _functions(tree: ast.AST):
+def _functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             yield node
@@ -56,7 +61,9 @@ class MissingHints(Detector):
         return out
 
     @staticmethod
-    def _missing(fn: ast.FunctionDef | ast.AsyncFunctionDef, *, is_method: bool) -> list[str]:
+    def _missing(
+        fn: ast.FunctionDef | ast.AsyncFunctionDef, *, is_method: bool
+    ) -> list[str]:
         problems: list[str] = []
         a = fn.args
         positional = a.posonlyargs + a.args

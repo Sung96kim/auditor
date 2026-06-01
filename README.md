@@ -29,6 +29,16 @@ even for unchanged files. `auditor` moves all of that into deterministic Python:
 
 ## Install
 
+**Recommended — install the CLI globally as a tool** (so `auditor` is on your PATH in any repo):
+
+```bash
+uv tool install .                  # from a checkout
+uv tool install git+https://github.com/Sung96kim/auditor   # from GitHub
+uv tool install ".[mcp]"           # include the FastMCP server (auditor-mcp)
+```
+
+For development on the auditor itself:
+
 ```bash
 uv sync                 # core
 uv sync --extra mcp     # + FastMCP server

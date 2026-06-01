@@ -2,9 +2,15 @@
 
 from auditor.languages.python.shapes import ShapeExtractor
 
-_MODEL_A = "from pydantic import BaseModel\nclass A(BaseModel):\n    x: int\n    y: str\n"
-_MODEL_B = "from pydantic import BaseModel\nclass B(BaseModel):\n    x: int\n    y: str\n"
-_MODEL_DIFF = "from pydantic import BaseModel\nclass C(BaseModel):\n    p: float\n    q: bool\n"
+_MODEL_A = (
+    "from pydantic import BaseModel\nclass A(BaseModel):\n    x: int\n    y: str\n"
+)
+_MODEL_B = (
+    "from pydantic import BaseModel\nclass B(BaseModel):\n    x: int\n    y: str\n"
+)
+_MODEL_DIFF = (
+    "from pydantic import BaseModel\nclass C(BaseModel):\n    p: float\n    q: bool\n"
+)
 _FUNC_A = "def a(x: int, y: int):\n    z = x + y\n    return z\n"
 _FUNC_B = "def b(x: int, y: int):\n    z = x + y\n    return z\n"
 

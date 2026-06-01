@@ -8,7 +8,14 @@ from auditor.mcp_server import mcp
 async def test_tools_registered():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
-    assert {"scan", "report", "manifest", "discover", "aggregate", "rules_list"} <= names
+    assert {
+        "scan",
+        "report",
+        "manifest",
+        "discover",
+        "aggregate",
+        "rules_list",
+    } <= names
 
 
 async def test_rules_list_tool():
@@ -18,7 +25,9 @@ async def test_rules_list_tool():
 
 
 async def test_report_tool(sample_repo):
-    result = await mcp.call_tool("report", {"file": str(sample_repo / "src" / "integrations.py")})
+    result = await mcp.call_tool(
+        "report", {"file": str(sample_repo / "src" / "integrations.py")}
+    )
     data = _structured(result)
     rules = {x["rule_id"] for f in data["files"] for x in f["findings"]}
     assert "PY-SEC-DANGEROUS-EVAL" in rules
@@ -47,6 +56,8 @@ async def test_discover_tool(sample_repo):
 
 
 async def test_manifest_tool(sample_repo):
-    result = await mcp.call_tool("manifest", {"file": str(sample_repo / "src" / "models.py")})
+    result = await mcp.call_tool(
+        "manifest", {"file": str(sample_repo / "src" / "models.py")}
+    )
     data = _structured(result)
     assert any(e["symbol"] == "OpportunityRecord" for e in data)

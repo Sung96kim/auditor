@@ -26,10 +26,14 @@ class Registry:
     def register_detector(self, cls: type, *, source: str = "built-in") -> None:
         existing = self._detectors.get(cls.rule_id)
         if existing is not None and existing is not cls:
-            raise ValueError(f"duplicate rule_id {cls.rule_id!r}: {existing!r} vs {cls!r}")
+            raise ValueError(
+                f"duplicate rule_id {cls.rule_id!r}: {existing!r} vs {cls!r}"
+            )
         self._detectors[cls.rule_id] = cls
         self._sources[f"detector:{cls.rule_id}"] = source
-        if not isinstance(cls.category, Category) and cls.category not in {c.value for c in Category}:
+        if not isinstance(cls.category, Category) and cls.category not in {
+            c.value for c in Category
+        }:
             self._plugin_categories.add(str(cls.category))
 
     def register_language(self, cls: type, *, source: str = "built-in") -> None:
@@ -49,7 +53,11 @@ class Registry:
         return list(self._detectors.values())
 
     def detectors_for_language(self, language: str) -> list[type]:
-        return [d for d in self._detectors.values() if getattr(d, "language", "python") == language]
+        return [
+            d
+            for d in self._detectors.values()
+            if getattr(d, "language", "python") == language
+        ]
 
     def rule_ids(self) -> set[RuleId]:
         return set(self._detectors)
@@ -88,14 +96,19 @@ class Registry:
         """For ``auditor plugins list``."""
         return {
             "detectors": {
-                rid: {"category": str(cls.category), "source": self.source_of("detector", rid)}
+                rid: {
+                    "category": str(cls.category),
+                    "source": self.source_of("detector", rid),
+                }
                 for rid, cls in sorted(self._detectors.items())
             },
             "languages": {
-                name: {"source": self.source_of("language", name)} for name in sorted(self._languages)
+                name: {"source": self.source_of("language", name)}
+                for name in sorted(self._languages)
             },
             "reporters": {
-                name: {"source": self.source_of("reporter", name)} for name in sorted(self._reporters)
+                name: {"source": self.source_of("reporter", name)}
+                for name in sorted(self._reporters)
             },
         }
 

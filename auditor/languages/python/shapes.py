@@ -43,7 +43,10 @@ def _model_shape(cls: ast.ClassDef) -> str | None:
 
 def _function_shape(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
     a = fn.args
-    params = [_safe_unparse(p.annotation) if p.annotation else "_" for p in a.posonlyargs + a.args]
+    params = [
+        _safe_unparse(p.annotation) if p.annotation else "_"
+        for p in a.posonlyargs + a.args
+    ]
     if len(fn.body) < 2:
         return None
     skeleton = _body_skeleton(fn.body)

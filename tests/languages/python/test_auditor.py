@@ -8,14 +8,18 @@ from auditor.models import Severity
 
 
 def test_severity_override_applied():
-    settings = AuditorSettings.model_validate({"rules": {"PY-SEC-SSRF": {"severity": "blocking"}}})
+    settings = AuditorSettings.model_validate(
+        {"rules": {"PY-SEC-SSRF": {"severity": "blocking"}}}
+    )
     res = run_audit("requests.get(url, timeout=5)", settings=settings)
     ssrf = [f for f in res.findings if f.rule_id == "PY-SEC-SSRF"]
     assert ssrf and ssrf[0].severity is Severity.BLOCKING
 
 
 def test_disabled_rule_is_skipped_not_run():
-    settings = AuditorSettings.model_validate({"rules": {"PY-SEC-DANGEROUS-EVAL": {"enabled": False}}})
+    settings = AuditorSettings.model_validate(
+        {"rules": {"PY-SEC-DANGEROUS-EVAL": {"enabled": False}}}
+    )
     res = run_audit("eval(x)", settings=settings)
     assert "PY-SEC-DANGEROUS-EVAL" not in {f.rule_id for f in res.findings}
     assert "PY-SEC-DANGEROUS-EVAL" in {s.rule_id for s in res.skipped_rules}

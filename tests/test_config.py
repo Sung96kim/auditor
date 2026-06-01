@@ -1,7 +1,6 @@
 """Config layering + resolution: profile extends chain, pyproject vs .auditor precedence,
 threshold merge, per-rule/category/role resolution, and validation."""
 
-
 import pytest
 
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
@@ -63,17 +62,28 @@ def test_severity_and_verdict_override():
 
 def test_glob_override_applies_last(tmp_path):
     settings = AuditorSettings.model_validate(
-        {"overrides": [{"path": "migrations/*", "rules": {"PY-SEC-DANGEROUS-EVAL": {"enabled": False}}}]}
+        {
+            "overrides": [
+                {
+                    "path": "migrations/*",
+                    "rules": {"PY-SEC-DANGEROUS-EVAL": {"enabled": False}},
+                }
+            ]
+        }
     )
     on = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="app/x.py")
-    off = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="migrations/0001.py")
+    off = ResolvedConfig(
+        settings, role=FileRole.PRODUCTION, rel_path="migrations/0001.py"
+    )
     assert on.effective("PY-SEC-DANGEROUS-EVAL").enabled is True
     assert off.effective("PY-SEC-DANGEROUS-EVAL").enabled is False
 
 
 def test_unknown_category_fails():
     with pytest.raises(Exception, match="unknown category"):
-        AuditorSettings.model_validate({"categories": {"not-a-category": {"enabled": False}}})
+        AuditorSettings.model_validate(
+            {"categories": {"not-a-category": {"enabled": False}}}
+        )
 
 
 def test_circular_profile_rejected(tmp_path):

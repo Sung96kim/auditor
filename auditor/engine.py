@@ -34,14 +34,18 @@ def project_deps(root: Path) -> frozenset[str]:
     specs = list(project.get("dependencies", []))
     for group in project.get("optional-dependencies", {}).values():
         specs.extend(group)
-    names = {m.group(0).lower() for spec in specs if (m := _DEP_NAME.match(spec.strip()))}
+    names = {
+        m.group(0).lower() for spec in specs if (m := _DEP_NAME.match(spec.strip()))
+    }
     return frozenset(names)
 
 
 class ScanEngine:
     """Audits files under one resolved root, with config, project facts, and an optional cache."""
 
-    def __init__(self, root: Path, settings: AuditorSettings, *, index: IndexStore | None = None) -> None:
+    def __init__(
+        self, root: Path, settings: AuditorSettings, *, index: IndexStore | None = None
+    ) -> None:
         self.root = root
         self.settings = settings
         self.index = index
@@ -81,14 +85,18 @@ class ScanEngine:
         sha = content_hash(source)
 
         if self.index is not None:
-            return await self._scan_cached(auditor, rel, source, sha, role, rc, enabled, skipped)
+            return await self._scan_cached(
+                auditor, rel, source, sha, role, rc, enabled, skipped
+            )
 
         res = self._audit(auditor, rel, source, role, rc, list(enabled))
         res.skipped_rules.extend(skipped)
         return res
 
     async def scan_path(self, target: Path) -> list[ScanResult]:
-        files = FileDiscovery(self.root, exclude_globs=tuple(self.settings.exclude)).files(target)
+        files = FileDiscovery(
+            self.root, exclude_globs=tuple(self.settings.exclude)
+        ).files(target)
         results = [await self.scan_file(p) for p in files]
         if self.index is not None and len(results) > 1:
             await self._apply_crossfile(results)
@@ -96,7 +104,9 @@ class ScanEngine:
 
     # --- internals --------------------------------------------------------
 
-    def _partition_rules(self, rc: ResolvedConfig, language: str) -> tuple[dict[str, str], list[SkippedRule]]:
+    def _partition_rules(
+        self, rc: ResolvedConfig, language: str
+    ) -> tuple[dict[str, str], list[SkippedRule]]:
         enabled: dict[str, str] = {}
         skipped: list[SkippedRule] = []
         for det in REGISTRY.detectors_for_language(language):
@@ -106,7 +116,11 @@ class ScanEngine:
             if eff.enabled:
                 enabled[det.rule_id] = rule_fingerprint(det.rule_id, eff)
             else:
-                skipped.append(SkippedRule(rule_id=det.rule_id, reason=eff.skipped_reason or "disabled"))
+                skipped.append(
+                    SkippedRule(
+                        rule_id=det.rule_id, reason=eff.skipped_reason or "disabled"
+                    )
+                )
         return enabled, skipped
 
     def _audit(
@@ -148,7 +162,9 @@ class ScanEngine:
         ]
 
         if not missed:  # nothing to re-run
-            findings = [f for rid in enabled for f in await index.cached_findings(rel, rid)]
+            findings = [
+                f for rid in enabled for f in await index.cached_findings(rel, rid)
+            ]
             findings.sort(key=lambda f: (f.line, f.rule_id))
             # genuinely cached only if a prior scan recorded this file; a file with no
             # enabled rules (e.g. role-excluded) has nothing to do, not a cache hit.
@@ -184,10 +200,14 @@ class ScanEngine:
         extractor = ShapeExtractor.for_source(source)
         rows = extractor.shapes() if extractor else []
         if rows:
-            await index.add_shapes([(s.shape_hash, s.kind, rel, s.symbol, s.line) for s in rows])
+            await index.add_shapes(
+                [(s.shape_hash, s.kind, rel, s.symbol, s.line) for s in rows]
+            )
 
         hit = [rid for rid in enabled if rid not in missed]
-        findings = list(res.findings) + [f for rid in hit for f in await index.cached_findings(rel, rid)]
+        findings = list(res.findings) + [
+            f for rid in hit for f in await index.cached_findings(rel, rid)
+        ]
         findings.sort(key=lambda f: (f.line, f.rule_id))
         return ScanResult(
             file=rel,

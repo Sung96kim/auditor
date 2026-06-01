@@ -45,7 +45,10 @@ class InlineImport(Detector):
         enclosing = nearest_enclosing_function(ctx.tree)
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)) and enclosing.get(id(node)) is not None:
+            if (
+                isinstance(node, (ast.Import, ast.ImportFrom))
+                and enclosing.get(id(node)) is not None
+            ):
                 out.append(
                     self.make_finding(
                         ctx,

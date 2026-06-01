@@ -2,6 +2,7 @@
 sequential awaits, no-await async bodies."""
 
 import ast
+from collections.abc import Iterator
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext, Detector
@@ -27,20 +28,20 @@ _SYNC_IO_NAMES = {
 _SYNC_IO_SUFFIXES = (".read", ".write", ".readlines", ".writelines")
 
 
-def _own_async_funcs(tree: ast.AST):
+def _own_async_funcs(tree: ast.AST) -> Iterator[ast.AsyncFunctionDef]:
     """Yield async functions, but exclude nested-function descents for ownership checks."""
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef):
             yield node
 
 
-def _direct_calls_in(fn: ast.AsyncFunctionDef):
+def _direct_calls_in(fn: ast.AsyncFunctionDef) -> Iterator[ast.Call]:
     """Calls inside fn but not inside a nested (sync or async) function def."""
     for stmt in fn.body:
         yield from _calls_excluding_nested(stmt)
 
 
-def _calls_excluding_nested(node: ast.AST):
+def _calls_excluding_nested(node: ast.AST) -> Iterator[ast.Call]:
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -67,7 +68,11 @@ class SyncIoInAsync(Detector):
                 if id(call) in awaited:
                     continue  # an awaited call does not block the loop
                 name = dotted_name(call.func)
-                if name in _SYNC_IO_NAMES or name.endswith(_SYNC_IO_SUFFIXES) or name == "httpx.Client":
+                if (
+                    name in _SYNC_IO_NAMES
+                    or name.endswith(_SYNC_IO_SUFFIXES)
+                    or name == "httpx.Client"
+                ):
                     out.append(
                         self.make_finding(
                             ctx,
@@ -201,9 +206,14 @@ class NoAwaitBody(Detector):
     default_severity: ClassVar[Severity] = Severity.LOW
     verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
 
+    #: async dunders the language requires to be coroutines even without an await
+    _ASYNC_PROTOCOL = {"__aenter__", "__aexit__", "__anext__", "__aiter__", "__acall__"}
+
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for fn in _own_async_funcs(ctx.tree):
+            if fn.name in self._ASYNC_PROTOCOL or _is_abstract_or_stub(fn):
+                continue  # protocol coroutines / abstract stubs are legitimately await-free
             if not _has_async_construct(fn):
                 out.append(
                     self.make_finding(
@@ -224,7 +234,33 @@ def _has_async_construct(fn: ast.AsyncFunctionDef) -> bool:
     return False
 
 
-def _nodes_excluding_nested_funcs(node: ast.AST):
+def _is_abstract_or_stub(fn: ast.AsyncFunctionDef) -> bool:
+    """A stub coroutine — ``...``/``pass``/``raise`` — is legitimately await-free."""
+    body = [
+        s
+        for s in fn.body
+        if not (
+            isinstance(s, ast.Expr)
+            and isinstance(s.value, ast.Constant)
+            and isinstance(s.value.value, str)
+        )
+    ]
+    if not body:
+        return True
+    if len(body) == 1:
+        stmt = body[0]
+        if isinstance(stmt, (ast.Pass, ast.Raise)):
+            return True
+        if (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value is ...
+        ):
+            return True
+    return False
+
+
+def _nodes_excluding_nested_funcs(node: ast.AST) -> Iterator[ast.AST]:
     yield node
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):

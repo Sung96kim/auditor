@@ -9,7 +9,6 @@ from auditor.languages.python.detectors._util import call_attr, dotted_name, kwa
 from auditor.languages.python.detectors.security._base import (
     SecurityDetector,
     has_true_kwarg,
-    string_constants,
 )
 from auditor.models import Finding, Severity, VerdictKind
 
@@ -22,7 +21,11 @@ class FlaskDebug(SecurityDetector):
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if isinstance(node, ast.Call) and call_attr(node) == "run" and has_true_kwarg(node, "debug"):
+            if (
+                isinstance(node, ast.Call)
+                and call_attr(node) == "run"
+                and has_true_kwarg(node, "debug")
+            ):
                 out.append(
                     self.make_finding(
                         ctx,
@@ -44,7 +47,9 @@ class JinjaAutoescapeOff(SecurityDetector):
         for node in ast.walk(ctx.tree):
             if isinstance(node, ast.Call) and call_attr(node) == "Environment":
                 autoescape = kwarg(node, "autoescape")
-                if autoescape is None or (isinstance(autoescape, ast.Constant) and autoescape.value is False):
+                if autoescape is None or (
+                    isinstance(autoescape, ast.Constant) and autoescape.value is False
+                ):
                     out.append(
                         self.make_finding(
                             ctx,
@@ -56,7 +61,9 @@ class JinjaAutoescapeOff(SecurityDetector):
         return out
 
 
-_SEC_ASSERT = re.compile(r"(auth|admin|permission|allowed|is_owner|authorized|can_)", re.I)
+_SEC_ASSERT = re.compile(
+    r"(auth|admin|permission|allowed|is_owner|authorized|can_)", re.I
+)
 
 
 class AssertForSecurity(SecurityDetector):
@@ -70,7 +77,9 @@ class AssertForSecurity(SecurityDetector):
         for node in ast.walk(ctx.tree):
             if isinstance(node, ast.Assert):
                 names = {n.id for n in ast.walk(node.test) if isinstance(n, ast.Name)}
-                attrs = {n.attr for n in ast.walk(node.test) if isinstance(n, ast.Attribute)}
+                attrs = {
+                    n.attr for n in ast.walk(node.test) if isinstance(n, ast.Attribute)
+                }
                 if any(_SEC_ASSERT.search(x) for x in names | attrs):
                     out.append(
                         self.make_finding(
@@ -83,15 +92,67 @@ class AssertForSecurity(SecurityDetector):
         return out
 
 
+_TMP_PREFIXES = ("/tmp/", "/var/tmp/")
+_TMP_EXACT = ("/tmp", "/var/tmp")
+_PATH_NAME = re.compile(
+    r"path|dir|tmp|temp|file|dest|output|target|cache|location", re.I
+)
+_PATH_FUNCS = {
+    "open",
+    "join",
+    "makedirs",
+    "mkdir",
+    "Path",
+    "NamedTemporaryFile",
+    "TemporaryFile",
+}
+
+
+def _is_tmp_literal(node: ast.expr | None) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and (node.value.startswith(_TMP_PREFIXES) or node.value in _TMP_EXACT)
+    )
+
+
+def _hardcoded_tmp_path(node: ast.AST) -> ast.Constant | None:
+    """A ``/tmp`` literal only when used as a path — a path-like assignment or a path/file
+    call arg. A bare ``/tmp`` string elsewhere is not flagged."""
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        tgt = node.targets[0]
+        if (
+            isinstance(tgt, ast.Name)
+            and _PATH_NAME.search(tgt.id)
+            and _is_tmp_literal(node.value)
+        ):
+            return node.value
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        if _PATH_NAME.search(node.target.id) and _is_tmp_literal(node.value):
+            return node.value
+    elif isinstance(node, ast.Call) and call_attr(node) in _PATH_FUNCS:
+        for arg in node.args:
+            if _is_tmp_literal(arg):
+                return arg
+    return None
+
+
 class InsecureTempfile(SecurityDetector):
     rule_id: ClassVar[str] = "PY-SEC-INSECURE-TEMPFILE"
     default_severity: ClassVar[Severity] = Severity.MEDIUM
-    standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B306", "bandit:B108", "owasp:A05")
+    standard_refs: ClassVar[tuple[str, ...]] = (
+        "bandit:B306",
+        "bandit:B108",
+        "owasp:A05",
+    )
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if isinstance(node, ast.Call) and dotted_name(node.func) == "tempfile.mktemp":
+            if (
+                isinstance(node, ast.Call)
+                and dotted_name(node.func) == "tempfile.mktemp"
+            ):
                 out.append(
                     self.make_finding(
                         ctx,
@@ -100,13 +161,13 @@ class InsecureTempfile(SecurityDetector):
                         suggestion="use tempfile.mkstemp / NamedTemporaryFile",
                     )
                 )
-        for node in string_constants(ctx.tree):
-            if node.value.startswith(("/tmp/", "/var/tmp/")) or node.value in ("/tmp", "/var/tmp"):
+            tmp = _hardcoded_tmp_path(node)
+            if tmp is not None:
                 out.append(
                     self.make_finding(
                         ctx,
-                        line=node.lineno,
-                        message=f"hardcoded temp path `{node.value}`; predictable/insecure",
+                        line=tmp.lineno,
+                        message=f"hardcoded temp path `{tmp.value}`; predictable/insecure",
                         suggestion="use tempfile for temp paths",
                     )
                 )

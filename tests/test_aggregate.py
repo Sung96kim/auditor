@@ -25,7 +25,9 @@ async def test_aggregate_rollup(tmp_path):
     settings = load_config(root)
     db = root / ".auditor" / "index.db"
     async with await IndexStore.connect(db) as index:
-        await ScanEngine.for_target(root / "pkg", settings=settings, index=index).scan_path(root / "pkg")
+        await ScanEngine.for_target(
+            root / "pkg", settings=settings, index=index
+        ).scan_path(root / "pkg")
         md = await AuditAggregator(index).markdown()
     assert "# Audit — consolidated report" in md
     assert "Scope: 2 files audited." in md
@@ -39,7 +41,9 @@ async def test_write_audit_file(tmp_path):
     db = root / ".auditor" / "index.db"
     out = root / "AUDIT.md"
     async with await IndexStore.connect(db) as index:
-        await ScanEngine.for_target(root / "pkg", settings=settings, index=index).scan_path(root / "pkg")
+        await ScanEngine.for_target(
+            root / "pkg", settings=settings, index=index
+        ).scan_path(root / "pkg")
         await AuditAggregator(index).write(out)
     assert out.exists()
     assert "consolidated report" in out.read_text()

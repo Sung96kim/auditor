@@ -20,7 +20,11 @@ _UNSAFE_LOADERS = {
 class UnsafeDeserialize(SecurityDetector):
     rule_id: ClassVar[str] = "PY-SEC-UNSAFE-DESERIALIZE"
     default_severity: ClassVar[Severity] = Severity.HIGH
-    standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B301", "bandit:B506", "owasp:A08")
+    standard_refs: ClassVar[tuple[str, ...]] = (
+        "bandit:B301",
+        "bandit:B506",
+        "owasp:A08",
+    )
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
@@ -90,8 +94,12 @@ class XxeUnsafeXml(SecurityDetector):
 
 def _imports_defusedxml(tree: ast.AST) -> bool:
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import) and any(a.name.startswith("defusedxml") for a in node.names):
+        if isinstance(node, ast.Import) and any(
+            a.name.startswith("defusedxml") for a in node.names
+        ):
             return True
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("defusedxml"):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+            "defusedxml"
+        ):
             return True
     return False

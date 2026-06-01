@@ -20,7 +20,11 @@ def _defines_basesettings(tree: ast.Module) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             for base in node.bases:
-                name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+                name = (
+                    base.attr
+                    if isinstance(base, ast.Attribute)
+                    else getattr(base, "id", "")
+                )
                 if name == "BaseSettings":
                     return True
     return False
@@ -51,7 +55,10 @@ class PythonAuditor(LanguageAuditor):
                 language="python",
                 role=role,
                 skipped_rules=[
-                    SkippedRule(rule_id="*", reason=f"syntax error at line {exc.lineno}: {exc.msg}")
+                    SkippedRule(
+                        rule_id="*",
+                        reason=f"syntax error at line {exc.lineno}: {exc.msg}",
+                    )
                 ],
             )
         ctx = AuditContext(
@@ -77,12 +84,21 @@ class PythonAuditor(LanguageAuditor):
         for cls in detector_classes:
             eff = config.effective(cls.rule_id)
             if not eff.enabled:
-                skipped.append(SkippedRule(rule_id=cls.rule_id, reason=eff.skipped_reason or "disabled"))
+                skipped.append(
+                    SkippedRule(
+                        rule_id=cls.rule_id, reason=eff.skipped_reason or "disabled"
+                    )
+                )
                 continue
             detector: Detector = cls()
             for f in detector.run(ctx):
                 findings.append(
-                    f.model_copy(update={"severity": eff.severity, "verdict_kind": eff.verdict_kind})
+                    f.model_copy(
+                        update={
+                            "severity": eff.severity,
+                            "verdict_kind": eff.verdict_kind,
+                        }
+                    )
                 )
 
         findings.sort(key=lambda f: (f.line, f.rule_id))

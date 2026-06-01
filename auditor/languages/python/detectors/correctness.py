@@ -22,6 +22,20 @@ def _reraises(handler: ast.ExceptHandler) -> bool:
     return any(isinstance(node, ast.Raise) for node in ast.walk(handler))
 
 
+def _handles_exception(handler: ast.ExceptHandler) -> bool:
+    """The handler re-raises or references the captured exception (logged/wrapped/propagated).
+    Capturing but never using it is not handling."""
+    if _reraises(handler):
+        return True
+    if handler.name is None:
+        return False
+    return any(
+        isinstance(n, ast.Name) and n.id == handler.name
+        for stmt in handler.body
+        for n in ast.walk(stmt)
+    )
+
+
 class BroadExcept(Detector):
     rule_id: ClassVar[str] = "PY-CORRECT-BROAD-EXCEPT"
     category: ClassVar[Category] = Category.CORRECTNESS
@@ -33,8 +47,12 @@ class BroadExcept(Detector):
             if not isinstance(node, ast.ExceptHandler):
                 continue
             names = _handler_type_names(node)
-            if (names & _BROAD or "<bare>" in names) and not _reraises(node):
-                label = "bare except" if "<bare>" in names else f"except {', '.join(sorted(names))}"
+            if (names & _BROAD or "<bare>" in names) and not _handles_exception(node):
+                label = (
+                    "bare except"
+                    if "<bare>" in names
+                    else f"except {', '.join(sorted(names))}"
+                )
                 out.append(
                     self.make_finding(
                         ctx,

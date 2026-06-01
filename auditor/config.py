@@ -87,7 +87,9 @@ class OverrideConfig(BaseModel):
 class AuditorSettings(BaseSettings):
     """The merged repo configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="AUDITOR_", extra="forbid", validate_default=False)
+    model_config = SettingsConfigDict(
+        env_prefix="AUDITOR_", extra="forbid", validate_default=False
+    )
 
     extends: str = "base"
     include: list[str] = Field(default_factory=list)
@@ -105,7 +107,9 @@ class AuditorSettings(BaseSettings):
 
     @field_validator("rules", mode="after")
     @classmethod
-    def _check_rule_ids(cls, value: dict[RuleId, RuleConfig]) -> dict[RuleId, RuleConfig]:
+    def _check_rule_ids(
+        cls, value: dict[RuleId, RuleConfig]
+    ) -> dict[RuleId, RuleConfig]:
         known = REGISTRY.rule_ids()
         if known:  # only enforce once detectors are registered (two-phase load)
             for rid in value:
@@ -117,7 +121,9 @@ class AuditorSettings(BaseSettings):
 
     @field_validator("categories", mode="after")
     @classmethod
-    def _check_categories(cls, value: dict[str, CategoryConfig]) -> dict[str, CategoryConfig]:
+    def _check_categories(
+        cls, value: dict[str, CategoryConfig]
+    ) -> dict[str, CategoryConfig]:
         known = REGISTRY.categories()
         for cat in value:
             if cat not in known:
@@ -223,7 +229,9 @@ class EffectiveRule(BaseModel):
 class ResolvedConfig:
     """Per-file effective view of the settings, given the file's role + path."""
 
-    def __init__(self, settings: AuditorSettings, *, role: FileRole, rel_path: str) -> None:
+    def __init__(
+        self, settings: AuditorSettings, *, role: FileRole, rel_path: str
+    ) -> None:
         self.settings = settings
         self.role = role
         self.rel_path = rel_path
@@ -298,7 +306,10 @@ class ResolvedConfig:
         )
 
     def _role_mode(self) -> RoleMode:
-        if self.role in (FileRole.TEST, FileRole.TEST_SUPPORT) and self.settings.test_mode:
+        if (
+            self.role in (FileRole.TEST, FileRole.TEST_SUPPORT)
+            and self.settings.test_mode
+        ):
             return self.settings.test_mode
         rp = self.settings.roles.get(self.role)
         if rp is not None:

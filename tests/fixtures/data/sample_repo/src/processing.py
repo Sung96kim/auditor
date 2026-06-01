@@ -69,9 +69,9 @@ class StringUtils:
         return value if len(value) <= limit else value[:limit] + "…"
 
 
-def to_summary(events: list) -> dict:
-    # PY-OOP-THIN-WRAPPER: single return delegating to one call
-    return ReportBuilder(events, "summary").build()
+def to_summary(events: list) -> list:
+    # PY-OOP-THIN-WRAPPER: pure pass-through, forwards its arg verbatim
+    return build_signals(events)
 
 
 class PipelineManager:
@@ -119,8 +119,8 @@ class PipelineManager:
 
 
 # PY-OOP-FREE-FN-ORCHESTRATOR: a chain of free functions threading the same state.
-def build_signals(raw: list) -> list:
-    return [r for r in raw if r]
+def build_signals(signals: list) -> list:
+    return [s for s in signals if s]
 
 
 def build_contexts(signals: list, registry: dict) -> list:

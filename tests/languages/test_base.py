@@ -12,8 +12,11 @@ def _ctx(source: str) -> AuditContext:
     settings = AuditorSettings()
     rc = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="x.py")
     return AuditContext(
-        file_path="x.py", source=source, tree=ast.parse(source),
-        role=FileRole.PRODUCTION, config=rc,
+        file_path="x.py",
+        source=source,
+        tree=ast.parse(source),
+        role=FileRole.PRODUCTION,
+        config=rc,
     )
 
 

@@ -16,7 +16,11 @@ _WEAK_HASH_NAMES = {"md5", "sha1"}
 class WeakHash(SecurityDetector):
     rule_id: ClassVar[str] = "PY-SEC-WEAK-HASH"
     default_severity: ClassVar[Severity] = Severity.MEDIUM
-    standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B303", "bandit:B324", "owasp:A02")
+    standard_refs: ClassVar[tuple[str, ...]] = (
+        "bandit:B303",
+        "bandit:B324",
+        "owasp:A02",
+    )
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
@@ -65,7 +69,10 @@ class InsecureRandom(SecurityDetector):
         for node in ast.walk(ctx.tree):
             if isinstance(node, ast.Call):
                 name = dotted_name(node.func)
-                if name.startswith("random.") and name.split(".", 1)[1] in _RANDOM_SEC_FNS:
+                if (
+                    name.startswith("random.")
+                    and name.split(".", 1)[1] in _RANDOM_SEC_FNS
+                ):
                     out.append(
                         self.make_finding(
                             ctx,
@@ -77,7 +84,9 @@ class InsecureRandom(SecurityDetector):
         return out
 
 
-_SECRET_NAME = re.compile(r"(password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key)", re.I)
+_SECRET_NAME = re.compile(
+    r"(password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key)", re.I
+)
 
 
 class HardcodedSecret(SecurityDetector):
@@ -91,7 +100,11 @@ class HardcodedSecret(SecurityDetector):
             target_name = _assign_target_name(node)
             if target_name and _SECRET_NAME.search(target_name):
                 value = node.value
-                if isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value:
+                if (
+                    isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                    and value.value
+                ):
                     out.append(
                         self.make_finding(
                             ctx,

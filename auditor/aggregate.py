@@ -62,7 +62,9 @@ def _render(files: list[IndexEntry], findings: list[Finding]) -> str:
     candidates = [f for f in findings if f.verdict_kind.value == "candidate"]
     if candidates:
         lines += ["## Candidates to judge", ""]
-        for f in sorted(candidates, key=lambda f: (-severity_rank(f.severity), f.rule_id)):
+        for f in sorted(
+            candidates, key=lambda f: (-severity_rank(f.severity), f.rule_id)
+        ):
             lines.append(f"- **{f.severity.value}** `{f.rule_id}` — {f.message}")
         lines.append("")
 

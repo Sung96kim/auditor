@@ -17,7 +17,9 @@ def test_content_hash_deterministic():
 
 def test_fingerprint_stable_for_same_config():
     eff = _eff("PY-STYLE-FILE-SIZE", AuditorSettings())
-    assert rule_fingerprint("PY-STYLE-FILE-SIZE", eff) == rule_fingerprint("PY-STYLE-FILE-SIZE", eff)
+    assert rule_fingerprint("PY-STYLE-FILE-SIZE", eff) == rule_fingerprint(
+        "PY-STYLE-FILE-SIZE", eff
+    )
 
 
 def test_fingerprint_changes_with_threshold():
@@ -28,13 +30,19 @@ def test_fingerprint_changes_with_threshold():
             {"rules": {"PY-STYLE-FILE-SIZE": {"threshold": {"file_max_lines": 10}}}}
         ),
     )
-    assert rule_fingerprint("PY-STYLE-FILE-SIZE", base) != rule_fingerprint("PY-STYLE-FILE-SIZE", bumped)
+    assert rule_fingerprint("PY-STYLE-FILE-SIZE", base) != rule_fingerprint(
+        "PY-STYLE-FILE-SIZE", bumped
+    )
 
 
 def test_fingerprint_changes_with_severity():
     base = _eff("PY-SEC-SSRF", AuditorSettings())
     bumped = _eff(
         "PY-SEC-SSRF",
-        AuditorSettings.model_validate({"rules": {"PY-SEC-SSRF": {"severity": "blocking"}}}),
+        AuditorSettings.model_validate(
+            {"rules": {"PY-SEC-SSRF": {"severity": "blocking"}}}
+        ),
     )
-    assert rule_fingerprint("PY-SEC-SSRF", base) != rule_fingerprint("PY-SEC-SSRF", bumped)
+    assert rule_fingerprint("PY-SEC-SSRF", base) != rule_fingerprint(
+        "PY-SEC-SSRF", bumped
+    )

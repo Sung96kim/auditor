@@ -53,7 +53,11 @@ def nearest_enclosing_function(
 
     def walk(node: ast.AST, fn: ast.FunctionDef | ast.AsyncFunctionDef | None) -> None:
         for child in ast.iter_child_nodes(node):
-            cur = child if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+            cur = (
+                child
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                else fn
+            )
             if cur is not None:
                 out[id(child)] = cur
             walk(child, cur)
@@ -65,3 +69,15 @@ def nearest_enclosing_function(
 def module_level_statements(tree: ast.Module) -> Iterator[ast.stmt]:
     """Top-level statements only (module import scope)."""
     yield from tree.body
+
+
+def function_params(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """All parameter names of a function — values that enter from the caller (potential
+    taint sources for security checks that 'go upward' to find user-controlled data)."""
+    a = fn.args
+    names = {p.arg for p in a.posonlyargs + a.args + a.kwonlyargs}
+    if a.vararg:
+        names.add(a.vararg.arg)
+    if a.kwarg:
+        names.add(a.kwarg.arg)
+    return names

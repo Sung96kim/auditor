@@ -1,19 +1,76 @@
 """Transport & network security detectors."""
 
 import ast
+import re
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext
-from auditor.languages.python.detectors._util import dotted_name, kwarg
+from auditor.languages.python.detectors._util import call_attr, dotted_name, kwarg
 from auditor.languages.python.detectors.security._base import (
     SecurityDetector,
     has_false_kwarg,
-    string_constants,
 )
 from auditor.models import Finding, Severity, VerdictKind
 
 _HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "request"}
 _HTTP_LIBS = ("requests.", "httpx.")
+
+_ALL_IFACE = "0.0.0.0"
+_HOST_KWARGS = {
+    "host",
+    "hostname",
+    "bind",
+    "address",
+    "addr",
+    "interface",
+    "server_address",
+    "listen",
+}
+_BIND_FUNCS = {
+    "bind",
+    "run",
+    "serve",
+    "create_server",
+    "run_server",
+    "make_server",
+    "listen",
+}
+_HOST_NAME = re.compile(r"host|bind|addr|interface|listen", re.I)
+
+
+def _is_all_iface(node: ast.expr | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value == _ALL_IFACE
+
+
+def _binds_all_interfaces(node: ast.AST) -> ast.Constant | None:
+    """The ``"0.0.0.0"`` literal only when used as a bind address — a host kwarg, a
+    bind/run/serve arg, or a host-like assignment. A bare literal elsewhere is not flagged."""
+    if isinstance(node, ast.Call):
+        for kw in node.keywords:
+            if kw.arg in _HOST_KWARGS and _is_all_iface(kw.value):
+                return kw.value
+        if call_attr(node) in _BIND_FUNCS:
+            for arg in node.args:
+                if _is_all_iface(arg):
+                    return arg
+                if (
+                    isinstance(arg, ast.Tuple)
+                    and arg.elts
+                    and _is_all_iface(arg.elts[0])
+                ):
+                    return arg.elts[0]
+    elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+        tgt = node.targets[0]
+        if (
+            isinstance(tgt, ast.Name)
+            and _HOST_NAME.search(tgt.id)
+            and _is_all_iface(node.value)
+        ):
+            return node.value
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        if _HOST_NAME.search(node.target.id) and _is_all_iface(node.value):
+            return node.value
+    return None
 
 
 def _is_http_call(node: ast.Call) -> str | None:
@@ -34,15 +91,29 @@ class InsecureTls(SecurityDetector):
             if isinstance(node, ast.Call):
                 name = dotted_name(node.func)
                 if has_false_kwarg(node, "verify"):
-                    out.append(self._f(ctx, node, "TLS verification disabled (verify=False)"))
+                    out.append(
+                        self._f(ctx, node, "TLS verification disabled (verify=False)")
+                    )
                 elif has_false_kwarg(node, "check_hostname"):
-                    out.append(self._f(ctx, node, "hostname check disabled (check_hostname=False)"))
+                    out.append(
+                        self._f(
+                            ctx, node, "hostname check disabled (check_hostname=False)"
+                        )
+                    )
                 elif name == "ssl._create_unverified_context":
-                    out.append(self._f(ctx, node, "ssl._create_unverified_context() disables verification"))
+                    out.append(
+                        self._f(
+                            ctx,
+                            node,
+                            "ssl._create_unverified_context() disables verification",
+                        )
+                    )
         return out
 
     def _f(self, ctx: AuditContext, node: ast.Call, msg: str) -> Finding:
-        return self.make_finding(ctx, line=node.lineno, message=msg, suggestion="keep TLS verification on")
+        return self.make_finding(
+            ctx, line=node.lineno, message=msg, suggestion="keep TLS verification on"
+        )
 
 
 class RequestNoTimeout(SecurityDetector):
@@ -74,12 +145,13 @@ class BindAllInterfaces(SecurityDetector):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
-        for node in string_constants(ctx.tree):
-            if node.value == "0.0.0.0":
+        for node in ast.walk(ctx.tree):
+            target = _binds_all_interfaces(node)
+            if target is not None:
                 out.append(
                     self.make_finding(
                         ctx,
-                        line=node.lineno,
+                        line=target.lineno,
                         message="binds all interfaces (0.0.0.0); exposes the service broadly",
                         suggestion="bind to a specific interface unless intentionally public",
                     )

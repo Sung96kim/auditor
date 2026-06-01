@@ -17,7 +17,12 @@ class MarkdownReporter(Reporter):
         flagged = [r for r in results if r.findings]
         flagged.sort(key=lambda r: -sum(r.counts.values()))
         if flagged:
-            lines += ["## Files with findings", "", "| File | Role | Blocking | High | Medium | Low |", "| --- | --- | --- | --- | --- | --- |"]
+            lines += [
+                "## Files with findings",
+                "",
+                "| File | Role | Blocking | High | Medium | Low |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
             for r in flagged:
                 c = r.counts
                 lines.append(
@@ -27,9 +32,13 @@ class MarkdownReporter(Reporter):
             lines.append("")
         for r in flagged:
             lines += [f"### `{r.file}`", ""]
-            for f in sorted(r.findings, key=lambda f: (-severity_rank(f.severity), f.line)):
+            for f in sorted(
+                r.findings, key=lambda f: (-severity_rank(f.severity), f.line)
+            ):
                 mark = "🔧" if f.verdict_kind.value == "auto" else "🔎"
-                lines.append(f"- {mark} **{f.severity.value}** `{f.rule_id}` (L{f.line}) — {f.message}")
+                lines.append(
+                    f"- {mark} **{f.severity.value}** `{f.rule_id}` (L{f.line}) — {f.message}"
+                )
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 

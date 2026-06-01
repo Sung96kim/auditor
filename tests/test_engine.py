@@ -22,13 +22,17 @@ def _make_repo(tmp_path: Path) -> Path:
 
 
 async def _scan_dir(root: Path, target: Path, settings, index) -> dict:
-    results = await ScanEngine.for_target(target, settings=settings, index=index).scan_path(target)
+    results = await ScanEngine.for_target(
+        target, settings=settings, index=index
+    ).scan_path(target)
     return {r.file: r for r in results}
 
 
 async def test_stateless_scan_no_db(tmp_path):
     root = _make_repo(tmp_path)
-    res = await ScanEngine.for_target(root / "pkg" / "a.py").scan_file(root / "pkg" / "a.py")
+    res = await ScanEngine.for_target(root / "pkg" / "a.py").scan_file(
+        root / "pkg" / "a.py"
+    )
     assert "PY-SEC-DANGEROUS-EVAL" in {f.rule_id for f in res.findings}
     assert not (root / ".auditor" / "index.db").exists()
     assert res.cached is False
@@ -54,7 +58,9 @@ async def test_incremental_cache_reuses_unchanged(tmp_path):
         third = await _scan_dir(root, root / "pkg", settings, index)
         assert third["pkg/a.py"].cached is False
         assert third["pkg/b.py"].cached is True
-        assert "PY-SEC-DANGEROUS-EVAL" not in {f.rule_id for f in third["pkg/a.py"].findings}
+        assert "PY-SEC-DANGEROUS-EVAL" not in {
+            f.rule_id for f in third["pkg/a.py"].findings
+        }
 
 
 async def test_per_rule_invalidation(tmp_path):
@@ -82,7 +88,9 @@ async def test_parallel_writers(tmp_path):
 
     async def worker(p: Path) -> int:
         async with await IndexStore.connect(db) as index:
-            res = await ScanEngine.for_target(p, settings=settings, index=index).scan_file(p)
+            res = await ScanEngine.for_target(
+                p, settings=settings, index=index
+            ).scan_file(p)
             return len(res.findings)
 
     results = await asyncio.gather(*[worker(p) for p in files * 4])

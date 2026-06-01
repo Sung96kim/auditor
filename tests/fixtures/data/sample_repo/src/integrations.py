@@ -12,7 +12,7 @@ import tempfile
 import requests
 import yaml
 
-DEFAULT_REGISTRY = "0.0.0.0"  # PY-SEC-BIND-ALL-INTERFACES (a real bind address constant)
+BIND_HOST = "0.0.0.0"  # PY-SEC-BIND-ALL-INTERFACES (server bound to all interfaces)
 
 
 class CommandRunner:

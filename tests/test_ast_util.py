@@ -10,11 +10,20 @@ def _first(src: str, node_type) -> ast.AST:
 
 
 def test_dotted():
-    assert ast_util.dotted(ast.parse("os.environ.get", mode="eval").body) == "os.environ.get"
-    assert ast_util.dotted(ast.parse("requests.get(x)", mode="eval").body) == "requests.get"
+    assert (
+        ast_util.dotted(ast.parse("os.environ.get", mode="eval").body)
+        == "os.environ.get"
+    )
+    assert (
+        ast_util.dotted(ast.parse("requests.get(x)", mode="eval").body)
+        == "requests.get"
+    )
     assert ast_util.dotted(ast.parse("plain", mode="eval").body) == "plain"
     # unparse fallback for non-name/attribute nodes (e.g. a subscript return type)
-    assert ast_util.dotted(ast.parse("dict[str, Any]", mode="eval").body) == "dict[str, Any]"
+    assert (
+        ast_util.dotted(ast.parse("dict[str, Any]", mode="eval").body)
+        == "dict[str, Any]"
+    )
 
 
 def test_decorator_names():
@@ -51,7 +60,13 @@ def test_class_flags():
     assert "BASEMODEL" in ast_util.class_flags(basemodel)
     dc = _first("@dataclass\nclass R:\n    x: int", ast.ClassDef)
     assert "DATACLASS" in ast_util.class_flags(dc)
-    allstatic = _first("class U:\n    @staticmethod\n    def a(): ...\n    @staticmethod\n    def b(): ...", ast.ClassDef)
+    allstatic = _first(
+        "class U:\n    @staticmethod\n    def a(): ...\n    @staticmethod\n    def b(): ...",
+        ast.ClassDef,
+    )
     assert "ALL_STATICMETHODS" in ast_util.class_flags(allstatic)
-    mixed = _first("class S:\n    @staticmethod\n    def a(): ...\n    def b(self): ...", ast.ClassDef)
+    mixed = _first(
+        "class S:\n    @staticmethod\n    def a(): ...\n    def b(self): ...",
+        ast.ClassDef,
+    )
     assert "ALL_STATICMETHODS" not in ast_util.class_flags(mixed)

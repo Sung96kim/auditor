@@ -49,13 +49,23 @@ def demo_result() -> ScanResult:
     """A small ScanResult with one auto + one candidate finding, for reporter tests."""
     findings = [
         Finding(
-            rule_id="PY-SEC-DANGEROUS-EVAL", category=Category.SECURITY, severity=Severity.BLOCKING,
-            verdict_kind=VerdictKind.AUTO, line=2, message="eval on input",
+            rule_id="PY-SEC-DANGEROUS-EVAL",
+            category=Category.SECURITY,
+            severity=Severity.BLOCKING,
+            verdict_kind=VerdictKind.AUTO,
+            line=2,
+            message="eval on input",
             standard_refs=("bandit:B307", "owasp:A03"),
         ),
         Finding(
-            rule_id="PY-OOP-CONSTRUCTOR-WALL", category=Category.OOP_COMPOSITION,
-            severity=Severity.LOW, verdict_kind=VerdictKind.CANDIDATE, line=10, message="wall",
+            rule_id="PY-OOP-CONSTRUCTOR-WALL",
+            category=Category.OOP_COMPOSITION,
+            severity=Severity.LOW,
+            verdict_kind=VerdictKind.CANDIDATE,
+            line=10,
+            message="wall",
         ),
     ]
-    return ScanResult(file="pkg/a.py", language="python", role=FileRole.PRODUCTION, findings=findings)
+    return ScanResult(
+        file="pkg/a.py", language="python", role=FileRole.PRODUCTION, findings=findings
+    )
