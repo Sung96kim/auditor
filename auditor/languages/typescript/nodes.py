@@ -114,9 +114,11 @@ class Tsx:
         for child in self.named_children():
             if child.type == "jsx_text" and child.text.strip():
                 return True
+            # an expression child renders text/value (`{label}`, `{n}`, `{fmt()}`) unless it
+            # is itself an element (`{<Icon/>}`), which is markup, not text.
             if child.type == "jsx_expression":
                 inner = child.named_children()
-                if inner and inner[0].type in ("string", "template_string"):
+                if inner and not inner[0].is_jsx_element:
                     return True
         return False
 
@@ -175,3 +177,11 @@ def callee(call: Tsx) -> str:
 def field_text(node: Tsx, field: str) -> str:
     child = node.field(field)
     return child.text if child is not None else ""
+
+
+def import_source(node: Tsx) -> str:
+    """The module string of an ``import ... from "x"`` statement (quotes stripped)."""
+    source = node.field("source")
+    if source is None or source.type != "string":
+        return ""
+    return "".join(c.text for c in source.named_children() if c.type == "string_fragment")

@@ -85,6 +85,30 @@ class OverrideConfig(BaseModel):
     categories: dict[str, CategoryConfig] = Field(default_factory=dict)
 
 
+class DesignSystemPrimitive(BaseModel):
+    """One declared design-system primitive: the raw markup it should replace. Lets the
+    project supply its own vocabulary so the auditor can check 'this should be <Badge>'
+    without the tool hardcoding any component."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    component: str  # the primitive to recommend, e.g. "Badge"
+    when_class: str | None = None  # className regex whose raw markup should be this primitive
+    requires_text: bool = True  # only when the element renders text (skip icon-only backdrops)
+    size_override: bool = False  # also flag fixed h-/w-/size- className on this component
+
+
+class DesignSystem(BaseModel):
+    """A project's declared design system. Empty by default — the DS rules only fire when a
+    repo opts in by declaring its shell / primitives."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ui_paths: list[str] = Field(default_factory=list)  # import paths that bypass the shell
+    shell: str | None = None  # the entrypoint to recommend instead
+    primitives: list[DesignSystemPrimitive] = Field(default_factory=list)
+
+
 class AuditorSettings(BaseSettings):
     """The merged repo configuration."""
 
@@ -105,6 +129,7 @@ class AuditorSettings(BaseSettings):
     plugins: list[str] = Field(default_factory=list)
     trust_local_plugins: bool = False
     lint_overlap: bool = False
+    design_system: DesignSystem = Field(default_factory=DesignSystem)
 
     @field_validator("rules", mode="after")
     @classmethod

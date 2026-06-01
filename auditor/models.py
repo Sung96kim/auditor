@@ -76,6 +76,7 @@ class Category(StrEnum):
     STYLE = "style"
     REACT = "react"
     A11Y = "a11y"
+    DESIGN_SYSTEM = "design-system"
 
 
 class ManifestEntryKind(StrEnum):

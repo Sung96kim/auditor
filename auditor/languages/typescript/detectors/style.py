@@ -4,18 +4,8 @@ from collections import defaultdict
 from typing import ClassVar
 
 from auditor.languages.typescript.base import TsAuditContext, TsDetector
-from auditor.languages.typescript.nodes import Tsx
+from auditor.languages.typescript.nodes import Tsx, import_source
 from auditor.models import Category, Finding, Severity
-
-
-def _import_source(node: Tsx) -> str | None:
-    """The module string of an ``import ... from "x"`` statement (without quotes)."""
-    source = node.field("source")
-    if source is None or source.type != "string":
-        return None
-    return "".join(
-        c.text for c in source.named_children() if c.type == "string_fragment"
-    )
 
 
 class DuplicateImport(TsDetector):
@@ -28,8 +18,8 @@ class DuplicateImport(TsDetector):
         by_source: dict[str, list[Tsx]] = defaultdict(list)
         for node in ctx.root.named_children():
             if node.type == "import_statement":
-                src = _import_source(node)
-                if src is not None:
+                src = import_source(node)
+                if src:
                     by_source[src].append(node)
 
         out: list[Finding] = []

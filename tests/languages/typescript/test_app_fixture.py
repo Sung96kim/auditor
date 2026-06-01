@@ -15,6 +15,12 @@ from auditor.registry import REGISTRY
 _PYPROJECT = (
     '[project]\nname = "x"\nversion = "0"\n'
     '[tool.auditor.rules."TS-STYLE-FILE-SIZE".threshold]\nfile_max_lines = 70\n'
+    "[tool.auditor.design_system]\n"
+    'ui_paths = ["@/components/ui"]\nshell = "@/lib/ui"\n'
+    "[[tool.auditor.design_system.primitives]]\n"
+    "component = \"Badge\"\nwhen_class = 'rounded-full bg-\\w+-\\d+/\\d+'\n"
+    "[[tool.auditor.design_system.primitives]]\n"
+    'component = "Button"\nsize_override = true\n'
 )
 
 

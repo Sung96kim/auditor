@@ -3,6 +3,7 @@
 from auditor.languages.typescript.detectors import (  # noqa: F401
     a11y,
     complexity,
+    design_system,
     dry,
     react,
     security,
