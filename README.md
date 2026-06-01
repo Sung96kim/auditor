@@ -49,10 +49,12 @@ uv sync --extra dev     # + pytest/ruff
 
 ```bash
 auditor scan .                       # audit the repo (JSON to stdout)
-auditor scan . --incremental         # use/update the on-disk cache (.auditor/index.db)
-auditor scan . --format sarif        # SARIF 2.1.0 for CI / GitHub code scanning
-auditor scan . --profile strict      # run any repo at strict strength (no config edits needed)
-auditor scan tests/ --strict-tests   # audit test code at full production strength
+auditor scan . -i                    # --incremental: use/update the cache (.auditor/index.db)
+auditor scan . -f sarif              # --format: json | sarif | md | html
+auditor scan . -f html -o audit.html # --output: write the report to a file instead of stdout
+auditor scan . --serve               # render HTML and open it in a browser on a local port
+auditor scan . -p strict             # --profile: run any repo at strict strength (no config edits)
+auditor scan tests/ -t               # --strict-tests: audit test code at full production strength
 auditor report path/to/file.py       # single file, stateless (manifest + findings)
 auditor manifest path/to/file.py     # AST manifest only (no detectors)
 auditor discover .                   # list auditable files with their classified role

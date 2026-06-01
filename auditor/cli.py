@@ -24,6 +24,7 @@ from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 from auditor.reporters import render
 from auditor.roles import RoleClassifier
+from auditor.serve import ReportServer
 
 app = typer.Typer(
     no_args_is_help=True, add_completion=False, help="A token-efficient repo auditor."
@@ -71,22 +72,32 @@ def scan(
         "."
     ),
     incremental: Annotated[
-        bool, typer.Option(help="Use/update the on-disk cache.")
+        bool, typer.Option("-i", "--incremental", help="Use/update the on-disk cache.")
     ] = False,
     no_index: Annotated[
-        bool, typer.Option("--no-index", help="Force stateless (no cache).")
+        bool, typer.Option("-n", "--no-index", help="Force stateless (no cache).")
     ] = False,
     strict_tests: Annotated[
-        bool, typer.Option(help="Audit tests at production strength.")
+        bool,
+        typer.Option("-t", "--strict-tests", help="Audit tests at production strength."),
     ] = False,
     allow_local_plugins: Annotated[
-        bool, typer.Option(help="Load .auditor/plugins/*.py.")
+        bool,
+        typer.Option("-a", "--allow-local-plugins", help="Load .auditor/plugins/*.py."),
     ] = False,
     profile: Annotated[
         str | None,
-        typer.Option(help="Override the profile for this run: base|strict|pydantic|all-strict."),
+        typer.Option("-p", "--profile", help="Override the profile for this run: base|strict|pydantic|all-strict."),
     ] = None,
-    fmt: Annotated[str, typer.Option("--format", help="json | sarif | md")] = "json",
+    serve: Annotated[
+        bool,
+        typer.Option("-s", "--serve", help="Render HTML and open it in a browser on a local port."),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("-o", "--output", help="Write the report to this path instead of stdout."),
+    ] = None,
+    fmt: Annotated[str, typer.Option("-f", "--format", help="json | sarif | md | html")] = "json",
 ) -> None:
     """Audit a file or directory."""
     results = _run(
@@ -100,7 +111,25 @@ def scan(
         ),
         f"auditing {target}…",
     )
-    typer.echo(render(results, fmt))
+    if serve:
+        _serve_html(results)
+        return
+    _emit(render(results, fmt), output)
+
+
+def _serve_html(results: list[ScanResult]) -> None:
+    server = ReportServer(render(results, "html"))
+    _status.print(f"[bold]Serving audit report at[/bold] {server.url}  (Ctrl-C to stop)")
+    server.serve()
+
+
+def _emit(rendered: str, output: Path | None) -> None:
+    """Write a rendered report to ``output`` (with a stderr note) or echo it to stdout."""
+    if output is None:
+        typer.echo(rendered)
+        return
+    output.write_text(rendered, encoding="utf-8")
+    _status.print(f"wrote {output}")
 
 
 # --------------------------------------------------------------- manifest/report
@@ -119,13 +148,17 @@ def report(
     file: Annotated[Path, typer.Argument(help="Python file.")],
     profile: Annotated[
         str | None,
-        typer.Option(help="Override the profile for this run: base|strict|pydantic|all-strict."),
+        typer.Option("-p", "--profile", help="Override the profile for this run: base|strict|pydantic|all-strict."),
     ] = None,
-    fmt: Annotated[str, typer.Option("--format", help="json | sarif | md")] = "json",
+    output: Annotated[
+        Path | None,
+        typer.Option("-o", "--output", help="Write the report to this path instead of stdout."),
+    ] = None,
+    fmt: Annotated[str, typer.Option("-f", "--format", help="json | sarif | md | html")] = "json",
 ) -> None:
     """Audit one file (stateless) — manifest + findings in one call."""
     result = _run(_report(file, profile), f"auditing {file.name}…")
-    typer.echo(render([result], fmt))
+    _emit(render([result], fmt), output)
 
 
 async def _report(file: Path, profile: str | None) -> ScanResult:
@@ -200,7 +233,7 @@ def index_add(
     paths: Annotated[
         list[Path], typer.Argument(help="Files to register in the audit scope.")
     ],
-    target: Annotated[Path, typer.Option("--root")] = Path("."),
+    target: Annotated[Path, typer.Option("-r", "--root")] = Path("."),
 ) -> None:
     """Register files as the audit scope."""
     root = find_root(target)
@@ -217,7 +250,7 @@ async def _index_add(root: Path, rels: list[str]) -> None:
 
 
 @index_app.command("list")
-def index_list(target: Annotated[Path, typer.Option("--root")] = Path(".")) -> None:
+def index_list(target: Annotated[Path, typer.Option("-r", "--root")] = Path(".")) -> None:
     """List the registered scope + per-file counts."""
     root = find_root(target)
     _echo_json(_run(_index_list(root), "reading index…"))
@@ -232,7 +265,7 @@ async def _index_list(root: Path) -> list[dict]:
 
 
 @config_app.command("show")
-def config_show(target: Annotated[Path, typer.Option("--root")] = Path(".")) -> None:
+def config_show(target: Annotated[Path, typer.Option("-r", "--root")] = Path(".")) -> None:
     """Print the resolved configuration."""
     settings = load_config(find_root(target))
     _echo_json(settings.model_dump(mode="json"))
@@ -240,9 +273,11 @@ def config_show(target: Annotated[Path, typer.Option("--root")] = Path(".")) -> 
 
 @rules_app.command("list")
 def rules_list(
-    category: Annotated[str | None, typer.Option(help="Filter by category.")] = None,
+    category: Annotated[
+        str | None, typer.Option("-c", "--category", help="Filter by category.")
+    ] = None,
     standard: Annotated[
-        str | None, typer.Option(help="bandit | owasp coverage.")
+        str | None, typer.Option("-s", "--standard", help="bandit | owasp coverage.")
     ] = None,
 ) -> None:
     """List every registered detector rule."""
@@ -268,7 +303,7 @@ def rules_list(
 
 
 @plugins_app.command("list")
-def plugins_list(target: Annotated[Path, typer.Option("--root")] = Path(".")) -> None:
+def plugins_list(target: Annotated[Path, typer.Option("-r", "--root")] = Path(".")) -> None:
     """Show every loaded detector/language/reporter/profile and its source."""
     loader = PluginLoader()
     load_config(find_root(target), loader=loader)

@@ -39,6 +39,14 @@ def severity_rank(severity: Severity) -> int:
     return _SEVERITY_ORDER[severity]
 
 
+SEVERITIES_DESC: tuple[Severity, ...] = (
+    Severity.BLOCKING,
+    Severity.HIGH,
+    Severity.MEDIUM,
+    Severity.LOW,
+)
+
+
 class VerdictKind(StrEnum):
     """Who decides the finding. ``auto`` = the tool decided deterministically;
     ``candidate`` = evidence only, the agent must judge."""
@@ -185,6 +193,14 @@ class ScanResult(BaseModel):
         for f in self.findings:
             out[f.severity] += 1
         return out
+
+    @property
+    def severity_key(self) -> tuple[int, ...]:
+        """Descending sort key: worst-severity-first, then by count within each
+        severity (blocking → high → medium → low). A file with any blocking finding
+        outranks one with only lows, regardless of total count."""
+        c = self.counts
+        return tuple(-c[s] for s in SEVERITIES_DESC)
 
 
 class IndexEntry(BaseModel):

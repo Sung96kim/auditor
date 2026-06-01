@@ -57,6 +57,22 @@ def test_scanresult_counts():
     assert r.counts[Severity.BLOCKING] == 0
 
 
+def test_severity_key_orders_blocking_before_many_lows():
+    blocker = ScanResult(
+        file="b.py",
+        language="python",
+        role=FileRole.PRODUCTION,
+        findings=[_finding(Severity.BLOCKING)],
+    )
+    lows = ScanResult(
+        file="l.py",
+        language="python",
+        role=FileRole.PRODUCTION,
+        findings=[_finding(Severity.LOW) for _ in range(9)],
+    )
+    assert sorted([lows, blocker], key=lambda r: r.severity_key) == [blocker, lows]
+
+
 def test_manifest_entry_defaults():
     e = ManifestEntry(line=3, symbol="f", kind=ManifestEntryKind.FUNCTION)
     assert e.arg_count == 0 and e.flags == () and e.return_type is None

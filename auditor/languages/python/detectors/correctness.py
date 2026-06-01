@@ -8,6 +8,9 @@ from auditor.languages.python.detectors._util import dotted_name
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _BROAD = {"Exception", "BaseException"}
+# Control-flow signals (not errors); a no-op handler for them is idiomatic graceful
+# shutdown / clean exit, not a swallowed error.
+_CONTROL_FLOW = {"KeyboardInterrupt", "SystemExit", "GeneratorExit"}
 
 
 def _handler_type_names(handler: ast.ExceptHandler) -> set[str]:
@@ -84,13 +87,17 @@ class SwallowedException(Detector):
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if isinstance(node, ast.ExceptHandler) and _is_noop_body(node.body):
-                out.append(
-                    self.make_finding(
-                        ctx,
-                        line=node.lineno,
-                        message="exception silently swallowed (no log, re-raise, or handling)",
-                        suggestion="log the error, handle it, or re-raise",
-                    )
+            if not isinstance(node, ast.ExceptHandler) or not _is_noop_body(node.body):
+                continue
+            names = _handler_type_names(node)
+            if names and names <= _CONTROL_FLOW:
+                continue  # `except KeyboardInterrupt: pass` etc. — intentional clean exit
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=node.lineno,
+                    message="exception silently swallowed (no log, re-raise, or handling)",
+                    suggestion="log the error, handle it, or re-raise",
                 )
+            )
         return out

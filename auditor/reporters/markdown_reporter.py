@@ -15,7 +15,7 @@ class MarkdownReporter(Reporter):
         lines.append(_totals_line(totals))
         lines.append("")
         flagged = [r for r in results if r.findings]
-        flagged.sort(key=lambda r: -sum(r.counts.values()))
+        flagged.sort(key=lambda r: r.severity_key)
         if flagged:
             lines += [
                 "## Files with findings",

@@ -55,6 +55,23 @@ def test_report_md(sample_repo):
     assert "# Audit report" in result.output
 
 
+def test_scan_html_short_flag(sample_repo):
+    result = runner.invoke(app, ["scan", str(sample_repo / "src"), "-f", "html"])
+    assert result.exit_code == 0, result.output
+    assert result.output.lstrip().startswith("<!doctype html>")
+
+
+def test_scan_output_to_file(sample_repo, tmp_path):
+    out = tmp_path / "report.json"
+    result = runner.invoke(
+        app, ["scan", str(sample_repo / "src"), "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(out.read_text())
+    assert payload["totals"]["blocking"] >= 1
+    assert out.name in result.output  # stdout/stderr notes where it wrote
+
+
 def test_manifest(sample_repo):
     payload = _json(
         runner.invoke(app, ["manifest", str(sample_repo / "src" / "models.py")])

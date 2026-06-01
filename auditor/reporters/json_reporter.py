@@ -8,8 +8,10 @@ from auditor.reporters.base import Reporter
 
 
 def payload(results: list[ScanResult]) -> dict:
-    """Structured result payload (used by the JSON reporter and the MCP server)."""
-    return {"files": [_file_payload(r) for r in results], "totals": _totals(results)}
+    """Structured result payload (used by the JSON reporter and the MCP server).
+    Files are ordered worst-severity-first so an agent reads the critical ones first."""
+    ordered = sorted(results, key=lambda r: (not r.findings, r.severity_key))
+    return {"files": [_file_payload(r) for r in ordered], "totals": _totals(ordered)}
 
 
 class JsonReporter(Reporter):

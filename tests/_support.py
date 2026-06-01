@@ -45,6 +45,24 @@ def rule_ids(result: ScanResult) -> set[str]:
     return {f.rule_id for f in result.findings}
 
 
+def result_with(file: str, *severities: Severity) -> ScanResult:
+    """A ScanResult with one finding per given severity — for ordering tests."""
+    findings = [
+        Finding(
+            rule_id="PY-TEST-RULE",
+            category=Category.STYLE,
+            severity=sev,
+            verdict_kind=VerdictKind.AUTO,
+            line=i + 1,
+            message=f"{sev.value} finding",
+        )
+        for i, sev in enumerate(severities)
+    ]
+    return ScanResult(
+        file=file, language="python", role=FileRole.PRODUCTION, findings=findings
+    )
+
+
 def demo_result() -> ScanResult:
     """A small ScanResult with one auto + one candidate finding, for reporter tests."""
     findings = [
