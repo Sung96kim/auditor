@@ -12,7 +12,7 @@ even though they share the index ``shapes`` table.
 import hashlib
 
 from auditor.languages.base import ShapeRow
-from auditor.languages.typescript.nodes import Tsx
+from auditor.languages.typescript.nodes import Tsx, callee, field_text
 
 _SKELETON_NODES = (
     "if_statement",
@@ -73,7 +73,10 @@ class ShapeExtractor:
 
     def _collect_blocks(self, node: Tsx, out: list[ShapeRow]) -> None:
         for child in node.named_children():
-            tags = _jsx_skeleton(child) if child.is_jsx_element else []
+            # a fragment (`<>...</>`) parses as a jsx_element with no name — it's grouping,
+            # not a real block, so descend through it rather than treating it as the block.
+            is_block = child.is_jsx_element and bool(child.jsx_name())
+            tags = _jsx_skeleton(child) if is_block else []
             if len(tags) >= _MIN_BLOCK_TAGS and len(set(tags)) >= _MIN_BLOCK_DISTINCT:
                 out.append(
                     ShapeRow(_hash("tsb|" + ">".join(tags)), "jsx-block", tags[0], child.line)
@@ -105,9 +108,9 @@ class ShapeExtractor:
 
 
 def _jsx_skeleton(body: Tsx) -> list[str]:
-    """Ordered tag names of every JSX element rendered in the body — the visual structure
-    with text/props/handlers stripped."""
-    return [n.jsx_name() for n in body.walk() if n.is_jsx_element]
+    """Ordered tag names of every named JSX element rendered in the body — the visual
+    structure with text/props/handlers stripped. Fragments (no name) are skipped."""
+    return [name for n in body.walk() if n.is_jsx_element and (name := n.jsx_name())]
 
 
 def _function_signature(body: Tsx) -> list[str]:
@@ -118,21 +121,10 @@ def _function_signature(body: Tsx) -> list[str]:
         if node.type in _SKELETON_NODES:
             parts.append(node.type)
         elif node.type == "call_expression":
-            parts.append("c:" + _callee(node.field("function")))
+            parts.append("c:" + callee(node))
         elif node.type == "new_expression":
-            parts.append("new:" + _callee(node.field("constructor")))
+            parts.append("new:" + field_text(node, "constructor"))
     return parts
-
-
-def _callee(fn: Tsx | None) -> str:
-    if fn is None:
-        return ""
-    if fn.type == "member_expression":
-        prop = fn.field("property")
-        return prop.text if prop is not None else ""
-    if fn.type == "identifier":
-        return fn.text
-    return fn.type
 
 
 def _param_types(body: Tsx) -> str:

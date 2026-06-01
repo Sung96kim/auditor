@@ -74,28 +74,11 @@ def _element_skeleton(element: Tsx) -> tuple[str, ...]:
 
 def _top_level_components(root: Tsx) -> list[tuple[str, int]]:
     """Top-level Capitalized declarations whose body renders JSX (i.e. React components)."""
-    out: list[tuple[str, int]] = []
-    for top in root.named_children():
-        decl = top.unwrap_export()
-        if decl.type == "function_declaration":
-            out.extend(_component_at(decl.field("name"), decl, decl))
-        elif decl.type == "lexical_declaration":
-            for declarator in decl.named_children():
-                if declarator.type == "variable_declarator":
-                    out.extend(
-                        _component_at(
-                            declarator.field("name"), declarator.field("value"), declarator
-                        )
-                    )
-    return out
-
-
-def _component_at(
-    name: Tsx | None, body: Tsx | None, at: Tsx
-) -> list[tuple[str, int]]:
-    if name is None or body is None or not _is_component(name.text, body):
-        return []
-    return [(name.text, at.line)]
+    return [
+        (name, at.line)
+        for name, body, at in root.top_declarations()
+        if _is_component(name, body)
+    ]
 
 
 def _is_component(name: str, body: Tsx) -> bool:

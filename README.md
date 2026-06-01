@@ -106,8 +106,12 @@ Each carries a stable `rule_id`, a category, a default severity, and (for securi
 **TypeScript / React** (`.ts/.tsx/.js/.jsx`, via the `ts` extra — tree-sitter): objective,
 **framework-agnostic** rules only —
 
-- **accessibility** (`a11y`): non-interactive `onClick`, icon-only button without a label,
-  `<img>` without alt, positive `tabIndex`.
+- **security** (`security`, OWASP-mapped): `dangerouslySetInnerHTML` with dynamic content,
+  `target="_blank"` without `rel="noopener"`, `javascript:` URLs, `eval`/`new Function`.
+- **accessibility** (`a11y`): non-interactive `onClick`, icon-only button / form control /
+  `<iframe>` without a label, `<img>` without alt, `<a>` without href, positive `tabIndex`,
+  `autoFocus`, redundant role, mouse handler without a keyboard equivalent.
+- **size & complexity**: large file, too many props, JSX nested too deep (config-tunable).
 - **structure** (`react`): multiple components per file, repeated sibling JSX → `.map()`,
   duplicate imports.
 - **DRY / extraction** (`react`): a component with a large hook cluster → custom `use*` hook

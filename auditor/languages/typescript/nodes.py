@@ -65,6 +65,20 @@ class Tsx:
     def contains_jsx(self) -> bool:
         return any(node.is_jsx_element for node in self.walk())
 
+    def top_declarations(self) -> list[tuple[str, "Tsx", "Tsx"]]:
+        """(name, body, anchor) for each top-level function and arrow/value const — the one
+        place that walks module-level declarations, so detectors don't each re-roll it."""
+        out: list[tuple[str, Tsx, Tsx]] = []
+        for top in self.named_children():
+            decl = top.unwrap_export()
+            if decl.type == "function_declaration":
+                out.extend(_named(decl.field("name"), decl, decl))
+            elif decl.type == "lexical_declaration":
+                for d in decl.named_children():
+                    if d.type == "variable_declarator":
+                        out.extend(_named(d.field("name"), d.field("value"), d))
+        return out
+
     # --- JSX element ---------------------------------------------------------
 
     def opening(self) -> "Tsx":
@@ -138,3 +152,26 @@ class Tsx:
             inner = value.named_children()
             return inner[0].text if inner else ""
         return value.text
+
+
+def _named(name: Tsx | None, body: Tsx | None, at: Tsx) -> list[tuple[str, Tsx, Tsx]]:
+    if name is None or body is None:
+        return []
+    return [(name.text, body, at)]
+
+
+def callee(call: Tsx) -> str:
+    """The name of the function a call invokes: ``f()`` -> ``f``, ``a.b()`` -> ``b``."""
+    fn = call.field("function")
+    if fn is None:
+        return ""
+    if fn.type == "member_expression":
+        return field_text(fn, "property")
+    if fn.type == "identifier":
+        return fn.text
+    return ""
+
+
+def field_text(node: Tsx, field: str) -> str:
+    child = node.field(field)
+    return child.text if child is not None else ""

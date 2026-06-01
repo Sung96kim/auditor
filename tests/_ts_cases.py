@@ -60,5 +60,74 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "const x = <div tabIndex={3}>x</div>;\n",
             "const x = <div tabIndex={0}>x</div>;\n",
         ),
+        (
+            "TS-A11Y-FORM-LABEL",
+            'const x = <input type="text" />;\n',
+            'const x = <input type="text" aria-label="name" />;\n',
+        ),
+        (
+            "TS-A11Y-ANCHOR-NO-HREF",
+            "const x = <a onClick={go}>x</a>;\n",
+            'const x = <a href="/x">x</a>;\n',
+        ),
+        (
+            "TS-A11Y-AUTOFOCUS",
+            "const x = <div autoFocus tabIndex={0}>x</div>;\n",
+            "const x = <div tabIndex={0}>x</div>;\n",
+        ),
+        (
+            "TS-A11Y-REDUNDANT-ROLE",
+            'const x = <button role="button">go</button>;\n',
+            "const x = <button>go</button>;\n",
+        ),
+        (
+            "TS-A11Y-MOUSE-NO-KEY",
+            "const x = <div onMouseOver={f}>x</div>;\n",
+            "const x = <div onMouseOver={f} onFocus={g}>x</div>;\n",
+        ),
+        (
+            "TS-A11Y-IFRAME-TITLE",
+            'const x = <iframe src="/x" />;\n',
+            'const x = <iframe src="/x" title="map" />;\n',
+        ),
+    ],
+    "security": [
+        (
+            "TS-SEC-DANGEROUS-HTML",
+            "const x = <div dangerouslySetInnerHTML={{ __html: userHtml }} />;\n",
+            'const x = <div dangerouslySetInnerHTML={{ __html: "<b>safe</b>" }} />;\n',
+        ),
+        (
+            "TS-SEC-TARGET-BLANK-NOOPENER",
+            'const x = <a href="/x" target="_blank">go</a>;\n',
+            'const x = <a href="/x" target="_blank" rel="noopener">go</a>;\n',
+        ),
+        (
+            "TS-SEC-JAVASCRIPT-URL",
+            'const x = <a href="javascript:alert(1)">go</a>;\n',
+            'const x = <a href="/safe">go</a>;\n',
+        ),
+        (
+            "TS-SEC-DANGEROUS-EVAL",
+            "const x = eval(code);\n",
+            "const x = JSON.parse(code);\n",
+        ),
+    ],
+    "complexity": [
+        (
+            "TS-STYLE-FILE-SIZE",
+            "const x = 1;\n" * 801,
+            "const x = 1;\n",
+        ),
+        (
+            "TS-REACT-TOO-MANY-PROPS",
+            "export function W({ a, b, c, d, e, f, g }: Props) {\n  return <div />;\n}\n",
+            "export function W({ a }: Props) {\n  return <div />;\n}\n",
+        ),
+        (
+            "TS-REACT-DEEP-JSX-NESTING",
+            "const x = (\n  <div><div><div><div><div><div><div>deep</div></div></div></div></div></div></div>\n);\n",
+            "const x = (\n  <div><div>shallow</div></div>\n);\n",
+        ),
     ],
 }

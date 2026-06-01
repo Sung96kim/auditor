@@ -28,6 +28,26 @@ _NATIVELY_INTERACTIVE = {
     "summary",
     "details",
 }
+_FORM_CONTROLS = {"input", "select", "textarea"}
+_UNLABELLED_INPUT_TYPES = {"hidden", "submit", "button", "reset", "image"}
+_NAMING_ATTRS = {"aria-label", "aria-labelledby", "id", "title"}
+_MOUSE_ATTRS = {"onMouseOver", "onMouseOut"}
+_FOCUS_ATTRS = {"onFocus", "onBlur"}
+_IMPLICIT_ROLE = {
+    "a": "link",
+    "button": "button",
+    "nav": "navigation",
+    "ul": "list",
+    "ol": "list",
+    "li": "listitem",
+    "img": "img",
+    "table": "table",
+    "main": "main",
+    "header": "banner",
+    "footer": "contentinfo",
+    "article": "article",
+    "form": "form",
+}
 
 
 class A11yDetector(TsDetector):
@@ -139,6 +159,129 @@ class PositiveTabIndex(A11yDetector):
                         line=element.line,
                         message=f"positive tabIndex ({value}) overrides natural tab order",
                         suggestion="use tabIndex={0} (focusable) or -1 (programmatic), not a positive value",
+                    )
+                )
+        return out
+
+
+class FormControlNoLabel(A11yDetector):
+    rule_id: ClassVar[str] = "TS-A11Y-FORM-LABEL"
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for element in ctx.root.descendants(*_ALL_ELEMENTS):
+            name = element.jsx_name()
+            if name not in _FORM_CONTROLS:
+                continue
+            attrs = element.attributes()
+            if name == "input":
+                input_type = attrs["type"].attr_value_text() if "type" in attrs else "text"
+                if input_type in _UNLABELLED_INPUT_TYPES:
+                    continue
+            if not (_NAMING_ATTRS & attrs.keys()):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=element.line,
+                        message=f"<{name}> has no associated label (aria-label / id+htmlFor)",
+                        suggestion="add aria-label, or an id linked from a <label htmlFor>",
+                    )
+                )
+        return out
+
+
+class AnchorNoHref(A11yDetector):
+    rule_id: ClassVar[str] = "TS-A11Y-ANCHOR-NO-HREF"
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for element in ctx.root.descendants(*_ALL_ELEMENTS):
+            if element.jsx_name() != "a":
+                continue
+            if "href" not in element.attributes():
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=element.line,
+                        message="<a> without href is not a real link/keyboard-focusable",
+                        suggestion="add href, or use a <button> if it triggers an action",
+                    )
+                )
+        return out
+
+
+class AutoFocus(A11yDetector):
+    rule_id: ClassVar[str] = "TS-A11Y-AUTOFOCUS"
+    default_severity: ClassVar[Severity] = Severity.LOW
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for element in ctx.root.descendants(*_ALL_ELEMENTS):
+            if "autoFocus" in element.attributes():
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=element.line,
+                        message="autoFocus can disorient screen-reader and keyboard users",
+                        suggestion="move focus intentionally in response to a user action instead",
+                    )
+                )
+        return out
+
+
+class RedundantRole(A11yDetector):
+    rule_id: ClassVar[str] = "TS-A11Y-REDUNDANT-ROLE"
+    default_severity: ClassVar[Severity] = Severity.LOW
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for element in ctx.root.descendants(*_ALL_ELEMENTS):
+            name = element.jsx_name()
+            role = element.attributes().get("role")
+            if role is not None and role.attr_value_text() == _IMPLICIT_ROLE.get(name):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=element.line,
+                        message=f'role="{_IMPLICIT_ROLE[name]}" is redundant on <{name}>',
+                        suggestion="drop the redundant role (it's the element's implicit role)",
+                    )
+                )
+        return out
+
+
+class MouseOnlyHandler(A11yDetector):
+    rule_id: ClassVar[str] = "TS-A11Y-MOUSE-NO-KEY"
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for element in ctx.root.descendants(*_ALL_ELEMENTS):
+            attrs = element.attributes()
+            if (_MOUSE_ATTRS & attrs.keys()) and not (_FOCUS_ATTRS & attrs.keys()):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=element.line,
+                        message="onMouseOver/onMouseOut without onFocus/onBlur; keyboard users miss it",
+                        suggestion="pair mouse handlers with onFocus/onBlur",
+                    )
+                )
+        return out
+
+
+class IframeNoTitle(A11yDetector):
+    rule_id: ClassVar[str] = "TS-A11Y-IFRAME-TITLE"
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for element in ctx.root.descendants(*_ALL_ELEMENTS):
+            if element.jsx_name() == "iframe" and "title" not in element.attributes():
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=element.line,
+                        message="<iframe> has no title (screen readers can't describe it)",
+                        suggestion='add a descriptive title="…"',
                     )
                 )
         return out

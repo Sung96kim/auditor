@@ -37,6 +37,7 @@ class Threshold(BaseModel):
     max_attrs: int = 15
     max_complexity: int = 10
     flat_field_min: int = 12
+    max_jsx_depth: int = 6
 
     def merged(self, override: "Threshold | None") -> "Threshold":
         if override is None:
