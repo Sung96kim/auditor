@@ -104,14 +104,23 @@ Each carries a stable `rule_id`, a category, a default severity, and (for securi
 `standard_refs` like `bandit:B602` / `owasp:A03`. `auditor rules list` enumerates them.
 
 **TypeScript / React** (`.ts/.tsx/.js/.jsx`, via the `ts` extra — tree-sitter): objective,
-**framework-agnostic** rules only — accessibility (`a11y`: non-interactive `onClick`,
-icon-only button without a label, `<img>` without alt, positive `tabIndex`), structure
-(`react`: multiple components per file, repeated sibling JSX → `.map()`, duplicate imports),
-and cross-file **DRY/dedup** (`TS-XFILE-DUP-COMPONENT`/`DUP-FUNCTION` — same normalized
-component/function shape across files → extract a shared one). The auditor deliberately does
-**not** encode a design system: it never says "this should be `<Badge>`" or "use the size
-prop" — that needs the project's primitive vocabulary, which is the agent + design-system
-skill's judgment layer. The auditor surfaces the structural fact; you map it to your code.
+**framework-agnostic** rules only —
+
+- **accessibility** (`a11y`): non-interactive `onClick`, icon-only button without a label,
+  `<img>` without alt, positive `tabIndex`.
+- **structure** (`react`): multiple components per file, repeated sibling JSX → `.map()`,
+  duplicate imports.
+- **DRY / extraction** (`react`): a component with a large hook cluster → custom `use*` hook
+  (`EXTRACTABLE-HOOK`); a pure helper nested in a component → module-level util
+  (`EXTRACTABLE-HELPER`); near-twin functions/components differing only in constants →
+  parameterize into one (`PARALLEL-SIBLING`).
+- **cross-file dedup**: same normalized component/function shape across files → extract a
+  shared one (`XFILE-DUP-COMPONENT`/`DUP-FUNCTION`).
+
+The auditor deliberately does **not** encode a design system: it never says "this should be
+`<Badge>`" or "use the size prop" — that needs the project's primitive vocabulary, which is
+the agent + design-system skill's judgment layer. The auditor surfaces the structural fact
+(duplication, extractable unit, accessibility violation); you map it to your code.
 
 ## Plugins
 

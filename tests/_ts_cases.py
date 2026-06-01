@@ -23,6 +23,21 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "const x = (\n  <ul>\n    <li><a>1</a></li>\n    <li><a>2</a></li>\n    <li><a>3</a></li>\n  </ul>\n);\n",
             "const x = (\n  <ul>\n    <li><a>1</a></li>\n  </ul>\n);\n",
         ),
+        (
+            "TS-REACT-EXTRACTABLE-HOOK",
+            "export function W() {\n  const [a, setA] = useState(0);\n  const [b, setB] = useState(0);\n  const [c, setC] = useState(0);\n  useEffect(() => setA(1), []);\n  useEffect(() => setB(2), []);\n  return <div>{a}{b}{c}</div>;\n}\n",
+            "export function W() {\n  const [a, setA] = useState(0);\n  return <div>{a}</div>;\n}\n",
+        ),
+        (
+            "TS-REACT-EXTRACTABLE-HELPER",
+            "export function W({ n }: { n: number }) {\n  const [x] = useState(0);\n  function score(raw: number) {\n    const v = raw * 2;\n    return Math.round(v);\n  }\n  return <div>{score(n)}{x}</div>;\n}\n",
+            "export function W() {\n  const [x, setX] = useState(0);\n  function bump() {\n    setX(x + 1);\n  }\n  return <button onClick={bump}>{x}</button>;\n}\n",
+        ),
+        (
+            "TS-REACT-PARALLEL-SIBLING",
+            "function toKib(n: number) {\n  const v = n / 1024;\n  return v.toFixed(1);\n}\nfunction toMib(n: number) {\n  const v = n / 1048576;\n  return v.toFixed(1);\n}\n",
+            "function a(n: number) {\n  return n + 1;\n}\nfunction b(n: number) {\n  return n.toString();\n}\n",
+        ),
     ],
     "a11y": [
         (
