@@ -30,3 +30,8 @@ class DuplicateComponent(_TsXFileRule):
 class DuplicateFunction(_TsXFileRule):
     rule_id: ClassVar[str] = "TS-XFILE-DUP-FUNCTION"
     checklist_item: ClassVar[int] = 15
+
+
+class DuplicateJsxBlock(_TsXFileRule):
+    rule_id: ClassVar[str] = "TS-XFILE-DUP-JSX-BLOCK"
+    checklist_item: ClassVar[int] = 12

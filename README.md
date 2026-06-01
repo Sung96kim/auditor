@@ -115,7 +115,8 @@ Each carries a stable `rule_id`, a category, a default severity, and (for securi
   (`EXTRACTABLE-HELPER`); near-twin functions/components differing only in constants →
   parameterize into one (`PARALLEL-SIBLING`).
 - **cross-file dedup**: same normalized component/function shape across files → extract a
-  shared one (`XFILE-DUP-COMPONENT`/`DUP-FUNCTION`).
+  shared one (`XFILE-DUP-COMPONENT`/`DUP-FUNCTION`); the same substantial hand-rolled JSX
+  sub-tree inline in different components → extract a shared component (`XFILE-DUP-JSX-BLOCK`).
 
 The auditor deliberately does **not** encode a design system: it never says "this should be
 `<Badge>`" or "use the size prop" — that needs the project's primitive vocabulary, which is

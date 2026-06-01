@@ -76,3 +76,39 @@ async def test_duplicate_function_flags_both_sites(tmp_path):
     rules = await _scan(tmp_path, {"a.ts": _FN, "b.ts": _FN_DUP})
     assert "TS-XFILE-DUP-FUNCTION" in rules["src/a.ts"]
     assert "TS-XFILE-DUP-FUNCTION" in rules["src/b.ts"]
+
+
+_BLOCK = """
+export function {name}() {{
+  return (
+    <section className="card">
+      <header><h3>{a}</h3><span>{b}</span></header>
+      <ul><li>{a}</li><li>{b}</li></ul>
+    </section>
+  );
+}}
+"""
+_OTHER = """
+export function Other() {
+  return (
+    <article>
+      <nav><a>x</a></nav>
+      <p>one</p><p>two</p><p>three</p>
+    </article>
+  );
+}
+"""
+
+
+async def test_duplicate_jsx_block_flags_recurring_inline_block(tmp_path):
+    rules = await _scan(
+        tmp_path,
+        {
+            "A.tsx": _BLOCK.format(name="CardA", a="T", b="m"),
+            "B.tsx": _BLOCK.format(name="CardB", a="X", b="y"),
+            "C.tsx": _OTHER,
+        },
+    )
+    assert "TS-XFILE-DUP-JSX-BLOCK" in rules["src/A.tsx"]
+    assert "TS-XFILE-DUP-JSX-BLOCK" in rules["src/B.tsx"]
+    assert "TS-XFILE-DUP-JSX-BLOCK" not in rules["src/C.tsx"]

@@ -26,6 +26,11 @@ _SKELETON_NODES = (
 )
 _MIN_JSX_TAGS = 4  # ignore trivial components (a bare wrapper) — too generic to dedup
 _MIN_FN_TOKENS = 4  # a function shape needs real substance, else small fns collide by luck
+# A recurring JSX *sub-tree* (inline in different components) is worth extracting only when
+# it's a real composed block, not a layout wrapper — recurring `<div className="flex">` is
+# everywhere and would drown the signal.
+_MIN_BLOCK_TAGS = 6
+_MIN_BLOCK_DISTINCT = 3
 
 
 def _hash(text: str) -> str:
@@ -54,7 +59,27 @@ class ShapeExtractor:
                                 declarator,
                             )
                         )
+        rows.extend(self._block_shapes())
         return rows
+
+    def _block_shapes(self) -> list[ShapeRow]:
+        """Shapes for substantial inline JSX sub-trees, so the same hand-rolled block sitting
+        inside different components/files groups → extract a shared component. Only the
+        *outermost* qualifying block in a region is emitted, so one duplicated region is one
+        finding, not one per nesting level."""
+        out: list[ShapeRow] = []
+        self._collect_blocks(self.root, out)
+        return out
+
+    def _collect_blocks(self, node: Tsx, out: list[ShapeRow]) -> None:
+        for child in node.named_children():
+            tags = _jsx_skeleton(child) if child.is_jsx_element else []
+            if len(tags) >= _MIN_BLOCK_TAGS and len(set(tags)) >= _MIN_BLOCK_DISTINCT:
+                out.append(
+                    ShapeRow(_hash("tsb|" + ">".join(tags)), "jsx-block", tags[0], child.line)
+                )  # maximal block — do not descend into it
+            else:
+                self._collect_blocks(child, out)
 
     def _shape(self, body: Tsx | None, name: Tsx | None, at: Tsx) -> list[ShapeRow]:
         if body is None or name is None:
