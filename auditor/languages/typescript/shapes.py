@@ -31,6 +31,7 @@ _MIN_FN_TOKENS = 4  # a function shape needs real substance, else small fns coll
 # everywhere and would drown the signal.
 _MIN_BLOCK_TAGS = 6
 _MIN_BLOCK_DISTINCT = 3
+_FUNCTION_BODIES = {"function_declaration", "arrow_function", "function_expression"}
 
 
 def _hash(text: str) -> str:
@@ -93,6 +94,8 @@ class ShapeExtractor:
             if len(tags) >= _MIN_JSX_TAGS:
                 return [ShapeRow(_hash("tsc|" + ">".join(tags)), "component", symbol, at.line)]
             return []
+        if body.type not in _FUNCTION_BODIES:
+            return []  # a data const (lookup map, options array) is not a duplicate "function"
         signature = _function_signature(body)
         if len(signature) >= _MIN_FN_TOKENS:
             params = _param_types(body)
@@ -114,17 +117,27 @@ def _jsx_skeleton(body: Tsx) -> list[str]:
 
 
 def _function_signature(body: Tsx) -> list[str]:
-    """Control-flow nodes interleaved with the names of what the body *calls* — so two
-    functions match only when they do the same operations, not merely share a silhouette."""
-    parts: list[str] = []
-    for node in body.walk():
-        if node.type in _SKELETON_NODES:
-            parts.append(node.type)
-        elif node.type == "call_expression":
-            parts.append("c:" + callee(node))
-        elif node.type == "new_expression":
-            parts.append("new:" + field_text(node, "constructor"))
-    return parts
+    """Control flow + the names of what the body calls, *references*, and keys it builds — so
+    two functions match only when they do the same operations on the same things, not merely
+    share a silhouette. Member/property names keep apart twins that differ only in which
+    function/field they touch (``api.createResume`` vs ``api.createSession``, a tone enum vs a
+    className object) while preserving genuine copies (same calls + members)."""
+    return [token for node in body.walk() if (token := _signature_token(node))]
+
+
+def _signature_token(node: Tsx) -> str | None:
+    t = node.type
+    if t in _SKELETON_NODES:
+        return t
+    if t == "call_expression":
+        return "c:" + callee(node)
+    if t == "new_expression":
+        return "new:" + field_text(node, "constructor")
+    if t == "member_expression":
+        return "m:" + field_text(node, "property")
+    if t == "pair":
+        return "k:" + field_text(node, "key")
+    return None
 
 
 def _param_types(body: Tsx) -> str:

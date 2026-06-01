@@ -52,3 +52,25 @@ def test_distinct_operations_do_not_collide():
     a = _shapes(split)
     b = _shapes(date)
     assert a and b and a[0].shape_hash != b[0].shape_hash
+
+
+def test_data_consts_are_not_function_shapes():
+    # two lookup maps with the same keys are not duplicate "functions" (found via tailor audit)
+    rows = _shapes(
+        'const STATUS_LABEL = { ok: "Healthy", bad: "Down", warn: "Slow" };\n'
+        'const STATUS_TONE = { ok: "green", bad: "red", warn: "amber" };\n'
+    )
+    assert [r for r in rows if r.kind == "ts-function"] == []
+
+
+def test_thin_wrappers_differing_in_member_do_not_collide():
+    # two mutation hooks identical but for which api fn they reference must NOT dedup
+    a = _shapes(
+        "export function useA() {\n  const qc = useQueryClient();\n  return useMutation({ mutationFn: api.createResume, onSuccess: () => qc.invalidateQueries() });\n}\n"
+    )
+    b = _shapes(
+        "export function useB() {\n  const qc = useQueryClient();\n  return useMutation({ mutationFn: api.createSession, onSuccess: () => qc.invalidateQueries() });\n}\n"
+    )
+    fa = next(r for r in a if r.kind == "ts-function")
+    fb = next(r for r in b if r.kind == "ts-function")
+    assert fa.shape_hash != fb.shape_hash
