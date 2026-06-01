@@ -57,6 +57,16 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "try:\n    x()\nexcept ValueError:\n    pass",
             "try:\n    x()\nexcept ValueError:\n    log()",
         ),
+        (
+            "PY-CORRECT-RAISE-WITHOUT-FROM",
+            'try:\n    x()\nexcept ValueError:\n    raise RuntimeError("boom")',
+            'try:\n    x()\nexcept ValueError as e:\n    raise RuntimeError("boom") from e',
+        ),
+        (
+            "PY-CORRECT-NAIVE-DATETIME",
+            "t = datetime.now()",
+            "t = datetime.now(timezone.utc)",
+        ),
     ],
     "async_rules": [
         (
@@ -83,6 +93,11 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "PY-ASYNC-NO-AWAIT-BODY",
             "async def f():\n    return 1",
             "async def f():\n    return await g()",
+        ),
+        (
+            "PY-ASYNC-UNAWAITED-COROUTINE",
+            "async def g():\n    await h()\nasync def f():\n    g()",
+            "async def g():\n    await h()\nasync def f():\n    await g()",
         ),
     ],
     "config_rules": [

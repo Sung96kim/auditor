@@ -276,3 +276,49 @@ def _nodes_excluding_nested_funcs(node: ast.AST) -> Iterator[ast.AST]:
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         yield from _nodes_excluding_nested_funcs(child)
+
+
+class UnawaitedCoroutine(Detector):
+    rule_id: ClassVar[str] = "PY-ASYNC-UNAWAITED-COROUTINE"
+    category: ClassVar[Category] = Category.ASYNC
+    default_severity: ClassVar[Severity] = Severity.HIGH
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        module_async = {
+            n.name for n in ctx.tree.body if isinstance(n, ast.AsyncFunctionDef)
+        }
+        out: list[Finding] = []
+        for call in _bare_statement_calls(ctx.tree):
+            func = call.func
+            if isinstance(func, ast.Name) and func.id in module_async:
+                out.append(self._finding(ctx, call, f"{func.id}"))
+        for cls in ast.walk(ctx.tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            methods = {m.name for m in cls.body if isinstance(m, ast.AsyncFunctionDef)}
+            for call in _bare_statement_calls(cls):
+                func = call.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "self"
+                    and func.attr in methods
+                ):
+                    out.append(self._finding(ctx, call, f"self.{func.attr}"))
+        return out
+
+    def _finding(self, ctx: AuditContext, call: ast.Call, label: str) -> Finding:
+        return self.make_finding(
+            ctx,
+            line=call.lineno,
+            message=f"`{label}(...)` is a coroutine that is never awaited; the call silently does nothing",
+            suggestion="add `await` (or asyncio.create_task/gather if fire-and-forget is intended)",
+        )
+
+
+def _bare_statement_calls(node: ast.AST) -> Iterator[ast.Call]:
+    """Calls that are a bare expression statement — result discarded, not awaited. An awaited
+    call is ``Expr(Await(Call))`` so its ``.value`` is an Await, not a Call, and is skipped."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call):
+            yield n.value

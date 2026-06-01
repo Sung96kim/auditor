@@ -1,4 +1,5 @@
-"""Correctness-category detectors: broad/swallowed exceptions."""
+"""Correctness-category detectors: broad/swallowed exceptions, raise-without-from,
+naive datetimes."""
 
 import ast
 from typing import ClassVar
@@ -101,3 +102,73 @@ class SwallowedException(Detector):
                 )
             )
         return out
+
+
+class RaiseWithoutFrom(Detector):
+    rule_id: ClassVar[str] = "PY-CORRECT-RAISE-WITHOUT-FROM"
+    category: ClassVar[Category] = Category.CORRECTNESS
+    default_severity: ClassVar[Severity] = Severity.LOW
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        seen: set[int] = set()
+        for handler in ast.walk(ctx.tree):
+            if not isinstance(handler, ast.ExceptHandler):
+                continue
+            for node in ast.walk(handler):
+                # `raise X` / `raise X()` with no `from`; `from None`/`from err` set node.cause
+                if (
+                    isinstance(node, ast.Raise)
+                    and node.exc is not None
+                    and node.cause is None
+                    and id(node) not in seen
+                ):
+                    seen.add(id(node))
+                    out.append(
+                        self.make_finding(
+                            ctx,
+                            line=node.lineno,
+                            message="raising inside an except without `from` obscures the original error",
+                            suggestion="`raise NewError(...) from err` (or `from None` to deliberately drop the cause)",
+                        )
+                    )
+        return out
+
+
+class NaiveDatetime(Detector):
+    rule_id: ClassVar[str] = "PY-CORRECT-NAIVE-DATETIME"
+    category: ClassVar[Category] = Category.CORRECTNESS
+    default_severity: ClassVar[Severity] = Severity.SUGGESTION
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            attr = node.func.attr
+            if attr not in ("now", "utcnow") or not _owner_is_datetime(node.func.value):
+                continue
+            if attr == "now" and _has_tz_arg(node):
+                continue  # datetime.now(timezone.utc) is tz-aware
+            label = "utcnow()" if attr == "utcnow" else "now()"
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=node.lineno,
+                    message=f"datetime.{label} returns a naive (tz-unaware) datetime",
+                    suggestion="pass tz=timezone.utc, e.g. datetime.now(timezone.utc)",
+                )
+            )
+        return out
+
+
+def _owner_is_datetime(owner: ast.expr) -> bool:
+    if isinstance(owner, ast.Name):
+        return owner.id == "datetime"
+    return isinstance(owner, ast.Attribute) and owner.attr == "datetime"
+
+
+def _has_tz_arg(call: ast.Call) -> bool:
+    return bool(call.args) or any(kw.arg in ("tz", "tzinfo") for kw in call.keywords)
