@@ -40,7 +40,8 @@ def _render(files: list[IndexEntry], findings: list[Finding]) -> str:
         "",
         (
             f"**Totals — blocking: {totals[Severity.BLOCKING]} · high: {totals[Severity.HIGH]} · "
-            f"medium: {totals[Severity.MEDIUM]} · low: {totals[Severity.LOW]}**"
+            f"medium: {totals[Severity.MEDIUM]} · low: {totals[Severity.LOW]} · "
+            f"suggestion: {totals[Severity.SUGGESTION]}**"
         ),
         "",
         "## Files with findings (most severe first)",

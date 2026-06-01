@@ -7,7 +7,6 @@ from auditor.registry import REGISTRY
 _XFILE_RULES = (
     "PY-XFILE-DUP-MODEL",
     "PY-XFILE-DUP-FUNCTION",
-    "PY-XFILE-PARALLEL-SIBLING",
 )
 
 

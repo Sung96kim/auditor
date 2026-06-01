@@ -8,6 +8,9 @@ export function EmbedViewer({ html, src }: { html: string; src: string }) {
         Documentation
       </a>
       <a href="javascript:void(0)">Run action</a>
+      <button>
+        <TrashIcon /> Delete
+      </button>
     </div>
   );
 }

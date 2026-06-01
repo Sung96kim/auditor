@@ -5,6 +5,15 @@
 [categories]
 "oop-composition" = { enabled = false }
 
+# Suggestion-tier nudges (below `low`, never CI-blocking) surface even at the base floor,
+# though they live in the otherwise opt-in oop-composition category. Test roles re-disable the
+# whole category below, so these stay quiet on test code.
+[rules]
+PY-OOP-MODEL-REBUILD = { enabled = true }
+PY-OOP-DICT-MUTATION-BUILDER = { enabled = true }
+PY-OOP-MODULE-CONST-FOR-SUBCLASS = { enabled = true }
+PY-OOP-CLOSURE-CAPTURE = { enabled = true }
+
 # Test code is classified, not dropped, and audited under a relaxed policy:
 # rules that are noise-by-design in tests are disabled or downgraded to candidate.
 [roles.test]

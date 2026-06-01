@@ -28,7 +28,7 @@ _BY_KIND: dict[str, _XKind] = {
     "jsx-block": _XKind("TS-XFILE-DUP-JSX-BLOCK", Category.REACT, "JSX block", 12),
 }
 _FALLBACK = _BY_KIND["function"]
-_RULES = [k.rule for k in _BY_KIND.values()] + ["PY-XFILE-PARALLEL-SIBLING"]
+_RULES = [k.rule for k in _BY_KIND.values()]
 
 
 async def run(index: IndexStore) -> dict[str, list[Finding]]:

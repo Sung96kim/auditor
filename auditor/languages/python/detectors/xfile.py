@@ -30,8 +30,3 @@ class DuplicateModel(_XFileRule):
 class DuplicateFunction(_XFileRule):
     rule_id: ClassVar[str] = "PY-XFILE-DUP-FUNCTION"
     checklist_item: ClassVar[int] = 24
-
-
-class ParallelSibling(_XFileRule):
-    rule_id: ClassVar[str] = "PY-XFILE-PARALLEL-SIBLING"
-    checklist_item: ClassVar[int] = 17

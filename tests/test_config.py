@@ -40,6 +40,36 @@ def test_base_disables_oop(tmp_path):
     assert eff.enabled is False
 
 
+_SUGGESTION_RULES = (
+    "PY-OOP-MODEL-REBUILD",
+    "PY-OOP-DICT-MUTATION-BUILDER",
+    "PY-OOP-MODULE-CONST-FOR-SUBCLASS",
+    "PY-OOP-CLOSURE-CAPTURE",
+)
+
+
+def test_base_enables_suggestion_rules_in_production(tmp_path):
+    # suggestion-tier nudges are on at the base floor even though oop-composition is off
+    (tmp_path / ".auditor").mkdir(parents=True)
+    (tmp_path / ".auditor" / "config.toml").write_text('extends = "base"\n')
+    settings = load_config(tmp_path)
+    rc = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="x.py")
+    for rid in _SUGGESTION_RULES:
+        assert rc.effective(rid).enabled is True, rid
+        assert rc.effective(rid).severity == Severity.SUGGESTION, rid
+
+
+def test_base_suppresses_suggestion_rules_on_test_code(tmp_path):
+    # the relaxed test role re-disables the whole oop-composition category, nudges included
+    (tmp_path / ".auditor").mkdir(parents=True)
+    (tmp_path / ".auditor" / "config.toml").write_text('extends = "base"\n')
+    settings = load_config(tmp_path)
+    for role in (FileRole.TEST, FileRole.TEST_SUPPORT):
+        rc = ResolvedConfig(settings, role=role, rel_path="x.py")
+        for rid in _SUGGESTION_RULES:
+            assert rc.effective(rid).enabled is False, (role, rid)
+
+
 def test_threshold_merge_keeps_unset_defaults():
     settings = AuditorSettings.model_validate(
         {"rules": {"PY-STYLE-FILE-SIZE": {"threshold": {"file_max_lines": 5}}}}

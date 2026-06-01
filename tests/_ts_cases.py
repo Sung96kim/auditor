@@ -95,6 +95,11 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             'const x = <iframe src="/x" />;\n',
             'const x = <iframe src="/x" title="map" />;\n',
         ),
+        (
+            "TS-A11Y-DECORATIVE-ICON",
+            "const x = <button><PlusIcon /> Save</button>;\n",
+            'const x = <button><PlusIcon aria-hidden="true" /> Save</button>;\n',
+        ),
     ],
     "security": [
         (

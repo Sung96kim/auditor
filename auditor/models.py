@@ -24,9 +24,11 @@ class Severity(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+    SUGGESTION = "suggestion"  # optional nudges; below low, never CI-blocking
 
 
 _SEVERITY_ORDER = {
+    Severity.SUGGESTION: -1,
     Severity.LOW: 0,
     Severity.MEDIUM: 1,
     Severity.HIGH: 2,
@@ -44,6 +46,7 @@ SEVERITIES_DESC: tuple[Severity, ...] = (
     Severity.HIGH,
     Severity.MEDIUM,
     Severity.LOW,
+    Severity.SUGGESTION,
 )
 
 

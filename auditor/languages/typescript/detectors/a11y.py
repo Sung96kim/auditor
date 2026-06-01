@@ -285,3 +285,30 @@ class IframeNoTitle(A11yDetector):
                     )
                 )
         return out
+
+
+_DECORATIVE_RESOLVED = {"aria-hidden", "aria-label", "aria-labelledby", "role", "title", "alt"}
+
+
+class DecorativeIconNotHidden(A11yDetector):
+    rule_id: ClassVar[str] = "TS-A11Y-DECORATIVE-ICON"
+    default_severity: ClassVar[Severity] = Severity.LOW
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for parent in ctx.root.descendants("jsx_element"):
+            if not parent.has_text_child():
+                continue
+            for child in parent.child_elements():
+                if _is_icon(child) and not (
+                    _DECORATIVE_RESOLVED & child.attributes().keys()
+                ):
+                    out.append(
+                        self.make_finding(
+                            ctx,
+                            line=child.line,
+                            message=f"decorative <{child.jsx_name()}> beside text is read aloud as noise by screen readers",
+                            suggestion='add aria-hidden="true" (or aria-label if the icon conveys meaning)',
+                        )
+                    )
+        return out

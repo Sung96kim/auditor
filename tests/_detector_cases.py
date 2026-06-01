@@ -137,6 +137,36 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "def build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
             "def only(x):\n    return x",
         ),
+        (
+            "PY-OOP-FIELD-COPY",
+            "def __init__(self, s):\n    self.a = s.a\n    self.b = s.b\n    self.c = s.c\n    self.d = s.d\n    self.e = s.e",
+            "def __init__(self, s):\n    self.a = s.a",
+        ),
+        (
+            "PY-OOP-PARALLEL-SIBLING",
+            "def to_kib(n):\n    v = n / 1024\n    return round(v, 1)\ndef to_mib(n):\n    v = n / 1048576\n    return round(v, 1)",
+            "def only(n):\n    return n + 1",
+        ),
+        (
+            "PY-OOP-MODEL-REBUILD",
+            "Foo.model_rebuild()",
+            "Foo.model_validate(x)",
+        ),
+        (
+            "PY-OOP-DICT-MUTATION-BUILDER",
+            'def b(d):\n    d["x"] = 1\n    return d',
+            'def b(d):\n    return d["x"]',
+        ),
+        (
+            "PY-OOP-MODULE-CONST-FOR-SUBCLASS",
+            'TIMEOUT_RULE_TITLE = "t"\nTIMEOUT_RULE_STEPS = ()\n\nclass TimeoutRule(Rule):\n    pass',
+            'class TimeoutRule(Rule):\n    TITLE = "t"\n    STEPS = ()',
+        ),
+        (
+            "PY-OOP-CLOSURE-CAPTURE",
+            "def outer(deps):\n    def inner(event):\n        return serialize(event, deps)\n    return inner",
+            "def outer(deps):\n    return deps",
+        ),
     ],
     "security/injection": [
         ("PY-SEC-DANGEROUS-EVAL", "eval(user_input)", "eval('1')"),
@@ -210,7 +240,6 @@ TESTED_SEPARATELY = {
     "PY-STYLE-STALE-COMMENT",
     "PY-XFILE-DUP-MODEL",
     "PY-XFILE-DUP-FUNCTION",
-    "PY-XFILE-PARALLEL-SIBLING",
     "TS-XFILE-DUP-COMPONENT",
     "TS-XFILE-DUP-FUNCTION",
     "TS-XFILE-DUP-JSX-BLOCK",

@@ -24,6 +24,7 @@ _SEVERITY_HUE: dict[Severity, str] = {
     Severity.HIGH: "#c2410c",
     Severity.MEDIUM: "#b08900",
     Severity.LOW: "#3b6fb0",
+    Severity.SUGGESTION: "#6b7280",
 }
 
 

@@ -98,7 +98,7 @@ function Toolbar({ filter, dispatch }: { filter: FilterState; dispatch: (p: Part
     <div className="toolbar" onMouseOver={() => undefined}>
       <input autoFocus value={filter.query} onChange={(e) => dispatch({ query: e.target.value })} />
       <button role="button" onClick={() => dispatch({ desc: !filter.desc })}>
-        <SearchIcon />
+        <SearchIcon /> Sort
       </button>
       <div onClick={() => dispatch({ sort: "name" })} tabIndex={3}>
         Sort by name
