@@ -56,6 +56,26 @@ _RANDOM_SEC_FNS = {
     "sample",
     "uniform",
 }
+# `random` is only a security problem when its output is a token/secret/key/nonce/etc.
+# Sampling, shuffling, jitter, sort tiebreakers and the like are legitimate non-crypto uses,
+# so flag a call only when its assignment target or enclosing function names a secret.
+_SECURITY_CONTEXT = re.compile(
+    r"(token|password|passwd|secret|nonce|salt|otp|csrf|credential|session[_-]?id"
+    r"|api[_-]?key|private[_-]?key|secret[_-]?key|signing[_-]?key|encryption[_-]?key"
+    r"|auth[_-]?code|verification)",
+    re.I,
+)
+
+
+def _is_insecure_random(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    name = dotted_name(node.func)
+    return name.startswith("random.") and name.split(".", 1)[1] in _RANDOM_SEC_FNS
+
+
+def _random_calls(subtree: ast.AST) -> list[ast.Call]:
+    return [n for n in ast.walk(subtree) if _is_insecure_random(n)]
 
 
 class InsecureRandom(SecurityDetector):
@@ -65,23 +85,29 @@ class InsecureRandom(SecurityDetector):
     standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B311", "owasp:A02")
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        out: list[Finding] = []
+        sensitive: dict[int, ast.Call] = {}
         for node in ast.walk(ctx.tree):
-            if isinstance(node, ast.Call):
-                name = dotted_name(node.func)
-                if (
-                    name.startswith("random.")
-                    and name.split(".", 1)[1] in _RANDOM_SEC_FNS
-                ):
-                    out.append(
-                        self.make_finding(
-                            ctx,
-                            line=node.lineno,
-                            message=f"`{name}(...)` is not cryptographically secure; unsafe for tokens/keys",
-                            suggestion="use the secrets module for security-sensitive randomness",
-                        )
-                    )
-        return out
+            name = _assign_target_name(node)
+            if name and _SECURITY_CONTEXT.search(name):
+                value = getattr(node, "value", None)
+                if value is not None:
+                    sensitive.update((id(c), c) for c in _random_calls(value))
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and _SECURITY_CONTEXT.search(node.name)
+            ):
+                sensitive.update((id(c), c) for c in _random_calls(node))
+
+        return [
+            self.make_finding(
+                ctx,
+                line=call.lineno,
+                message=f"`{dotted_name(call.func)}(...)` is not cryptographically "
+                "secure; unsafe for tokens/keys",
+                suggestion="use the secrets module for security-sensitive randomness",
+            )
+            for call in sorted(sensitive.values(), key=lambda c: c.lineno)
+        ]
 
 
 _SECRET_NAME = re.compile(

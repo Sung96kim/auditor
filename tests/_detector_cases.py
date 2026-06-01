@@ -165,7 +165,11 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
     ],
     "security/crypto": [
         ("PY-SEC-WEAK-HASH", "hashlib.md5(b)", "hashlib.sha256(b)"),
-        ("PY-SEC-INSECURE-RANDOM", "random.randint(0, 9)", "secrets.randbelow(9)"),
+        (
+            "PY-SEC-INSECURE-RANDOM",
+            "token = random.randint(0, 9999)",
+            "idx = random.randint(0, 9)",
+        ),
         ("PY-SEC-HARDCODED-SECRET", "password = 'hunter2'", "password = get_secret()"),
     ],
     "security/network": [

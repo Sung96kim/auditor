@@ -214,6 +214,8 @@ class NoAwaitBody(Detector):
         for fn in _own_async_funcs(ctx.tree):
             if fn.name in self._ASYNC_PROTOCOL or _is_abstract_or_stub(fn):
                 continue  # protocol coroutines / abstract stubs are legitimately await-free
+            if _is_async_generator(fn):
+                continue  # `async def` + yield is an async generator; must stay async
             if not _has_async_construct(fn):
                 out.append(
                     self.make_finding(
@@ -230,6 +232,14 @@ def _has_async_construct(fn: ast.AsyncFunctionDef) -> bool:
     for stmt in fn.body:
         for node in _nodes_excluding_nested_funcs(stmt):
             if isinstance(node, (ast.Await, ast.AsyncWith, ast.AsyncFor)):
+                return True
+    return False
+
+
+def _is_async_generator(fn: ast.AsyncFunctionDef) -> bool:
+    for stmt in fn.body:
+        for node in _nodes_excluding_nested_funcs(stmt):
+            if isinstance(node, (ast.Yield, ast.YieldFrom)):
                 return True
     return False
 

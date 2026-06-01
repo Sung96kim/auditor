@@ -23,3 +23,19 @@ def test_awaited_call_not_flagged_as_sync_io():
     good = "async def f(store):\n    await store.write(data)\n"  # awaited -> clean
     assert "PY-ASYNC-SYNC-IO" in rule_ids(run_audit(bad))
     assert "PY-ASYNC-SYNC-IO" not in rule_ids(run_audit(good))
+
+
+def test_async_generator_not_flagged_no_await_body():
+    # an async generator (has yield, consumed via `async for`) must stay async even
+    # without an internal await — not a "make it sync" candidate.
+    src = (
+        "async def stream(items):\n"
+        "    for x in items:\n"
+        "        yield x\n"
+    )
+    assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))
+
+
+def test_async_no_await_still_flags_plain_coroutine():
+    src = "async def compute(x):\n    return x + 1\n"
+    assert "PY-ASYNC-NO-AWAIT-BODY" in rule_ids(run_audit(src))
