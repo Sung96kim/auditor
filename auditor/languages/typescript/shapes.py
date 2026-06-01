@@ -12,7 +12,7 @@ even though they share the index ``shapes`` table.
 import hashlib
 
 from auditor.languages.base import ShapeRow
-from auditor.languages.typescript.nodes import Tsx, callee, field_text
+from auditor.languages.typescript.nodes import Tsx, callee, field_text, is_pascal_case
 
 _SKELETON_NODES = (
     "if_statement",
@@ -90,7 +90,7 @@ class ShapeExtractor:
         if body is None or name is None:
             return []
         symbol = name.text
-        if symbol[:1].isupper() and body.contains_jsx():
+        if is_pascal_case(symbol) and body.contains_jsx():
             tags = _jsx_skeleton(body)
             if len(tags) >= _MIN_JSX_TAGS and len(set(tags)) >= _MIN_COMPONENT_DISTINCT:
                 return [ShapeRow(_hash("tsc|" + ">".join(tags)), "component", symbol, at.line)]

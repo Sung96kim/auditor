@@ -4,7 +4,7 @@ come from config (``[tool.auditor.rules.<id>.threshold]``), so a repo tunes its 
 from typing import ClassVar
 
 from auditor.languages.typescript.base import TsAuditContext, TsDetector
-from auditor.languages.typescript.nodes import Tsx
+from auditor.languages.typescript.nodes import Tsx, is_pascal_case
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 
@@ -81,8 +81,8 @@ class DeepJsxNesting(TsDetector):
 def _components(root: Tsx) -> list[tuple[str, Tsx, Tsx]]:
     return [
         (name, body, at)
-        for name, body, at in root.top_declarations()
-        if name[:1].isupper() and body.contains_jsx()
+        for name, body, at, _ in root.top_declarations()
+        if is_pascal_case(name) and body.contains_jsx()
     ]
 
 

@@ -30,6 +30,34 @@ def test_parallel_sibling_still_flags_twin_functions():
     assert "TS-REACT-PARALLEL-SIBLING" in rule_ids(run_ts_audit(src))
 
 
+def test_compound_component_family_is_not_flagged():
+    # exported <Tabs>/<TabsList>/<TabsTrigger> family is a cohesive public API (found via tailor)
+    src = (
+        "export function Tabs() {\n  return <div><span /><span /></div>;\n}\n"
+        "export function TabsList() {\n  return <ul><li /><li /></ul>;\n}\n"
+        "export function TabsTrigger() {\n  return <button><i /><b /></button>;\n}\n"
+    )
+    assert "TS-REACT-MULTI-COMPONENT-FILE" not in rule_ids(run_ts_audit(src))
+
+
+def test_private_subcomponent_is_still_flagged():
+    # Dashboard + an unexported DashboardFooter is the private-sub-component drift, not compound
+    src = (
+        "export function Dashboard() {\n  return <main><span /></main>;\n}\n"
+        "function DashboardFooter() {\n  return <footer><a /></footer>;\n}\n"
+    )
+    assert "TS-REACT-MULTI-COMPONENT-FILE" in rule_ids(run_ts_audit(src))
+
+
+def test_screaming_case_const_with_jsx_is_not_a_component():
+    # ACTION_META = { icon: <Icon/> } is a constant, not a second component (found via tailor)
+    src = (
+        "const ACTION_META = { add: { icon: <PlusIcon /> }, rm: { icon: <XIcon /> } };\n"
+        "export function GapRow() {\n  return <div>{ACTION_META.add.icon}</div>;\n}\n"
+    )
+    assert "TS-REACT-MULTI-COMPONENT-FILE" not in rule_ids(run_ts_audit(src))
+
+
 def test_multi_component_ignores_non_component_helpers():
     src = "export function A() {\n  return <div />;\n}\nfunction makeKey() {\n  return 1;\n}\n"
     assert "TS-REACT-MULTI-COMPONENT-FILE" not in rule_ids(run_ts_audit(src))

@@ -15,7 +15,7 @@ from collections import defaultdict
 from typing import ClassVar
 
 from auditor.languages.typescript.base import TsAuditContext, TsDetector
-from auditor.languages.typescript.nodes import Tsx, callee, field_text
+from auditor.languages.typescript.nodes import Tsx, callee, field_text, is_pascal_case
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _HOOKS = {
@@ -48,7 +48,7 @@ _STRUCTURE = {
 
 
 def _is_component(name: str, body: Tsx) -> bool:
-    return bool(name) and name[0].isupper() and body.contains_jsx()
+    return is_pascal_case(name) and body.contains_jsx()
 
 
 class ExtractableHook(TsDetector):
@@ -60,7 +60,7 @@ class ExtractableHook(TsDetector):
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
         out: list[Finding] = []
-        for name, body, at in ctx.root.top_declarations():
+        for name, body, at, _ in ctx.root.top_declarations():
             if not _is_component(name, body):
                 continue
             hooks = sum(
@@ -89,7 +89,7 @@ class ExtractableHelper(TsDetector):
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
         out: list[Finding] = []
-        for name, body, _ in ctx.root.top_declarations():
+        for name, body, _, _ in ctx.root.top_declarations():
             if not _is_component(name, body):
                 continue
             component_locals = self._bound_names(body)
@@ -149,7 +149,7 @@ class ParallelSibling(TsDetector):
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
         groups: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = defaultdict(list)
-        for name, body, at in ctx.root.top_declarations():
+        for name, body, at, _ in ctx.root.top_declarations():
             if body.type not in _PARAMETERIZABLE:
                 continue  # skip data consts (lookup maps, style objects) — not parameterizable
             skeleton, literals = self._fingerprint(body)

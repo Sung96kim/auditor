@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import ClassVar
 
 from auditor.languages.typescript.base import TsAuditContext, TsDetector
-from auditor.languages.typescript.nodes import Tsx, callee
+from auditor.languages.typescript.nodes import Tsx, callee, is_pascal_case
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _MIN_REPEAT = 3  # 3+ identical-shape siblings is a strong "map over data" signal
@@ -89,7 +89,9 @@ class MultiComponentFile(TsDetector):
         components = _top_level_components(ctx.root)
         if len(components) <= 1:
             return []
-        names = ", ".join(name for name, _ in components)
+        if _is_compound_family(components):
+            return []  # exported <Tabs>/<TabsList>/… family — a cohesive public API, not drift
+        names = ", ".join(name for name, _, _ in components)
         return [
             self.make_finding(
                 ctx,
@@ -97,7 +99,7 @@ class MultiComponentFile(TsDetector):
                 message=f"{len(components)} components in one file ({names}); one per file",
                 suggestion="split each component into its own file (a provider wrapper may stay)",
             )
-            for _, line in components[1:]
+            for _, line, _ in components[1:]
         ]
 
 
@@ -133,14 +135,34 @@ def _element_skeleton(element: Tsx) -> tuple[str, ...]:
     return tuple(n.jsx_name() for n in element.walk() if n.is_jsx_element)
 
 
-def _top_level_components(root: Tsx) -> list[tuple[str, int]]:
-    """Top-level Capitalized declarations whose body renders JSX (i.e. React components)."""
+def _top_level_components(root: Tsx) -> list[tuple[str, int, bool]]:
+    """Top-level Capitalized declarations whose body renders JSX (name, line, exported)."""
     return [
-        (name, at.line)
-        for name, body, at in root.top_declarations()
+        (name, at.line, exported)
+        for name, body, at, exported in root.top_declarations()
         if _is_component(name, body)
     ]
 
 
+def _is_compound_family(components: list[tuple[str, int, bool]]) -> bool:
+    """A compound-component module (``Tabs``+``TabsList``+``TabsTrigger`` / ``Select``+
+    ``SelectTrigger``+``SelectContent``): every part is exported and all share a PascalCase
+    name prefix. A private sub-component (``Dashboard`` + unexported ``DashboardFooter``) is
+    NOT this — it's the drift we flag."""
+    if not all(exported for _, _, exported in components):
+        return False
+    names = [name for name, _, _ in components]
+    prefix = _common_prefix(names)
+    return len(prefix) >= 3 and prefix[0].isupper()
+
+
+def _common_prefix(names: list[str]) -> str:
+    lo, hi = min(names), max(names)
+    end = 0
+    while end < len(lo) and lo[end] == hi[end]:
+        end += 1
+    return lo[:end]
+
+
 def _is_component(name: str, body: Tsx) -> bool:
-    return bool(name) and name[0].isupper() and body.contains_jsx()
+    return is_pascal_case(name) and body.contains_jsx()

@@ -65,18 +65,19 @@ class Tsx:
     def contains_jsx(self) -> bool:
         return any(node.is_jsx_element for node in self.walk())
 
-    def top_declarations(self) -> list[tuple[str, "Tsx", "Tsx"]]:
-        """(name, body, anchor) for each top-level function and arrow/value const — the one
-        place that walks module-level declarations, so detectors don't each re-roll it."""
-        out: list[tuple[str, Tsx, Tsx]] = []
+    def top_declarations(self) -> list[tuple[str, "Tsx", "Tsx", bool]]:
+        """(name, body, anchor, exported) for each top-level function and arrow/value const —
+        the one place that walks module-level declarations, so detectors don't each re-roll it."""
+        out: list[tuple[str, Tsx, Tsx, bool]] = []
         for top in self.named_children():
+            exported = top.type == "export_statement"
             decl = top.unwrap_export()
             if decl.type == "function_declaration":
-                out.extend(_named(decl.field("name"), decl, decl))
+                out.extend(_named(decl.field("name"), decl, decl, exported))
             elif decl.type == "lexical_declaration":
                 for d in decl.named_children():
                     if d.type == "variable_declarator":
-                        out.extend(_named(d.field("name"), d.field("value"), d))
+                        out.extend(_named(d.field("name"), d.field("value"), d, exported))
         return out
 
     # --- JSX element ---------------------------------------------------------
@@ -156,10 +157,19 @@ class Tsx:
         return value.text
 
 
-def _named(name: Tsx | None, body: Tsx | None, at: Tsx) -> list[tuple[str, Tsx, Tsx]]:
+def _named(
+    name: Tsx | None, body: Tsx | None, at: Tsx, exported: bool
+) -> list[tuple[str, Tsx, Tsx, bool]]:
     if name is None or body is None:
         return []
-    return [(name.text, body, at)]
+    return [(name.text, body, at, exported)]
+
+
+def is_pascal_case(name: str) -> bool:
+    """A React component name: starts uppercase and is not all-caps (``GapRow``, ``Tabs``, or
+    a single ``A``), excluding SCREAMING_SNAKE_CASE constants (``ACTION_META``,
+    ``STATUS_LABEL``) that merely hold JSX values like an icon map."""
+    return bool(name) and name[0].isupper() and (len(name) == 1 or not name.isupper())
 
 
 def callee(call: Tsx) -> str:
