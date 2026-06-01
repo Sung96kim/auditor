@@ -130,6 +130,7 @@ class AuditorSettings(BaseSettings):
     plugins: list[str] = Field(default_factory=list)
     trust_local_plugins: bool = False
     lint_overlap: bool = False
+    respect_noqa: bool = True
     design_system: DesignSystem = Field(default_factory=DesignSystem)
 
     @field_validator("rules", mode="after")

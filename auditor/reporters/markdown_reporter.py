@@ -13,6 +13,9 @@ class MarkdownReporter(Reporter):
         totals = _totals(results)
         lines = ["# Audit report", ""]
         lines.append(_totals_line(totals))
+        suppressed = sum(r.suppressed for r in results)
+        if suppressed:
+            lines.append(f"_{suppressed} finding(s) suppressed by noqa._")
         lines.append("")
         flagged = [r for r in results if r.findings]
         flagged.sort(key=lambda r: r.severity_key)

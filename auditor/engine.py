@@ -17,6 +17,7 @@ from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
+from auditor.noqa import filter_findings
 from auditor.registry import REGISTRY
 from auditor.roles import RoleClassifier
 
@@ -131,7 +132,7 @@ class ScanEngine:
         rc: ResolvedConfig,
         rule_ids: list[str],
     ) -> ScanResult:
-        return auditor.audit(
+        res = auditor.audit(
             file_path=rel,
             source=source,
             role=role,
@@ -140,6 +141,10 @@ class ScanEngine:
             package_root=str(self.root),
             rule_ids=rule_ids,
         )
+        # Suppress before the index stores the findings, so cached re-scans stay consistent.
+        if self.settings.respect_noqa:
+            res.findings, res.suppressed = filter_findings(source, res.findings)
+        return res
 
     async def _scan_cached(
         self,
@@ -221,9 +226,16 @@ class ScanEngine:
         xfindings = await crossfile.run(self.index)
         for res in results:
             extra = xfindings.get(res.file)
-            if extra:
-                res.findings.extend(extra)
-                res.findings.sort(key=lambda f: (f.line, f.rule_id))
+            if not extra:
+                continue
+            if self.settings.respect_noqa:
+                source = (self.root / res.file).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                extra, dropped = filter_findings(source, extra)
+                res.suppressed += dropped
+            res.findings.extend(extra)
+            res.findings.sort(key=lambda f: (f.line, f.rule_id))
 
 
 async def audit_target(
@@ -235,16 +247,20 @@ async def audit_target(
     allow_local_plugins: bool = False,
     profile: str | None = None,
     exclude: tuple[str, ...] = (),
+    no_noqa: bool = False,
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
     ``extends`` for the run (e.g. ``"strict"`` to enable the OOP/composition rules);
-    ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``."""
+    ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``; ``no_noqa``
+    ignores in-file noqa directives (e.g. an un-silenceable security sweep)."""
     root = find_root(target)
     settings = load_config(root, profile=profile, allow_local_plugins=allow_local_plugins)
     updates: dict[str, object] = {}
     if strict_tests:
         updates["test_mode"] = "strict"
+    if no_noqa:
+        updates["respect_noqa"] = False
     if exclude:
         updates["exclude"] = [*settings.exclude, *exclude]
     if updates:

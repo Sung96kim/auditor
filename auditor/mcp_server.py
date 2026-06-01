@@ -37,11 +37,17 @@ async def scan(
     incremental: bool = False,
     strict_tests: bool = False,
     profile: str | None = None,
+    no_noqa: bool = False,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
-    the repo's profile for this run (base|strict|pydantic|all-strict)."""
+    the repo's profile for this run (base|strict|pydantic|all-strict). ``no_noqa`` ignores
+    in-file noqa directives."""
     results = await audit_target(
-        Path(path), incremental=incremental, strict_tests=strict_tests, profile=profile
+        Path(path),
+        incremental=incremental,
+        strict_tests=strict_tests,
+        profile=profile,
+        no_noqa=no_noqa,
     )
     return json_payload(results)
 

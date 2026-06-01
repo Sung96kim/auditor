@@ -192,6 +192,7 @@ class ScanResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     cached: bool = False
     skipped_rules: list[SkippedRule] = Field(default_factory=list)
+    suppressed: int = 0  # findings dropped by a noqa directive
 
     @property
     def counts(self) -> dict[Severity, int]:

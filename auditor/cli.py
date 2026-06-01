@@ -93,6 +93,10 @@ def scan(
         list[str] | None,
         typer.Option("-x", "--exclude", help="Glob to ignore (repeatable), on top of config."),
     ] = None,
+    no_noqa: Annotated[
+        bool,
+        typer.Option("--no-noqa", help="Ignore in-file noqa directives (un-silenceable sweep)."),
+    ] = False,
     serve: Annotated[
         bool,
         typer.Option("-s", "--serve", help="Render HTML and open it in a browser on a local port."),
@@ -113,6 +117,7 @@ def scan(
             allow_local_plugins=allow_local_plugins,
             profile=profile,
             exclude=tuple(exclude or ()),
+            no_noqa=no_noqa,
         ),
         f"auditing {target}…",
     )
