@@ -13,6 +13,23 @@ def test_flags_bad_ignores_good(rule_id, bad, good):
     assert rule_id not in rule_ids(run_ts_audit(good)), f"{rule_id} false-positived on clean code"
 
 
+def test_parallel_sibling_ignores_data_consts():
+    # two distinct lookup maps share key structure but are not "one parameterized function"
+    src = (
+        'const STATUS_LABEL = { ok: "Healthy", bad: "Down", warn: "Degraded" };\n'
+        'const STATUS_TONE = { ok: "green", bad: "red", warn: "amber" };\n'
+    )
+    assert "TS-REACT-PARALLEL-SIBLING" not in rule_ids(run_ts_audit(src))
+
+
+def test_parallel_sibling_still_flags_twin_functions():
+    src = (
+        "function toKib(n: number) {\n  const v = n / 1024;\n  return v.toFixed(1);\n}\n"
+        "function toMib(n: number) {\n  const v = n / 1048576;\n  return v.toFixed(1);\n}\n"
+    )
+    assert "TS-REACT-PARALLEL-SIBLING" in rule_ids(run_ts_audit(src))
+
+
 def test_multi_component_ignores_non_component_helpers():
     src = "export function A() {\n  return <div />;\n}\nfunction makeKey() {\n  return 1;\n}\n"
     assert "TS-REACT-MULTI-COMPONENT-FILE" not in rule_ids(run_ts_audit(src))

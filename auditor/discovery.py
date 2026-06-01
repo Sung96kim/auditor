@@ -27,7 +27,16 @@ _EXCLUDE_DIRS = {
     ".tox",
     ".eggs",
 }
-_DEFAULT_EXCLUDE_GLOBS = ("*.gen.py", "*_pb2.py", "*_pb2_grpc.py")
+_DEFAULT_EXCLUDE_GLOBS = (
+    "*.gen.py",
+    "*_pb2.py",
+    "*_pb2_grpc.py",
+    "*.gen.ts",
+    "*.gen.tsx",
+    "*.generated.ts",
+    "*.generated.tsx",
+    "*.d.ts",
+)
 
 
 def find_root(start: Path) -> Path:

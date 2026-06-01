@@ -31,6 +31,9 @@ _HOOKS = {
 }
 _MIN_HOOKS = 5  # below this a component's state plumbing isn't worth a custom hook
 _MIN_SKELETON = 4  # parallel-sibling needs real structural substance to be a true twin
+# parallel-sibling only applies to things you'd *parameterize* — functions/components — not
+# plain data consts (two different lookup maps aren't "one function with an argument").
+_PARAMETERIZABLE = {"function_declaration", "arrow_function", "function_expression"}
 _LITERALS = {"number", "string", "template_string", "true", "false", "regex", "null"}
 _STRUCTURE = {
     "if_statement",
@@ -147,6 +150,8 @@ class ParallelSibling(TsDetector):
     def run(self, ctx: TsAuditContext) -> list[Finding]:
         groups: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = defaultdict(list)
         for name, body, at in ctx.root.top_declarations():
+            if body.type not in _PARAMETERIZABLE:
+                continue  # skip data consts (lookup maps, style objects) — not parameterizable
             skeleton, literals = self._fingerprint(body)
             if len(skeleton) >= _MIN_SKELETON:
                 groups[skeleton].append((name, at.line, literals))

@@ -43,3 +43,15 @@ def test_custom_exclude_glob(tmp_path):
     files = {p.relative_to(root).as_posix() for p in fd.files(root / "pkg")}
     assert "pkg/sub/b.py" not in files
     assert "pkg/a.py" in files
+
+
+def test_generated_typescript_is_excluded(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "App.tsx").write_text("export const App = () => null;\n")
+    (src / "routeTree.gen.ts").write_text("export const tree = {};\n")
+    (src / "schema.generated.ts").write_text("export type T = {};\n")
+    (src / "types.d.ts").write_text("declare const x: number;\n")
+    found = {p.name for p in FileDiscovery(tmp_path).files(src)}
+    assert found == {"App.tsx"}  # generated/declaration files dropped
