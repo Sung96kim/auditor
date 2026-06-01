@@ -1,0 +1,11 @@
+# all-strict.toml — audit EVERY role at full production strength (incl. tests/scripts).
+extends = "strict"
+
+[roles.test]
+mode = "strict"
+
+[roles.test_support]
+mode = "strict"
+
+[roles.script]
+mode = "strict"

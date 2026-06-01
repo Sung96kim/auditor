@@ -1,0 +1,5 @@
+# strict.toml — base + the opinionated OOP/composition + complexity house rules.
+extends = "base"
+
+[categories]
+"oop-composition" = { enabled = true }

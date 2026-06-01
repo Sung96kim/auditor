@@ -1,0 +1,22 @@
+# Run the auditor against a repo mounted at /auditor.
+#   docker compose run --rm auditor scan .
+#   docker compose run --rm auditor scan . --format sarif
+#   TARGET=/path/to/repo docker compose run --rm auditor scan .
+services:
+  auditor:
+    build: .
+    image: auditor:latest
+    volumes:
+      - ${TARGET:-./}:/auditor
+    working_dir: /auditor
+
+  # Long-running MCP server over stdio (for agent integration).
+  auditor-mcp:
+    build: .
+    image: auditor:latest
+    volumes:
+      - ${TARGET:-./}:/auditor
+    working_dir: /auditor
+    entrypoint: ["python", "-m", "auditor.mcp_server"]
+    stdin_open: true
+    tty: true

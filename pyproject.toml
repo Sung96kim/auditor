@@ -1,0 +1,43 @@
+[project]
+name = "auditor"
+version = "0.1.0"
+description = "A token-efficient repo auditor for coding agents"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { file = "LICENSE" }
+dependencies = [
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "typer>=0.26",
+]
+
+[project.optional-dependencies]
+mcp = ["fastmcp"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff", "fastmcp"]
+
+[project.scripts]
+auditor = "auditor.cli:app"
+auditor-mcp = "auditor.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["auditor"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.auditor]
+extends = "strict"
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["tests/fixtures/data"]  # intentional anti-pattern / broken fixtures
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]  # line length is not enforced
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

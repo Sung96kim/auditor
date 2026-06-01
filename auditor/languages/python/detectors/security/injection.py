@@ -1,0 +1,147 @@
+"""Injection & code-execution security detectors."""
+
+import ast
+from typing import ClassVar
+
+from auditor.languages.base import AuditContext
+from auditor.languages.python.detectors._util import call_attr, dotted_name, kwarg
+from auditor.languages.python.detectors.security._base import (
+    SecurityDetector,
+    has_true_kwarg,
+)
+from auditor.models import Finding, Severity, VerdictKind
+
+
+class DangerousEval(SecurityDetector):
+    rule_id: ClassVar[str] = "PY-SEC-DANGEROUS-EVAL"
+    default_severity: ClassVar[Severity] = Severity.BLOCKING
+    standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B307", "owasp:A03")
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            name = dotted_name(node.func) if isinstance(node, ast.Call) else ""
+            if (
+                name in ("eval", "exec", "compile")
+                and node.args
+                and not isinstance(node.args[0], ast.Constant)
+            ):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=node.lineno,
+                        message=f"`{name}(...)` on non-constant input executes arbitrary code",
+                        suggestion="avoid eval/exec; parse explicitly or use a safe dispatch",
+                    )
+                )
+        return out
+
+
+class ShellInjection(SecurityDetector):
+    rule_id: ClassVar[str] = "PY-SEC-SHELL-INJECTION"
+    default_severity: ClassVar[Severity] = Severity.HIGH
+    standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B602", "bandit:B605", "owasp:A03")
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = dotted_name(node.func)
+            if name in ("os.system", "os.popen"):
+                out.append(self._f(ctx, node, f"`{name}(...)` invokes a shell"))
+            elif name.startswith("subprocess.") and has_true_kwarg(node, "shell"):
+                out.append(self._f(ctx, node, f"`{name}(..., shell=True)` is shell-injection prone"))
+        return out
+
+    def _f(self, ctx: AuditContext, node: ast.Call, msg: str) -> Finding:
+        return self.make_finding(
+            ctx, line=node.lineno, message=msg, suggestion="pass an argv list; avoid shell=True"
+        )
+
+
+def _is_string_build(node: ast.expr) -> bool:
+    if isinstance(node, ast.JoinedStr):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        return True
+    return bool(isinstance(node, ast.Call) and call_attr(node) == "format")
+
+
+class SqlStringBuild(SecurityDetector):
+    rule_id: ClassVar[str] = "PY-SEC-SQL-STRING-BUILD"
+    default_severity: ClassVar[Severity] = Severity.HIGH
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    standard_refs: ClassVar[tuple[str, ...]] = ("bandit:B608", "owasp:A03")
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if (
+                isinstance(node, ast.Call)
+                and call_attr(node) in ("execute", "executemany")
+                and node.args
+                and _is_string_build(node.args[0])
+            ):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=node.lineno,
+                        message="SQL built by string formatting passed to .execute(); injection risk",
+                        suggestion="use parameterized queries (placeholders + params)",
+                    )
+                )
+        return out
+
+
+class DjangoRawSql(SecurityDetector):
+    rule_id: ClassVar[str] = "PY-SEC-DJANGO-RAW-SQL"
+    default_severity: ClassVar[Severity] = Severity.HIGH
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    standard_refs: ClassVar[tuple[str, ...]] = ("owasp:A03",)
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if (
+                isinstance(node, ast.Call)
+                and call_attr(node) in ("raw", "extra")
+                and node.args
+                and _is_string_build(node.args[0])
+            ):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=node.lineno,
+                        message=f".{call_attr(node)}(...) with interpolated SQL; injection risk",
+                        suggestion="use params= / ORM filters instead of string interpolation",
+                    )
+                )
+        return out
+
+
+class PathTraversal(SecurityDetector):
+    rule_id: ClassVar[str] = "PY-SEC-PATH-TRAVERSAL"
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    standard_refs: ClassVar[tuple[str, ...]] = ("owasp:A01",)
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if isinstance(node, ast.Call) and dotted_name(node.func) == "open":
+                arg = node.args[0] if node.args else kwarg(node, "file")
+                if arg is not None and _is_string_build(arg) and _references_name(arg):
+                    out.append(
+                        self.make_finding(
+                            ctx,
+                            line=node.lineno,
+                            message="open() path built from a variable; possible path traversal",
+                            suggestion="validate/normalize the path; constrain to a base dir",
+                        )
+                    )
+        return out
+
+
+def _references_name(node: ast.expr) -> bool:
+    return any(isinstance(n, ast.Name) for n in ast.walk(node))

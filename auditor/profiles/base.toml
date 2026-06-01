@@ -1,0 +1,46 @@
+# base.toml — industry-standard floor.
+# Security, correctness, async, typing, config, and cross-file dedup are ON.
+# The opinionated `oop-composition` house rules are OFF (opt in via `strict`).
+
+[categories]
+"oop-composition" = { enabled = false }
+
+# Test code is classified, not dropped, and audited under a relaxed policy:
+# rules that are noise-by-design in tests are disabled or downgraded to candidate.
+[roles.test]
+mode = "relaxed"
+[roles.test.categories]
+typing = { enabled = false }
+"oop-composition" = { enabled = false }
+[roles.test.rules]
+PY-STYLE-FILE-SIZE = { enabled = false }
+PY-SEC-ASSERT-FOR-SECURITY = { enabled = false }
+PY-SEC-HARDCODED-SECRET = { enabled = false }
+PY-SEC-INSECURE-RANDOM = { enabled = false }
+PY-SEC-BIND-ALL-INTERFACES = { enabled = false }
+PY-SEC-FLASK-DEBUG = { enabled = false }
+PY-SEC-INSECURE-TEMPFILE = { enabled = false }
+PY-SEC-SHELL-INJECTION = { verdict_kind = "candidate" }
+PY-SEC-DANGEROUS-EVAL = { verdict_kind = "candidate" }
+PY-SEC-UNSAFE-DESERIALIZE = { verdict_kind = "candidate" }
+PY-SEC-INSECURE-TLS = { verdict_kind = "candidate" }
+
+[roles.test_support]
+mode = "relaxed"
+[roles.test_support.categories]
+typing = { enabled = false }
+"oop-composition" = { enabled = false }
+[roles.test_support.rules]
+PY-STYLE-FILE-SIZE = { enabled = false }
+PY-SEC-ASSERT-FOR-SECURITY = { enabled = false }
+PY-SEC-HARDCODED-SECRET = { enabled = false }
+PY-SEC-INSECURE-RANDOM = { enabled = false }
+PY-SEC-BIND-ALL-INTERFACES = { enabled = false }
+PY-SEC-FLASK-DEBUG = { enabled = false }
+PY-SEC-INSECURE-TEMPFILE = { enabled = false }
+
+[roles.script]
+mode = "relaxed"
+
+[roles.generated]
+mode = "excluded"

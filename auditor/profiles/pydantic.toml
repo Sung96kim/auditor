@@ -1,0 +1,2 @@
+# pydantic.toml — strict, tuned for Pydantic-first codebases.
+extends = "strict"

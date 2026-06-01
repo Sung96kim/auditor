@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+.python-version
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# auditor's own index/cache (per-repo)
+.auditor/index.db
+.auditor/index.db-wal
+.auditor/index.db-shm
+.auditor/plugins/
+
+# Audit output
+AUDIT.md
+.audit/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
