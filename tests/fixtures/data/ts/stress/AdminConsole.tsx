@@ -164,6 +164,13 @@ export function AdminConsole() {
     <main className="admin">
       <header>
         <h1>Admin</h1>
+        <nav>
+          {["all", "admin", "member"].map((r, i) => (
+            <button key={i} onClick={() => dispatch({ role: r as Role | "all" })}>
+              {r}
+            </button>
+          ))}
+        </nav>
         <div className="stats">
           <div className="tile"><span>Users</span><strong>{users.length}</strong></div>
           <div className="tile"><span>Active</span><strong>{users.filter((u) => u.active).length}</strong></div>

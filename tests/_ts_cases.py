@@ -19,6 +19,11 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "export function A() {\n  return <div />;\n}\nfunction helper() {\n  return 1;\n}\n",
         ),
         (
+            "TS-REACT-ARRAY-INDEX-KEY",
+            "const x = <ul>{items.map((it, i) => <li key={i}>{it}</li>)}</ul>;\n",
+            "const x = <ul>{items.map((it) => <li key={it.id}>{it.name}</li>)}</ul>;\n",
+        ),
+        (
             "TS-REACT-REPEATED-JSX",
             "const x = (\n  <ul>\n    <li><a>1</a></li>\n    <li><a>2</a></li>\n    <li><a>3</a></li>\n  </ul>\n);\n",
             "const x = (\n  <ul>\n    <li><a>1</a></li>\n  </ul>\n);\n",

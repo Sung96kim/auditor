@@ -60,6 +60,13 @@ export function Dashboard() {
 
   return (
     <main>
+      <nav>
+        {["1h", "24h", "7d"].map((r, i) => (
+          <button key={i} onClick={() => setRange(r)}>
+            {r}
+          </button>
+        ))}
+      </nav>
       <section>
         <div>
           <div>

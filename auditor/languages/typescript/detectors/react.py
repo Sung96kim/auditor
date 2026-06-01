@@ -10,11 +10,72 @@ from collections import defaultdict
 from typing import ClassVar
 
 from auditor.languages.typescript.base import TsAuditContext, TsDetector
-from auditor.languages.typescript.nodes import Tsx
+from auditor.languages.typescript.nodes import Tsx, callee
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _MIN_REPEAT = 3  # 3+ identical-shape siblings is a strong "map over data" signal
 _MIN_TAGS = 2  # ignore repeated leaf elements (<br/>, <li>text</li>) — too trivial
+_ITER_METHODS = {"map", "forEach", "flatMap"}
+
+
+class ArrayIndexKey(TsDetector):
+    rule_id: ClassVar[str] = "TS-REACT-ARRAY-INDEX-KEY"
+    category: ClassVar[Category] = Category.REACT
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    checklist_item: ClassVar[int] = 13
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for attr in ctx.root.descendants("jsx_attribute"):
+            if attr.attr_name() != "key":
+                continue
+            value = attr.attr_value()
+            index = _enclosing_iter_index(attr)
+            if value is None or index is None:
+                continue
+            if index in {n.text for n in value.walk() if n.type == "identifier"}:
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=attr.line,
+                        message=f"`key={{{index}}}` uses the array index; unstable when the list reorders/inserts",
+                        suggestion="key off a stable unique id from the item, not its position",
+                    )
+                )
+        return out
+
+
+def _enclosing_iter_index(attr: Tsx) -> str | None:
+    """The index parameter of the nearest enclosing ``.map``/``.forEach`` callback, if any."""
+    node = attr.node.parent
+    while node is not None:
+        if node.type in ("arrow_function", "function_expression"):
+            args = node.parent
+            if (
+                args is not None
+                and args.type == "arguments"
+                and args.parent is not None
+                and args.parent.type == "call_expression"
+                and callee(Tsx(args.parent)) in _ITER_METHODS
+            ):
+                return _second_param_name(Tsx(node))
+        node = node.parent
+    return None
+
+
+def _second_param_name(fn: Tsx) -> str | None:
+    params = fn.field("parameters")
+    if params is None:
+        return None
+    children = params.named_children()
+    if len(children) < 2:
+        return None
+    second = children[1]
+    if second.type == "identifier":
+        return second.text
+    pattern = second.field("pattern")
+    return pattern.text if pattern is not None and pattern.type == "identifier" else None
 
 
 class MultiComponentFile(TsDetector):

@@ -113,7 +113,7 @@ Each carries a stable `rule_id`, a category, a default severity, and (for securi
   `autoFocus`, redundant role, mouse handler without a keyboard equivalent.
 - **size & complexity**: large file, too many props, JSX nested too deep (config-tunable).
 - **structure** (`react`): multiple components per file, repeated sibling JSX → `.map()`,
-  duplicate imports.
+  duplicate imports, array index used as a React `key` (reorder/insert reconciliation bug).
 - **DRY / extraction** (`react`): a component with a large hook cluster → custom `use*` hook
   (`EXTRACTABLE-HOOK`); a pure helper nested in a component → module-level util
   (`EXTRACTABLE-HELPER`); near-twin functions/components differing only in constants →
