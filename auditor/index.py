@@ -13,10 +13,28 @@ import asyncio
 import queue
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
+
+_LOCK_RETRIES = 60
+_LOCK_BACKOFF = 0.05
+
+
+def _retry_locked(action: Callable[[], Any]) -> Any:
+    """Run ``action``, retrying on transient lock/busy errors. ``PRAGMA journal_mode=WAL``
+    ignores ``busy_timeout`` and returns SQLITE_BUSY immediately when fresh connections
+    contend on the journal-mode switch, so the one-time init path needs an explicit retry."""
+    for attempt in range(_LOCK_RETRIES):
+        try:
+            return action()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if ("locked" not in msg and "busy" not in msg) or attempt == _LOCK_RETRIES - 1:
+                raise
+            time.sleep(_LOCK_BACKOFF)
 
 from auditor.models import Finding, IndexEntry
 
@@ -136,13 +154,15 @@ class IndexStore:
 
     @staticmethod
     def _init_schema(conn: sqlite3.Connection) -> None:
-        # busy_timeout FIRST so the WAL switch + schema creation wait under concurrency
-        # (parallel audit agents) instead of erroring with "database is locked".
+        # busy_timeout FIRST so plain writes wait under concurrency (parallel audit agents)
+        # instead of erroring; the WAL switch + schema creation additionally need _retry_locked
+        # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
         conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA journal_mode=WAL")
+        if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+            _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-        conn.executescript(_SCHEMA)
+        _retry_locked(lambda: conn.executescript(_SCHEMA))
         conn.commit()
 
     async def __aenter__(self) -> "IndexStore":
