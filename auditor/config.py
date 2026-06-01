@@ -180,10 +180,13 @@ def _read_repo_tomls(root: Path) -> tuple[dict, dict]:
     return pyproject, standalone
 
 
-def merged_config_dict(root: Path) -> dict:
-    """Layer profile -> pyproject -> .auditor/config.toml into one raw dict (pre-validation)."""
+def merged_config_dict(root: Path, *, profile: str | None = None) -> dict:
+    """Layer profile -> pyproject -> .auditor/config.toml into one raw dict (pre-validation).
+
+    ``profile`` overrides the repo's ``extends`` for this run (the CLI ``--profile`` flag),
+    so any repo can be audited at e.g. ``strict`` strength without editing its config."""
     pyproject, standalone = _read_repo_tomls(root)
-    extends = standalone.get("extends") or pyproject.get("extends") or "base"
+    extends = profile or standalone.get("extends") or pyproject.get("extends") or "base"
     merged = _load_profile(extends)
     merged = _deep_merge(merged, pyproject)
     merged = _deep_merge(merged, standalone)
@@ -195,16 +198,17 @@ def merged_config_dict(root: Path) -> dict:
 def load_config(
     root: Path,
     *,
+    profile: str | None = None,
     allow_local_plugins: bool = False,
     loader: "PluginLoader | None" = None,
 ) -> AuditorSettings:
     """Two-phase load: read raw config, load the plugins it names (so a config can
     reference plugin-contributed rules), then validate against the populated registry.
 
-    Entry-point and config-named plugins load unconditionally; local ``.auditor/plugins``
-    load only when trusted (``allow_local_plugins`` or ``trust_local_plugins`` in config).
+    ``profile`` overrides the repo's ``extends`` for this run. Entry-point and config-named
+    plugins load unconditionally; local ``.auditor/plugins`` load only when trusted.
     """
-    raw = merged_config_dict(root)
+    raw = merged_config_dict(root, profile=profile)
     loader = loader if loader is not None else PluginLoader()
     loader.load_entry_points()
     loader.load_config_modules(list(raw.get("plugins", [])))

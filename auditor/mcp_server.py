@@ -33,19 +33,23 @@ mcp: FastMCP = FastMCP(
 
 @mcp.tool
 async def scan(
-    path: str = ".", incremental: bool = False, strict_tests: bool = False
+    path: str = ".",
+    incremental: bool = False,
+    strict_tests: bool = False,
+    profile: str | None = None,
 ) -> dict:
-    """Audit a file or directory. Returns {files: [...], totals: {...}}."""
+    """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
+    the repo's profile for this run (base|strict|pydantic|all-strict)."""
     results = await audit_target(
-        Path(path), incremental=incremental, strict_tests=strict_tests
+        Path(path), incremental=incremental, strict_tests=strict_tests, profile=profile
     )
     return json_payload(results)
 
 
 @mcp.tool
-async def report(file: str) -> dict:
+async def report(file: str, profile: str | None = None) -> dict:
     """Audit a single file statelessly (manifest + findings)."""
-    results = await audit_target(Path(file))
+    results = await audit_target(Path(file), profile=profile)
     return json_payload(results)
 
 

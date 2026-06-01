@@ -51,6 +51,7 @@ uv sync --extra dev     # + pytest/ruff
 auditor scan .                       # audit the repo (JSON to stdout)
 auditor scan . --incremental         # use/update the on-disk cache (.auditor/index.db)
 auditor scan . --format sarif        # SARIF 2.1.0 for CI / GitHub code scanning
+auditor scan . --profile strict      # run any repo at strict strength (no config edits needed)
 auditor scan tests/ --strict-tests   # audit test code at full production strength
 auditor report path/to/file.py       # single file, stateless (manifest + findings)
 auditor manifest path/to/file.py     # AST manifest only (no detectors)

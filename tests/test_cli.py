@@ -110,3 +110,15 @@ def test_scan_strict_tests(sample_repo):
     )
     rules = {x["rule_id"] for f in payload["files"] for x in f["findings"]}
     assert "PY-SEC-HARDCODED-SECRET" in rules
+
+
+def test_profile_override_enables_oop(sample_repo):
+    # a config-less subdir defaults to base (oop off); --profile strict turns it on
+    # remove the sample repo's pyproject [tool.auditor] to simulate a config-less repo
+    (sample_repo / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\ndependencies=["pydantic"]\n')
+    base = _json(runner.invoke(app, ["scan", str(sample_repo / "src"), "--no-index"]))
+    strict = _json(runner.invoke(app, ["scan", str(sample_repo / "src"), "--no-index", "--profile", "strict"]))
+    base_rules = {x["rule_id"] for f in base["files"] for x in f["findings"]}
+    strict_rules = {x["rule_id"] for f in strict["files"] for x in f["findings"]}
+    assert not any(r.startswith("PY-OOP-") and r != "PY-OOP-DATACLASS-IN-PYDANTIC" for r in base_rules)
+    assert "PY-OOP-CONSTRUCTOR-WALL" in strict_rules

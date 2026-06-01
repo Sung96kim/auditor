@@ -235,11 +235,13 @@ async def audit_target(
     no_index: bool = False,
     strict_tests: bool = False,
     allow_local_plugins: bool = False,
+    profile: str | None = None,
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
-    use the on-disk cache, and audit a file or directory."""
+    use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
+    ``extends`` for the run (e.g. ``"strict"`` to enable the OOP/composition rules)."""
     root = find_root(target)
-    settings = load_config(root, allow_local_plugins=allow_local_plugins)
+    settings = load_config(root, profile=profile, allow_local_plugins=allow_local_plugins)
     if strict_tests:
         settings = settings.model_copy(update={"test_mode": "strict"})
 

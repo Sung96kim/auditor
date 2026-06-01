@@ -82,6 +82,10 @@ def scan(
     allow_local_plugins: Annotated[
         bool, typer.Option(help="Load .auditor/plugins/*.py.")
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option(help="Override the profile for this run: base|strict|pydantic|all-strict."),
+    ] = None,
     fmt: Annotated[str, typer.Option("--format", help="json | sarif | md")] = "json",
 ) -> None:
     """Audit a file or directory."""
@@ -92,6 +96,7 @@ def scan(
             no_index=no_index,
             strict_tests=strict_tests,
             allow_local_plugins=allow_local_plugins,
+            profile=profile,
         ),
         f"auditing {target}…",
     )
@@ -112,16 +117,20 @@ def manifest(file: Annotated[Path, typer.Argument(help="Python file.")]) -> None
 @app.command()
 def report(
     file: Annotated[Path, typer.Argument(help="Python file.")],
+    profile: Annotated[
+        str | None,
+        typer.Option(help="Override the profile for this run: base|strict|pydantic|all-strict."),
+    ] = None,
     fmt: Annotated[str, typer.Option("--format", help="json | sarif | md")] = "json",
 ) -> None:
     """Audit one file (stateless) — manifest + findings in one call."""
-    result = _run(_report(file), f"auditing {file.name}…")
+    result = _run(_report(file, profile), f"auditing {file.name}…")
     typer.echo(render([result], fmt))
 
 
-async def _report(file: Path) -> ScanResult:
+async def _report(file: Path, profile: str | None) -> ScanResult:
     root = find_root(file)
-    engine = ScanEngine(root, load_config(root))
+    engine = ScanEngine(root, load_config(root, profile=profile))
     return await engine.scan_file(file)
 
 
