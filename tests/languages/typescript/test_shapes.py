@@ -54,6 +54,21 @@ def test_distinct_operations_do_not_collide():
     assert a and b and a[0].shape_hash != b[0].shape_hash
 
 
+def test_all_div_components_are_too_generic_to_dedup():
+    # two distinct components made entirely of <div> collide by luck — not a real duplicate
+    # (found via tailor audit: Callout vs EmptyState, both all-<div>)
+    a = "export function Callout() {\n  return <div><div><div /></div><div><div /></div></div>;\n}\n"
+    b = "export function Empty() {\n  return <div><div><div /></div><div><div /></div></div>;\n}\n"
+    assert _shapes(a) == [] and _shapes(b) == []
+
+
+def test_varied_tag_components_still_dedup():
+    a = "export function ListA() {\n  return <section><header><h2>t</h2></header><ul><li>x</li></ul></section>;\n}\n"
+    b = "export function ListB() {\n  return <section><header><h2>y</h2></header><ul><li>z</li></ul></section>;\n}\n"
+    ra, rb = _shapes(a)[0], _shapes(b)[0]
+    assert ra.kind == "component" and ra.shape_hash == rb.shape_hash
+
+
 def test_data_consts_are_not_function_shapes():
     # two lookup maps with the same keys are not duplicate "functions" (found via tailor audit)
     rows = _shapes(

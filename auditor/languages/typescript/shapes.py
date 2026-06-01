@@ -25,6 +25,7 @@ _SKELETON_NODES = (
     "ternary_expression",
 )
 _MIN_JSX_TAGS = 4  # ignore trivial components (a bare wrapper) — too generic to dedup
+_MIN_COMPONENT_DISTINCT = 3  # all-<div> components collide by luck; need real tag variety
 _MIN_FN_TOKENS = 4  # a function shape needs real substance, else small fns collide by luck
 # A recurring JSX *sub-tree* (inline in different components) is worth extracting only when
 # it's a real composed block, not a layout wrapper — recurring `<div className="flex">` is
@@ -91,7 +92,7 @@ class ShapeExtractor:
         symbol = name.text
         if symbol[:1].isupper() and body.contains_jsx():
             tags = _jsx_skeleton(body)
-            if len(tags) >= _MIN_JSX_TAGS:
+            if len(tags) >= _MIN_JSX_TAGS and len(set(tags)) >= _MIN_COMPONENT_DISTINCT:
                 return [ShapeRow(_hash("tsc|" + ">".join(tags)), "component", symbol, at.line)]
             return []
         if body.type not in _FUNCTION_BODIES:
