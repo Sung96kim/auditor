@@ -7,12 +7,27 @@ Cheap by design — a GROUP BY over the shapes table, recomputed each scan; no r
 from auditor.index import IndexStore
 from auditor.models import Category, Finding, Severity, VerdictKind
 
-_MODEL_RULE = "PY-XFILE-DUP-MODEL"
-_FUNCTION_RULE = "PY-XFILE-DUP-FUNCTION"
-_RULES = [_MODEL_RULE, _FUNCTION_RULE, "PY-XFILE-PARALLEL-SIBLING"]
 
-_RULE_BY_KIND = {"model": _MODEL_RULE, "function": _FUNCTION_RULE}
-_ITEM_BY_KIND = {"model": 16, "function": 24}
+class _XKind:
+    """How one shape ``kind`` becomes a cross-file finding (rule, category, noun, item)."""
+
+    __slots__ = ("rule", "category", "noun", "item")
+
+    def __init__(self, rule: str, category: Category, noun: str, item: int) -> None:
+        self.rule = rule
+        self.category = category
+        self.noun = noun
+        self.item = item
+
+
+_BY_KIND: dict[str, _XKind] = {
+    "model": _XKind("PY-XFILE-DUP-MODEL", Category.OOP_COMPOSITION, "model", 16),
+    "function": _XKind("PY-XFILE-DUP-FUNCTION", Category.OOP_COMPOSITION, "function", 24),
+    "component": _XKind("TS-XFILE-DUP-COMPONENT", Category.REACT, "component", 12),
+    "ts-function": _XKind("TS-XFILE-DUP-FUNCTION", Category.REACT, "function", 15),
+}
+_FALLBACK = _BY_KIND["function"]
+_RULES = [k.rule for k in _BY_KIND.values()] + ["PY-XFILE-PARALLEL-SIBLING"]
 
 
 async def run(index: IndexStore) -> dict[str, list[Finding]]:
@@ -48,17 +63,16 @@ async def run(index: IndexStore) -> dict[str, list[Finding]]:
 
 
 def _finding(kind: str, symbol: str, line: int, elsewhere: list[str]) -> Finding:
-    rule_id = _RULE_BY_KIND.get(kind, _FUNCTION_RULE)
-    noun = "model" if kind == "model" else "function"
+    spec = _BY_KIND.get(kind, _FALLBACK)
     return Finding(
-        rule_id=rule_id,
-        category=Category.OOP_COMPOSITION,
+        rule_id=spec.rule,
+        category=spec.category,
         severity=Severity.LOW,
         verdict_kind=VerdictKind.CANDIDATE,
         line=line,
-        message=f"{noun} `{symbol}` shares its shape with: {', '.join(elsewhere)}",
+        message=f"{spec.noun} `{symbol}` shares its shape with: {', '.join(elsewhere)}",
         evidence=symbol,
-        suggestion="extract a shared model/function; have both sites reuse it",
+        suggestion=f"extract a shared {spec.noun}; have both sites reuse it",
         detector="crossfile",
-        checklist_item=_ITEM_BY_KIND.get(kind),
+        checklist_item=spec.item,
     )

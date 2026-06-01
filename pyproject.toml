@@ -13,7 +13,19 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["fastmcp"]
-dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff", "fastmcp"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+    "fastmcp",
+    "tree-sitter>=0.23",
+    "tree-sitter-typescript>=0.23",
+]
+ts = [
+    "tree-sitter>=0.23",
+    "tree-sitter-typescript>=0.23",
+]
 
 [project.scripts]
 auditor = "auditor.cli:app"

@@ -1,0 +1,140 @@
+"""``Tsx`` — a thin wrapper over a tree-sitter ``Node`` giving text/line/walk navigation and
+the JSX element/attribute model, so detectors compose method calls instead of threading raw
+nodes through free functions. Methods that return nodes return wrapped ``Tsx`` instances."""
+
+from collections.abc import Iterator
+
+from tree_sitter import Node
+
+_JSX_ELEMENTS = ("jsx_element", "jsx_self_closing_element")
+
+
+class Tsx:
+    """A wrapped tree-sitter node. Generic navigation + JSX accessors on one cursor type."""
+
+    __slots__ = ("node",)
+
+    def __init__(self, node: Node) -> None:
+        self.node = node
+
+    @property
+    def type(self) -> str:
+        return self.node.type
+
+    @property
+    def text(self) -> str:
+        return self.node.text.decode("utf-8", "replace")
+
+    @property
+    def line(self) -> int:
+        """1-indexed start line, for ``Finding.line``."""
+        return self.node.start_point.row + 1
+
+    @property
+    def is_jsx_element(self) -> bool:
+        return self.type in _JSX_ELEMENTS
+
+    def field(self, name: str) -> "Tsx | None":
+        child = self.node.child_by_field_name(name)
+        return Tsx(child) if child is not None else None
+
+    def named_children(self) -> list["Tsx"]:
+        return [Tsx(c) for c in self.node.named_children]
+
+    def walk(self) -> Iterator["Tsx"]:
+        """Pre-order over every named descendant (including self)."""
+        stack = [self.node]
+        while stack:
+            cur = stack.pop()
+            yield Tsx(cur)
+            stack.extend(reversed(cur.named_children))
+
+    def descendants(self, *types: str) -> Iterator["Tsx"]:
+        for node in self.walk():
+            if node.type in types:
+                yield node
+
+    def unwrap_export(self) -> "Tsx":
+        """The declaration an ``export ...`` statement exports, else self unchanged."""
+        if self.type == "export_statement":
+            decl = self.field("declaration")
+            if decl is not None:
+                return decl
+        return self
+
+    def contains_jsx(self) -> bool:
+        return any(node.is_jsx_element for node in self.walk())
+
+    # --- JSX element ---------------------------------------------------------
+
+    def opening(self) -> "Tsx":
+        """The tag carrying name + attributes: self when self-closing, else the
+        ``jsx_opening_element`` child."""
+        if self.type == "jsx_self_closing_element":
+            return self
+        for child in self.named_children():
+            if child.type == "jsx_opening_element":
+                return child
+        return self
+
+    def jsx_name(self) -> str:
+        name = self.opening().field("name")
+        return name.text if name is not None else ""
+
+    def jsx_attributes(self) -> list["Tsx"]:
+        return [c for c in self.opening().named_children() if c.type == "jsx_attribute"]
+
+    def attributes(self) -> dict[str, "Tsx"]:
+        return {a.attr_name(): a for a in self.jsx_attributes()}
+
+    def child_elements(self) -> list["Tsx"]:
+        if self.type == "jsx_self_closing_element":
+            return []
+        return [c for c in self.named_children() if c.is_jsx_element]
+
+    def has_text_child(self) -> bool:
+        """True if the element directly renders non-whitespace text (a real label), not only
+        other elements/icons."""
+        if self.type == "jsx_self_closing_element":
+            return False
+        for child in self.named_children():
+            if child.type == "jsx_text" and child.text.strip():
+                return True
+            if child.type == "jsx_expression":
+                inner = child.named_children()
+                if inner and inner[0].type in ("string", "template_string"):
+                    return True
+        return False
+
+    # --- JSX attribute -------------------------------------------------------
+
+    def attr_name(self) -> str:
+        for child in self.named_children():
+            if child.type == "property_identifier":
+                return child.text
+        return ""
+
+    def attr_value(self) -> "Tsx | None":
+        seen_name = False
+        for child in self.named_children():
+            if child.type == "property_identifier" and not seen_name:
+                seen_name = True
+                continue
+            return child
+        return None
+
+    def attr_value_text(self) -> str:
+        """The attribute value as text: the literal for ``className="..."``, or the inner
+        expression for ``tabIndex={3}`` / ``onClick={go}`` (braces stripped). Empty for a
+        boolean attribute (``disabled``)."""
+        value = self.attr_value()
+        if value is None:
+            return ""
+        if value.type == "string":
+            return "".join(
+                c.text for c in value.named_children() if c.type == "string_fragment"
+            )
+        if value.type == "jsx_expression":
+            inner = value.named_children()
+            return inner[0].text if inner else ""
+        return value.text

@@ -74,6 +74,8 @@ class Category(StrEnum):
     CONFIG = "config"
     OOP_COMPOSITION = "oop-composition"
     STYLE = "style"
+    REACT = "react"
+    A11Y = "a11y"
 
 
 class ManifestEntryKind(StrEnum):

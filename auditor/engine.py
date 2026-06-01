@@ -16,7 +16,6 @@ from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
-from auditor.languages.python.shapes import ShapeExtractor
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
 from auditor.registry import REGISTRY
 from auditor.roles import RoleClassifier
@@ -197,8 +196,7 @@ class ScanEngine:
             await index.record_rule(rel, rid, enabled[rid], by_rule.get(rid, []), now)
 
         await index.clear_shapes(rel)
-        extractor = ShapeExtractor.for_source(source)
-        rows = extractor.shapes() if extractor else []
+        rows = auditor.shapes(source)
         if rows:
             await index.add_shapes(
                 [(s.shape_hash, s.kind, rel, s.symbol, s.line) for s in rows]

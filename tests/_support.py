@@ -5,6 +5,7 @@ from pathlib import Path
 
 from auditor.config import AuditorSettings, ResolvedConfig
 from auditor.languages.python.auditor import PythonAuditor
+from auditor.languages.typescript.auditor import TypeScriptAuditor
 from auditor.models import (
     Category,
     FileRole,
@@ -17,6 +18,22 @@ from auditor.models import (
 DATA_DIR = Path(__file__).parent / "fixtures" / "data"
 SAMPLE_REPO = DATA_DIR / "sample_repo"
 PLUGIN_FILE = DATA_DIR / "plugins" / "house_rules.py"
+TS_DATA = DATA_DIR / "ts"
+
+
+def run_ts_audit(
+    source: str,
+    *,
+    role: FileRole = FileRole.PRODUCTION,
+    settings: AuditorSettings | None = None,
+    rel_path: str = "Component.tsx",
+) -> ScanResult:
+    """Audit a TS/TSX source string with every rule enabled unless overridden."""
+    settings = settings if settings is not None else AuditorSettings()
+    rc = ResolvedConfig(settings, role=role, rel_path=rel_path)
+    return TypeScriptAuditor().audit(
+        file_path=rel_path, source=source, role=role, config=rc
+    )
 
 
 def run_audit(

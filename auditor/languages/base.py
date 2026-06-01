@@ -129,6 +129,20 @@ class Detector(ABC):
         )
 
 
+class ShapeRow:
+    """One normalized shape occurrence feeding the cross-file dedup pass: a structural
+    fingerprint that collides when two definitions are the same shape regardless of name.
+    ``kind`` selects the cross-file rule (``model``/``function``/``component``/…)."""
+
+    __slots__ = ("shape_hash", "kind", "symbol", "line")
+
+    def __init__(self, shape_hash: str, kind: str, symbol: str, line: int) -> None:
+        self.shape_hash = shape_hash
+        self.kind = kind
+        self.symbol = symbol
+        self.line = line
+
+
 class LanguageAuditor(ABC):
     """One per language. Parses a file, builds its manifest, runs its detectors."""
 
@@ -150,3 +164,7 @@ class LanguageAuditor(ABC):
     ) -> ScanResult:
         """Return a ScanResult for one file."""
         raise NotImplementedError
+
+    def shapes(self, source: str) -> list[ShapeRow]:
+        """Normalized shape rows for the cross-file dedup pass. Default: none."""
+        return []

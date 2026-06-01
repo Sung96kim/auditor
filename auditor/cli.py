@@ -134,7 +134,7 @@ def _emit(rendered: str, output: Path | None) -> None:
         typer.echo(rendered)
         return
     output.write_text(rendered, encoding="utf-8")
-    _status.print(f"wrote {output}")
+    typer.echo(f"wrote {output}", err=True)
 
 
 # --------------------------------------------------------------- manifest/report

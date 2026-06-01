@@ -3,6 +3,8 @@ rule. Each per-module test file imports its group; test_detectors.py checks tota
 
 Not collected by pytest (no ``test_`` prefix) — this is shared data."""
 
+from _ts_cases import GROUPS as TS_GROUPS
+
 # generated bodies for the threshold-driven rules
 _WALL = "Model(" + ", ".join(f"a{i}=1" for i in range(12)) + ")"
 _FLAT = "class M(BaseModel):\n" + "".join(f"    f{i}: int\n" for i in range(12))
@@ -209,11 +211,15 @@ TESTED_SEPARATELY = {
     "PY-XFILE-DUP-MODEL",
     "PY-XFILE-DUP-FUNCTION",
     "PY-XFILE-PARALLEL-SIBLING",
+    "TS-XFILE-DUP-COMPONENT",
+    "TS-XFILE-DUP-FUNCTION",
 }
 
 
 def all_cases() -> list[tuple[str, str, str]]:
+    """Every (rule_id, bad, good) case across the Python and TS detector tables."""
     out: list[tuple[str, str, str]] = []
-    for group in GROUPS.values():
-        out.extend(group)
+    for groups in (GROUPS, TS_GROUPS):
+        for group in groups.values():
+            out.extend(group)
     return out

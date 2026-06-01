@@ -8,19 +8,9 @@ to its parameter types + a normalized body skeleton.
 import ast
 import hashlib
 
+from auditor.languages.base import ShapeRow
+
 _MODEL_BASES = {"BaseModel"}
-
-
-class ShapeRow:
-    """One shape occurrence: (hash, kind, symbol, line)."""
-
-    __slots__ = ("shape_hash", "kind", "symbol", "line")
-
-    def __init__(self, shape_hash: str, kind: str, symbol: str, line: int) -> None:
-        self.shape_hash = shape_hash
-        self.kind = kind
-        self.symbol = symbol
-        self.line = line
 
 
 def _hash(text: str) -> str:
