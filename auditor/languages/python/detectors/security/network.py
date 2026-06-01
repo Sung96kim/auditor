@@ -5,7 +5,13 @@ import re
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext
-from auditor.languages.python.detectors._util import call_attr, dotted_name, kwarg
+from auditor.languages.python.detectors._util import (
+    call_attr,
+    dotted_name,
+    function_params,
+    kwarg,
+    nearest_enclosing_function,
+)
 from auditor.languages.python.detectors.security._base import (
     SecurityDetector,
     has_false_kwarg,
@@ -181,6 +187,18 @@ class ParamikoAutoadd(SecurityDetector):
         return out
 
 
+def _url_is_user_derived(url: ast.expr, params: set[str]) -> bool:
+    """True if the URL expression references caller data — an enclosing-function parameter
+    or a subscript (``request.args['url']``). A module/global constant name
+    (``RECAPTCHA_URL``) or a literal is not user-controlled, so not SSRF."""
+    for sub in ast.walk(url):
+        if isinstance(sub, ast.Name) and sub.id in params:
+            return True
+        if isinstance(sub, ast.Subscript):
+            return True
+    return False
+
+
 class Ssrf(SecurityDetector):
     rule_id: ClassVar[str] = "PY-SEC-SSRF"
     default_severity: ClassVar[Severity] = Severity.MEDIUM
@@ -188,17 +206,24 @@ class Ssrf(SecurityDetector):
     standard_refs: ClassVar[tuple[str, ...]] = ("owasp:A10",)
 
     def run(self, ctx: AuditContext) -> list[Finding]:
+        enclosing = nearest_enclosing_function(ctx.tree)
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if isinstance(node, ast.Call) and _is_http_call(node):
-                url = node.args[0] if node.args else kwarg(node, "url")
-                if url is not None and not isinstance(url, ast.Constant):
-                    out.append(
-                        self.make_finding(
-                            ctx,
-                            line=node.lineno,
-                            message="outbound HTTP to a non-constant URL; possible SSRF",
-                            suggestion="validate/allow-list the destination host",
-                        )
-                    )
+            if not (isinstance(node, ast.Call) and _is_http_call(node)):
+                continue
+            url = node.args[0] if node.args else kwarg(node, "url")
+            if url is None or isinstance(url, ast.Constant):
+                continue
+            fn = enclosing.get(id(node))
+            params = function_params(fn) if fn is not None else set()
+            if not _url_is_user_derived(url, params):
+                continue  # constant/global URL — not caller-controlled
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=node.lineno,
+                    message="outbound HTTP to a caller-derived URL; possible SSRF",
+                    suggestion="validate/allow-list the destination host",
+                )
+            )
         return out

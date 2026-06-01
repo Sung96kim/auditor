@@ -187,8 +187,8 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
         ),
         (
             "PY-SEC-SSRF",
-            "requests.get(url, timeout=5)",
-            "requests.get('http://fixed', timeout=5)",
+            "def fetch(url):\n    return requests.get(url, timeout=5)",
+            "def fetch():\n    return requests.get('http://fixed', timeout=5)",
         ),
     ],
     "security/framework": [

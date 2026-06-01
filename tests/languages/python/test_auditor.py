@@ -11,7 +11,9 @@ def test_severity_override_applied():
     settings = AuditorSettings.model_validate(
         {"rules": {"PY-SEC-SSRF": {"severity": "blocking"}}}
     )
-    res = run_audit("requests.get(url, timeout=5)", settings=settings)
+    res = run_audit(
+        "def f(url):\n    return requests.get(url, timeout=5)", settings=settings
+    )
     ssrf = [f for f in res.findings if f.rule_id == "PY-SEC-SSRF"]
     assert ssrf and ssrf[0].severity is Severity.BLOCKING
 
