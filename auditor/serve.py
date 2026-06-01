@@ -5,8 +5,54 @@ snippets, so it is never published to an external host. The page is held in memo
 served to any GET; the server runs until interrupted (Ctrl-C).
 """
 
+import platform
+import shutil
+import subprocess
 import webbrowser
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# WSL ships no Linux browser, so Python's webbrowser/xdg-open opens nothing. These launch
+# the Windows default browser instead; it reaches 127.0.0.1 via WSL2 localhost forwarding.
+_WSL_LAUNCHERS: tuple[tuple[str, ...], ...] = (
+    ("wslview",),
+    ("explorer.exe",),
+    ("cmd.exe", "/c", "start", ""),
+)
+
+
+def _is_wsl() -> bool:
+    return "microsoft" in platform.uname().release.lower()
+
+
+def _wsl_browser_command(
+    url: str, *, which: Callable[[str], str | None] = shutil.which
+) -> list[str] | None:
+    """The first available Windows-side launcher command for ``url`` (or None)."""
+    for launcher in _WSL_LAUNCHERS:
+        exe = which(launcher[0])
+        if exe:
+            return [exe, *launcher[1:], url]
+    return None
+
+
+def _spawn(command: list[str]) -> bool:
+    try:
+        subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        return True
+    except OSError:
+        return False
+
+
+def open_url(url: str) -> bool:
+    """Open ``url`` in a browser; on WSL prefer the Windows default browser. Best-effort."""
+    if _is_wsl():
+        command = _wsl_browser_command(url)
+        if command is not None and _spawn(command):
+            return True
+    return webbrowser.open(url)
 
 
 class _ReportHandler(BaseHTTPRequestHandler):
@@ -38,7 +84,7 @@ class ReportServer(HTTPServer):
     def serve(self, *, open_browser: bool = True) -> None:
         """Open the report in a browser and serve until interrupted."""
         if open_browser:
-            webbrowser.open(self.url)
+            open_url(self.url)
         try:
             self.serve_forever()
         except KeyboardInterrupt:
