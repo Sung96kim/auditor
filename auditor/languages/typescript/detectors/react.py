@@ -31,10 +31,14 @@ class ArrayIndexKey(TsDetector):
             if attr.attr_name() != "key":
                 continue
             value = attr.attr_value()
-            index = _enclosing_iter_index(attr)
-            if value is None or index is None:
+            params = _enclosing_iter_params(attr)
+            if value is None or params is None:
                 continue
-            if index in {n.text for n in value.walk() if n.type == "identifier"}:
+            item, index = params
+            idents = {n.text for n in value.walk() if n.type == "identifier"}
+            # flag only a *bare* index key; a composite that also uses the item
+            # (`key={`${file.name}-${i}`}`) is stable and fine.
+            if index in idents and (item is None or item not in idents):
                 out.append(
                     self.make_finding(
                         ctx,
@@ -46,8 +50,9 @@ class ArrayIndexKey(TsDetector):
         return out
 
 
-def _enclosing_iter_index(attr: Tsx) -> str | None:
-    """The index parameter of the nearest enclosing ``.map``/``.forEach`` callback, if any."""
+def _enclosing_iter_params(attr: Tsx) -> tuple[str | None, str] | None:
+    """(item, index) parameter names of the nearest enclosing ``.map``/``.forEach`` callback,
+    or None if the key isn't inside one / the callback has no index parameter."""
     node = attr.node.parent
     while node is not None:
         if node.type in ("arrow_function", "function_expression"):
@@ -59,22 +64,24 @@ def _enclosing_iter_index(attr: Tsx) -> str | None:
                 and args.parent.type == "call_expression"
                 and callee(Tsx(args.parent)) in _ITER_METHODS
             ):
-                return _second_param_name(Tsx(node))
+                item, index = _param_names(Tsx(node))
+                return (item, index) if index is not None else None
         node = node.parent
     return None
 
 
-def _second_param_name(fn: Tsx) -> str | None:
+def _param_names(fn: Tsx) -> tuple[str | None, str | None]:
     params = fn.field("parameters")
-    if params is None:
-        return None
-    children = params.named_children()
-    if len(children) < 2:
-        return None
-    second = children[1]
-    if second.type == "identifier":
-        return second.text
-    pattern = second.field("pattern")
+    names = [_identifier_name(c) for c in params.named_children()] if params else []
+    item = names[0] if len(names) >= 1 else None
+    index = names[1] if len(names) >= 2 else None
+    return item, index
+
+
+def _identifier_name(param: Tsx) -> str | None:
+    if param.type == "identifier":
+        return param.text
+    pattern = param.field("pattern")
     return pattern.text if pattern is not None and pattern.type == "identifier" else None
 
 

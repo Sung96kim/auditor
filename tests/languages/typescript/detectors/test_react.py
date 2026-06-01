@@ -13,6 +13,17 @@ def test_flags_bad_ignores_good(rule_id, bad, good):
     assert rule_id not in rule_ids(run_ts_audit(good)), f"{rule_id} false-positived on clean code"
 
 
+def test_array_index_key_allows_composite_keys_using_the_item():
+    # key combining the item's stable fields with the index is fine (found via tailor audit)
+    src = "const x = <ul>{files.map((file, i) => <li key={`${file.name}-${i}`}>{file.name}</li>)}</ul>;\n"
+    assert "TS-REACT-ARRAY-INDEX-KEY" not in rule_ids(run_ts_audit(src))
+
+
+def test_array_index_key_still_flags_bare_index():
+    src = "const x = <ul>{items.map((it, i) => <li key={i}>{it}</li>)}</ul>;\n"
+    assert "TS-REACT-ARRAY-INDEX-KEY" in rule_ids(run_ts_audit(src))
+
+
 def test_parallel_sibling_ignores_data_consts():
     # two distinct lookup maps share key structure but are not "one parameterized function"
     src = (
