@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from conftest import PLUGIN_FILE
+from _support import PLUGIN_FILE
 
 from auditor.config import load_config
 from auditor.plugins import PluginLoader

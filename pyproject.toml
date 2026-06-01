@@ -25,7 +25,8 @@ packages = ["auditor"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "tests"]
+addopts = "--import-mode=importlib --ignore=tests/fixtures"
 
 [tool.auditor]
 extends = "strict"

@@ -3,17 +3,9 @@
 import ast
 from collections.abc import Iterator
 
-
-def dotted_name(node: ast.AST) -> str:
-    """Best-effort dotted name for a Name/Attribute/Call func, e.g. ``os.environ.get``."""
-    if isinstance(node, ast.Call):
-        return dotted_name(node.func)
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        base = dotted_name(node.value)
-        return f"{base}.{node.attr}" if base else node.attr
-    return ""
+from auditor.ast_util import (
+    dotted as dotted_name,  # noqa: F401  (re-exported for detectors)
+)
 
 
 def call_attr(node: ast.Call) -> str:

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import rule_ids, run_audit
+from _support import rule_ids, run_audit
 
 from auditor.config import AuditorSettings, load_config
 from auditor.models import FileRole

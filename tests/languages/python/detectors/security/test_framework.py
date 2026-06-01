@@ -1,10 +1,10 @@
-"""Detectors in security/deserialize.py: each rule flags its anti-pattern and ignores the clean version."""
+"""Detectors in security/framework.py: each rule flags its anti-pattern and ignores the clean version."""
 
 import pytest
 from _detector_cases import GROUPS
-from conftest import rule_ids, run_audit
+from _support import rule_ids, run_audit
 
-_CASES = GROUPS["security/deserialize"]
+_CASES = GROUPS["security/framework"]
 
 
 @pytest.mark.parametrize("rule_id, bad, good", _CASES, ids=[c[0] for c in _CASES])

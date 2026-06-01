@@ -1,7 +1,7 @@
 """languages/python/auditor.py: severity/verdict override application, syntax-error
 handling, and the rule_ids filter."""
 
-from conftest import run_audit
+from _support import run_audit
 
 from auditor.config import AuditorSettings
 from auditor.models import Severity

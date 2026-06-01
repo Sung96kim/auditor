@@ -15,7 +15,7 @@ from auditor.config import load_config
 from auditor.discovery import FileDiscovery, find_root
 from auditor.engine import audit_target
 from auditor.index import IndexStore
-from auditor.languages.python.manifest import ManifestBuilder
+from auditor.models import ManifestEntry
 from auditor.registry import REGISTRY
 from auditor.reporters.json_reporter import payload as json_payload
 from auditor.roles import RoleClassifier
@@ -49,7 +49,7 @@ async def report(file: str) -> dict:
 def manifest(file: str) -> list[dict]:
     """Return the AST class+function manifest for a Python file (no detectors)."""
     tree = ast.parse(Path(file).read_text(encoding="utf-8", errors="replace"))
-    return [e.model_dump(mode="json") for e in ManifestBuilder(tree).build()]
+    return [e.model_dump(mode="json") for e in ManifestEntry.from_module(tree)]
 
 
 @mcp.tool

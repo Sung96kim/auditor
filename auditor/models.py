@@ -4,9 +4,12 @@ Pure data records (Pydantic). The detector-runtime carrier ``AuditContext`` live
 ``languages.base`` with the ``Detector`` ABC to avoid a config <-> models import cycle.
 """
 
+import ast
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from auditor import ast_util
 
 RuleId = str
 """A rule identifier, e.g. ``PY-ASYNC-SYNC-IO``. Validated against the runtime registry
@@ -66,8 +69,15 @@ class ManifestEntryKind(StrEnum):
     METHOD = "method"
 
 
+_FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
+
+
 class ManifestEntry(BaseModel):
-    """One top-level (or method) definition in a file's class+function manifest."""
+    """One top-level (or method) definition in a file's class+function manifest.
+
+    The model owns its construction — ``ManifestEntry.from_module(tree)`` is the factory the
+    auditor uses (no separate builder class). The low-level AST extraction lives in
+    :mod:`auditor.ast_util`; these factories just shape the results into entries."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -80,6 +90,47 @@ class ManifestEntry(BaseModel):
     decorators: tuple[str, ...] = ()
     is_async: bool = False
     flags: tuple[str, ...] = ()
+
+    @classmethod
+    def from_module(cls, tree: ast.Module) -> list["ManifestEntry"]:
+        """Every top-level class/function (+ its methods) in document order."""
+        entries: list[ManifestEntry] = []
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                entries.append(cls.from_class(node))
+                entries.extend(
+                    cls.from_function(sub, owner=node.name, is_method=True)
+                    for sub in node.body
+                    if isinstance(sub, _FuncDef)
+                )
+            elif isinstance(node, _FuncDef):
+                entries.append(cls.from_function(node, owner=None, is_method=False))
+        return entries
+
+    @classmethod
+    def from_class(cls, node: ast.ClassDef) -> "ManifestEntry":
+        return cls(
+            line=node.lineno,
+            symbol=node.name,
+            kind=ManifestEntryKind.CLASS,
+            field_count=ast_util.class_field_count(node),
+            decorators=ast_util.decorator_names(node),
+            flags=ast_util.class_flags(node),
+        )
+
+    @classmethod
+    def from_function(cls, fn: _FuncDef, *, owner: str | None, is_method: bool) -> "ManifestEntry":
+        a = fn.args
+        return cls(
+            line=fn.lineno,
+            symbol=f"{owner}.{fn.name}" if owner else fn.name,
+            kind=ManifestEntryKind.METHOD if is_method else ManifestEntryKind.FUNCTION,
+            arg_count=len(a.posonlyargs) + len(a.args) + len(a.kwonlyargs),
+            return_type=ast_util.dotted(fn.returns) if fn.returns is not None else None,
+            decorators=ast_util.decorator_names(fn),
+            is_async=isinstance(fn, ast.AsyncFunctionDef),
+            flags=ast_util.function_flags(fn, is_method=is_method),
+        )
 
 
 class Finding(BaseModel):

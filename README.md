@@ -1,4 +1,10 @@
-# auditor
+<p align="center">
+  <img src="assets/icon.svg" width="120" alt="auditor logo">
+</p>
+
+<h1 align="center">auditor</h1>
+
+<p align="center"><em>A token-efficient repo auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
 A **token-efficient repo auditor** for coding agents (Claude Code, Codex, …) and CI.
 

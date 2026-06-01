@@ -147,15 +147,18 @@ class ScanEngine:
             if cached_sha != sha or await index.rule_fingerprint(rel, rid) != fp
         ]
 
-        if not missed:  # full cache hit — no parse
+        if not missed:  # nothing to re-run
             findings = [f for rid in enabled for f in await index.cached_findings(rel, rid)]
             findings.sort(key=lambda f: (f.line, f.rule_id))
+            # genuinely cached only if a prior scan recorded this file; a file with no
+            # enabled rules (e.g. role-excluded) has nothing to do, not a cache hit.
+            cached = enabled != {} and cached_sha is not None
             return ScanResult(
                 file=rel,
                 language=auditor.language,
                 role=role,
                 findings=findings,
-                cached=True,
+                cached=cached,
                 skipped_rules=skipped,
             )
 

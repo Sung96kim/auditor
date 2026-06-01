@@ -147,27 +147,34 @@ def _is_docstring(stmt: ast.stmt) -> bool:
     )
 
 
+_FACTORY_VERBS = {"build", "create", "make", "construct", "produce"}
+
+
 class BuilderClass(_OopCandidate):
+    """Flags a function-with-state: a class that stores inputs in ``__init__`` and exposes a
+    single public 'produce one output' method (build/create/make/…). Such a class is better
+    expressed as a factory classmethod on the result — ``Result.from_X(...)``."""
+
     rule_id: ClassVar[str] = "PY-OOP-BUILDER-CLASS"
     checklist_item: ClassVar[int] = 9
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if not isinstance(node, ast.ClassDef) or not node.name.endswith("Builder"):
+            if not isinstance(node, ast.ClassDef):
                 continue
-            public = [
-                s.name
-                for s in node.body
-                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and not s.name.startswith("_")
-            ]
-            if public == ["build"]:
+            methods = [s for s in node.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            public = [m.name for m in methods if not m.name.startswith("_")]
+            has_init = any(m.name == "__init__" for m in methods)
+            named_builder = node.name.endswith("Builder")
+            # one public "produce" method, and the class either holds state or is *Builder
+            if len(public) == 1 and public[0] in _FACTORY_VERBS and (has_init or named_builder):
                 out.append(
                     self.make_finding(
                         ctx,
                         line=node.lineno,
-                        message=f"builder `{node.name}` only exposes build(); use a factory classmethod",
-                        suggestion="replace with Result.from_X(...) on the result model",
+                        message=f"`{node.name}` holds inputs and produces one output via `.{public[0]}()` — potential factory refactor",
+                        suggestion="replace with a factory classmethod on the result (e.g. Result.from_X(...))",
                     )
                 )
         return out

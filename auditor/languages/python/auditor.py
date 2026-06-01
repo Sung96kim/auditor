@@ -9,8 +9,7 @@ from auditor.languages.base import AuditContext, Detector, LanguageAuditor
 from auditor.languages.python import (
     detectors as _detectors,  # noqa: F401  (registers rules)
 )
-from auditor.languages.python.manifest import ManifestBuilder
-from auditor.models import FileRole, Finding, ScanResult, SkippedRule
+from auditor.models import FileRole, Finding, ManifestEntry, ScanResult, SkippedRule
 from auditor.registry import REGISTRY
 
 if TYPE_CHECKING:
@@ -66,7 +65,7 @@ class PythonAuditor(LanguageAuditor):
             sibling_modules=sibling_modules,
             defines_basesettings=_defines_basesettings(tree),
         )
-        manifest = ManifestBuilder(tree).build()
+        manifest = ManifestEntry.from_module(tree)
 
         detector_classes = REGISTRY.detectors_for_language("python")
         if rule_ids is not None:

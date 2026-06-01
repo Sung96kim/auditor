@@ -2,7 +2,7 @@
 
 import pytest
 from _detector_cases import GROUPS
-from conftest import rule_ids, run_audit
+from _support import rule_ids, run_audit
 
 _CASES = GROUPS["async_rules"]
 

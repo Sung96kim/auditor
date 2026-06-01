@@ -17,8 +17,7 @@ from auditor.discovery import FileDiscovery, find_root
 from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
 from auditor.languages.python.auditor import PythonAuditor
-from auditor.languages.python.manifest import ManifestBuilder
-from auditor.models import ScanResult
+from auditor.models import ManifestEntry, ScanResult
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 from auditor.reporters import render
@@ -75,7 +74,7 @@ def scan(
 def manifest(file: Annotated[Path, typer.Argument(help="Python file.")]) -> None:
     """Print the AST class+function manifest for one file (no detectors)."""
     tree = ast.parse(file.read_text(encoding="utf-8", errors="replace"))
-    entries = ManifestBuilder(tree).build()
+    entries = ManifestEntry.from_module(tree)
     _echo_json([e.model_dump(mode="json") for e in entries])
 
 
