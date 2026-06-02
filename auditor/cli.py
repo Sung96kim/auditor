@@ -152,7 +152,6 @@ def scan(
     serve: Annotated[
         bool,
         typer.Option(
-            "-s",
             "--serve",
             help="Render HTML and open it in a browser on a local port.",
         ),
@@ -174,7 +173,7 @@ def scan(
     severity: Annotated[
         list[str] | None,
         typer.Option(
-            "-S",
+            "-s",
             "--severity",
             help="Only show these severities (repeatable): blocking|high|medium|low|suggestion.",
         ),

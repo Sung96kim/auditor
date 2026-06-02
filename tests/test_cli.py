@@ -89,7 +89,7 @@ def test_scan_severity_filter(sample_repo):
                 "--no-index",
                 "-f",
                 "json",
-                "-S",
+                "-s",
                 "blocking",
             ],
         )
@@ -99,7 +99,7 @@ def test_scan_severity_filter(sample_repo):
 
 
 def test_scan_severity_invalid(sample_repo):
-    result = runner.invoke(app, ["scan", str(sample_repo / "src"), "-S", "critical"])
+    result = runner.invoke(app, ["scan", str(sample_repo / "src"), "-s", "critical"])
     assert result.exit_code == 1
     assert "unknown severity" in result.output
 
