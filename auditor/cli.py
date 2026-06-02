@@ -20,7 +20,7 @@ from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
 from auditor.languages.python.auditor import PythonAuditor
 from auditor.logconfig import configure as configure_logging
-from auditor.models import ManifestEntry, ScanResult, Severity, SEVERITIES_DESC
+from auditor.models import SEVERITIES_DESC, ManifestEntry, ScanResult, Severity
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 from auditor.reporters import render
@@ -66,6 +66,16 @@ def _fail(message: str) -> NoReturn:
     raise typer.Exit(1)
 
 
+def _require_exists(path: Path) -> None:
+    if not path.exists():
+        _fail(f"no such file or directory: {path}")
+
+
+def _require_file(path: Path) -> None:
+    if not path.is_file():
+        _fail(f"no such file: {path}")
+
+
 _T = TypeVar("_T")
 
 
@@ -100,7 +110,9 @@ def scan(
     ] = False,
     strict_tests: Annotated[
         bool,
-        typer.Option("-t", "--strict-tests", help="Audit tests at production strength."),
+        typer.Option(
+            "-t", "--strict-tests", help="Audit tests at production strength."
+        ),
     ] = False,
     allow_local_plugins: Annotated[
         bool,
@@ -108,36 +120,58 @@ def scan(
     ] = False,
     profile: Annotated[
         str | None,
-        typer.Option("-p", "--profile", help="Override the profile for this run: base|strict|pydantic|all-strict."),
+        typer.Option(
+            "-p",
+            "--profile",
+            help="Override the profile for this run: base|strict|pydantic|all-strict.",
+        ),
     ] = None,
     exclude: Annotated[
         list[str] | None,
-        typer.Option("-x", "--exclude", help="Glob to ignore (repeatable), on top of config."),
+        typer.Option(
+            "-x", "--exclude", help="Glob to ignore (repeatable), on top of config."
+        ),
     ] = None,
     no_noqa: Annotated[
         bool,
-        typer.Option("--no-noqa", help="Ignore in-file noqa directives (un-silenceable sweep)."),
+        typer.Option(
+            "--no-noqa", help="Ignore in-file noqa directives (un-silenceable sweep)."
+        ),
     ] = False,
     serve: Annotated[
         bool,
-        typer.Option("-s", "--serve", help="Render HTML and open it in a browser on a local port."),
+        typer.Option(
+            "-s",
+            "--serve",
+            help="Render HTML and open it in a browser on a local port.",
+        ),
     ] = False,
     output: Annotated[
         Path | None,
-        typer.Option("-o", "--output", help="Write the report to this path instead of stdout."),
+        typer.Option(
+            "-o", "--output", help="Write the report to this path instead of stdout."
+        ),
     ] = None,
     fmt: Annotated[
         str | None,
-        typer.Option("-f", "--format", help="json | sarif | md | html. Default: a summary on a terminal, json when piped."),
+        typer.Option(
+            "-f",
+            "--format",
+            help="json | sarif | md | html. Default: a summary on a terminal, json when piped.",
+        ),
     ] = None,
     verbose: Annotated[
         int,
-        typer.Option("-v", "--verbose", count=True, help="Log progress to stderr: -v files, -vv detail, -vvv findings."),
+        typer.Option(
+            "-v",
+            "--verbose",
+            count=True,
+            help="Log progress to stderr: -v files, -vv detail, -vvv findings.",
+        ),
     ] = 0,
 ) -> None:
     """Audit a file or directory."""
-    if not target.exists():
-        _fail(f"no such file or directory: {target}")
+    _require_exists(target)
     if verbose:
         configure_logging(verbose)
     results = _run(
@@ -167,7 +201,9 @@ def scan(
 
 def _serve_html(results: list[ScanResult]) -> None:
     server = ReportServer(render(results, "html"))
-    _status.print(f"[bold]Serving audit report at[/bold] {server.url}  (Ctrl-C to stop)")
+    _status.print(
+        f"[bold]Serving audit report at[/bold] {server.url}  (Ctrl-C to stop)"
+    )
     server.serve()
 
 
@@ -250,8 +286,7 @@ def _print_summary(results: list[ScanResult]) -> None:
 @app.command()
 def manifest(file: Annotated[Path, typer.Argument(help="Python file.")]) -> None:
     """Print the AST class+function manifest for one file (no detectors)."""
-    if not file.is_file():
-        _fail(f"no such file: {file}")
+    _require_file(file)
     tree = ast.parse(file.read_text(encoding="utf-8", errors="replace"))
     entries = ManifestEntry.from_module(tree)
     _echo_json([e.model_dump(mode="json") for e in entries])
@@ -262,17 +297,24 @@ def report(
     file: Annotated[Path, typer.Argument(help="Python file.")],
     profile: Annotated[
         str | None,
-        typer.Option("-p", "--profile", help="Override the profile for this run: base|strict|pydantic|all-strict."),
+        typer.Option(
+            "-p",
+            "--profile",
+            help="Override the profile for this run: base|strict|pydantic|all-strict.",
+        ),
     ] = None,
     output: Annotated[
         Path | None,
-        typer.Option("-o", "--output", help="Write the report to this path instead of stdout."),
+        typer.Option(
+            "-o", "--output", help="Write the report to this path instead of stdout."
+        ),
     ] = None,
-    fmt: Annotated[str, typer.Option("-f", "--format", help="json | sarif | md | html")] = "json",
+    fmt: Annotated[
+        str, typer.Option("-f", "--format", help="json | sarif | md | html")
+    ] = "json",
 ) -> None:
     """Audit one file (stateless) — manifest + findings in one call."""
-    if not file.is_file():
-        _fail(f"no such file: {file}")
+    _require_file(file)
     result = _run(_report(file, profile), f"auditing {file.name}…")
     _emit(render([result], fmt), output)
 
@@ -291,8 +333,7 @@ def discover(
     target: Annotated[Path, typer.Argument()] = Path("."),
 ) -> None:
     """List auditable files with their classified role."""
-    if not target.exists():
-        _fail(f"no such file or directory: {target}")
+    _require_exists(target)
     root = find_root(target)
     classifier = RoleClassifier(load_config(root).role_globs)
     out = []
@@ -368,7 +409,9 @@ async def _index_add(root: Path, rels: list[str]) -> None:
 
 
 @index_app.command("list")
-def index_list(target: Annotated[Path, typer.Option("-r", "--root")] = Path(".")) -> None:
+def index_list(
+    target: Annotated[Path, typer.Option("-r", "--root")] = Path("."),
+) -> None:
     """List the registered scope + per-file counts."""
     root = find_root(target)
     _echo_json(_run(_index_list(root), "reading index…"))
@@ -383,7 +426,9 @@ async def _index_list(root: Path) -> list[dict]:
 
 
 @config_app.command("show")
-def config_show(target: Annotated[Path, typer.Option("-r", "--root")] = Path(".")) -> None:
+def config_show(
+    target: Annotated[Path, typer.Option("-r", "--root")] = Path("."),
+) -> None:
     """Print the resolved configuration."""
     settings = load_config(find_root(target))
     _echo_json(settings.model_dump(mode="json"))
@@ -421,7 +466,9 @@ def rules_list(
 
 
 @plugins_app.command("list")
-def plugins_list(target: Annotated[Path, typer.Option("-r", "--root")] = Path(".")) -> None:
+def plugins_list(
+    target: Annotated[Path, typer.Option("-r", "--root")] = Path("."),
+) -> None:
     """Show every loaded detector/language/reporter/profile and its source."""
     loader = PluginLoader()
     load_config(find_root(target), loader=loader)

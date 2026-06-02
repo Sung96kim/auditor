@@ -13,8 +13,6 @@ from auditor.languages.typescript.base import TsAuditContext, TsDetector
 from auditor.languages.typescript.nodes import Tsx, callee, is_pascal_case
 from auditor.models import Category, Finding, Severity, VerdictKind
 
-_MIN_REPEAT = 3  # 3+ identical-shape siblings is a strong "map over data" signal
-_MIN_TAGS = 2  # ignore repeated leaf elements (<br/>, <li>text</li>) — too trivial
 _ITER_METHODS = {"map", "forEach", "flatMap"}
 
 
@@ -82,7 +80,9 @@ def _identifier_name(param: Tsx) -> str | None:
     if param.type == "identifier":
         return param.text
     pattern = param.field("pattern")
-    return pattern.text if pattern is not None and pattern.type == "identifier" else None
+    return (
+        pattern.text if pattern is not None and pattern.type == "identifier" else None
+    )
 
 
 class MultiComponentFile(TsDetector):
@@ -97,7 +97,9 @@ class MultiComponentFile(TsDetector):
         if len(components) <= 1:
             return []
         if _is_compound_family(components):
-            return []  # exported <Tabs>/<TabsList>/… family — a cohesive public API, not drift
+            return (
+                []
+            )  # exported <Tabs>/<TabsList>/… family — a cohesive public API, not drift
         names = ", ".join(name for name, _, _ in components)
         return [
             self.make_finding(
@@ -118,15 +120,18 @@ class RepeatedJsx(TsDetector):
     checklist_item: ClassVar[int] = 13
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
+        threshold = ctx.config.effective(self.rule_id).threshold
+        min_tags = threshold.repeated_jsx_min_tags
+        min_repeat = threshold.repeated_jsx_min
         out: list[Finding] = []
         for parent in ctx.root.descendants("jsx_element"):
             by_shape: dict[tuple[str, ...], list[Tsx]] = defaultdict(list)
             for child in parent.child_elements():
                 shape = _element_skeleton(child)
-                if len(shape) >= _MIN_TAGS:
+                if len(shape) >= min_tags:
                     by_shape[shape].append(child)
             for shape, members in by_shape.items():
-                if len(members) >= _MIN_REPEAT:
+                if len(members) >= min_repeat:
                     out.append(
                         self.make_finding(
                             ctx,

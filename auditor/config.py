@@ -6,12 +6,12 @@ per-role/per-glob policy. ``load_config`` performs the two-phase plugin/config l
 config may reference plugin-contributed rules.
 """
 
-import tomllib
 from fnmatch import fnmatch
 from importlib import resources
 from pathlib import Path
 from typing import Literal
 
+import tomllib
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -39,6 +39,12 @@ class Threshold(BaseModel):
     flat_field_min: int = 12
     max_jsx_depth: int = 6
     field_copy_min: int = 5
+    dup_block_min_statements: int = 3
+    dup_block_min_tokens: int = 12
+    parallel_sibling_min_tokens: int = 4
+    module_const_min: int = 2
+    repeated_jsx_min: int = 3
+    repeated_jsx_min_tags: int = 2
 
     def merged(self, override: "Threshold | None") -> "Threshold":
         if override is None:
@@ -94,9 +100,15 @@ class DesignSystemPrimitive(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     component: str  # the primitive to recommend, e.g. "Badge"
-    when_class: str | None = None  # className regex whose raw markup should be this primitive
-    requires_text: bool = True  # only when the element renders text (skip icon-only backdrops)
-    size_override: bool = False  # also flag fixed h-/w-/size- className on this component
+    when_class: str | None = (
+        None  # className regex whose raw markup should be this primitive
+    )
+    requires_text: bool = (
+        True  # only when the element renders text (skip icon-only backdrops)
+    )
+    size_override: bool = (
+        False  # also flag fixed h-/w-/size- className on this component
+    )
 
 
 class DesignSystem(BaseModel):
@@ -105,7 +117,9 @@ class DesignSystem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ui_paths: list[str] = Field(default_factory=list)  # import paths that bypass the shell
+    ui_paths: list[str] = Field(
+        default_factory=list
+    )  # import paths that bypass the shell
     shell: str | None = None  # the entrypoint to recommend instead
     primitives: list[DesignSystemPrimitive] = Field(default_factory=list)
 
@@ -212,7 +226,8 @@ def merged_config_dict(root: Path, *, profile: str | None = None) -> dict:
     """Layer profile -> pyproject -> .auditor/config.toml into one raw dict (pre-validation).
 
     ``profile`` overrides the repo's ``extends`` for this run (the CLI ``--profile`` flag),
-    so any repo can be audited at e.g. ``strict`` strength without editing its config."""
+    so any repo can be audited at e.g. ``strict`` strength without editing its config.
+    """
     pyproject, standalone = _read_repo_tomls(root)
     extends = profile or standalone.get("extends") or pyproject.get("extends") or "base"
     merged = _load_profile(extends)
