@@ -220,6 +220,7 @@ class ScanEngine:
             findings=findings,
             cached=False,
             skipped_rules=skipped + res.skipped_rules,
+            suppressed=res.suppressed,
         )
 
     async def _apply_crossfile(self, results: list[ScanResult]) -> None:
