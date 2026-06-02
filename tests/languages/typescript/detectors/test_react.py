@@ -9,8 +9,12 @@ _CASES = GROUPS["react"]
 
 @pytest.mark.parametrize("rule_id, bad, good", _CASES, ids=[c[0] for c in _CASES])
 def test_flags_bad_ignores_good(rule_id, bad, good):
-    assert rule_id in rule_ids(run_ts_audit(bad)), f"{rule_id} did not flag its anti-pattern"
-    assert rule_id not in rule_ids(run_ts_audit(good)), f"{rule_id} false-positived on clean code"
+    assert rule_id in rule_ids(run_ts_audit(bad)), (
+        f"{rule_id} did not flag its anti-pattern"
+    )
+    assert rule_id not in rule_ids(run_ts_audit(good)), (
+        f"{rule_id} false-positived on clean code"
+    )
 
 
 def test_array_index_key_allows_composite_keys_using_the_item():
@@ -81,6 +85,8 @@ def test_multi_component_reports_each_extra_component():
         "const C = () => <p />;\n"
     )
     findings = [
-        f for f in run_ts_audit(src).findings if f.rule_id == "TS-REACT-MULTI-COMPONENT-FILE"
+        f
+        for f in run_ts_audit(src).findings
+        if f.rule_id == "TS-REACT-MULTI-COMPONENT-FILE"
     ]
     assert len(findings) == 2  # one per component beyond the first

@@ -6,12 +6,12 @@ per-role/per-glob policy. ``load_config`` performs the two-phase plugin/config l
 config may reference plugin-contributed rules.
 """
 
+import tomllib
 from fnmatch import fnmatch
 from importlib import resources
 from pathlib import Path
 from typing import Literal
 
-import tomllib
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

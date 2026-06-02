@@ -19,6 +19,8 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
+from auditor.models import Finding, IndexEntry
+
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05
 
@@ -39,8 +41,6 @@ def _retry_locked(action: Callable[[], Any]) -> Any:
                 raise
             time.sleep(_LOCK_BACKOFF)
 
-
-from auditor.models import Finding, IndexEntry
 
 _SCHEMA_VERSION = 1
 

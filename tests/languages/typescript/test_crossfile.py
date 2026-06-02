@@ -18,7 +18,9 @@ export function Card() {
   );
 }
 """
-_CARD_DUP = _CARD.replace("Card", "Panel").replace("Title", "Heading").replace("body", "text")
+_CARD_DUP = (
+    _CARD.replace("Card", "Panel").replace("Title", "Heading").replace("body", "text")
+)
 _UNIQUE = """
 export function Menu() {
   return (

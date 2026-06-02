@@ -61,7 +61,9 @@ async def _scan(tmp_path: Path):
     (proj / ".auditor").mkdir()
     settings = load_config(proj)
     async with await IndexStore.connect(proj / ".auditor" / "index.db") as index:
-        return await ScanEngine.for_target(proj, settings=settings, index=index).scan_path(proj)
+        return await ScanEngine.for_target(
+            proj, settings=settings, index=index
+        ).scan_path(proj)
 
 
 async def test_dashboard_exercises_every_category(tmp_path):
@@ -104,4 +106,7 @@ async def test_test_file_is_classified_and_relaxed(tmp_path):
     test_files = [r for r in results if r.role.value == "test"]
     assert test_files, "the backend tests/ file was not classified as a test"
     # security/typing rules are relaxed for test code — none of the prod-only noise leaks in
-    assert all("PY-SEC-HARDCODED-SECRET" not in {f.rule_id for f in r.findings} for r in test_files)
+    assert all(
+        "PY-SEC-HARDCODED-SECRET" not in {f.rule_id for f in r.findings}
+        for r in test_files
+    )

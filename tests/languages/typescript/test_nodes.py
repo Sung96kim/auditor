@@ -13,7 +13,10 @@ def _first(root: Tsx, type_: str) -> Tsx:
 
 
 def test_jsx_name_and_attributes():
-    el = _first(_tsx('const x = <Button size="icon" className="h-7" />;\n'), "jsx_self_closing_element")
+    el = _first(
+        _tsx('const x = <Button size="icon" className="h-7" />;\n'),
+        "jsx_self_closing_element",
+    )
     assert el.jsx_name() == "Button"
     attrs = el.attributes()
     assert set(attrs) == {"size", "className"}
@@ -34,7 +37,11 @@ def test_has_text_child_distinguishes_text_from_icon():
 
 
 def test_unwrap_export_and_contains_jsx():
-    exported = _tsx("export function F() {\n  return <div />;\n}\n").named_children()[0].unwrap_export()
+    exported = (
+        _tsx("export function F() {\n  return <div />;\n}\n")
+        .named_children()[0]
+        .unwrap_export()
+    )
     assert exported.type == "function_declaration"
     assert _tsx("const f = () => <div />;\n").contains_jsx() is True
     assert _tsx("const f = () => 1 + 2;\n").contains_jsx() is False

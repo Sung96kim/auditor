@@ -28,9 +28,13 @@ _PY_CASES = [
 ]
 
 
-@pytest.mark.parametrize("rule_id, src, loosened", _PY_CASES, ids=[c[0] for c in _PY_CASES])
+@pytest.mark.parametrize(
+    "rule_id, src, loosened", _PY_CASES, ids=[c[0] for c in _PY_CASES]
+)
 def test_python_threshold_is_configurable(rule_id, src, loosened):
-    assert rule_id not in rule_ids(run_audit(src)), "should be silent at the default floor"
+    assert rule_id not in rule_ids(run_audit(src)), (
+        "should be silent at the default floor"
+    )
     assert rule_id in rule_ids(run_audit(src, settings=_rules(rule_id, loosened)))
 
 

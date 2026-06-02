@@ -6,9 +6,6 @@ Public API:
 
 from loguru import logger
 
-# Stay silent when embedded / under MCP; the CLI's logconfig.configure() re-enables it.
-logger.disable("auditor")
-
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
 from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
@@ -43,3 +40,6 @@ __all__ = [
 ]
 
 __version__ = "0.1.0"
+
+# Stay silent when embedded / under MCP; the CLI's logconfig.configure() re-enables it.
+logger.disable("auditor")

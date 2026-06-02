@@ -28,11 +28,7 @@ def test_awaited_call_not_flagged_as_sync_io():
 def test_async_generator_not_flagged_no_await_body():
     # an async generator (has yield, consumed via `async for`) must stay async even
     # without an internal await — not a "make it sync" candidate.
-    src = (
-        "async def stream(items):\n"
-        "    for x in items:\n"
-        "        yield x\n"
-    )
+    src = "async def stream(items):\n    for x in items:\n        yield x\n"
     assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))
 
 

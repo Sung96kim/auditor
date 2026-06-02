@@ -67,7 +67,7 @@ def test_html_builds_collapsible_directory_tree():
     )
     # nested dirs become collapsible <details>, collapsed by default (no `open`)
     assert '<details class="dir">' in out
-    assert "<details class=\"dir\" open>" not in out
+    assert '<details class="dir" open>' not in out
     assert ">pkg/<" in out and ">sub/<" in out
     assert 'class="tfile" href="#f-pkg-sub-a-py"' in out
     assert "<nav class=toc>" in out and "<main>" in out  # two-pane layout

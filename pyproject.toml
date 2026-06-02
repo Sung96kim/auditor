@@ -46,11 +46,14 @@ extends = "strict"
 
 [tool.ruff]
 target-version = "py311"
-extend-exclude = ["tests/fixtures/data"]  # intentional anti-pattern / broken fixtures
+extend-exclude = ["tests/fixtures"]  # intentional anti-pattern / broken fixtures
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]  # line length is not enforced
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # packages import submodules purely to register detectors/reporters
 
 [build-system]
 requires = ["hatchling"]

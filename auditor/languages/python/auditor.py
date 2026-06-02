@@ -6,9 +6,7 @@ import ast
 from typing import TYPE_CHECKING, ClassVar
 
 from auditor.languages.base import AuditContext, Detector, LanguageAuditor, ShapeRow
-from auditor.languages.python import (
-    detectors as _detectors,
-)  # noqa: F401  (registers rules)
+from auditor.languages.python import detectors as _detectors  # noqa: F401
 from auditor.languages.python.shapes import ShapeExtractor
 from auditor.models import FileRole, Finding, ManifestEntry, ScanResult, SkippedRule
 from auditor.registry import REGISTRY

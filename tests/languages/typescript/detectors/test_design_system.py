@@ -35,7 +35,9 @@ def test_direct_ui_import_flagged_when_declared():
 
 def test_direct_ui_import_exempts_the_ui_layer_itself():
     src = 'import { cn } from "@/components/ui/utils";\n'
-    found = rule_ids(run_ts_audit(src, settings=_DS, rel_path="src/components/ui/badge.tsx"))
+    found = rule_ids(
+        run_ts_audit(src, settings=_DS, rel_path="src/components/ui/badge.tsx")
+    )
     assert "TS-DS-DIRECT-UI-IMPORT" not in found
 
 
@@ -46,7 +48,9 @@ def test_inline_primitive_matches_declared_pattern_with_text():
 
 def test_inline_primitive_skips_icon_only_backdrop():
     # requires_text defaults True — a coloured disc behind an icon is not the primitive
-    src = 'const x = <div className="rounded-full bg-amber-500/10"><WarnIcon /></div>;\n'
+    src = (
+        'const x = <div className="rounded-full bg-amber-500/10"><WarnIcon /></div>;\n'
+    )
     assert "TS-DS-INLINE-PRIMITIVE" not in rule_ids(run_ts_audit(src, settings=_DS))
 
 

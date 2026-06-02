@@ -44,5 +44,7 @@ def test_wsl_browser_command_none_when_no_launcher():
 
 
 def test_wsl_browser_threads_start_args_through():
-    cmd = _wsl_browser_command("http://x/", which=lambda n: n if n == "cmd.exe" else None)
+    cmd = _wsl_browser_command(
+        "http://x/", which=lambda n: n if n == "cmd.exe" else None
+    )
     assert cmd == ["cmd.exe", "/c", "start", "", "http://x/"]

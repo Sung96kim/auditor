@@ -6,9 +6,7 @@ one place (mirroring PythonAuditor).
 from typing import TYPE_CHECKING, ClassVar
 
 from auditor.languages.base import LanguageAuditor, ShapeRow
-from auditor.languages.typescript import (
-    detectors as _detectors,
-)  # noqa: F401  (registers TS rules)
+from auditor.languages.typescript import detectors as _detectors  # noqa: F401
 from auditor.languages.typescript.base import TsAuditContext, TsDetector
 from auditor.languages.typescript.manifest import build_manifest
 from auditor.languages.typescript.nodes import Tsx

@@ -65,9 +65,6 @@ async def test_duplication_spanning_three_files_names_every_other_site(tmp_path)
     }
     assert len(files_with_dup_component) >= 3
     a_finding = next(
-        f
-        for r in results
-        for f in r.findings
-        if f.rule_id == "TS-XFILE-DUP-COMPONENT"
+        f for r in results for f in r.findings if f.rule_id == "TS-XFILE-DUP-COMPONENT"
     )
     assert a_finding.message.count(",") >= 1  # lists multiple other sites

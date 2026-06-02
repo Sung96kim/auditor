@@ -97,9 +97,7 @@ class MultiComponentFile(TsDetector):
         if len(components) <= 1:
             return []
         if _is_compound_family(components):
-            return (
-                []
-            )  # exported <Tabs>/<TabsList>/… family — a cohesive public API, not drift
+            return []  # exported <Tabs>/<TabsList>/… family — a cohesive public API, not drift
         names = ", ".join(name for name, _, _ in components)
         return [
             self.make_finding(

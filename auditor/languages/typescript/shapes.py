@@ -106,9 +106,7 @@ class ShapeExtractor:
                 ]
             return []
         if body.type not in _FUNCTION_BODIES:
-            return (
-                []
-            )  # a data const (lookup map, options array) is not a duplicate "function"
+            return []  # a data const (lookup map, options array) is not a duplicate "function"
         signature = _function_signature(body)
         if len(signature) >= _MIN_FN_TOKENS:
             params = _param_types(body)

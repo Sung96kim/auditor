@@ -15,7 +15,9 @@ def captured():
     """Enable auditor logging into a list sink at TRACE; restore disabled state after."""
     messages: list[str] = []
     logger.enable("auditor")
-    handle = logger.add(lambda m: messages.append(str(m)), level="TRACE", format="{level}|{message}")
+    handle = logger.add(
+        lambda m: messages.append(str(m)), level="TRACE", format="{level}|{message}"
+    )
     yield messages
     logger.remove(handle)
     logger.disable("auditor")

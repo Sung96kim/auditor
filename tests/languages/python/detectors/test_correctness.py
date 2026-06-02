@@ -18,7 +18,13 @@ def test_flags_bad_ignores_good(rule_id, bad, good):
 
 
 @pytest.mark.parametrize(
-    "exc", ["KeyboardInterrupt", "SystemExit", "GeneratorExit", "(KeyboardInterrupt, SystemExit)"]
+    "exc",
+    [
+        "KeyboardInterrupt",
+        "SystemExit",
+        "GeneratorExit",
+        "(KeyboardInterrupt, SystemExit)",
+    ],
 )
 def test_swallowed_exempts_control_flow_signals(exc):
     # a no-op handler for control-flow signals is idiomatic clean exit, not a hidden error

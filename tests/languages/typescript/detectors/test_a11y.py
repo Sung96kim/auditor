@@ -9,13 +9,20 @@ _CASES = GROUPS["a11y"]
 
 @pytest.mark.parametrize("rule_id, bad, good", _CASES, ids=[c[0] for c in _CASES])
 def test_flags_bad_ignores_good(rule_id, bad, good):
-    assert rule_id in rule_ids(run_ts_audit(bad)), f"{rule_id} did not flag its anti-pattern"
-    assert rule_id not in rule_ids(run_ts_audit(good)), f"{rule_id} false-positived on clean code"
+    assert rule_id in rule_ids(run_ts_audit(bad)), (
+        f"{rule_id} did not flag its anti-pattern"
+    )
+    assert rule_id not in rule_ids(run_ts_audit(good)), (
+        f"{rule_id} false-positived on clean code"
+    )
 
 
 def test_onclick_on_native_interactive_element_is_fine():
     # a real <button>/<a> already has keyboard + focus semantics
-    for src in ("<button onClick={go}>x</button>;\n", '<a href="/x" onClick={go}>x</a>;\n'):
+    for src in (
+        "<button onClick={go}>x</button>;\n",
+        '<a href="/x" onClick={go}>x</a>;\n',
+    ):
         assert "TS-A11Y-NONINTERACTIVE-ONCLICK" not in rule_ids(run_ts_audit(src))
 
 
@@ -33,7 +40,9 @@ def test_icon_button_with_text_is_not_flagged():
 def test_icon_button_matches_any_button_named_component():
     # not hardcoded to "Button" — any *Button component counts
     assert "TS-A11Y-ICON-BUTTON-NO-LABEL" in rule_ids(
-        run_ts_audit("const x = <IconButton><Gear /></IconButton>;\n".replace("Gear", "GearIcon"))
+        run_ts_audit(
+            "const x = <IconButton><Gear /></IconButton>;\n".replace("Gear", "GearIcon")
+        )
     )
 
 
