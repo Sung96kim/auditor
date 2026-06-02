@@ -7,9 +7,9 @@ entry points that build an engine for a target.
 
 import re
 import time
+import tomllib
 from pathlib import Path
 
-import tomllib
 from loguru import logger
 
 from auditor import crossfile
@@ -105,9 +105,10 @@ class ScanEngine:
             self.root, exclude_globs=tuple(self.settings.exclude)
         ).files(target)
         logger.opt(colors=True).info(
-            "<light-black>scanning</light-black> <bold>{}</bold> <light-black>files under {}</light-black>",
+            "<light-black>scanning</light-black> <bold>{}</bold> <light-black>files in</light-black> <bold>{}</bold> <light-black>· paths shown relative to</light-black> <bold>{}</bold>",
             len(files),
-            self.rel(target) or ".",
+            target,
+            self.root.name,
         )
         results = [await self.scan_file(p) for p in files]
         if self.index is not None and len(results) > 1:
