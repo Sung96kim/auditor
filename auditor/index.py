@@ -26,15 +26,19 @@ _LOCK_BACKOFF = 0.05
 def _retry_locked(action: Callable[[], Any]) -> Any:
     """Run ``action``, retrying on transient lock/busy errors. ``PRAGMA journal_mode=WAL``
     ignores ``busy_timeout`` and returns SQLITE_BUSY immediately when fresh connections
-    contend on the journal-mode switch, so the one-time init path needs an explicit retry."""
+    contend on the journal-mode switch, so the one-time init path needs an explicit retry.
+    """
     for attempt in range(_LOCK_RETRIES):
         try:
             return action()
         except sqlite3.OperationalError as exc:
             msg = str(exc).lower()
-            if ("locked" not in msg and "busy" not in msg) or attempt == _LOCK_RETRIES - 1:
+            if (
+                "locked" not in msg and "busy" not in msg
+            ) or attempt == _LOCK_RETRIES - 1:
                 raise
             time.sleep(_LOCK_BACKOFF)
+
 
 from auditor.models import Finding, IndexEntry
 
@@ -411,9 +415,9 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
         suggestion=row["suggestion"],
         detector=row["detector"],
         checklist_item=row["checklist_item"],
-        standard_refs=tuple(row["standard_refs"].split(","))
-        if row["standard_refs"]
-        else (),
+        standard_refs=(
+            tuple(row["standard_refs"].split(",")) if row["standard_refs"] else ()
+        ),
     )
 
 

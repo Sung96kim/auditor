@@ -22,7 +22,9 @@ class _XKind:
 
 _BY_KIND: dict[str, _XKind] = {
     "model": _XKind("PY-XFILE-DUP-MODEL", Category.OOP_COMPOSITION, "model", 16),
-    "function": _XKind("PY-XFILE-DUP-FUNCTION", Category.OOP_COMPOSITION, "function", 24),
+    "function": _XKind(
+        "PY-XFILE-DUP-FUNCTION", Category.OOP_COMPOSITION, "function", 24
+    ),
     "component": _XKind("TS-XFILE-DUP-COMPONENT", Category.REACT, "component", 12),
     "ts-function": _XKind("TS-XFILE-DUP-FUNCTION", Category.REACT, "function", 15),
     "jsx-block": _XKind("TS-XFILE-DUP-JSX-BLOCK", Category.REACT, "JSX block", 12),

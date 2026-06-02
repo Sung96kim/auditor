@@ -1,6 +1,7 @@
 """``Tsx`` — a thin wrapper over a tree-sitter ``Node`` giving text/line/walk navigation and
 the JSX element/attribute model, so detectors compose method calls instead of threading raw
-nodes through free functions. Methods that return nodes return wrapped ``Tsx`` instances."""
+nodes through free functions. Methods that return nodes return wrapped ``Tsx`` instances.
+"""
 
 from collections.abc import Iterator
 
@@ -67,7 +68,8 @@ class Tsx:
 
     def top_declarations(self) -> list[tuple[str, "Tsx", "Tsx", bool]]:
         """(name, body, anchor, exported) for each top-level function and arrow/value const —
-        the one place that walks module-level declarations, so detectors don't each re-roll it."""
+        the one place that walks module-level declarations, so detectors don't each re-roll it.
+        """
         out: list[tuple[str, Tsx, Tsx, bool]] = []
         for top in self.named_children():
             exported = top.type == "export_statement"
@@ -77,7 +79,9 @@ class Tsx:
             elif decl.type == "lexical_declaration":
                 for d in decl.named_children():
                     if d.type == "variable_declarator":
-                        out.extend(_named(d.field("name"), d.field("value"), d, exported))
+                        out.extend(
+                            _named(d.field("name"), d.field("value"), d, exported)
+                        )
         return out
 
     # --- JSX element ---------------------------------------------------------
@@ -194,4 +198,6 @@ def import_source(node: Tsx) -> str:
     source = node.field("source")
     if source is None or source.type != "string":
         return ""
-    return "".join(c.text for c in source.named_children() if c.type == "string_fragment")
+    return "".join(
+        c.text for c in source.named_children() if c.type == "string_fragment"
+    )

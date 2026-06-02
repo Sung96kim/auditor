@@ -1,8 +1,8 @@
 """Importing this package registers the built-in reporters (json, sarif, markdown, html)."""
 
-from auditor.reporters import (  # noqa: F401
+from auditor.reporters import (
     html_reporter,
-    json_reporter,
+    json_reporter,  # noqa: F401
     markdown_reporter,
     sarif_reporter,
 )

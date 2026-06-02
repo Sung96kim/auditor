@@ -148,7 +148,9 @@ class ParallelSibling(TsDetector):
     checklist_item: ClassVar[int] = 17
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
-        groups: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = defaultdict(list)
+        groups: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = (
+            defaultdict(list)
+        )
         for name, body, at, _ in ctx.root.top_declarations():
             if body.type not in _PARAMETERIZABLE:
                 continue  # skip data consts (lookup maps, style objects) — not parameterizable

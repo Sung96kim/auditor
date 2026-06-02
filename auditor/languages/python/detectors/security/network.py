@@ -50,7 +50,8 @@ def _is_all_iface(node: ast.expr | None) -> bool:
 
 def _binds_all_interfaces(node: ast.AST) -> ast.Constant | None:
     """The ``"0.0.0.0"`` literal only when used as a bind address — a host kwarg, a
-    bind/run/serve arg, or a host-like assignment. A bare literal elsewhere is not flagged."""
+    bind/run/serve arg, or a host-like assignment. A bare literal elsewhere is not flagged.
+    """
     if isinstance(node, ast.Call):
         for kw in node.keywords:
             if kw.arg in _HOST_KWARGS and _is_all_iface(kw.value):

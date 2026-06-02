@@ -32,7 +32,8 @@ def _segments(path: str) -> list[str]:
 def _alias_stripped(ui_path: str) -> list[str]:
     """The directory segments of an import alias with a leading alias root dropped — the part
     that maps onto a real file path. ``@/components/ui`` -> ``[components, ui]``. The root
-    (``@``, ``~``, ``@scope``, ``src`` aliases vary per project) is whatever precedes it."""
+    (``@``, ``~``, ``@scope``, ``src`` aliases vary per project) is whatever precedes it.
+    """
     parts = _segments(ui_path)
     if parts and (parts[0] == "." or parts[0][0] in _ALIAS_ROOTS):
         parts = parts[1:]
@@ -41,12 +42,15 @@ def _alias_stripped(ui_path: str) -> list[str]:
 
 def _under_ui_layer(file_path: str, ui_paths: list[str]) -> bool:
     """Match a configured ui path against the real file path by whole trailing segments, so
-    it works regardless of the project's alias root (start from the back, not the prefix)."""
+    it works regardless of the project's alias root (start from the back, not the prefix).
+    """
     haystack = _segments(file_path)
     for ui_path in ui_paths:
         needle = _alias_stripped(ui_path)
         n = len(needle)
-        if n and any(haystack[i : i + n] == needle for i in range(len(haystack) - n + 1)):
+        if n and any(
+            haystack[i : i + n] == needle for i in range(len(haystack) - n + 1)
+        ):
             return True
     return False
 
@@ -147,7 +151,9 @@ class SizeOverride(_DesignSystemDetector):
             if element.jsx_name() not in sized:
                 continue
             class_attr = element.attributes().get("className")
-            if class_attr is not None and _SIZE_CLASS.search(class_attr.attr_value_text()):
+            if class_attr is not None and _SIZE_CLASS.search(
+                class_attr.attr_value_text()
+            ):
                 out.append(
                     self.make_finding(
                         ctx,

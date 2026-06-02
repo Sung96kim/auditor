@@ -98,7 +98,8 @@ def _dynamic_parts(node: ast.expr) -> list[ast.expr]:
 
 def _carries_external_data(node: ast.expr, params: set[str]) -> bool:
     """True if the string build interpolates caller data — an enclosing-function parameter or
-    a subscript (``request.args['q']``). Constants/placeholder locals are not tainted."""
+    a subscript (``request.args['q']``). Constants/placeholder locals are not tainted.
+    """
     for part in _dynamic_parts(node):
         for sub in ast.walk(part):
             if isinstance(sub, ast.Name) and sub.id in params:

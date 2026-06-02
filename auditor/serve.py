@@ -38,9 +38,7 @@ def _wsl_browser_command(
 
 def _spawn(command: list[str]) -> bool:
     try:
-        subprocess.Popen(
-            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except OSError:
         return False

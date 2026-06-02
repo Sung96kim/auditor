@@ -92,10 +92,9 @@ class InsecureRandom(SecurityDetector):
                 value = getattr(node, "value", None)
                 if value is not None:
                     sensitive.update((id(c), c) for c in _random_calls(value))
-            if (
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and _SECURITY_CONTEXT.search(node.name)
-            ):
+            if isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef)
+            ) and _SECURITY_CONTEXT.search(node.name):
                 sensitive.update((id(c), c) for c in _random_calls(node))
 
         return [

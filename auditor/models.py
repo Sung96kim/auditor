@@ -68,7 +68,8 @@ class FileRole(StrEnum):
 
 class Category(StrEnum):
     """Built-in detector categories. Plugins may register additional category strings;
-    the config layer validates against the union of these and plugin-registered names."""
+    the config layer validates against the union of these and plugin-registered names.
+    """
 
     SECURITY = "security"
     CORRECTNESS = "correctness"

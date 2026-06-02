@@ -4,8 +4,8 @@ import ast
 from collections.abc import Iterator
 
 from auditor.ast_util import (
-    dotted as dotted_name,  # noqa: F401  (re-exported for detectors)
-)
+    dotted as dotted_name,
+)  # noqa: F401  (re-exported for detectors)
 
 
 def call_attr(node: ast.Call) -> str:

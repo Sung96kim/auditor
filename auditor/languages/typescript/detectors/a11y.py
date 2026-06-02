@@ -175,7 +175,9 @@ class FormControlNoLabel(A11yDetector):
                 continue
             attrs = element.attributes()
             if name == "input":
-                input_type = attrs["type"].attr_value_text() if "type" in attrs else "text"
+                input_type = (
+                    attrs["type"].attr_value_text() if "type" in attrs else "text"
+                )
                 if input_type in _UNLABELLED_INPUT_TYPES:
                     continue
             if not (_NAMING_ATTRS & attrs.keys()):
@@ -287,7 +289,14 @@ class IframeNoTitle(A11yDetector):
         return out
 
 
-_DECORATIVE_RESOLVED = {"aria-hidden", "aria-label", "aria-labelledby", "role", "title", "alt"}
+_DECORATIVE_RESOLVED = {
+    "aria-hidden",
+    "aria-label",
+    "aria-labelledby",
+    "role",
+    "title",
+    "alt",
+}
 
 
 class DecorativeIconNotHidden(A11yDetector):

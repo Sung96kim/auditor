@@ -145,7 +145,9 @@ class NaiveDatetime(Detector):
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            if not (
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            ):
                 continue
             attr = node.func.attr
             if attr not in ("now", "utcnow") or not _owner_is_datetime(node.func.value):

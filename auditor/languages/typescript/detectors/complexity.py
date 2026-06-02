@@ -1,5 +1,6 @@
 """Size & complexity detectors — objective, threshold-driven, project-agnostic. Thresholds
-come from config (``[tool.auditor.rules.<id>.threshold]``), so a repo tunes its own bar."""
+come from config (``[tool.auditor.rules.<id>.threshold]``), so a repo tunes its own bar.
+"""
 
 from typing import ClassVar
 
@@ -99,7 +100,12 @@ def _prop_count(body: Tsx) -> int:
         return sum(
             1
             for c in pattern.named_children()
-            if c.type in ("shorthand_property_identifier_pattern", "pair_pattern", "object_assignment_pattern")
+            if c.type
+            in (
+                "shorthand_property_identifier_pattern",
+                "pair_pattern",
+                "object_assignment_pattern",
+            )
         )
     annotation = first.field("type")
     if annotation is not None:

@@ -318,7 +318,8 @@ class UnawaitedCoroutine(Detector):
 
 def _bare_statement_calls(node: ast.AST) -> Iterator[ast.Call]:
     """Calls that are a bare expression statement — result discarded, not awaited. An awaited
-    call is ``Expr(Await(Call))`` so its ``.value`` is an Await, not a Call, and is skipped."""
+    call is ``Expr(Await(Call))`` so its ``.value`` is an Await, not a Call, and is skipped.
+    """
     for n in ast.walk(node):
         if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call):
             yield n.value

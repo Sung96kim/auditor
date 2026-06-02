@@ -19,7 +19,9 @@ class DuplicateImport(TsDetector):
         for node in ctx.root.named_children():
             # `import type {…}` deliberately sits apart from the value import from the same
             # module — that separation is idiomatic, not a duplicate to merge.
-            if node.type == "import_statement" and not node.text.startswith("import type"):
+            if node.type == "import_statement" and not node.text.startswith(
+                "import type"
+            ):
                 src = import_source(node)
                 if src:
                     by_source[src].append(node)

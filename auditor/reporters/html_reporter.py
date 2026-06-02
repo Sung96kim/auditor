@@ -10,13 +10,7 @@ reporters.
 import html
 from typing import ClassVar
 
-from auditor.models import (
-    SEVERITIES_DESC,
-    Finding,
-    ScanResult,
-    Severity,
-    severity_rank,
-)
+from auditor.models import SEVERITIES_DESC, Finding, ScanResult, Severity, severity_rank
 from auditor.reporters.base import Reporter
 
 _SEVERITY_HUE: dict[Severity, str] = {
@@ -84,7 +78,7 @@ class HtmlReporter(Reporter):
             sections = "\n".join(self._section(r) for r in flagged)
             body = (
                 f"{header}<div class=layout>"
-                "<nav class=toc><div class=\"toc-head\"><span class=\"toc-title\">Files</span>"
+                '<nav class=toc><div class="toc-head"><span class="toc-title">Files</span>'
                 '<span class="toc-actions"><button id="expand-all">Expand all</button>'
                 '<button id="collapse-all">Collapse all</button></span></div>'
                 f"{tree.render()}</nav>"

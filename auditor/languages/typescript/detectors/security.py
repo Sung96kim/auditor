@@ -76,8 +76,9 @@ class JavascriptUrl(TsDetector):
         out: list[Finding] = []
         for element in ctx.root.descendants(*_ALL_ELEMENTS):
             for name, attr in element.attributes().items():
-                if name in _URL_ATTRS and attr.attr_value_text().strip().lower().startswith(
-                    "javascript:"
+                if (
+                    name in _URL_ATTRS
+                    and attr.attr_value_text().strip().lower().startswith("javascript:")
                 ):
                     out.append(
                         self.make_finding(
