@@ -43,6 +43,18 @@ def route_alert(alert):
         return handle_default(alert)
 
 
+def escalate(alert):
+    # high and critical were copy-pasted — the same three steps run in both branches
+    if alert.severity == "high":
+        ticket = open_ticket(alert)
+        page_oncall(ticket)
+        record_metric(ticket.id)
+    elif alert.severity == "critical":
+        ticket = open_ticket(alert)
+        page_oncall(ticket)
+        record_metric(ticket.id)
+
+
 def notify(alert):
     return AlertFormatters.to_slack(alert)
 

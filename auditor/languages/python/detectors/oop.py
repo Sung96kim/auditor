@@ -536,6 +536,74 @@ def _twin_fingerprint(
     return tuple(skeleton), tuple(literals)
 
 
+_MIN_BLOCK_STATEMENTS = 3  # a duplicated run of 3+ statements is worth extracting
+_MIN_BLOCK_TOKENS = 12  # ...but only if it has real substance, not 3 trivial assignments
+
+
+class DuplicateBlock(_OopCandidate):
+    rule_id: ClassVar[str] = "PY-OOP-DUPLICATE-BLOCK"
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        # Within-file duplication of an AST statement block (a branch/loop/with/try/function
+        # body). Cross-file dup is PY-XFILE-DUP-FUNCTION; whole-function twins are
+        # PY-OOP-PARALLEL-SIBLING — this catches a block copy-pasted inside one file.
+        groups: dict[tuple[str, ...], list[int]] = defaultdict(list)
+        for block in _statement_blocks(ctx.tree):
+            if len(block) < _MIN_BLOCK_STATEMENTS:
+                continue
+            tokens = tuple(t for stmt in block for t in _block_tokens(stmt))
+            if len(tokens) >= _MIN_BLOCK_TOKENS:
+                groups[tokens].append(block[0].lineno)
+        out: list[Finding] = []
+        for lines in groups.values():
+            unique = sorted(set(lines))
+            if len(unique) < 2:
+                continue
+            elsewhere = ", ".join(f"L{ln}" for ln in unique[1:])
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=unique[0],
+                    message=f"this block is duplicated at {elsewhere}; extract a shared helper",
+                    suggestion="pull the repeated statements into a function/method and call it",
+                )
+            )
+        return out
+
+
+def _statement_blocks(tree: ast.AST) -> Iterator[list[ast.stmt]]:
+    """Every statement-list body in the tree: function/branch/loop/with/try bodies + handlers."""
+    seen: set[int] = set()
+    for node in ast.walk(tree):
+        blocks = [getattr(node, f, None) for f in ("body", "orelse", "finalbody")]
+        blocks += [h.body for h in getattr(node, "handlers", []) or []]
+        for block in blocks:
+            if (
+                isinstance(block, list)
+                and block
+                and isinstance(block[0], ast.stmt)
+                and id(block) not in seen
+            ):
+                seen.add(id(block))
+                yield block
+
+
+def _block_tokens(stmt: ast.stmt) -> list[str]:
+    """Name-aware, literal-blind token stream — identical logic on the same names matches even
+    when constants differ; different calls/names do not collide."""
+    out: list[str] = []
+    for node in ast.walk(stmt):
+        if isinstance(node, ast.Constant):
+            out.append("L")
+        elif isinstance(node, ast.Name):
+            out.append("n:" + node.id)
+        elif isinstance(node, ast.Attribute):
+            out.append("a:" + node.attr)
+        else:
+            out.append(type(node).__name__)
+    return out
+
+
 def _functions_by_shared_param(
     tree: ast.Module,
 ) -> dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]]:

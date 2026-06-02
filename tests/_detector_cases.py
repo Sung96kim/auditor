@@ -182,6 +182,26 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "def outer(deps):\n    def inner(event):\n        return serialize(event, deps)\n    return inner",
             "def outer(deps):\n    return deps",
         ),
+        (
+            "PY-OOP-DUPLICATE-BLOCK",
+            (
+                "def handle(evt):\n"
+                '    if evt.kind == "a":\n'
+                "        record = build(evt)\n"
+                "        store.save(record)\n"
+                "        notify(record.id)\n"
+                '    elif evt.kind == "b":\n'
+                "        record = build(evt)\n"
+                "        store.save(record)\n"
+                "        notify(record.id)\n"
+            ),
+            (
+                "def handle(evt):\n"
+                "    record = build(evt)\n"
+                "    store.save(record)\n"
+                "    return record\n"
+            ),
+        ),
     ],
     "security/injection": [
         ("PY-SEC-DANGEROUS-EVAL", "eval(user_input)", "eval('1')"),
