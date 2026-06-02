@@ -85,6 +85,23 @@ def test_file_directive_line_is_not_a_line_directive():
     assert n == 0 and len(kept) == 1
 
 
+def test_python_ignores_directive_text_inside_strings():
+    # `# noqa` / `# auditor: noqa` that live in a docstring or string literal are NOT directives
+    src = (
+        '"""Docs mentioning # auditor: noqa and # noqa here."""\n'
+        'pattern = "# noqa"\n'
+        "eval(x)\n"
+    )
+    kept, n = filter_findings(src, [_f("PY-SEC-DANGEROUS-EVAL", 3)], language="python")
+    assert n == 0 and len(kept) == 1
+
+
+def test_python_still_honors_real_comment_directive():
+    src = "eval(x)  # noqa\n"
+    kept, n = filter_findings(src, [_f("PY-SEC-DANGEROUS-EVAL", 1)], language="python")
+    assert n == 1 and kept == []
+
+
 def _repo(tmp_path: Path, body: str) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "x"\nversion = "0"\n[tool.auditor]\nextends = "base"\n'
