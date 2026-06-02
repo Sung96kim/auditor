@@ -16,6 +16,8 @@ from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
+from loguru import logger
+
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
 from auditor.noqa import filter_findings
 from auditor.registry import REGISTRY
@@ -71,6 +73,11 @@ class ScanEngine:
             return str(path)
 
     async def scan_file(self, path: Path) -> ScanResult:
+        res = await self._scan_file(path)
+        _log_file(res)
+        return res
+
+    async def _scan_file(self, path: Path) -> ScanResult:
         source = path.read_text(encoding="utf-8", errors="replace")
         rel = self.rel(path)
         role = self.roles.classify(rel, source)
@@ -97,9 +104,18 @@ class ScanEngine:
         files = FileDiscovery(
             self.root, exclude_globs=tuple(self.settings.exclude)
         ).files(target)
+        logger.opt(colors=True).info(
+            "<light-black>scanning</light-black> <bold>{}</bold> <light-black>files under {}</light-black>",
+            len(files),
+            self.rel(target) or ".",
+        )
         results = [await self.scan_file(p) for p in files]
         if self.index is not None and len(results) > 1:
+            logger.opt(colors=True).info(
+                "<light-black>cross-file pass over {} files</light-black>", len(results)
+            )
             await self._apply_crossfile(results)
+        _log_summary(results)
         return results
 
     # --- internals --------------------------------------------------------
@@ -276,3 +292,62 @@ async def audit_target(
         async with await IndexStore.connect(root / ".auditor" / "index.db") as index:
             return await _run(ScanEngine(root, settings, index=index))
     return await _run(ScanEngine(root, settings))
+
+
+# loguru color tag per severity (stripped automatically when the sink isn't a TTY)
+_SEV_COLOR = {
+    "blocking": "red",
+    "high": "light-red",
+    "medium": "yellow",
+    "low": "cyan",
+    "suggestion": "light-black",
+}
+_clog = logger.opt(colors=True)
+
+
+def _log_file(res: ScanResult) -> None:
+    if res.language == "unknown":
+        _clog.debug("<light-black>· {}  (unrecognized language)</light-black>", res.file)
+        return
+    if res.cached:
+        tag = "<light-black>cached</light-black>"
+    elif res.findings:
+        tag = f"<light-red>{len(res.findings)} findings</light-red>"
+    else:
+        tag = "<green>clean</green>"
+    _clog.info(
+        "<bold>{}</bold> <light-black>·</light-black> <light-black>{}</light-black> "
+        "<light-black>·</light-black> " + tag,
+        res.file,
+        res.role.value,
+    )
+    notes = []
+    if res.suppressed:
+        notes.append(f"{res.suppressed} suppressed")
+    if res.skipped_rules:
+        notes.append(f"{len(res.skipped_rules)} rules skipped ({res.skipped_rules[0].reason})")
+    if notes:
+        _clog.debug("<light-black>    {}</light-black>", " · ".join(notes))
+    for f in res.findings:
+        color = _SEV_COLOR.get(f.severity.value, "white")
+        _clog.trace(
+            f"    <{color}>{{:<10}}</{color}> <light-black>L{{:<4}}</light-black> {{}}",
+            f.severity.value,
+            f.line,
+            f.rule_id,
+        )
+
+
+def _log_summary(results: list[ScanResult]) -> None:
+    findings = sum(len(r.findings) for r in results)
+    cached = sum(1 for r in results if r.cached)
+    suppressed = sum(r.suppressed for r in results)
+    sep = " <light-black>·</light-black> "
+    _clog.info(
+        "<bold>done</bold>" + sep + "{} files" + sep + "<light-red>{} findings</light-red>"
+        + sep + "{} cached" + sep + "{} suppressed",
+        len(results),
+        findings,
+        cached,
+        suppressed,
+    )

@@ -7,7 +7,7 @@ import asyncio
 import json
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any, NamedTuple, NoReturn, TypeVar
 
 import typer
 from rich.console import Console
@@ -19,7 +19,8 @@ from auditor.discovery import FileDiscovery, find_root
 from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
 from auditor.languages.python.auditor import PythonAuditor
-from auditor.models import ManifestEntry, ScanResult
+from auditor.logconfig import configure as configure_logging
+from auditor.models import ManifestEntry, ScanResult, Severity, SEVERITIES_DESC
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 from auditor.reporters import render
@@ -44,17 +45,37 @@ app.add_typer(plugins_app, name="plugins")
 # Spinner goes to STDERR so it never corrupts the JSON/SARIF stdout that agents parse;
 # rich auto-disables the animation when stderr isn't a TTY (piped/captured output).
 _status = Console(stderr=True)
+_out = Console()  # stdout — the interactive human summary
+
+_SEV_STYLE = {
+    "blocking": "bold red",
+    "high": "red",
+    "medium": "yellow",
+    "low": "cyan",
+    "suggestion": "bright_black",
+}
 
 
 def _echo_json(payload: object) -> None:
     typer.echo(json.dumps(payload, indent=2))
 
 
+def _fail(message: str) -> NoReturn:
+    """Emit a clean one-line error to stderr and exit non-zero (no traceback)."""
+    _status.print(f"[red]error:[/red] {message}")
+    raise typer.Exit(1)
+
+
 _T = TypeVar("_T")
 
 
-def _run(coro: Coroutine[Any, Any, _T], message: str = "auditing…") -> _T:
-    """Run an async core call while showing a spinner on stderr."""
+def _run(
+    coro: Coroutine[Any, Any, _T], message: str = "auditing…", *, spinner: bool = True
+) -> _T:
+    """Run an async core call. Shows a stderr spinner unless ``spinner`` is off (e.g. when
+    ``-v`` logging is driving the progress output instead)."""
+    if not spinner:
+        return asyncio.run(coro)
     with _status.status(message, spinner="dots"):
         return asyncio.run(coro)
 
@@ -105,9 +126,20 @@ def scan(
         Path | None,
         typer.Option("-o", "--output", help="Write the report to this path instead of stdout."),
     ] = None,
-    fmt: Annotated[str, typer.Option("-f", "--format", help="json | sarif | md | html")] = "json",
+    fmt: Annotated[
+        str | None,
+        typer.Option("-f", "--format", help="json | sarif | md | html. Default: a summary on a terminal, json when piped."),
+    ] = None,
+    verbose: Annotated[
+        int,
+        typer.Option("-v", "--verbose", count=True, help="Log progress to stderr: -v files, -vv detail, -vvv findings."),
+    ] = 0,
 ) -> None:
     """Audit a file or directory."""
+    if not target.exists():
+        _fail(f"no such file or directory: {target}")
+    if verbose:
+        configure_logging(verbose)
     results = _run(
         audit_target(
             target,
@@ -120,11 +152,17 @@ def scan(
             no_noqa=no_noqa,
         ),
         f"auditing {target}…",
+        spinner=not verbose,
     )
     if serve:
         _serve_html(results)
         return
-    _emit(render(results, fmt), output)
+    # Default output is a concise human summary, not a raw machine dump — an agent that wants
+    # parseable output asks for it explicitly with `-f json|md|sarif` (or `-o PATH`).
+    if fmt is None and output is None:
+        _print_summary(results)
+        return
+    _emit(render(results, fmt or "json"), output)
 
 
 def _serve_html(results: list[ScanResult]) -> None:
@@ -142,12 +180,78 @@ def _emit(rendered: str, output: Path | None) -> None:
     typer.echo(f"wrote {output}", err=True)
 
 
+class _Stats(NamedTuple):
+    totals: dict[Severity, int]
+    findings: int
+    files_with: int
+    suppressed: int
+    cached: int
+
+
+def _summary_stats(results: list[ScanResult]) -> _Stats:
+    totals = {s: 0 for s in SEVERITIES_DESC}
+    for r in results:
+        for sev, n in r.counts.items():
+            totals[sev] += n
+    return _Stats(
+        totals=totals,
+        findings=sum(totals.values()),
+        files_with=sum(1 for r in results if r.findings),
+        suppressed=sum(r.suppressed for r in results),
+        cached=sum(1 for r in results if r.cached),
+    )
+
+
+def _severity_line(totals: dict[Severity, int]) -> str:
+    return "   ".join(
+        f"[{_SEV_STYLE[s.value]}]{s.value} {totals[s]}[/{_SEV_STYLE[s.value]}]"
+        for s in SEVERITIES_DESC
+        if totals[s]
+    )
+
+
+def _meta_line(stats: _Stats) -> str:
+    parts = (
+        f"{stats.cached} cached" if stats.cached else "",
+        f"{stats.suppressed} suppressed by noqa" if stats.suppressed else "",
+    )
+    return " · ".join(p for p in parts if p)
+
+
+def _print_summary(results: list[ScanResult]) -> None:
+    """The default scan output: a compact, readable roll-up. Machine formats are opt-in via
+    ``-f``/``-o``, so this never has to be parseable."""
+    stats = _summary_stats(results)
+    if not stats.findings:
+        _out.print(f"[green]✓ clean[/green] — {len(results)} files, no findings")
+        return
+
+    _out.print(
+        f"[bold]{stats.findings}[/bold] findings in [bold]{stats.files_with}[/bold] of {len(results)} files"
+    )
+    _out.print("  " + _severity_line(stats.totals))
+    meta = _meta_line(stats)
+    if meta:
+        _out.print(f"  [dim]{meta}[/dim]")
+
+    _out.print("\n[bold]worst files[/bold]")
+    for r in sorted(results, key=lambda r: len(r.findings), reverse=True)[:5]:
+        if r.findings:
+            _out.print(f"  [red]{len(r.findings):>3}[/red]  {r.file}")
+
+    _out.print(
+        "\n[dim]-f json|md|sarif or -o PATH for the full report · -v/-vv/-vvv to log as it scans[/dim]"
+    )
+
+
 # --------------------------------------------------------------- manifest/report
 
 
 @app.command()
 def manifest(file: Annotated[Path, typer.Argument(help="Python file.")]) -> None:
     """Print the AST class+function manifest for one file (no detectors)."""
+    if not file.is_file():
+        _fail(f"no such file: {file}")
     tree = ast.parse(file.read_text(encoding="utf-8", errors="replace"))
     entries = ManifestEntry.from_module(tree)
     _echo_json([e.model_dump(mode="json") for e in entries])
@@ -167,6 +271,8 @@ def report(
     fmt: Annotated[str, typer.Option("-f", "--format", help="json | sarif | md | html")] = "json",
 ) -> None:
     """Audit one file (stateless) — manifest + findings in one call."""
+    if not file.is_file():
+        _fail(f"no such file: {file}")
     result = _run(_report(file, profile), f"auditing {file.name}…")
     _emit(render([result], fmt), output)
 
@@ -185,6 +291,8 @@ def discover(
     target: Annotated[Path, typer.Argument()] = Path("."),
 ) -> None:
     """List auditable files with their classified role."""
+    if not target.exists():
+        _fail(f"no such file or directory: {target}")
     root = find_root(target)
     classifier = RoleClassifier(load_config(root).role_globs)
     out = []

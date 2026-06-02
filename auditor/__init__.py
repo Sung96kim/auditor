@@ -4,6 +4,11 @@ Public API:
     from auditor import scan_file, scan_path, load_config, render, ScanEngine, IndexStore
 """
 
+from loguru import logger
+
+# Stay silent when embedded / under MCP; the CLI's logconfig.configure() re-enables it.
+logger.disable("auditor")
+
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
 from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
