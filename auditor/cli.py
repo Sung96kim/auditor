@@ -76,6 +76,17 @@ def _require_file(path: Path) -> None:
         _fail(f"no such file: {path}")
 
 
+def _severity_set(values: list[str]) -> set[str]:
+    valid = {s.value for s in SEVERITIES_DESC}
+    chosen = {v.lower() for v in values}
+    unknown = chosen - valid
+    if unknown:
+        _fail(
+            f"unknown severity {sorted(unknown)}; choose from {[s.value for s in SEVERITIES_DESC]}"
+        )
+    return chosen
+
+
 _T = TypeVar("_T")
 
 
@@ -160,6 +171,14 @@ def scan(
             help="json | sarif | md | html. Default: a summary on a terminal, json when piped.",
         ),
     ] = None,
+    severity: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-S",
+            "--severity",
+            help="Only show these severities (repeatable): blocking|high|medium|low|suggestion.",
+        ),
+    ] = None,
     verbose: Annotated[
         int,
         typer.Option(
@@ -188,6 +207,10 @@ def scan(
         f"auditing {target}…",
         spinner=not verbose,
     )
+    if severity:
+        wanted = _severity_set(severity)
+        for r in results:
+            r.findings = [f for f in r.findings if f.severity.value in wanted]
     if serve:
         _serve_html(results)
         return

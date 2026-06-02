@@ -79,6 +79,31 @@ def test_missing_target_fails_cleanly(cmd):
     assert "Traceback" not in result.output
 
 
+def test_scan_severity_filter(sample_repo):
+    payload = _json(
+        runner.invoke(
+            app,
+            [
+                "scan",
+                str(sample_repo / "src"),
+                "--no-index",
+                "-f",
+                "json",
+                "-S",
+                "blocking",
+            ],
+        )
+    )
+    findings = [f for fl in payload["files"] for f in fl["findings"]]
+    assert findings and all(f["severity"] == "blocking" for f in findings)
+
+
+def test_scan_severity_invalid(sample_repo):
+    result = runner.invoke(app, ["scan", str(sample_repo / "src"), "-S", "critical"])
+    assert result.exit_code == 1
+    assert "unknown severity" in result.output
+
+
 def test_scan_exclude_glob(sample_repo):
     src = str(sample_repo / "src")
     full = _json(runner.invoke(app, ["scan", src, "--no-index", "-f", "json"]))

@@ -38,10 +38,12 @@ async def scan(
     strict_tests: bool = False,
     profile: str | None = None,
     no_noqa: bool = False,
+    severity: list[str] | None = None,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_noqa`` ignores
-    in-file noqa directives."""
+    in-file noqa directives. ``severity`` keeps only findings of those levels
+    (blocking|high|medium|low|suggestion) — fewer tokens when you only want the worst."""
     results = await audit_target(
         Path(path),
         incremental=incremental,
@@ -49,6 +51,10 @@ async def scan(
         profile=profile,
         no_noqa=no_noqa,
     )
+    if severity:
+        wanted = {s.lower() for s in severity}
+        for r in results:
+            r.findings = [f for f in r.findings if f.severity.value in wanted]
     return json_payload(results)
 
 
