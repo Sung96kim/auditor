@@ -73,6 +73,7 @@ class Category(StrEnum):
 
     SECURITY = "security"
     MALWARE = "malware"
+    SECRETS = "secrets"  # noqa: PY-SEC-HARDCODED-SECRET  (category name, not a credential)
     CORRECTNESS = "correctness"
     TYPING = "typing"
     ASYNC = "async"

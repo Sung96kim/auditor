@@ -289,6 +289,22 @@ TESTED_SEPARATELY = {
     "PY-MAL-CRYPTO-MINER",
     "PY-MAL-CREDENTIAL-ACCESS",
     "PY-MAL-ENCODED-BLOB",
+    "PY-MAL-EXFIL-URL",
+    "PY-MAL-PICKLE-REDUCE",
+    "PY-MAL-DYNAMIC-IMPORT",
+    "PY-MAL-SHELLCODE",
+    # shell malware — covered in tests/languages/bash/test_malware.py (own case table)
+    "SH-MAL-CURL-BASH",
+    "SH-MAL-REVERSE-SHELL",
+    "SH-MAL-FORK-BOMB",
+    "SH-MAL-ENCODED-EXEC",
+    "SH-MAL-DESTRUCTIVE",
+    "SH-MAL-CRYPTO-MINER",
+    "SH-MAL-CREDENTIAL-EXFIL",
+    # committed-secret sweep — covered in tests/languages/*/test_secrets.py
+    "PY-SECRET-DETECTED",
+    "TS-SECRET-DETECTED",
+    "SH-SECRET-DETECTED",
 }
 
 

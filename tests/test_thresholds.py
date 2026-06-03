@@ -18,7 +18,9 @@ _PY_CASES = [
     (
         "PY-OOP-DUPLICATE-BLOCK",
         "def a():\n    if c:\n        log(x)\n        send(x)\n    if d:\n        log(x)\n        send(x)\n",
-        {"dry": {"dup_block_min_statements": 2, "dup_block_min_tokens": 6}},  # loosen → fires
+        {
+            "dry": {"dup_block_min_statements": 2, "dup_block_min_tokens": 6}
+        },  # loosen → fires
     ),
     (
         "PY-OOP-MODULE-CONST-FOR-SUBCLASS",

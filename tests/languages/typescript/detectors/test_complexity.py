@@ -21,7 +21,11 @@ def test_flags_bad_ignores_good(rule_id, bad, good):
 
 def test_file_size_threshold_is_configurable():
     settings = AuditorSettings.model_validate(
-        {"rules": {"TS-STYLE-FILE-SIZE": {"threshold": {"size": {"file_max_lines": 3}}}}}
+        {
+            "rules": {
+                "TS-STYLE-FILE-SIZE": {"threshold": {"size": {"file_max_lines": 3}}}
+            }
+        }
     )
     assert "TS-STYLE-FILE-SIZE" in rule_ids(
         run_ts_audit("a;\nb;\nc;\nd;\n", settings=settings)

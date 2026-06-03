@@ -7,7 +7,7 @@
 <p align="center"><em>A token-efficient repo auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
 It does the mechanical, deterministic part of a code audit — parsing, building the
-class/function manifest, running **88 anti-pattern detectors** (Python + TypeScript/React),
+class/function manifest, running **109 anti-pattern detectors** (Python, TypeScript/React, Bash),
 hashing for an incremental cache — so an agent spends tokens only on the genuine judgment
 calls. Findings are split into `auto` (the tool decided) and `candidate` (evidence only;
 you judge).
@@ -137,8 +137,8 @@ self-documenting `Field` with a `ge=1` validation): `threshold.oop.wall_kwarg_mi
 `threshold.jsx.repeated_jsx_min`, … Because the cache keys each rule by `(content + that rule's
 resolved config)`, changing one threshold re-runs only that rule on the next scan.
 
-- **Profiles**: `base` (industry floor: security/correctness/async/typing/config + cross-file
-  dedup on; opinionated OOP/composition off), `strict` (adds OOP/composition + complexity),
+- **Profiles**: `base` (industry floor: security/**malware**/correctness/async/typing/config +
+  cross-file dedup on; opinionated OOP/composition off), `strict` (adds OOP/composition + complexity),
   `pydantic`, `all-strict` (audits every role — tests included — at production strength).
 - **Roles**: every file is classified `production | test | test_support | script | generated`
   from path + content. Test code is audited under a **relaxed** policy (assert-for-auth,
@@ -150,12 +150,22 @@ resolved config)`, changing one threshold re-runs only that rule on the next sca
 
 ## Detectors
 
-**57 Python rules** across `security` (Bandit/OWASP-mapped), `correctness`, `typing`, `async`,
-`config`, `oop-composition`, and `style` — including DRY/composition rules (cross-file
+**64 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `correctness`, `typing`,
+`async`, `config`, `oop-composition`, and `style` — including DRY/composition rules (cross-file
 duplicate model/function, within-file duplicate blocks, parallel siblings, field-by-field
 copying) and a `suggestion` tier of low-stakes nudges below the severity ladder. Each carries
 a stable `rule_id`, a category, a default severity, and (for security) `standard_refs` like
 `bandit:B602` / `owasp:A03`. `auditor rules list` enumerates them.
+
+**Malware / supply-chain** (`malware`, on by default in `base` — for vetting dependencies,
+PR diffs, and untrusted repos): detects the patterns that turn a benign primitive into an
+attack, keyed on the *combination* so real decode/fetch/path use stays quiet —
+obfuscated exec (`eval`/`exec` of a base64/hex-decoded blob), remote exec (running a fetched
+response body), reverse shells (socket→`dup2`, `/dev/tcp`, `nc -e`), `curl … | sh`,
+crypto-miners (stratum/known miners), credential-path access/exfil, and packed base64/hex
+blobs. Available for **Python, TypeScript, and Bash**; AST/tree-sitter based for Python and
+TS, so a minified one-liner payload is caught the same as formatted code. Mostly `blocking`;
+the path/blob/destructive heuristics are `candidate`s you judge.
 
 **TypeScript / React** (`.ts/.tsx/.js/.jsx`, via the `ts` extra — tree-sitter): objective,
 **framework-agnostic** rules only —
@@ -180,6 +190,14 @@ The auditor deliberately does **not** encode a design system: it never says "thi
 `<Badge>`" or "use the size prop" — that needs the project's primitive vocabulary, which is
 the agent + design-system skill's judgment layer. The auditor surfaces the structural fact
 (duplication, extractable unit, accessibility violation); you map it to your code.
+
+**Bash / shell** (`.sh/.bash`, no extra needed — line/regex based): the `malware` category
+for install scripts and backdoors — `curl … | sh`, reverse shells (`/dev/tcp`, `nc -e`,
+`mkfifo|nc`, `socat exec:`), fork bombs, decode-and-run (`base64 -d | sh`), disk-destroyers
+(`rm -rf /`, `mkfs`, `dd of=/dev/…`), and credential exfil (a secret path piped to an
+outbound command). `search`-based, so an embedded pattern in a packed one-liner is still
+caught; full-line `#` comments are skipped so documentation describing an attack doesn't
+self-flag.
 
 ## Plugins
 

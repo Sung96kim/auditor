@@ -27,7 +27,13 @@ def test_fingerprint_changes_with_threshold():
     bumped = _eff(
         "PY-STYLE-FILE-SIZE",
         AuditorSettings.model_validate(
-            {"rules": {"PY-STYLE-FILE-SIZE": {"threshold": {"size": {"file_max_lines": 10}}}}}
+            {
+                "rules": {
+                    "PY-STYLE-FILE-SIZE": {
+                        "threshold": {"size": {"file_max_lines": 10}}
+                    }
+                }
+            }
         ),
     )
     assert rule_fingerprint("PY-STYLE-FILE-SIZE", base) != rule_fingerprint(

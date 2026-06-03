@@ -5,6 +5,7 @@ plain top-level import (no inline imports, no import cycle: ``PythonAuditor`` re
 ``ResolvedConfig`` only under TYPE_CHECKING).
 """
 
+import auditor.languages.bash.auditor  # noqa: F401  (registers BashAuditor + shell detectors)
 import auditor.languages.python.auditor  # noqa: F401  (registers PythonAuditor + every detector)
 import auditor.reporters  # noqa: F401  (registers json/sarif/markdown reporters)
 

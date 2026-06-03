@@ -6,6 +6,7 @@ from auditor.languages.python.detectors import (
     correctness,
     malware,
     oop,
+    secrets,
     security,
     style,
     suggestions,

