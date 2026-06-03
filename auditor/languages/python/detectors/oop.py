@@ -554,6 +554,9 @@ class ParallelSibling(ParallelSiblingMixin[AuditContext, ast.AST], _OopCandidate
     def _min_skeleton(self, ctx: AuditContext) -> int:
         return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_tokens
 
+    def _min_group(self, ctx: AuditContext) -> int:
+        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_group
+
 
 class DuplicateBlock(_OopCandidate):
     rule_id: ClassVar[str] = "PY-OOP-DUPLICATE-BLOCK"

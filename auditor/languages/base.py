@@ -159,6 +159,10 @@ class ParallelSiblingMixin(Generic[_Ctx, _Node]):
     def _min_skeleton(self, ctx: _Ctx) -> int:
         raise NotImplementedError
 
+    def _min_group(self, ctx: _Ctx) -> int:
+        """How many near-twins must share a skeleton before flagging. Default 2 (any pair)."""
+        return 2
+
     def _fingerprint(self, root: _Node) -> tuple[tuple[str, ...], tuple[str, ...]]:
         skeleton: list[str] = []
         literals: list[str] = []
@@ -172,6 +176,7 @@ class ParallelSiblingMixin(Generic[_Ctx, _Node]):
 
     def run(self, ctx: _Ctx) -> list[Finding]:
         floor = self._min_skeleton(ctx)
+        min_group = self._min_group(ctx)
         groups: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = (
             defaultdict(list)
         )
@@ -181,9 +186,11 @@ class ParallelSiblingMixin(Generic[_Ctx, _Node]):
                 groups[skeleton].append((name, line, literals))
         out: list[Finding] = []
         for members in groups.values():
-            # parallel siblings = same skeleton but the constants differ; a same-literals match
-            # is a true duplicate (a different rule), not a parameterizable twin.
-            if len(members) < 2 or len({lits for _, _, lits in members}) < 2:
+            # Need ``min_group`` members (a tunable noise floor). The distinct-literals >= 2
+            # check is definitional, not a knob: if every member has the *same* constants they
+            # are exact duplicates (the DUP-FUNCTION rule's job), not parameterizable twins —
+            # this rule is specifically "same shape, *different* constants".
+            if len(members) < min_group or len({lits for _, _, lits in members}) < 2:
                 continue
             names = ", ".join(n for n, _, _ in members)
             out.extend(

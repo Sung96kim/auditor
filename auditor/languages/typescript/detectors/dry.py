@@ -31,7 +31,6 @@ _HOOKS = {
     "useTransition",
 }
 _MIN_HOOKS = 5  # below this a component's state plumbing isn't worth a custom hook
-_MIN_SKELETON = 4  # parallel-sibling needs real structural substance to be a true twin
 # parallel-sibling only applies to things you'd *parameterize* — functions/components — not
 # plain data consts (two different lookup maps aren't "one function with an argument").
 _PARAMETERIZABLE = {"function_declaration", "arrow_function", "function_expression"}
@@ -160,7 +159,10 @@ class ParallelSibling(ParallelSiblingMixin[TsAuditContext, Tsx], TsDetector):
         return root.walk()
 
     def _min_skeleton(self, ctx: TsAuditContext) -> int:
-        return _MIN_SKELETON
+        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_tokens
+
+    def _min_group(self, ctx: TsAuditContext) -> int:
+        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_group
 
     def _token(self, node: Tsx) -> tuple[str | None, str | None]:
         """One structural token for ``node``, plus its literal text if it is a constant.

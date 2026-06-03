@@ -42,6 +42,9 @@ class Threshold(BaseModel):
     dup_block_min_statements: int = 3
     dup_block_min_tokens: int = 12
     parallel_sibling_min_tokens: int = 4
+    parallel_sibling_min_group: int = (
+        2  # how many near-twins before flagging (2 = any pair)
+    )
     module_const_min: int = 2
     repeated_jsx_min: int = 3
     repeated_jsx_min_tags: int = 2
