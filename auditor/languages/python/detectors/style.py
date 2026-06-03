@@ -20,7 +20,7 @@ class FileSize(Detector):
     checklist_item: ClassVar[int] = 20
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        limit = ctx.config.effective(self.rule_id).threshold.file_max_lines
+        limit = ctx.config.effective(self.rule_id).threshold.size.file_max_lines
         n = len(ctx.lines)
         if n > limit:
             return [

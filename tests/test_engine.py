@@ -72,7 +72,7 @@ async def test_per_rule_invalidation(tmp_path):
 
     # Lower a threshold for one rule via config; only that rule should re-run.
     (root / ".auditor" / "config.toml").write_text(
-        'extends = "base"\n[rules]\nPY-STYLE-FILE-SIZE = { threshold = { file_max_lines = 1 } }\n'
+        'extends = "base"\n[rules]\nPY-STYLE-FILE-SIZE = { threshold = { size = { file_max_lines = 1 } } }\n'
     )
     settings2 = load_config(root)
     async with await IndexStore.connect(db) as index:

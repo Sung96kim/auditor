@@ -119,8 +119,8 @@ class RepeatedJsx(TsDetector):
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
         threshold = ctx.config.effective(self.rule_id).threshold
-        min_tags = threshold.repeated_jsx_min_tags
-        min_repeat = threshold.repeated_jsx_min
+        min_tags = threshold.jsx.repeated_jsx_min_tags
+        min_repeat = threshold.jsx.repeated_jsx_min
         out: list[Finding] = []
         for parent in ctx.root.descendants("jsx_element"):
             by_shape: dict[tuple[str, ...], list[Tsx]] = defaultdict(list)

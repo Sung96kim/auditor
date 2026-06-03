@@ -124,17 +124,18 @@ diff_base = "origin/main"          # what `scan --vs-base` diffs against
 
 [tool.auditor.rules]
 PY-TYPING-MISSING-HINTS = { severity = "high" }
-PY-OOP-CONSTRUCTOR-WALL = { enabled = true, threshold = { wall_kwarg_min = 10 } }
-PY-OOP-DUPLICATE-BLOCK  = { threshold = { dup_block_min_statements = 2 } }  # tune any floor
+PY-OOP-CONSTRUCTOR-WALL = { enabled = true, threshold = { oop = { wall_kwarg_min = 10 } } }
+PY-OOP-DUPLICATE-BLOCK  = { threshold = { dry = { dup_block_min_statements = 2 } } }
 
 [tool.auditor.categories]
 security = { min_severity = "high" }
 ```
 
-Every threshold-driven rule's floor is config-tunable (`wall_kwarg_min`, `max_complexity`,
-`max_params`, `dup_block_min_statements`, `repeated_jsx_min`, …). Because the cache keys each
-rule by `(content + that rule's resolved config)`, changing one threshold re-runs only that
-rule on the next scan.
+Every threshold-driven rule's floor is config-tunable, grouped by concern (each knob is a
+self-documenting `Field` with a `ge=1` validation): `threshold.oop.wall_kwarg_min`,
+`threshold.size.max_complexity`, `threshold.dry.dup_block_min_statements`,
+`threshold.jsx.repeated_jsx_min`, … Because the cache keys each rule by `(content + that rule's
+resolved config)`, changing one threshold re-runs only that rule on the next scan.
 
 - **Profiles**: `base` (industry floor: security/correctness/async/typing/config + cross-file
   dedup on; opinionated OOP/composition off), `strict` (adds OOP/composition + complexity),

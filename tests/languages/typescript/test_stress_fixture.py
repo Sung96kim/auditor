@@ -14,7 +14,7 @@ from auditor.registry import REGISTRY
 
 _PYPROJECT = (
     '[project]\nname = "x"\nversion = "0"\n'
-    '[tool.auditor.rules."TS-STYLE-FILE-SIZE".threshold]\nfile_max_lines = 200\n'
+    '[tool.auditor.rules."TS-STYLE-FILE-SIZE".threshold.size]\nfile_max_lines = 200\n'
     "[tool.auditor.design_system]\n"
     'ui_paths = ["@/components/ui"]\nshell = "@/lib/ui"\n'
     "[[tool.auditor.design_system.primitives]]\n"

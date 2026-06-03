@@ -108,7 +108,15 @@ def test_min_severity_filter(sample_repo):
     payload = _json(
         runner.invoke(
             app,
-            ["scan", str(sample_repo / "src"), "--no-index", "-f", "json", "-m", "blocking"],
+            [
+                "scan",
+                str(sample_repo / "src"),
+                "--no-index",
+                "-f",
+                "json",
+                "-m",
+                "blocking",
+            ],
         )
     )
     findings = [f for fl in payload["files"] for f in fl["findings"]]
@@ -117,9 +125,19 @@ def test_min_severity_filter(sample_repo):
 
 def test_fail_on_gates_exit_code(sample_repo):
     src = str(sample_repo / "src")
-    assert runner.invoke(app, ["scan", src, "--no-index", "--fail-on", "blocking"]).exit_code == 1
+    assert (
+        runner.invoke(
+            app, ["scan", src, "--no-index", "--fail-on", "blocking"]
+        ).exit_code
+        == 1
+    )
     clean = str(sample_repo / "src" / "clean.py")
-    assert runner.invoke(app, ["scan", clean, "--no-index", "--fail-on", "suggestion"]).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["scan", clean, "--no-index", "--fail-on", "suggestion"]
+        ).exit_code
+        == 0
+    )
 
 
 def _git(repo, *args):
@@ -144,7 +162,9 @@ def test_scan_changed_scopes_output_to_diff(tmp_path):
 
     result = runner.invoke(app, ["scan", str(tmp_path), "--changed", "-f", "json"])
     payload = json.loads(result.output)
-    assert [r["file"] for r in payload["files"]] == ["a.py"]  # output scoped to the change
+    assert [r["file"] for r in payload["files"]] == [
+        "a.py"
+    ]  # output scoped to the change
 
 
 def test_since_requires_git_repo(tmp_path):

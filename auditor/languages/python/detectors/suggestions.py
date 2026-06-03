@@ -90,7 +90,7 @@ class ModuleConstForSubclass(_OopSuggestion):
     checklist_item: ClassVar[int] = 13
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        min_consts = ctx.config.effective(self.rule_id).threshold.module_const_min
+        min_consts = ctx.config.effective(self.rule_id).threshold.oop.module_const_min
         consts = _module_const_names(ctx.tree)
         out: list[Finding] = []
         for node in ctx.tree.body:

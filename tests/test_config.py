@@ -72,12 +72,12 @@ def test_base_suppresses_suggestion_rules_on_test_code(tmp_path):
 
 def test_threshold_merge_keeps_unset_defaults():
     settings = AuditorSettings.model_validate(
-        {"rules": {"PY-STYLE-FILE-SIZE": {"threshold": {"file_max_lines": 5}}}}
+        {"rules": {"PY-STYLE-FILE-SIZE": {"threshold": {"size": {"file_max_lines": 5}}}}}
     )
     rc = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="x.py")
     thr = rc.effective("PY-STYLE-FILE-SIZE").threshold
-    assert thr.file_max_lines == 5  # overridden
-    assert thr.wall_kwarg_min == 12  # default preserved
+    assert thr.size.file_max_lines == 5  # overridden
+    assert thr.oop.wall_kwarg_min == 12  # default preserved
 
 
 def test_severity_and_verdict_override():

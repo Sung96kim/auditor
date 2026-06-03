@@ -80,7 +80,7 @@ class ConstructorWall(_OopCandidate):
     checklist_item: ClassVar[int] = 3
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        threshold = ctx.config.effective(self.rule_id).threshold.wall_kwarg_min
+        threshold = ctx.config.effective(self.rule_id).threshold.oop.wall_kwarg_min
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
             if isinstance(node, ast.Call) and len(node.keywords) >= threshold:
@@ -107,7 +107,7 @@ class FlatFieldModel(_OopCandidate):
     checklist_item: ClassVar[int] = 4
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        threshold = ctx.config.effective(self.rule_id).threshold.flat_field_min
+        threshold = ctx.config.effective(self.rule_id).threshold.oop.flat_field_min
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.ClassDef):
@@ -226,7 +226,9 @@ class DispatchLadder(_OopCandidate):
     checklist_item: ClassVar[int] = 12
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        threshold = ctx.config.effective(self.rule_id).threshold.dispatch_min_branches
+        threshold = ctx.config.effective(
+            self.rule_id
+        ).threshold.oop.dispatch_min_branches
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
             ladder = _dispatch_ladder(fn, threshold)
@@ -333,7 +335,7 @@ class LongParamList(_OopCandidate):
     rule_id: ClassVar[str] = "PY-OOP-LONG-PARAM-LIST"
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        threshold = ctx.config.effective(self.rule_id).threshold.max_params
+        threshold = ctx.config.effective(self.rule_id).threshold.size.max_params
         method_lines = _method_lines(ctx.tree)
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
@@ -369,7 +371,7 @@ class GodClass(_OopCandidate):
                 and not s.name.startswith("__")
             ]
             attrs = _instance_attrs(node)
-            if len(methods) > eff.max_methods or len(attrs) > eff.max_attrs:
+            if len(methods) > eff.size.max_methods or len(attrs) > eff.size.max_attrs:
                 out.append(
                     self.make_finding(
                         ctx,
@@ -410,7 +412,7 @@ class HighComplexity(_OopCandidate):
     rule_id: ClassVar[str] = "PY-OOP-HIGH-COMPLEXITY"
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        threshold = ctx.config.effective(self.rule_id).threshold.max_complexity
+        threshold = ctx.config.effective(self.rule_id).threshold.size.max_complexity
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
             score = _complexity(fn)
@@ -480,7 +482,7 @@ class FieldByFieldCopy(_OopCandidate):
     checklist_item: ClassVar[int] = 11
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        threshold = ctx.config.effective(self.rule_id).threshold.field_copy_min
+        threshold = ctx.config.effective(self.rule_id).threshold.oop.field_copy_min
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
             for source, count in _field_copies(fn).items():
@@ -552,10 +554,14 @@ class ParallelSibling(ParallelSiblingMixin[AuditContext, ast.AST], _OopCandidate
         return None, None
 
     def _min_skeleton(self, ctx: AuditContext) -> int:
-        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_tokens
+        return ctx.config.effective(
+            self.rule_id
+        ).threshold.dry.parallel_sibling_min_tokens
 
     def _min_group(self, ctx: AuditContext) -> int:
-        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_group
+        return ctx.config.effective(
+            self.rule_id
+        ).threshold.dry.parallel_sibling_min_group
 
 
 class DuplicateBlock(_OopCandidate):
@@ -566,8 +572,8 @@ class DuplicateBlock(_OopCandidate):
         # body). Cross-file dup is PY-XFILE-DUP-FUNCTION; whole-function twins are
         # PY-OOP-PARALLEL-SIBLING — this catches a block copy-pasted inside one file.
         threshold = ctx.config.effective(self.rule_id).threshold
-        min_statements = threshold.dup_block_min_statements
-        min_tokens = threshold.dup_block_min_tokens
+        min_statements = threshold.dry.dup_block_min_statements
+        min_tokens = threshold.dry.dup_block_min_tokens
         groups: dict[tuple[str, ...], list[int]] = defaultdict(list)
         for block in _statement_blocks(ctx.tree):
             if len(block) < min_statements:

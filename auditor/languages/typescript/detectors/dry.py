@@ -159,10 +159,14 @@ class ParallelSibling(ParallelSiblingMixin[TsAuditContext, Tsx], TsDetector):
         return root.walk()
 
     def _min_skeleton(self, ctx: TsAuditContext) -> int:
-        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_tokens
+        return ctx.config.effective(
+            self.rule_id
+        ).threshold.dry.parallel_sibling_min_tokens
 
     def _min_group(self, ctx: TsAuditContext) -> int:
-        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_group
+        return ctx.config.effective(
+            self.rule_id
+        ).threshold.dry.parallel_sibling_min_group
 
     def _token(self, node: Tsx) -> tuple[str | None, str | None]:
         """One structural token for ``node``, plus its literal text if it is a constant.

@@ -16,7 +16,7 @@ class FileSize(TsDetector):
     checklist_item: ClassVar[int] = 18
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
-        limit = ctx.config.effective(self.rule_id).threshold.file_max_lines
+        limit = ctx.config.effective(self.rule_id).threshold.size.file_max_lines
         lines = len(ctx.lines)
         if lines <= limit:
             return []
@@ -39,7 +39,7 @@ class TooManyProps(TsDetector):
     checklist_item: ClassVar[int] = 21
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
-        limit = ctx.config.effective(self.rule_id).threshold.max_params
+        limit = ctx.config.effective(self.rule_id).threshold.size.max_params
         out: list[Finding] = []
         for name, body, at in _components(ctx.root):
             count = _prop_count(body)
@@ -63,7 +63,7 @@ class DeepJsxNesting(TsDetector):
     checklist_item: ClassVar[int] = 11
 
     def run(self, ctx: TsAuditContext) -> list[Finding]:
-        limit = ctx.config.effective(self.rule_id).threshold.max_jsx_depth
+        limit = ctx.config.effective(self.rule_id).threshold.jsx.max_jsx_depth
         out: list[Finding] = []
         for element in ctx.root.descendants("jsx_element", "jsx_self_closing_element"):
             if _jsx_depth(element) > limit:

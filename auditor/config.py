@@ -23,36 +23,112 @@ from auditor.registry import REGISTRY
 RoleMode = Literal["relaxed", "strict", "excluded"]
 
 
-class Threshold(BaseModel):
-    """Typed knobs for the threshold-driven detectors. Partial overrides merge onto the
-    base via ``exclude_unset``."""
+class OopThreshold(BaseModel):
+    """Floors for the OOP/composition-shape detectors."""
 
     model_config = ConfigDict(extra="forbid")
 
-    wall_kwarg_min: int = 12
-    file_max_lines: int = 800
-    dispatch_min_branches: int = 5
-    max_params: int = 6
-    max_methods: int = 20
-    max_attrs: int = 15
-    max_complexity: int = 10
-    flat_field_min: int = 12
-    max_jsx_depth: int = 6
-    field_copy_min: int = 5
-    dup_block_min_statements: int = 3
-    dup_block_min_tokens: int = 12
-    parallel_sibling_min_tokens: int = 4
-    parallel_sibling_min_group: int = (
-        2  # how many near-twins before flagging (2 = any pair)
+    wall_kwarg_min: int = Field(
+        12, ge=1, description="kwargs in a constructor call before it's a 'wall'"
     )
-    module_const_min: int = 2
-    repeated_jsx_min: int = 3
-    repeated_jsx_min_tags: int = 2
+    flat_field_min: int = Field(
+        12, ge=1, description="fields in a flat model before it should be grouped"
+    )
+    field_copy_min: int = Field(
+        5,
+        ge=1,
+        description="`self.x = src.x` copies before it's field-by-field copying",
+    )
+    module_const_min: int = Field(
+        2,
+        ge=1,
+        description="module consts prefixed with a subclass name before flagging",
+    )
+    dispatch_min_branches: int = Field(
+        5,
+        ge=1,
+        description="if/elif or guard-clause branches before it's a dispatch ladder",
+    )
+
+
+class SizeThreshold(BaseModel):
+    """Floors for the size/complexity detectors."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_max_lines: int = Field(
+        800, ge=1, description="split a module past this many lines"
+    )
+    max_params: int = Field(
+        6, ge=1, description="parameters before a signature is too long"
+    )
+    max_methods: int = Field(
+        20, ge=1, description="methods before a class is a god class"
+    )
+    max_attrs: int = Field(
+        15, ge=1, description="instance attributes before a class is a god class"
+    )
+    max_complexity: int = Field(
+        10, ge=1, description="cyclomatic complexity ceiling per function"
+    )
+
+
+class DryThreshold(BaseModel):
+    """Floors for the duplication / parameterize-me detectors."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dup_block_min_statements: int = Field(
+        3, ge=1, description="statements in a repeated block before flagging"
+    )
+    dup_block_min_tokens: int = Field(
+        12,
+        ge=1,
+        description="tokens in a repeated block before flagging (filters trivial)",
+    )
+    parallel_sibling_min_tokens: int = Field(
+        4, ge=1, description="skeleton size before two defs can be parallel siblings"
+    )
+    parallel_sibling_min_group: int = Field(
+        2,
+        ge=1,
+        description="near-twins sharing a skeleton before flagging (2 = any pair)",
+    )
+
+
+class JsxThreshold(BaseModel):
+    """Floors for the React/JSX structural detectors."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_jsx_depth: int = Field(6, ge=1, description="JSX nesting depth before flagging")
+    repeated_jsx_min: int = Field(
+        3, ge=1, description="identical sibling JSX blocks before 'map over data'"
+    )
+    repeated_jsx_min_tags: int = Field(
+        2, ge=1, description="tags in a repeated JSX block before it counts"
+    )
+
+
+class Threshold(BaseModel):
+    """Threshold knobs grouped by concern. A partial override deep-merges onto the base, so a
+    repo can tune one floor (e.g. ``threshold.dry.dup_block_min_statements``) without restating
+    the rest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    oop: OopThreshold = Field(default_factory=OopThreshold)
+    size: SizeThreshold = Field(default_factory=SizeThreshold)
+    dry: DryThreshold = Field(default_factory=DryThreshold)
+    jsx: JsxThreshold = Field(default_factory=JsxThreshold)
 
     def merged(self, override: "Threshold | None") -> "Threshold":
         if override is None:
             return self
-        return self.model_copy(update=override.model_dump(exclude_unset=True))
+        sparse = override.model_dump(exclude_unset=True)
+        if not sparse:
+            return self
+        return Threshold.model_validate(_deep_merge(self.model_dump(), sparse))
 
 
 class RuleConfig(BaseModel):

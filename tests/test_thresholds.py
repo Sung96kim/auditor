@@ -18,12 +18,12 @@ _PY_CASES = [
     (
         "PY-OOP-DUPLICATE-BLOCK",
         "def a():\n    if c:\n        log(x)\n        send(x)\n    if d:\n        log(x)\n        send(x)\n",
-        {"dup_block_min_statements": 2, "dup_block_min_tokens": 6},  # loosen → fires
+        {"dry": {"dup_block_min_statements": 2, "dup_block_min_tokens": 6}},  # loosen → fires
     ),
     (
         "PY-OOP-MODULE-CONST-FOR-SUBCLASS",
         "FOO_A = 1\n\nclass Foo(Base):\n    pass\n",  # one matching const
-        {"module_const_min": 1},  # loosen from 2 → fires
+        {"oop": {"module_const_min": 1}},  # loosen from 2 → fires
     ),
 ]
 
@@ -42,5 +42,5 @@ def test_repeated_jsx_threshold_is_configurable():
     # two identical sibling blocks — under the default min of 3, over a configured min of 2
     src = "const x = <ul><li><a>x</a></li><li><a>y</a></li></ul>;\n"
     assert "TS-REACT-REPEATED-JSX" not in rule_ids(run_ts_audit(src))
-    loosened = _rules("TS-REACT-REPEATED-JSX", {"repeated_jsx_min": 2})
+    loosened = _rules("TS-REACT-REPEATED-JSX", {"jsx": {"repeated_jsx_min": 2}})
     assert "TS-REACT-REPEATED-JSX" in rule_ids(run_ts_audit(src, settings=loosened))
