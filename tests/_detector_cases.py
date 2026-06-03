@@ -281,6 +281,14 @@ TESTED_SEPARATELY = {
     "TS-DS-DIRECT-UI-IMPORT",
     "TS-DS-INLINE-PRIMITIVE",
     "TS-DS-SIZE-OVERRIDE",
+    # malware/* are tested in their own test_malware.py (per-language)
+    "PY-MAL-OBFUSCATED-EXEC",
+    "PY-MAL-REMOTE-EXEC",
+    "PY-MAL-REVERSE-SHELL",
+    "PY-MAL-DOWNLOAD-EXEC",
+    "PY-MAL-CRYPTO-MINER",
+    "PY-MAL-CREDENTIAL-ACCESS",
+    "PY-MAL-ENCODED-BLOB",
 }
 
 

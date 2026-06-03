@@ -72,6 +72,7 @@ class Category(StrEnum):
     """
 
     SECURITY = "security"
+    MALWARE = "malware"
     CORRECTNESS = "correctness"
     TYPING = "typing"
     ASYNC = "async"

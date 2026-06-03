@@ -4,6 +4,7 @@ from auditor.languages.python.detectors import (
     async_rules,  # noqa: F401
     config_rules,
     correctness,
+    malware,
     oop,
     security,
     style,
