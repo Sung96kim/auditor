@@ -10,7 +10,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from typing import ClassVar
 
-from auditor.languages.base import AuditContext, Detector
+from auditor.languages.base import AuditContext, Detector, ParallelSiblingMixin
 from auditor.languages.python.detectors._util import dotted_name
 from auditor.models import Category, Finding, Severity, VerdictKind
 
@@ -524,62 +524,35 @@ def _root_name(node: ast.expr) -> str | None:
     return None
 
 
-class ParallelSibling(_OopCandidate):
+class ParallelSibling(ParallelSiblingMixin[AuditContext, ast.AST], _OopCandidate):
+    # Same-file twins only — cross-file near-twins are PY-XFILE-DUP-FUNCTION's job.
     rule_id: ClassVar[str] = "PY-OOP-PARALLEL-SIBLING"
     checklist_item: ClassVar[int] = 17
+    unit: ClassVar[str] = "function"
 
-    def run(self, ctx: AuditContext) -> list[Finding]:
-        # Same-file twins only — cross-file near-twins are PY-XFILE-DUP-FUNCTION's job, so the
-        # two never overlap (one is within a file, the other across files).
-        by_skeleton: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = (
-            defaultdict(list)
-        )
-        min_tokens = ctx.config.effective(
-            self.rule_id
-        ).threshold.parallel_sibling_min_tokens
-        for node in ctx.tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                skeleton, literals = _twin_fingerprint(node)
-                if len(skeleton) >= min_tokens:
-                    by_skeleton[skeleton].append((node.name, node.lineno, literals))
-        out: list[Finding] = []
-        for members in by_skeleton.values():
-            # parallel siblings = identical structure but the *constants* differ; a same-literals
-            # match is a true duplicate (a different rule) not a parameterizable twin.
-            if len(members) < 2 or len({lits for _, _, lits in members}) < 2:
-                continue
-            names = ", ".join(name for name, _, _ in members)
-            for name, line, _ in members:
-                out.append(
-                    self.make_finding(
-                        ctx,
-                        line=line,
-                        message=f"`{name}` is a near-twin of {names} (same structure, only constants differ)",
-                        suggestion="unify into one function parameterized by the differing value",
-                    )
-                )
-        return out
+    def _candidates(self, ctx: AuditContext) -> list[tuple[str, int, ast.AST]]:
+        return [
+            (n.name, n.lineno, n)
+            for n in ctx.tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
 
+    def _walk(self, root: ast.AST) -> Iterator[ast.AST]:
+        return ast.walk(root)
 
-def _twin_fingerprint(
-    fn: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """A literal-blind structural skeleton plus the literal constants, so two functions with the
-    same skeleton but different constants are recognizable as parameterizable twins (item 17).
-    """
-    skeleton: list[str] = []
-    literals: list[str] = []
-    for node in ast.walk(fn):
+    def _token(self, node: ast.AST) -> tuple[str | None, str | None]:
         if isinstance(node, ast.Constant):
-            skeleton.append("L")
-            literals.append(repr(node.value))
-        elif isinstance(node, ast.Call):
-            skeleton.append("c:" + dotted_name(node.func))
-        elif isinstance(node, ast.Attribute):
-            skeleton.append("a:" + node.attr)
-        elif isinstance(node, _TWIN_STRUCT):
-            skeleton.append(type(node).__name__)
-    return tuple(skeleton), tuple(literals)
+            return "L", repr(node.value)
+        if isinstance(node, ast.Call):
+            return "c:" + dotted_name(node.func), None
+        if isinstance(node, ast.Attribute):
+            return "a:" + node.attr, None
+        if isinstance(node, _TWIN_STRUCT):
+            return type(node).__name__, None
+        return None, None
+
+    def _min_skeleton(self, ctx: AuditContext) -> int:
+        return ctx.config.effective(self.rule_id).threshold.parallel_sibling_min_tokens
 
 
 class DuplicateBlock(_OopCandidate):

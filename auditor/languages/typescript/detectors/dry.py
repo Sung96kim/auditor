@@ -11,9 +11,10 @@ hook/util/primitive (the auditor never names one):
   only in constants → unify into one parameterized definition (a prop/argument).
 """
 
-from collections import defaultdict
+from collections.abc import Iterable
 from typing import ClassVar
 
+from auditor.languages.base import ParallelSiblingMixin
 from auditor.languages.typescript.base import TsAuditContext, TsDetector
 from auditor.languages.typescript.nodes import Tsx, callee, field_text, is_pascal_case
 from auditor.models import Category, Finding, Severity, VerdictKind
@@ -140,57 +141,28 @@ class ExtractableHelper(TsDetector):
         return {n.text for n in scope.walk() if n.type == "identifier"}
 
 
-class ParallelSibling(TsDetector):
+class ParallelSibling(ParallelSiblingMixin[TsAuditContext, Tsx], TsDetector):
     rule_id: ClassVar[str] = "TS-REACT-PARALLEL-SIBLING"
     category: ClassVar[Category] = Category.REACT
     default_severity: ClassVar[Severity] = Severity.LOW
     verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
     checklist_item: ClassVar[int] = 17
 
-    def run(self, ctx: TsAuditContext) -> list[Finding]:
-        groups: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = (
-            defaultdict(list)
-        )
-        for name, body, at, _ in ctx.root.top_declarations():
-            if body.type not in _PARAMETERIZABLE:
-                continue  # skip data consts (lookup maps, style objects) — not parameterizable
-            skeleton, literals = self._fingerprint(body)
-            if len(skeleton) >= _MIN_SKELETON:
-                groups[skeleton].append((name, at.line, literals))
+    def _candidates(self, ctx: TsAuditContext) -> list[tuple[str, int, Tsx]]:
+        # skip data consts (lookup maps, style objects) — not parameterizable
+        return [
+            (name, at.line, body)
+            for name, body, at, _ in ctx.root.top_declarations()
+            if body.type in _PARAMETERIZABLE
+        ]
 
-        out: list[Finding] = []
-        for members in groups.values():
-            distinct_literals = {m[2] for m in members}
-            if len(members) < 2 or len(distinct_literals) < 2:
-                continue  # need ≥2 twins that actually differ in their constants
-            names = ", ".join(m[0] for m in members)
-            for name, line, _ in members:
-                out.append(
-                    self.make_finding(
-                        ctx,
-                        line=line,
-                        message=f"{name} is a near-twin of {names} (same structure, different constants)",
-                        suggestion="unify into one definition parameterized by the differing value (a prop/arg)",
-                    )
-                )
-        return out
+    def _walk(self, root: Tsx) -> Iterable[Tsx]:
+        return root.walk()
 
-    @classmethod
-    def _fingerprint(cls, body: Tsx) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        """A literal-blind structural skeleton + the sequence of actual constants. Two defs
-        with the same skeleton but different literals are parallel siblings."""
-        skeleton: list[str] = []
-        literals: list[str] = []
-        for n in body.walk():
-            token, literal = cls._token(n)
-            if token:
-                skeleton.append(token)
-                if literal:
-                    literals.append(literal)
-        return tuple(skeleton), tuple(literals)
+    def _min_skeleton(self, ctx: TsAuditContext) -> int:
+        return _MIN_SKELETON
 
-    @staticmethod
-    def _token(node: Tsx) -> tuple[str | None, str | None]:
+    def _token(self, node: Tsx) -> tuple[str | None, str | None]:
         """One structural token for ``node``, plus its literal text if it is a constant.
         Property/member names are kept so twins that differ in *which* function/option they
         reference (not just a constant) are NOT treated as parameterizable siblings."""

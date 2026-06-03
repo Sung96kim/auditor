@@ -8,7 +8,9 @@ afterward (one place, not per detector).
 
 import ast
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from collections import defaultdict
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 from auditor.models import (
     Category,
@@ -127,6 +129,73 @@ class Detector(ABC):
             checklist_item=self.checklist_item,
             standard_refs=self.standard_refs,
         )
+
+
+_Ctx = TypeVar("_Ctx")
+_Node = TypeVar("_Node")
+
+
+class ParallelSiblingMixin(Generic[_Ctx, _Node]):
+    """Language-agnostic 'parallel sibling' detection (checklist item 17): 2+ top-level defs
+    with the same structural skeleton but different *constants* should be one definition
+    parameterized by the differing value. Owns the group-and-flag algorithm; a concrete
+    detector (which also subclasses ``Detector``) injects the language specifics — which defs
+    to consider (``_candidates``), how to walk/tokenize a node (``_walk``/``_token``), and the
+    skeleton-size floor (``_min_skeleton``)."""
+
+    unit: ClassVar[str] = "definition"  # the noun used in the suggestion
+
+    def _candidates(self, ctx: _Ctx) -> Iterable[tuple[str, int, _Node]]:
+        """(name, line, root-node) for each definition to fingerprint."""
+        raise NotImplementedError
+
+    def _walk(self, root: _Node) -> Iterable[_Node]:
+        raise NotImplementedError
+
+    def _token(self, node: _Node) -> tuple[str | None, str | None]:
+        """One literal-blind structural token for a node, plus its literal text if constant."""
+        raise NotImplementedError
+
+    def _min_skeleton(self, ctx: _Ctx) -> int:
+        raise NotImplementedError
+
+    def _fingerprint(self, root: _Node) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        skeleton: list[str] = []
+        literals: list[str] = []
+        for node in self._walk(root):
+            token, literal = self._token(node)
+            if token:
+                skeleton.append(token)
+                if literal:
+                    literals.append(literal)
+        return tuple(skeleton), tuple(literals)
+
+    def run(self, ctx: _Ctx) -> list[Finding]:
+        floor = self._min_skeleton(ctx)
+        groups: dict[tuple[str, ...], list[tuple[str, int, tuple[str, ...]]]] = (
+            defaultdict(list)
+        )
+        for name, line, root in self._candidates(ctx):
+            skeleton, literals = self._fingerprint(root)
+            if len(skeleton) >= floor:
+                groups[skeleton].append((name, line, literals))
+        out: list[Finding] = []
+        for members in groups.values():
+            # parallel siblings = same skeleton but the constants differ; a same-literals match
+            # is a true duplicate (a different rule), not a parameterizable twin.
+            if len(members) < 2 or len({lits for _, _, lits in members}) < 2:
+                continue
+            names = ", ".join(n for n, _, _ in members)
+            out.extend(
+                self.make_finding(  # type: ignore[attr-defined]  (the concrete class is a Detector)
+                    ctx,
+                    line=line,
+                    message=f"`{name}` is a near-twin of {names} (same structure, only constants differ)",
+                    suggestion=f"unify into one {self.unit} parameterized by the differing value",
+                )
+                for name, line, _ in members
+            )
+        return out
 
 
 class ShapeRow:
