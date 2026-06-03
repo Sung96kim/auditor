@@ -6,7 +6,6 @@
 
 <p align="center"><em>A token-efficient repo auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
-
 It does the mechanical, deterministic part of a code audit — parsing, building the
 class/function manifest, running **88 anti-pattern detectors** (Python + TypeScript/React),
 hashing for an incremental cache — so an agent spends tokens only on the genuine judgment
