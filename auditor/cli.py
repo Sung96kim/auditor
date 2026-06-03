@@ -116,15 +116,40 @@ def _filter_display(
 ) -> None:
     wanted = _severity_set(severity) if severity else None
     floor = severity_rank(_check_severity(min_severity)) if min_severity else None
-    if wanted is None and floor is None:
-        return
     for r in results:
-        r.findings = [
-            f
-            for f in r.findings
-            if (wanted is None or f.severity.value in wanted)
-            and (floor is None or severity_rank(f.severity) >= floor)
-        ]
+        if wanted is not None:
+            r.findings = [f for f in r.findings if f.severity.value in wanted]
+        if floor is not None:
+            r.findings = [f for f in r.findings if severity_rank(f.severity) >= floor]
+
+
+def _diff_report_only(
+    target: Path, since: str | None, changed: bool, vs_base: bool
+) -> set[str] | None:
+    """Resolve the git diff ref (--since / --changed / --vs-base) and return the changed-file
+    set to scope the output to, or None if no diff mode was requested. Exits cleanly on error."""
+    ref: str | None = None
+    if vs_base:
+        root = find_root(target)
+        ref = load_config(root).diff_base or default_base_ref(root)
+        if ref is None:
+            _fail(
+                "no base branch found (tried main/master/develop/development); "
+                "set [tool.auditor] diff_base or use --since <ref>"
+            )
+    elif since:
+        ref = since
+    elif changed:
+        ref = "HEAD"
+    if ref is None:
+        return None
+    try:
+        report_only = git_changed_files(find_root(target), ref)
+    except ValueError as exc:
+        _fail(str(exc))
+    if report_only is None:
+        _fail("--since / --changed / --vs-base requires a git repository")
+    return report_only
 
 
 _T = TypeVar("_T")
@@ -266,29 +291,9 @@ def scan(
     if verbose:
         configure_logging(verbose)
 
-    ref: str | None = None
-    if vs_base:
-        root = find_root(target)
-        ref = load_config(root).diff_base or default_base_ref(root)
-        if ref is None:
-            _fail(
-                "no base branch found (tried main/master/develop/development); "
-                "set [tool.auditor] diff_base or use --since <ref>"
-            )
-    elif since:
-        ref = since
-    elif changed:
-        ref = "HEAD"
-    report_only: set[str] | None = None
-    if ref is not None:
-        try:
-            report_only = git_changed_files(find_root(target), ref)
-        except ValueError as exc:
-            _fail(str(exc))
-        if report_only is None:
-            _fail("--since / --changed / --vs-base requires a git repository")
-        if not no_index:
-            incremental = True  # whole-repo scan stays fast via the cache
+    report_only = _diff_report_only(target, since, changed, vs_base)
+    if report_only is not None and not no_index:
+        incremental = True  # whole-repo scan stays fast via the cache
 
     results = _run(
         audit_target(

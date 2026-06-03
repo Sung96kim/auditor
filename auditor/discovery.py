@@ -42,19 +42,26 @@ _DEFAULT_EXCLUDE_GLOBS = (
 _BASE_CANDIDATES = ("main", "master", "develop", "development")
 
 
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
+    """Run a git subcommand under ``root``; ``None`` if git isn't available."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return None
+
+
 def default_base_ref(root: Path) -> str | None:
     """The repo's likely base branch — the first of main/master/develop/development that exists
     (local or ``origin/``). ``None`` if none resolve or ``root`` isn't a git repo."""
     for name in _BASE_CANDIDATES:
         for ref in (name, f"origin/{name}"):
-            try:
-                done = subprocess.run(
-                    ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", ref],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-            except (subprocess.SubprocessError, FileNotFoundError):
+            done = _git(root, "rev-parse", "--verify", "--quiet", ref)
+            if done is None:
                 return None
             if done.returncode == 0:
                 return ref
@@ -69,27 +76,20 @@ def git_changed_files(root: Path, ref: str) -> set[str] | None:
     can't be resolved. Used to *scope the output* of a scan to changed files — each is still
     audited in full, and the whole repo is still scanned (cheaply, via the cache) so cross-file
     rules stay correct."""
-
-    def _git(*args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-    inside = _git("rev-parse", "--is-inside-work-tree")
-    if inside.returncode != 0 or inside.stdout.strip() != "true":
+    inside = _git(root, "rev-parse", "--is-inside-work-tree")
+    if inside is None or inside.returncode != 0 or inside.stdout.strip() != "true":
         return None  # not a git repo — caller decides how to report
 
-    diff = _git("diff", "--name-only", "--relative", ref)
-    if diff.returncode != 0:
+    diff = _git(root, "diff", "--name-only", "--relative", ref)
+    if diff is None or diff.returncode != 0:
         raise ValueError(
             f"git ref {ref!r} could not be resolved — fetch it first "
             f"(e.g. `git fetch origin {ref}`) or check the name"
         )
-    untracked = _git("ls-files", "--others", "--exclude-standard")
-    lines = diff.stdout.splitlines() + untracked.stdout.splitlines()
+    untracked = _git(root, "ls-files", "--others", "--exclude-standard")
+    lines = diff.stdout.splitlines() + (
+        untracked.stdout.splitlines() if untracked else []
+    )
     return {line for line in lines if line}
 
 
