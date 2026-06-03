@@ -229,20 +229,39 @@ class DispatchLadder(_OopCandidate):
         threshold = ctx.config.effective(self.rule_id).threshold.dispatch_min_branches
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
-            for stmt in ast.walk(fn):
-                if isinstance(stmt, ast.If):
-                    branches = _elif_chain_len(stmt)
-                    if branches >= threshold:
-                        out.append(
-                            self.make_finding(
-                                ctx,
-                                line=stmt.lineno,
-                                message=f"if/elif dispatch ladder ({branches} branches)",
-                                suggestion="replace the ladder with a registered subclass family",
-                            )
-                        )
-                        break
+            ladder = _dispatch_ladder(fn, threshold)
+            if ladder is not None:
+                line, detail = ladder
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=line,
+                        message=f"dispatch ladder ({detail})",
+                        suggestion="replace the ladder with a registered subclass family or a dict dispatch",
+                    )
+                )
         return out
+
+
+def _dispatch_ladder(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef, threshold: int
+) -> tuple[int, str] | None:
+    """A dispatch ladder in either form: an ``if/elif`` chain, or ≥ ``threshold`` sibling
+    guard-clause ``if``s in one block all keying off the same discriminator variable."""
+    for stmt in ast.walk(fn):
+        if isinstance(stmt, ast.If):
+            branches = _elif_chain_len(stmt)
+            if branches >= threshold:
+                return stmt.lineno, f"{branches} if/elif branches"
+    for block in _statement_blocks(fn):
+        by_disc: dict[str, list[int]] = defaultdict(list)
+        for s in block:
+            if isinstance(s, ast.If) and (disc := _discriminator(s.test)) is not None:
+                by_disc[disc].append(s.lineno)
+        for disc, lines in by_disc.items():
+            if len(lines) >= threshold:
+                return min(lines), f"{len(lines)} guard clauses on `{disc}`"
+    return None
 
 
 def _elif_chain_len(node: ast.If) -> int:
@@ -252,6 +271,30 @@ def _elif_chain_len(node: ast.If) -> int:
         count += 1
         cur = cur.orelse[0]
     return count
+
+
+_DISPATCH_OPS = (ast.Eq, ast.NotEq, ast.In, ast.NotIn)
+
+
+def _discriminator(test: ast.expr) -> str | None:
+    """The variable a guard tests, when it's an equality/membership check (`t == "x"`,
+    `t in {...}`) — the thing a dispatch ladder switches on. ``None`` otherwise."""
+    if (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], _DISPATCH_OPS)
+    ):
+        return _name_of(test.left)
+    return None
+
+
+def _name_of(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _name_of(node.value)
+        return f"{base}.{node.attr}" if base else None
+    return None
 
 
 class StaticMethodClass(_OopCandidate):

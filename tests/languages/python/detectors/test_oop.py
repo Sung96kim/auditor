@@ -41,3 +41,27 @@ _C_COMP = "def f(xs):\n    return [y for y in xs if y if y>0 if y<9 if y!=5 if y
 def test_high_complexity_counter(source, should_flag):
     flagged = "PY-OOP-HIGH-COMPLEXITY" in rule_ids(run_audit(source))
     assert flagged is should_flag
+
+
+# guard-clause dispatch (sequential `if t == ...: return`) is the same anti-pattern as if/elif
+_GUARD_DISPATCH = "def tok(node):\n    t = node.type\n" + "".join(
+    f'    if t == "k{i}": return {i}\n' for i in range(5)
+)
+_GUARD_MIXED_VARS = "def f(a, b):\n" + "".join(
+    f'    if a == "x{i}": return {i}\n'
+    if i % 2
+    else f'    if b == "y{i}": return {i}\n'
+    for i in range(6)
+)
+
+
+@pytest.mark.parametrize(
+    "source, should_flag",
+    [
+        (_GUARD_DISPATCH, True),  # 5 guard clauses on one discriminator `t`
+        (_GUARD_MIXED_VARS, False),  # split across two vars → only 3 each, no ladder
+    ],
+    ids=["guard-clause-dispatch", "mixed-discriminators"],
+)
+def test_dispatch_ladder_guard_clause_form(source, should_flag):
+    assert ("PY-OOP-DISPATCH-LADDER" in rule_ids(run_audit(source))) is should_flag
