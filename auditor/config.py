@@ -145,6 +145,9 @@ class AuditorSettings(BaseSettings):
     trust_local_plugins: bool = False
     lint_overlap: bool = False
     respect_noqa: bool = True
+    diff_base: str | None = (
+        None  # `scan --vs-base` ref; None auto-detects main/master/develop/development
+    )
     design_system: DesignSystem = Field(default_factory=DesignSystem)
 
     @field_validator("rules", mode="after")

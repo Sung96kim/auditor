@@ -268,12 +268,15 @@ async def audit_target(
     profile: str | None = None,
     exclude: tuple[str, ...] = (),
     no_noqa: bool = False,
+    report_only: set[str] | None = None,
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
     ``extends`` for the run (e.g. ``"strict"`` to enable the OOP/composition rules);
     ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``; ``no_noqa``
-    ignores in-file noqa directives (e.g. an un-silenceable security sweep)."""
+    ignores in-file noqa directives (e.g. an un-silenceable security sweep). ``report_only``
+    (paths relative to root) scopes the *returned* results to those files — the whole repo is
+    still scanned so cross-file/repo-global rules stay correct (e.g. a git-diff scan)."""
     root = find_root(target)
     settings = load_config(
         root, profile=profile, allow_local_plugins=allow_local_plugins
@@ -289,9 +292,14 @@ async def audit_target(
         settings = settings.model_copy(update=updates)
 
     async def _run(engine: ScanEngine) -> list[ScanResult]:
-        if target.is_dir():
-            return await engine.scan_path(target)
-        return [await engine.scan_file(target)]
+        results = (
+            await engine.scan_path(target)
+            if target.is_dir()
+            else [await engine.scan_file(target)]
+        )
+        if report_only is not None:
+            results = [r for r in results if r.file in report_only]
+        return results
 
     if incremental and not no_index and target.is_dir():
         async with await IndexStore.connect(root / ".auditor" / "index.db") as index:

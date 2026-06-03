@@ -15,12 +15,23 @@ from rich.console import Console
 from auditor import crossfile as crossfile_pass
 from auditor.aggregate import AuditAggregator
 from auditor.config import load_config
-from auditor.discovery import FileDiscovery, find_root
+from auditor.discovery import (
+    FileDiscovery,
+    default_base_ref,
+    find_root,
+    git_changed_files,
+)
 from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
 from auditor.languages.python.auditor import PythonAuditor
 from auditor.logconfig import configure as configure_logging
-from auditor.models import SEVERITIES_DESC, ManifestEntry, ScanResult, Severity
+from auditor.models import (
+    SEVERITIES_DESC,
+    ManifestEntry,
+    ScanResult,
+    Severity,
+    severity_rank,
+)
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 from auditor.reporters import render
@@ -85,6 +96,35 @@ def _severity_set(values: list[str]) -> set[str]:
             f"unknown severity {sorted(unknown)}; choose from {[s.value for s in SEVERITIES_DESC]}"
         )
     return chosen
+
+
+def _check_severity(value: str) -> Severity:
+    if value.lower() not in {s.value for s in SEVERITIES_DESC}:
+        _fail(
+            f"unknown severity '{value}'; choose from {[s.value for s in SEVERITIES_DESC]}"
+        )
+    return Severity(value.lower())
+
+
+def _gate_tripped(results: list[ScanResult], fail_on: str) -> bool:
+    floor = severity_rank(_check_severity(fail_on))
+    return any(severity_rank(f.severity) >= floor for r in results for f in r.findings)
+
+
+def _filter_display(
+    results: list[ScanResult], severity: list[str] | None, min_severity: str | None
+) -> None:
+    wanted = _severity_set(severity) if severity else None
+    floor = severity_rank(_check_severity(min_severity)) if min_severity else None
+    if wanted is None and floor is None:
+        return
+    for r in results:
+        r.findings = [
+            f
+            for f in r.findings
+            if (wanted is None or f.severity.value in wanted)
+            and (floor is None or severity_rank(f.severity) >= floor)
+        ]
 
 
 _T = TypeVar("_T")
@@ -178,6 +218,39 @@ def scan(
             help="Only show these severities (repeatable): blocking|high|medium|low|suggestion.",
         ),
     ] = None,
+    min_severity: Annotated[
+        str | None,
+        typer.Option(
+            "-m", "--min-severity", help="Only show findings at or above this severity."
+        ),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option(
+            "--since",
+            help="Scope output to files changed vs a git ref (e.g. main). Whole repo is still scanned so cross-file rules stay correct.",
+        ),
+    ] = None,
+    changed: Annotated[
+        bool,
+        typer.Option(
+            "--changed", help="Scope output to working-tree changes (vs HEAD)."
+        ),
+    ] = False,
+    vs_base: Annotated[
+        bool,
+        typer.Option(
+            "--vs-base",
+            help="Scope output to changes vs the configured diff_base branch.",
+        ),
+    ] = False,
+    fail_on: Annotated[
+        str | None,
+        typer.Option(
+            "--fail-on",
+            help="Exit non-zero if any finding is at or above this severity (CI gate).",
+        ),
+    ] = None,
     verbose: Annotated[
         int,
         typer.Option(
@@ -192,6 +265,31 @@ def scan(
     _require_exists(target)
     if verbose:
         configure_logging(verbose)
+
+    ref: str | None = None
+    if vs_base:
+        root = find_root(target)
+        ref = load_config(root).diff_base or default_base_ref(root)
+        if ref is None:
+            _fail(
+                "no base branch found (tried main/master/develop/development); "
+                "set [tool.auditor] diff_base or use --since <ref>"
+            )
+    elif since:
+        ref = since
+    elif changed:
+        ref = "HEAD"
+    report_only: set[str] | None = None
+    if ref is not None:
+        try:
+            report_only = git_changed_files(find_root(target), ref)
+        except ValueError as exc:
+            _fail(str(exc))
+        if report_only is None:
+            _fail("--since / --changed / --vs-base requires a git repository")
+        if not no_index:
+            incremental = True  # whole-repo scan stays fast via the cache
+
     results = _run(
         audit_target(
             target,
@@ -202,14 +300,15 @@ def scan(
             profile=profile,
             exclude=tuple(exclude or ()),
             no_noqa=no_noqa,
+            report_only=report_only,
         ),
         f"auditing {target}…",
         spinner=not verbose,
     )
-    if severity:
-        wanted = _severity_set(severity)
-        for r in results:
-            r.findings = [f for f in r.findings if f.severity.value in wanted]
+
+    gate_tripped = _gate_tripped(results, fail_on) if fail_on else False
+    _filter_display(results, severity, min_severity)
+
     if serve:
         _serve_html(results)
         return
@@ -217,8 +316,10 @@ def scan(
     # parseable output asks for it explicitly with `-f json|md|sarif` (or `-o PATH`).
     if fmt is None and output is None:
         _print_summary(results)
-        return
-    _emit(render(results, fmt or "json"), output)
+    else:
+        _emit(render(results, fmt or "json"), output)
+    if gate_tripped:
+        raise typer.Exit(1)
 
 
 def _serve_html(results: list[ScanResult]) -> None:

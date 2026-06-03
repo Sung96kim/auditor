@@ -104,6 +104,73 @@ def test_scan_severity_invalid(sample_repo):
     assert "unknown severity" in result.output
 
 
+def test_min_severity_filter(sample_repo):
+    payload = _json(
+        runner.invoke(
+            app,
+            ["scan", str(sample_repo / "src"), "--no-index", "-f", "json", "-m", "blocking"],
+        )
+    )
+    findings = [f for fl in payload["files"] for f in fl["findings"]]
+    assert findings and all(f["severity"] == "blocking" for f in findings)
+
+
+def test_fail_on_gates_exit_code(sample_repo):
+    src = str(sample_repo / "src")
+    assert runner.invoke(app, ["scan", src, "--no-index", "--fail-on", "blocking"]).exit_code == 1
+    clean = str(sample_repo / "src" / "clean.py")
+    assert runner.invoke(app, ["scan", clean, "--no-index", "--fail-on", "suggestion"]).exit_code == 0
+
+
+def _git(repo, *args):
+    import subprocess
+
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def test_scan_changed_scopes_output_to_diff(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="strict"\n'
+    )
+    (tmp_path / "a.py").write_text("def f(x):\n    eval(x)\n")
+    (tmp_path / "b.py").write_text("def g(y):\n    return y\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "init")
+    # change only a.py; b.py is untouched
+    (tmp_path / "a.py").write_text("def f(x):\n    eval(x)\n    return x\n")
+
+    result = runner.invoke(app, ["scan", str(tmp_path), "--changed", "-f", "json"])
+    payload = json.loads(result.output)
+    assert [r["file"] for r in payload["files"]] == ["a.py"]  # output scoped to the change
+
+
+def test_since_requires_git_repo(tmp_path):
+    (tmp_path / "m.py").write_text("x = 1\n")
+    result = runner.invoke(app, ["scan", str(tmp_path), "--since", "main"])
+    assert result.exit_code == 1
+    assert "git repository" in result.output
+
+
+def test_vs_base_autodetects_non_main_branch(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "master")  # repo whose base isn't `main`
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="strict"\n'
+    )
+    (tmp_path / "a.py").write_text("def f(x):\n    eval(x)\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "init")
+    (tmp_path / "a.py").write_text("def f(x):\n    eval(x)\n    return x\n")
+
+    result = runner.invoke(app, ["scan", str(tmp_path), "--vs-base", "-f", "json"])
+    payload = json.loads(result.output)
+    assert [r["file"] for r in payload["files"]] == ["a.py"]
+
+
 def test_scan_exclude_glob(sample_repo):
     src = str(sample_repo / "src")
     full = _json(runner.invoke(app, ["scan", src, "--no-index", "-f", "json"]))

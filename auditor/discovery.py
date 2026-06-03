@@ -39,6 +39,60 @@ _DEFAULT_EXCLUDE_GLOBS = (
 )
 
 
+_BASE_CANDIDATES = ("main", "master", "develop", "development")
+
+
+def default_base_ref(root: Path) -> str | None:
+    """The repo's likely base branch — the first of main/master/develop/development that exists
+    (local or ``origin/``). ``None`` if none resolve or ``root`` isn't a git repo."""
+    for name in _BASE_CANDIDATES:
+        for ref in (name, f"origin/{name}"):
+            try:
+                done = subprocess.run(
+                    ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", ref],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except (subprocess.SubprocessError, FileNotFoundError):
+                return None
+            if done.returncode == 0:
+                return ref
+    return None
+
+
+def git_changed_files(root: Path, ref: str) -> set[str] | None:
+    """Paths (relative to ``root``) that differ from ``ref`` (any ref git resolves: ``main``,
+    ``origin/main``, ``HEAD~3``, a tag, a SHA), plus untracked files. Only local git is run
+    (``diff``/``ls-files``) — no network, so it's the same for ssh and https remotes; the ref
+    just has to exist locally. ``None`` if ``root`` isn't a git repo; ``ValueError`` if the ref
+    can't be resolved. Used to *scope the output* of a scan to changed files — each is still
+    audited in full, and the whole repo is still scanned (cheaply, via the cache) so cross-file
+    rules stay correct."""
+
+    def _git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    inside = _git("rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return None  # not a git repo — caller decides how to report
+
+    diff = _git("diff", "--name-only", "--relative", ref)
+    if diff.returncode != 0:
+        raise ValueError(
+            f"git ref {ref!r} could not be resolved — fetch it first "
+            f"(e.g. `git fetch origin {ref}`) or check the name"
+        )
+    untracked = _git("ls-files", "--others", "--exclude-standard")
+    lines = diff.stdout.splitlines() + untracked.stdout.splitlines()
+    return {line for line in lines if line}
+
+
 def find_root(start: Path) -> Path:
     """Walk up from ``start`` for a repo root (.git / pyproject.toml / .auditor)."""
     start = start if start.is_dir() else start.parent

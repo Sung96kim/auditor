@@ -12,7 +12,7 @@ from fastmcp import FastMCP
 
 from auditor.aggregate import AuditAggregator
 from auditor.config import load_config
-from auditor.discovery import FileDiscovery, find_root
+from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.index import IndexStore
 from auditor.models import ManifestEntry
@@ -39,17 +39,24 @@ async def scan(
     profile: str | None = None,
     no_noqa: bool = False,
     severity: list[str] | None = None,
+    since: str | None = None,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_noqa`` ignores
     in-file noqa directives. ``severity`` keeps only findings of those levels
-    (blocking|high|medium|low|suggestion) — fewer tokens when you only want the worst."""
+    (blocking|high|medium|low|suggestion) — fewer tokens when you only want the worst.
+    ``since`` (a git ref like ``main``/``HEAD``) scopes the output to files changed vs that ref
+    — ideal for reviewing a branch/PR — while the whole repo is still scanned so cross-file
+    rules stay correct."""
+    root = find_root(Path(path))
+    report_only = git_changed_files(root, since) if since else None
     results = await audit_target(
         Path(path),
-        incremental=incremental,
+        incremental=incremental or since is not None,
         strict_tests=strict_tests,
         profile=profile,
         no_noqa=no_noqa,
+        report_only=report_only,
     )
     if severity:
         wanted = {s.lower() for s in severity}
