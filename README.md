@@ -8,12 +8,14 @@
 
 
 It does the mechanical, deterministic part of a code audit — parsing, building the
-class/function manifest, running ~48 anti-pattern detectors, hashing for an incremental
-cache — so an agent spends tokens only on the genuine judgment calls. Findings are split
-into `auto` (the tool decided) and `candidate` (evidence only; you judge).
+class/function manifest, running **88 anti-pattern detectors** (Python + TypeScript/React),
+hashing for an incremental cache — so an agent spends tokens only on the genuine judgment
+calls. Findings are split into `auto` (the tool decided) and `candidate` (evidence only;
+you judge).
 
 Think of it as "like an MCP, but also a CLI": run it over `bash` in any harness, or expose
-it as an MCP server. Works on any repo, directory, or single file.
+it as an MCP server. Works on any repo, directory, or single file — and slots into a PR/CI
+loop with `--since main` (audit only what changed) and `--fail-on high` (gate the build).
 
 ## Why
 
@@ -47,15 +49,19 @@ uv sync --extra dev     # + pytest/ruff
 
 ## CLI
 
+By default `scan` prints a **concise human summary** (severity counts + worst files); an
+agent/CI asks for machine output explicitly with `-f` or `-o`.
+
 ```bash
-auditor scan .                       # audit the repo (JSON to stdout)
-auditor scan . -i                    # --incremental: use/update the cache (.auditor/index.db)
-auditor scan . -f sarif              # --format: json | sarif | md | html
+auditor scan .                       # readable summary (severity counts, worst files)
+auditor scan . -f json               # machine output — json | sarif | md | html
 auditor scan . -f html -o audit.html # --output: write the report to a file instead of stdout
 auditor scan . --serve               # render HTML and open it in a browser on a local port
+auditor scan . -i                    # --incremental: use/update the cache (.auditor/index.db)
 auditor scan . -p strict             # --profile: run any repo at strict strength (no config edits)
 auditor scan . -x '**/migrations/**' # --exclude: ad-hoc ignore glob (repeatable), on top of config
 auditor scan tests/ -t               # --strict-tests: audit test code at full production strength
+auditor scan . -vvv                  # -v/-vv/-vvv: log progress to stderr (files / detail / per-finding)
 auditor report path/to/file.py       # single file, stateless (manifest + findings)
 auditor manifest path/to/file.py     # AST manifest only (no detectors)
 auditor discover .                   # list auditable files with their classified role
@@ -64,6 +70,46 @@ auditor rules list --category security --standard bandit
 auditor config show                  # the resolved configuration
 auditor plugins list                 # loaded detectors/languages/reporters + their source
 ```
+
+### Scope the output
+
+```bash
+auditor scan . -s high -s blocking   # --severity: only these levels (repeatable, exact)
+auditor scan . -m high               # --min-severity: this level and worse
+```
+
+### PR / CI loop
+
+`--since`/`--changed`/`--vs-base` **scope the reported findings to the files you changed** —
+but the whole repo is still scanned (cheaply, through the cache) so cross-file/repo-global
+rules stay correct, and each changed file is audited **in full** (never just the diff hunks).
+
+```bash
+auditor scan --changed                       # files changed in your working tree (vs HEAD)
+auditor scan --since main -f json            # files changed vs a ref (branch/origin-branch/SHA/tag)
+auditor scan --vs-base                       # vs your base branch (auto-detects main/master/develop)
+auditor scan --since main --fail-on high     # CI gate: exit non-zero if any finding is high+
+```
+
+`--fail-on <severity>` makes `scan` exit non-zero when any finding is at or above that level
+— the gate is independent of any display filter. Only local git is run (`diff`/`ls-files`),
+so it's identical for ssh and https remotes; an unfetched ref gives a clean "fetch it first"
+error. `--vs-base` auto-detects the base branch (first of `main`/`master`/`develop`/
+`development`, local or `origin/`); pin it with `[tool.auditor] diff_base = "origin/main"`.
+
+### noqa suppression
+
+Flake8-compatible, honored only in real comments (string/docstring text is ignored):
+
+```python
+risky()            # noqa                       — suppress every finding on this line
+risky()            # noqa: PY-SEC-DANGEROUS-EVAL — suppress just that rule
+# auditor: noqa                                  — suppress the whole file
+# auditor: noqa: PY-SEC-HARDCODED-SECRET         — suppress one rule file-wide
+```
+
+`scan --no-noqa` ignores all directives (an un-silenceable sweep). Suppressed counts are
+surfaced, never silent.
 
 ## Standards & configuration
 
@@ -75,14 +121,21 @@ standalone `.auditor/config.toml` (standalone wins on conflict).
 [tool.auditor]
 extends = "strict"                 # base | strict | pydantic | all-strict | a path
 exclude = ["migrations/**"]
+diff_base = "origin/main"          # what `scan --vs-base` diffs against
 
 [tool.auditor.rules]
 PY-TYPING-MISSING-HINTS = { severity = "high" }
 PY-OOP-CONSTRUCTOR-WALL = { enabled = true, threshold = { wall_kwarg_min = 10 } }
+PY-OOP-DUPLICATE-BLOCK  = { threshold = { dup_block_min_statements = 2 } }  # tune any floor
 
 [tool.auditor.categories]
 security = { min_severity = "high" }
 ```
+
+Every threshold-driven rule's floor is config-tunable (`wall_kwarg_min`, `max_complexity`,
+`max_params`, `dup_block_min_statements`, `repeated_jsx_min`, …). Because the cache keys each
+rule by `(content + that rule's resolved config)`, changing one threshold re-runs only that
+rule on the next scan.
 
 - **Profiles**: `base` (industry floor: security/correctness/async/typing/config + cross-file
   dedup on; opinionated OOP/composition off), `strict` (adds OOP/composition + complexity),
@@ -97,10 +150,12 @@ security = { min_severity = "high" }
 
 ## Detectors
 
-~48 Python rules across `security` (Bandit/OWASP-mapped), `correctness`, `typing`, `async`,
-`config`, `oop-composition`, and `style`, plus cross-file duplicate-model/function dedup.
-Each carries a stable `rule_id`, a category, a default severity, and (for security)
-`standard_refs` like `bandit:B602` / `owasp:A03`. `auditor rules list` enumerates them.
+**57 Python rules** across `security` (Bandit/OWASP-mapped), `correctness`, `typing`, `async`,
+`config`, `oop-composition`, and `style` — including DRY/composition rules (cross-file
+duplicate model/function, within-file duplicate blocks, parallel siblings, field-by-field
+copying) and a `suggestion` tier of low-stakes nudges below the severity ladder. Each carries
+a stable `rule_id`, a category, a default severity, and (for security) `standard_refs` like
+`bandit:B602` / `owasp:A03`. `auditor rules list` enumerates them.
 
 **TypeScript / React** (`.ts/.tsx/.js/.jsx`, via the `ts` extra — tree-sitter): objective,
 **framework-agnostic** rules only —
@@ -140,7 +195,9 @@ auditor-mcp                       # stdio server (requires the `mcp` extra)
 python -m auditor.mcp_server
 ```
 
-Tools: `scan`, `report`, `manifest`, `discover`, `aggregate`, `rules_list`.
+Tools: `scan`, `report`, `manifest`, `discover`, `aggregate`, `rules_list`. The MCP `scan`
+takes `severity` and `since` (audit only a branch's changes), so an agent reviewing a PR pulls
+back just the changed files' findings — fewer tokens, same cross-file correctness.
 
 ## Programmatic API
 
@@ -162,9 +219,9 @@ TARGET=/path/to/repo docker compose run --rm auditor scan . --format sarif
 ## Development
 
 ```bash
-uv run pytest            # 170 tests
+uv run pytest            # 370 tests
 uv run pytest --cov=auditor
-uv run ruff check auditor tests
+uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```
 
 The package is held to its own standard: registries and analyzers are classes, config is
