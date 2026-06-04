@@ -4,6 +4,7 @@ import ast
 from collections.abc import Iterator
 from typing import ClassVar
 
+from auditor import ast_util
 from auditor.languages.base import AuditContext, Detector
 from auditor.models import Category, Finding, Severity
 
@@ -45,7 +46,7 @@ class MissingHints(Detector):
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         # method first-arg (self/cls) is exempt; detect by being inside a class.
-        method_lines = _method_line_set(ctx.tree)
+        method_lines = ast_util.method_line_set(ctx.tree)
         for fn in _functions(ctx.tree):
             is_method = fn.lineno in method_lines
             missing = self._missing(fn, is_method=is_method)
@@ -78,16 +79,6 @@ class MissingHints(Detector):
         if fn.returns is None and fn.name not in ("__init__", "__post_init__"):
             problems.append("-> return")
         return problems
-
-
-def _method_line_set(tree: ast.AST) -> set[int]:
-    lines: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for sub in node.body:
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    lines.add(sub.lineno)
-    return lines
 
 
 class UntypedDict(Detector):

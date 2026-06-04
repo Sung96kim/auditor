@@ -3,14 +3,14 @@
 from typing import ClassVar
 
 from auditor.models import ScanResult, Severity, severity_rank
-from auditor.reporters.base import Reporter
+from auditor.reporters.base import Reporter, severity_totals
 
 
 class MarkdownReporter(Reporter):
     format: ClassVar[str] = "md"
 
     def render(self, results: list[ScanResult]) -> str:
-        totals = _totals(results)
+        totals = severity_totals(results)
         lines = ["# Audit report", ""]
         lines.append(_totals_line(totals))
         suppressed = sum(r.suppressed for r in results)
@@ -44,14 +44,6 @@ class MarkdownReporter(Reporter):
                 )
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
-
-
-def _totals(results: list[ScanResult]) -> dict[Severity, int]:
-    out = {s: 0 for s in Severity}
-    for r in results:
-        for sev, n in r.counts.items():
-            out[sev] += n
-    return out
 
 
 def _totals_line(totals: dict[Severity, int]) -> str:

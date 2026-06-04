@@ -6,6 +6,7 @@ the same way. Kept dependency-light so the config layer can validate rule-ids/ca
 against it without an import cycle.
 """
 
+from fnmatch import fnmatch
 from typing import Any
 
 from auditor.models import Category, RuleId
@@ -74,8 +75,14 @@ class Registry:
         return dict(self._languages)
 
     def language_for_path(self, path: str) -> type | None:
+        # filename match (e.g. ``package.json``) wins over a suffix match across all languages,
+        # so a manifest isn't shadowed by a generic ``.json``/``.toml`` handler.
+        name = path.rsplit("/", 1)[-1]
         for cls in self._languages.values():
-            if path.endswith(tuple(cls.extensions)):
+            if any(fnmatch(name, pat) for pat in getattr(cls, "filenames", ())):
+                return cls
+        for cls in self._languages.values():
+            if cls.extensions and path.endswith(tuple(cls.extensions)):
                 return cls
         return None
 

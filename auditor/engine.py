@@ -220,7 +220,10 @@ class ScanEngine:
             await index.record_rule(rel, rid, enabled[rid], by_rule.get(rid, []), now)
 
         await index.clear_shapes(rel)
-        rows = auditor.shapes(source)
+        rows = auditor.shapes(
+            source,
+            method_min_statements=self.settings.threshold.dry.xfile_method_min_statements,
+        )
         if rows:
             await index.add_shapes(
                 [(s.shape_hash, s.kind, rel, s.symbol, s.line) for s in rows]

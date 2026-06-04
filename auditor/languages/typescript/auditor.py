@@ -7,13 +7,12 @@ from typing import TYPE_CHECKING, ClassVar
 
 from auditor.languages.base import LanguageAuditor, ShapeRow
 from auditor.languages.typescript import detectors as _detectors  # noqa: F401
-from auditor.languages.typescript.base import TsAuditContext, TsDetector
+from auditor.languages.typescript.base import TsAuditContext
 from auditor.languages.typescript.manifest import build_manifest
 from auditor.languages.typescript.nodes import Tsx
 from auditor.languages.typescript.parser import TsParser
 from auditor.languages.typescript.shapes import ShapeExtractor
-from auditor.models import FileRole, Finding, ScanResult, SkippedRule
-from auditor.registry import REGISTRY
+from auditor.models import FileRole, ScanResult
 
 if TYPE_CHECKING:
     from auditor.config import ResolvedConfig
@@ -53,34 +52,7 @@ class TypeScriptAuditor(LanguageAuditor):
         )
         manifest = build_manifest(root)
 
-        detector_classes = REGISTRY.detectors_for_language("typescript")
-        if rule_ids is not None:
-            wanted = set(rule_ids)
-            detector_classes = [d for d in detector_classes if d.rule_id in wanted]
-
-        findings: list[Finding] = []
-        skipped: list[SkippedRule] = []
-        for cls in detector_classes:
-            eff = config.effective(cls.rule_id)
-            if not eff.enabled:
-                skipped.append(
-                    SkippedRule(
-                        rule_id=cls.rule_id, reason=eff.skipped_reason or "disabled"
-                    )
-                )
-                continue
-            detector: TsDetector = cls()
-            for f in detector.run(ctx):
-                findings.append(
-                    f.model_copy(
-                        update={
-                            "severity": eff.severity,
-                            "verdict_kind": eff.verdict_kind,
-                        }
-                    )
-                )
-
-        findings.sort(key=lambda f: (f.line, f.rule_id))
+        findings, skipped = self._collect(ctx, config, rule_ids)
         return ScanResult(
             file=file_path,
             language="typescript",
@@ -90,6 +62,7 @@ class TypeScriptAuditor(LanguageAuditor):
             skipped_rules=skipped,
         )
 
-    def shapes(self, source: str) -> list[ShapeRow]:
+    def shapes(self, source: str, *, method_min_statements: int = 3) -> list[ShapeRow]:
+        # TS has its own shape extractor; the method-statement knob is Python-only
         tree = TsParser.parse(source, path="component.tsx")
         return ShapeExtractor(Tsx(tree.root_node)).shapes()

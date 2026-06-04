@@ -55,3 +55,14 @@ def test_generated_typescript_is_excluded(tmp_path):
     (src / "types.d.ts").write_text("declare const x: number;\n")
     found = {p.name for p in FileDiscovery(tmp_path).files(src)}
     assert found == {"App.tsx"}  # generated/declaration files dropped
+
+
+def test_manifest_discovered_by_filename_not_generic_json(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "package.json").write_text('{"name": "x"}\n')  # a manifest — by filename
+    (app / "tsconfig.json").write_text("{}\n")  # a generic .json — not audited
+    (app / "index.py").write_text("x = 1\n")
+    found = {p.name for p in FileDiscovery(tmp_path).files(app)}
+    assert found == {"package.json", "index.py"}

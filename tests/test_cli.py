@@ -48,6 +48,42 @@ def test_scan_sarif(sample_repo):
     assert sarif["version"] == "2.1.0"
 
 
+def test_baseline_hides_preexisting_findings(sample_repo, tmp_path):
+    src = str(sample_repo / "src")
+    bl = tmp_path / "baseline.json"
+    write = runner.invoke(app, ["scan", src, "--write-baseline", str(bl)])
+    assert write.exit_code == 0, write.output
+    assert bl.exists()
+
+    # re-scan against the baseline: every prior finding is hidden
+    payload = _json(
+        runner.invoke(app, ["scan", src, "--baseline", str(bl), "--format", "json"])
+    )
+    assert payload["totals"]["blocking"] == 0
+    assert sum(len(f["findings"]) for f in payload["files"]) == 0
+
+
+def test_baseline_makes_ci_gate_pass(sample_repo, tmp_path):
+    src = str(sample_repo / "src")
+    bl = tmp_path / "baseline.json"
+    runner.invoke(app, ["scan", src, "--write-baseline", str(bl)])
+    # the gate trips on the pre-existing findings, but passes once they're baselined
+    assert runner.invoke(app, ["scan", src, "--fail-on", "blocking"]).exit_code == 1
+    passed = runner.invoke(
+        app, ["scan", src, "--baseline", str(bl), "--fail-on", "blocking"]
+    )
+    assert passed.exit_code == 0, passed.output
+
+
+def test_missing_baseline_file_errors(sample_repo, tmp_path):
+    result = runner.invoke(
+        app,
+        ["scan", str(sample_repo / "src"), "--baseline", str(tmp_path / "nope.json")],
+    )
+    assert result.exit_code == 1
+    assert "baseline file not found" in result.output
+
+
 def test_report_md(sample_repo):
     result = runner.invoke(
         app, ["report", str(sample_repo / "src" / "web.py"), "--format", "md"]

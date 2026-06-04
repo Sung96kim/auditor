@@ -23,6 +23,12 @@ def dotted(node: ast.AST) -> str:
         return ""
 
 
+def base_name(node: ast.AST) -> str:
+    """The final segment of a dotted name — a class base, callee, or decorator: ``a.b.c`` -> ``c``,
+    ``f`` -> ``f``. Receiver-blind, for matching a node against a set of bare names."""
+    return dotted(node).rsplit(".", 1)[-1]
+
+
 def decorator_names(node: ast.ClassDef | _FuncDef) -> tuple[str, ...]:
     return tuple(
         dotted(d.func if isinstance(d, ast.Call) else d) for d in node.decorator_list
@@ -32,6 +38,17 @@ def decorator_names(node: ast.ClassDef | _FuncDef) -> tuple[str, ...]:
 def class_field_count(cls: ast.ClassDef) -> int:
     """Annotated class-level attributes — a proxy for Pydantic/dataclass field count."""
     return sum(1 for stmt in cls.body if isinstance(stmt, ast.AnnAssign))
+
+
+def method_line_set(tree: ast.AST) -> set[int]:
+    """Line numbers of every method — a function defined directly in a class body."""
+    return {
+        sub.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        for sub in node.body
+        if isinstance(sub, _FuncDef)
+    }
 
 
 def function_flags(fn: _FuncDef, *, is_method: bool) -> tuple[str, ...]:
@@ -55,15 +72,14 @@ def function_flags(fn: _FuncDef, *, is_method: bool) -> tuple[str, ...]:
 
 def class_flags(cls: ast.ClassDef) -> tuple[str, ...]:
     flags: list[str] = []
-    base_names = {dotted(b).split(".")[-1] for b in cls.bases}
+    base_names = {base_name(b) for b in cls.bases}
     if base_names & _PYDANTIC_BASES:
         flags.append("BASEMODEL")
     if "dataclass" in {d.split(".")[-1] for d in decorator_names(cls)}:
         flags.append("DATACLASS")
     methods = [s for s in cls.body if isinstance(s, _FuncDef)]
     if methods and all(
-        any(dotted(d).split(".")[-1] == "staticmethod" for d in m.decorator_list)
-        for m in methods
+        any(base_name(d) == "staticmethod" for d in m.decorator_list) for m in methods
     ):
         flags.append("ALL_STATICMETHODS")
     return tuple(flags)

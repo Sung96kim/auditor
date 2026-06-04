@@ -7,10 +7,10 @@
 <p align="center"><em>A token-efficient repo auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
 It does the mechanical, deterministic part of a code audit — parsing, building the
-class/function manifest, running **109 anti-pattern detectors** (Python, TypeScript/React, Bash),
-hashing for an incremental cache — so an agent spends tokens only on the genuine judgment
-calls. Findings are split into `auto` (the tool decided) and `candidate` (evidence only;
-you judge).
+class/function manifest, running **123 anti-pattern detectors** across Python, TypeScript/React,
+shell, and package manifests, hashing for an incremental cache — so an agent spends tokens only
+on the genuine judgment calls. Findings are split into `auto` (the tool decided) and `candidate`
+(evidence only; you judge).
 
 Think of it as "like an MCP, but also a CLI": run it over `bash` in any harness, or expose
 it as an MCP server. Works on any repo, directory, or single file — and slots into a PR/CI
@@ -96,6 +96,21 @@ so it's identical for ssh and https remotes; an unfetched ref gives a clean "fet
 error. `--vs-base` auto-detects the base branch (first of `main`/`master`/`develop`/
 `development`, local or `origin/`); pin it with `[tool.auditor] diff_base = "origin/main"`.
 
+### Baseline (adopt on a legacy repo)
+
+Accept today's findings, then gate only on what you *add* — so a large existing repo can turn
+the auditor on without drowning in pre-existing findings.
+
+```bash
+auditor scan . --write-baseline .auditor/baseline.json   # snapshot current findings, then exit
+auditor scan . --baseline .auditor/baseline.json         # report only NEW findings
+auditor scan . --baseline .auditor/baseline.json --fail-on high   # CI gate fires only on new high+
+```
+
+Each finding is fingerprinted by `(file, rule, hash(offending text))` — **line-independent**, so a
+finding survives edits elsewhere in the file, but genuinely new code is still reported. Filtering
+runs before `--fail-on`, so the gate trips only on findings absent from the baseline.
+
 ### noqa suppression
 
 Flake8-compatible, honored only in real comments (string/docstring text is ignored):
@@ -137,8 +152,9 @@ self-documenting `Field` with a `ge=1` validation): `threshold.oop.wall_kwarg_mi
 `threshold.jsx.repeated_jsx_min`, … Because the cache keys each rule by `(content + that rule's
 resolved config)`, changing one threshold re-runs only that rule on the next scan.
 
-- **Profiles**: `base` (industry floor: security/**malware**/correctness/async/typing/config +
-  cross-file dedup on; opinionated OOP/composition off), `strict` (adds OOP/composition + complexity),
+- **Profiles**: `base` (industry floor: security/**malware**/secrets/supply-chain/correctness/
+  async/typing/config + cross-file dedup on; opinionated OOP/composition off), `strict` (adds
+  OOP/composition + complexity),
   `pydantic`, `all-strict` (audits every role — tests included — at production strength).
 - **Roles**: every file is classified `production | test | test_support | script | generated`
   from path + content. Test code is audited under a **relaxed** policy (assert-for-auth,
@@ -150,22 +166,39 @@ resolved config)`, changing one threshold re-runs only that rule on the next sca
 
 ## Detectors
 
-**64 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `correctness`, `typing`,
-`async`, `config`, `oop-composition`, and `style` — including DRY/composition rules (cross-file
-duplicate model/function, within-file duplicate blocks, parallel siblings, field-by-field
-copying) and a `suggestion` tier of low-stakes nudges below the severity ladder. Each carries
-a stable `rule_id`, a category, a default severity, and (for security) `standard_refs` like
-`bandit:B602` / `owasp:A03`. `auditor rules list` enumerates them.
+**70 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `secrets`,
+`supply-chain`, `correctness`, `typing`, `async`, `config`, `oop-composition`, and `style` —
+including DRY/composition rules (cross-file duplicate model/function, within-file duplicate
+blocks, parallel siblings, field-by-field copying) and a `suggestion` tier of low-stakes nudges
+below the severity ladder. Each carries a stable `rule_id`, a category, a default severity, and
+(for security) `standard_refs` like `bandit:B602` / `owasp:A03`. `auditor rules list` enumerates
+them.
 
-**Malware / supply-chain** (`malware`, on by default in `base` — for vetting dependencies,
-PR diffs, and untrusted repos): detects the patterns that turn a benign primitive into an
-attack, keyed on the *combination* so real decode/fetch/path use stays quiet —
-obfuscated exec (`eval`/`exec` of a base64/hex-decoded blob), remote exec (running a fetched
-response body), reverse shells (socket→`dup2`, `/dev/tcp`, `nc -e`), `curl … | sh`,
-crypto-miners (stratum/known miners), credential-path access/exfil, and packed base64/hex
-blobs. Available for **Python, TypeScript, and Bash**; AST/tree-sitter based for Python and
-TS, so a minified one-liner payload is caught the same as formatted code. Mostly `blocking`;
-the path/blob/destructive heuristics are `candidate`s you judge.
+**Malware** (`malware`, 30 rules across Python, TypeScript, and Bash — on by default in `base`,
+for vetting dependencies, PR diffs, and untrusted repos): the patterns that turn a benign
+primitive into an attack, keyed on the *combination* so real decode/fetch/path use stays quiet —
+obfuscated exec (`eval`/`exec` of a base64/hex/zlib-decoded blob), remote exec (running a fetched
+response body), reverse shells (socket→`dup2`, `/dev/tcp`, `nc -e`, `socat exec:`), download-and-run
+(`curl … | sh`), in-memory shellcode loaders (executable-memory alloc **and** cast-to-function),
+`pickle`/`__reduce__` RCE gadgets, dynamic imports/`require` of a *decoded* name, computed
+`child_process` commands, crypto-miners (stratum / known miners), credential-path access, and
+exfil to anonymous webhook/paste/tunnel endpoints (common C2 sinks). AST/tree-sitter based for
+Python and TS, so a minified one-liner payload is caught the same as formatted code. Mostly
+`blocking`; the path/blob/destructive heuristics are `candidate`s you judge.
+
+**Secrets** (`secrets`, on by default): a committed-credential sweep for Python, TS, and shell
+(`PY-`/`TS-`/`SH-SECRET-DETECTED`) — high-confidence, format-validated provider patterns (AWS,
+GitHub, Stripe, Slack, OpenAI, Google, JWTs, database URIs, PEM private keys, and many
+newer-wave providers). Tuned against a 700+-file real-repo corpus for a near-zero false-positive
+rate; benign lookalikes (UUIDs, hashes, example URLs) are excluded.
+
+**Supply-chain** (`supply-chain`, on by default): the install-time *code-execution* vectors —
+npm lifecycle hooks (`preinstall`/`install`/`postinstall` in `package.json`, which auto-run on
+`npm install`) via `MF-SUPPLY-INSTALL-HOOK`, and `setup.py` running process/network/eval at
+module scope (executes on every `pip install`) via `PY-SUPPLY-SETUP-EXEC`. Manifests are
+dispatched by filename, not suffix. Dependency-graph scanning (typosquat, version pinning,
+transitive CVEs) is deliberately left to dedicated tools with live databases (Dependabot,
+OSV-Scanner) — the auditor stays offline and deterministic.
 
 **TypeScript / React** (`.ts/.tsx/.js/.jsx`, via the `ts` extra — tree-sitter): objective,
 **framework-agnostic** rules only —
@@ -191,13 +224,15 @@ The auditor deliberately does **not** encode a design system: it never says "thi
 the agent + design-system skill's judgment layer. The auditor surfaces the structural fact
 (duplication, extractable unit, accessibility violation); you map it to your code.
 
-**Bash / shell** (`.sh/.bash`, no extra needed — line/regex based): the `malware` category
-for install scripts and backdoors — `curl … | sh`, reverse shells (`/dev/tcp`, `nc -e`,
-`mkfifo|nc`, `socat exec:`), fork bombs, decode-and-run (`base64 -d | sh`), disk-destroyers
-(`rm -rf /`, `mkfs`, `dd of=/dev/…`), and credential exfil (a secret path piped to an
-outbound command). `search`-based, so an embedded pattern in a packed one-liner is still
-caught; full-line `#` comments are skipped so documentation describing an attack doesn't
-self-flag.
+**Bash / shell** (`.sh/.bash`, no extra needed — line/regex based): the `malware` + `secrets`
+categories for install scripts and backdoors — `curl … | sh`, reverse shells (`/dev/tcp`,
+`nc -e`, `mkfifo|nc`, `socat exec:`), fork bombs, decode-and-run (`base64 -d | sh`),
+disk-destroyers (`rm -rf /`, `mkfs`, `dd of=/dev/…`), persistence implants (`authorized_keys`,
+cron, shell-rc files), anti-forensics (history wipe, `setenforce 0`, `iptables -F`, log
+truncation), credential exfil (a secret path piped to an outbound command), and exfil to
+anonymous webhook/paste/tunnel sinks. `search`-based, so an embedded pattern in a packed
+one-liner is still caught; full-line `#` comments are skipped so documentation describing an
+attack doesn't self-flag.
 
 ## Plugins
 
@@ -237,7 +272,7 @@ TARGET=/path/to/repo docker compose run --rm auditor scan . --format sarif
 ## Development
 
 ```bash
-uv run pytest            # 370 tests
+uv run pytest            # 560 tests
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```

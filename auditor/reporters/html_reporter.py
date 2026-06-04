@@ -11,7 +11,7 @@ import html
 from typing import ClassVar
 
 from auditor.models import SEVERITIES_DESC, Finding, ScanResult, Severity, severity_rank
-from auditor.reporters.base import Reporter
+from auditor.reporters.base import Reporter, severity_totals
 
 _SEVERITY_HUE: dict[Severity, str] = {
     Severity.BLOCKING: "#b3123b",
@@ -68,7 +68,9 @@ class HtmlReporter(Reporter):
         flagged = sorted(
             (r for r in results if r.findings), key=lambda r: r.severity_key
         )
-        header = _header(_totals(results), scanned=len(results), flagged=len(flagged))
+        header = _header(
+            severity_totals(results), scanned=len(results), flagged=len(flagged)
+        )
         if not flagged:
             body = f'{header}<p class="clean">No findings. ✅</p>'
         else:
@@ -168,14 +170,6 @@ def _worst_severity(r: ScanResult) -> Severity:
 
 def _anchor(file: str) -> str:
     return "f-" + "".join(ch if ch.isalnum() else "-" for ch in file)
-
-
-def _totals(results: list[ScanResult]) -> dict[Severity, int]:
-    out = {s: 0 for s in Severity}
-    for r in results:
-        for sev, n in r.counts.items():
-            out[sev] += n
-    return out
 
 
 _STYLE = """

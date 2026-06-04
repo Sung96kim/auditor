@@ -187,7 +187,14 @@ class SequentialAwaits(Detector):
         for loop in ast.walk(ctx.tree):
             if not isinstance(loop, (ast.For, ast.AsyncFor)):
                 continue
-            awaits = [n for n in ast.walk(loop) if isinstance(n, ast.Await)]
+            # only awaits in the loop *body* run per-iteration; an await in the iterable
+            # (`for x in (await f()).values():`) is evaluated once — not a gather opportunity
+            awaits = [
+                n
+                for stmt in (*loop.body, *loop.orelse)
+                for n in ast.walk(stmt)
+                if isinstance(n, ast.Await)
+            ]
             if awaits:
                 out.append(
                     self.make_finding(

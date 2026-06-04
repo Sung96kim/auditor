@@ -94,6 +94,11 @@ class DryThreshold(BaseModel):
         ge=1,
         description="near-twins sharing a skeleton before flagging (2 = any pair)",
     )
+    xfile_method_min_statements: int = Field(
+        3,
+        ge=1,
+        description="statements in a method before it's indexed for cross-file dedup",
+    )
 
 
 class JsxThreshold(BaseModel):

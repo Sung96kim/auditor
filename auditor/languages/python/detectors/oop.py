@@ -10,6 +10,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from typing import ClassVar
 
+from auditor import ast_util
 from auditor.languages.base import AuditContext, Detector, ParallelSiblingMixin
 from auditor.languages.python.detectors._util import dotted_name
 from auditor.models import Category, Finding, Severity, VerdictKind
@@ -38,16 +39,6 @@ def _functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             yield node
-
-
-def _method_lines(tree: ast.AST) -> set[int]:
-    out: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for sub in node.body:
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    out.add(sub.lineno)
-    return out
 
 
 class DataclassInPydantic(Detector):
@@ -336,7 +327,7 @@ class LongParamList(_OopCandidate):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         threshold = ctx.config.effective(self.rule_id).threshold.size.max_params
-        method_lines = _method_lines(ctx.tree)
+        method_lines = ast_util.method_line_set(ctx.tree)
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
             a = fn.args

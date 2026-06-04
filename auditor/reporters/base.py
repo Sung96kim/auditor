@@ -6,7 +6,7 @@ Plugins add formats by subclassing ``Reporter`` (auto-registered via ``__init_su
 from abc import ABC, abstractmethod
 from typing import ClassVar
 
-from auditor.models import ScanResult
+from auditor.models import ScanResult, Severity
 from auditor.registry import REGISTRY
 
 
@@ -36,3 +36,12 @@ def render(results: list[ScanResult], fmt: str) -> str:
         available = sorted(REGISTRY.formats())
         raise ValueError(f"unknown format {fmt!r}; available: {available}")
     return cls().render(results)
+
+
+def severity_totals(results: list[ScanResult]) -> dict[Severity, int]:
+    """Per-severity finding counts summed across all results."""
+    out = {s: 0 for s in Severity}
+    for result in results:
+        for severity, count in result.counts.items():
+            out[severity] += count
+    return out

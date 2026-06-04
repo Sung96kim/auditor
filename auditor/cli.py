@@ -14,6 +14,7 @@ from rich.console import Console
 
 from auditor import crossfile as crossfile_pass
 from auditor.aggregate import AuditAggregator
+from auditor.baseline import Baseline
 from auditor.config import load_config
 from auditor.discovery import (
     FileDiscovery,
@@ -276,6 +277,20 @@ def scan(
             help="Exit non-zero if any finding is at or above this severity (CI gate).",
         ),
     ] = None,
+    baseline: Annotated[
+        Path | None,
+        typer.Option(
+            "--baseline",
+            help="Hide findings recorded in this baseline file; report (and gate on) only new ones.",
+        ),
+    ] = None,
+    write_baseline: Annotated[
+        Path | None,
+        typer.Option(
+            "--write-baseline",
+            help="Write the current findings to a baseline file and exit (snapshot for adoption).",
+        ),
+    ] = None,
     verbose: Annotated[
         int,
         typer.Option(
@@ -311,6 +326,23 @@ def scan(
         spinner=not verbose,
     )
 
+    if write_baseline is not None:
+        recorded = Baseline.from_results(results).write(write_baseline)
+        _status.print(
+            f"[bold]Wrote baseline[/bold] {write_baseline} — {recorded} finding(s) recorded"
+        )
+        return
+
+    hidden = 0
+    if baseline is not None:
+        if not baseline.exists():
+            _fail(
+                f"baseline file not found: {baseline} "
+                f"(create it first with `scan --write-baseline {baseline}`)"
+            )
+        hidden = Baseline.load(baseline).filter(results)
+
+    # baseline filtering runs before the gate, so a CI gate fails only on NEW findings
     gate_tripped = _gate_tripped(results, fail_on) if fail_on else False
     _filter_display(results, severity, min_severity)
 
@@ -321,6 +353,11 @@ def scan(
     # parseable output asks for it explicitly with `-f json|md|sarif` (or `-o PATH`).
     if fmt is None and output is None:
         _print_summary(results)
+        if hidden:
+            # human-only note; machine formats keep stdout pure (no baseline chatter)
+            _status.print(
+                f"[dim]{hidden} pre-existing finding(s) hidden by baseline[/dim]"
+            )
     else:
         _emit(render(results, fmt or "json"), output)
     if gate_tripped:

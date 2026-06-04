@@ -86,6 +86,16 @@ class IfFalseImport(Detector):
 
 
 _FILE_REF = re.compile(r"\b([\w/]+\.py)\b")
+# ubiquitous filenames named conceptually in prose ("the Python analog of an npm postinstall in
+# setup.py", "like a conftest.py fixture") — not a claim that the file is repo-local, so don't
+# flag them as stale even when absent from this repo.
+_WELL_KNOWN_FILES = {
+    "setup.py",
+    "conftest.py",
+    "__init__.py",
+    "__main__.py",
+    "manage.py",
+}
 
 
 class StaleComment(Detector):
@@ -106,6 +116,8 @@ class StaleComment(Detector):
             comment = line[line.index("#") :]
             for m in _FILE_REF.finditer(comment):
                 ref = m.group(1)
+                if Path(ref).name in _WELL_KNOWN_FILES:
+                    continue  # a conceptual reference, not a repo-local-path claim
                 if not _exists_anywhere(root, ref):
                     out.append(
                         self.make_finding(

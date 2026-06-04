@@ -10,6 +10,7 @@ from auditor.languages.python.detectors import (
     security,
     style,
     suggestions,
+    supply_chain,
     typing_rules,
     xfile,
 )

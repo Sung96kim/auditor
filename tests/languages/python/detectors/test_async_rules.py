@@ -35,3 +35,14 @@ def test_async_generator_not_flagged_no_await_body():
 def test_async_no_await_still_flags_plain_coroutine():
     src = "async def compute(x):\n    return x + 1\n"
     assert "PY-ASYNC-NO-AWAIT-BODY" in rule_ids(run_audit(src))
+
+
+def test_sequential_awaits_ignores_await_in_the_iterable():
+    # the await is in the for-iterable (evaluated once), not the body — not a gather opportunity
+    good = (
+        "async def f():\n    for row in (await fetch()).rows:\n        process(row)\n"
+    )
+    assert "PY-ASYNC-SEQUENTIAL-AWAITS" not in rule_ids(run_audit(good))
+    # a real per-iteration await in the body still flags
+    bad = "async def f(xs):\n    for x in xs:\n        await g(x)\n"
+    assert "PY-ASYNC-SEQUENTIAL-AWAITS" in rule_ids(run_audit(bad))

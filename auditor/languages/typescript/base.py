@@ -7,7 +7,7 @@ instead of a Python ``ast`` tree.
 
 from typing import TYPE_CHECKING, ClassVar
 
-from auditor.languages.base import Detector
+from auditor.languages.base import Detector, LineIndexed
 from auditor.languages.typescript.nodes import Tsx
 from auditor.models import FileRole
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from auditor.config import ResolvedConfig
 
 
-class TsAuditContext:
+class TsAuditContext(LineIndexed):
     """Everything a TS detector needs for one file, computed once per scan."""
 
     __slots__ = ("file_path", "source", "lines", "root", "role", "config")
@@ -35,12 +35,6 @@ class TsAuditContext:
         self.root = root
         self.role = role
         self.config = config
-
-    def line_text(self, lineno: int) -> str:
-        """1-indexed source line, stripped — used as ``Finding.evidence``."""
-        if 1 <= lineno <= len(self.lines):
-            return self.lines[lineno - 1].strip()
-        return ""
 
 
 class TsDetector(Detector):

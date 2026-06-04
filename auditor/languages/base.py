@@ -19,6 +19,7 @@ from auditor.models import (
     RuleId,
     ScanResult,
     Severity,
+    SkippedRule,
     VerdictKind,
 )
 from auditor.registry import REGISTRY
@@ -27,7 +28,21 @@ if TYPE_CHECKING:
     from auditor.config import ResolvedConfig
 
 
-class AuditContext:
+class LineIndexed:
+    """Mixin for a per-file context backed by source ``lines`` (which the concrete context owns in
+    its ``__slots__``): 1-indexed line access, used everywhere for ``Finding.evidence``."""
+
+    __slots__ = ()
+    lines: list[str]
+
+    def line_text(self, lineno: int) -> str:
+        """1-indexed source line, stripped — used as ``Finding.evidence``."""
+        if 1 <= lineno <= len(self.lines):
+            return self.lines[lineno - 1].strip()
+        return ""
+
+
+class AuditContext(LineIndexed):
     """Everything a detector needs for one file, computed once per scan.
 
     Not a Pydantic model: it carries an ``ast`` tree and the resolved config object,
@@ -70,12 +85,6 @@ class AuditContext:
         self.project_deps = project_deps
         self.sibling_modules = sibling_modules
         self.defines_basesettings = defines_basesettings
-
-    def line_text(self, lineno: int) -> str:
-        """1-indexed source line, stripped — used as ``Finding.evidence``."""
-        if 1 <= lineno <= len(self.lines):
-            return self.lines[lineno - 1].strip()
-        return ""
 
 
 class Detector(ABC):
@@ -224,6 +233,9 @@ class LanguageAuditor(ABC):
 
     language: ClassVar[str]
     extensions: ClassVar[tuple[str, ...]]
+    #: filenames (fnmatch patterns) this auditor claims regardless of suffix — for manifests
+    #: like ``package.json`` that are identified by name, not extension. Matched before suffix.
+    filenames: ClassVar[tuple[str, ...]] = ()
     abstract: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: object) -> None:
@@ -241,6 +253,44 @@ class LanguageAuditor(ABC):
         """Return a ScanResult for one file."""
         raise NotImplementedError
 
-    def shapes(self, source: str) -> list[ShapeRow]:
+    def _collect(
+        self,
+        ctx: object,
+        config: "ResolvedConfig",
+        rule_ids: list[str] | None,
+    ) -> tuple[list[Finding], list[SkippedRule]]:
+        """Run every enabled detector for this language over ``ctx`` (an opaque per-language
+        audit context, passed straight to ``detector.run``), stamping each finding with the
+        resolved config's severity/verdict. A disabled rule is recorded in ``skipped`` —
+        surfaced, never silently dropped. Shared by every auditor so this loop lives once."""
+        detectors = REGISTRY.detectors_for_language(self.language)
+        if rule_ids is not None:
+            wanted = set(rule_ids)
+            detectors = [d for d in detectors if d.rule_id in wanted]
+
+        findings: list[Finding] = []
+        skipped: list[SkippedRule] = []
+        for cls in detectors:
+            eff = config.effective(cls.rule_id)
+            if not eff.enabled:
+                skipped.append(
+                    SkippedRule(
+                        rule_id=cls.rule_id, reason=eff.skipped_reason or "disabled"
+                    )
+                )
+                continue
+            for finding in cls().run(ctx):
+                findings.append(
+                    finding.model_copy(
+                        update={
+                            "severity": eff.severity,
+                            "verdict_kind": eff.verdict_kind,
+                        }
+                    )
+                )
+        findings.sort(key=lambda f: (f.line, f.rule_id))
+        return findings, skipped
+
+    def shapes(self, source: str, *, method_min_statements: int = 3) -> list[ShapeRow]:
         """Normalized shape rows for the cross-file dedup pass. Default: none."""
         return []

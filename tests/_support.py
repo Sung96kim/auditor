@@ -5,6 +5,7 @@ from pathlib import Path
 
 from auditor.config import AuditorSettings, ResolvedConfig
 from auditor.languages.bash.auditor import BashAuditor
+from auditor.languages.manifest.auditor import ManifestAuditor
 from auditor.languages.python.auditor import PythonAuditor
 from auditor.languages.typescript.auditor import TypeScriptAuditor
 from auditor.models import (
@@ -70,6 +71,21 @@ def run_sh_audit(
     settings = settings if settings is not None else AuditorSettings()
     rc = ResolvedConfig(settings, role=role, rel_path=rel_path)
     return BashAuditor().audit(file_path=rel_path, source=source, role=role, config=rc)
+
+
+def run_manifest_audit(
+    source: str,
+    *,
+    role: FileRole = FileRole.PRODUCTION,
+    settings: AuditorSettings | None = None,
+    rel_path: str = "package.json",
+) -> ScanResult:
+    """Audit a manifest source string (package.json, …) with every rule enabled unless overridden."""
+    settings = settings if settings is not None else AuditorSettings()
+    rc = ResolvedConfig(settings, role=role, rel_path=rel_path)
+    return ManifestAuditor().audit(
+        file_path=rel_path, source=source, role=role, config=rc
+    )
 
 
 # (label, value) representative high-confidence secrets — each must trip `*-SECRET-DETECTED`.

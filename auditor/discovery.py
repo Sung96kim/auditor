@@ -112,23 +112,20 @@ class FileDiscovery:
         self.root = root
         self.exclude_globs = _DEFAULT_EXCLUDE_GLOBS + tuple(exclude_globs)
         self.suffixes = self._supported_suffixes()
+        self.filenames = self._supported_filenames()
 
     def files(self, target: Path) -> list[Path]:
         if target.is_file():
-            return [target] if target.suffix in self.suffixes else []
+            return [target] if self._supported(target) else []
 
         tracked = self._git_tracked()
         if tracked is not None:
             candidates = [
-                p
-                for p in tracked
-                if self._under(p, target) and p.suffix in self.suffixes
+                p for p in tracked if self._under(p, target) and self._supported(p)
             ]
         else:
             candidates = [
-                p
-                for p in target.rglob("*")
-                if p.is_file() and p.suffix in self.suffixes
+                p for p in target.rglob("*") if p.is_file() and self._supported(p)
             ]
 
         out = [p for p in candidates if not self._excluded(p)]
@@ -136,12 +133,25 @@ class FileDiscovery:
 
     # --- internals --------------------------------------------------------
 
+    def _supported(self, path: Path) -> bool:
+        """A file the auditor can audit — by suffix, or by a filename-keyed manifest."""
+        return path.suffix in self.suffixes or any(
+            fnmatch(path.name, pat) for pat in self.filenames
+        )
+
     @staticmethod
     def _supported_suffixes() -> tuple[str, ...]:
         suffixes: list[str] = []
         for cls in REGISTRY.languages().values():
             suffixes.extend(cls.extensions)
         return tuple(suffixes) or (".py",)
+
+    @staticmethod
+    def _supported_filenames() -> tuple[str, ...]:
+        pats: list[str] = []
+        for cls in REGISTRY.languages().values():
+            pats.extend(getattr(cls, "filenames", ()))
+        return tuple(pats)
 
     def _git_tracked(self) -> list[Path] | None:
         try:

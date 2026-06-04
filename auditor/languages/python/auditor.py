@@ -5,11 +5,10 @@ and applies config/role severity+verdict overrides in one place.
 import ast
 from typing import TYPE_CHECKING, ClassVar
 
-from auditor.languages.base import AuditContext, Detector, LanguageAuditor, ShapeRow
+from auditor.languages.base import AuditContext, LanguageAuditor, ShapeRow
 from auditor.languages.python import detectors as _detectors  # noqa: F401
 from auditor.languages.python.shapes import ShapeExtractor
-from auditor.models import FileRole, Finding, ManifestEntry, ScanResult, SkippedRule
-from auditor.registry import REGISTRY
+from auditor.models import FileRole, ManifestEntry, ScanResult, SkippedRule
 
 if TYPE_CHECKING:
     from auditor.config import ResolvedConfig
@@ -73,34 +72,7 @@ class PythonAuditor(LanguageAuditor):
         )
         manifest = ManifestEntry.from_module(tree)
 
-        detector_classes = REGISTRY.detectors_for_language("python")
-        if rule_ids is not None:
-            wanted = set(rule_ids)
-            detector_classes = [d for d in detector_classes if d.rule_id in wanted]
-
-        findings: list[Finding] = []
-        skipped: list[SkippedRule] = []
-        for cls in detector_classes:
-            eff = config.effective(cls.rule_id)
-            if not eff.enabled:
-                skipped.append(
-                    SkippedRule(
-                        rule_id=cls.rule_id, reason=eff.skipped_reason or "disabled"
-                    )
-                )
-                continue
-            detector: Detector = cls()
-            for f in detector.run(ctx):
-                findings.append(
-                    f.model_copy(
-                        update={
-                            "severity": eff.severity,
-                            "verdict_kind": eff.verdict_kind,
-                        }
-                    )
-                )
-
-        findings.sort(key=lambda f: (f.line, f.rule_id))
+        findings, skipped = self._collect(ctx, config, rule_ids)
         return ScanResult(
             file=file_path,
             language="python",
@@ -110,6 +82,8 @@ class PythonAuditor(LanguageAuditor):
             skipped_rules=skipped,
         )
 
-    def shapes(self, source: str) -> list[ShapeRow]:
+    def shapes(self, source: str, *, method_min_statements: int = 3) -> list[ShapeRow]:
         extractor = ShapeExtractor.for_source(source)
-        return extractor.shapes() if extractor else []
+        if extractor is None:
+            return []
+        return extractor.shapes(method_min_statements=method_min_statements)

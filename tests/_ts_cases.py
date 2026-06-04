@@ -176,5 +176,15 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             f'const blob = "{"A" * 240}";\n',
             'const token = "short-normal-string";\n',
         ),
+        (
+            "TS-MAL-EXEC-INJECTION",
+            "execSync(`tar -czf /tmp/a.tgz ${dir}`);\n",  # command built from interpolation
+            'execSync("tar -czf /tmp/a.tgz ./src");\n',  # a fixed, literal command
+        ),
+        (
+            "TS-MAL-EXFIL-URL",
+            'const sink = "https://webhook.site/00000000-0000-0000-0000-000000000000";\n',
+            'const url = "https://api.example.com/v1/events";\n',  # a normal service URL
+        ),
     ],
 }

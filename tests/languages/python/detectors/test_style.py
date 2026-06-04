@@ -27,3 +27,22 @@ def test_stale_comment(tmp_path):
     assert "PY-STYLE-STALE-COMMENT" not in rule_ids(
         run_audit(good, package_root=str(tmp_path))
     )
+
+
+@pytest.mark.parametrize(
+    "name", ["setup.py", "conftest.py", "__init__.py", "manage.py"]
+)
+def test_stale_comment_ignores_well_known_filenames(name, tmp_path):
+    # ubiquitous filenames named conceptually in prose aren't a repo-local-path claim — even
+    # though absent from this repo, they must not be flagged as stale
+    src = f"# behaves like a {name} would\nx = 1\n"
+    assert "PY-STYLE-STALE-COMMENT" not in rule_ids(
+        run_audit(src, package_root=str(tmp_path))
+    )
+
+
+def test_stale_comment_still_flags_ordinary_absent_module(tmp_path):
+    src = "# see gone_helper.py\nx = 1\n"
+    assert "PY-STYLE-STALE-COMMENT" in rule_ids(
+        run_audit(src, package_root=str(tmp_path))
+    )

@@ -69,3 +69,32 @@ def test_unknown_rule_id_fails(tmp_path):
     )
     with pytest.raises(Exception, match="unknown rule_id"):
         load_config(tmp_path)
+
+
+def test_config_named_module_is_imported_and_recorded():
+    # a config-named plugin module is imported on load (registers by import side effect)
+    loader = PluginLoader()
+    loader.load_config_modules(["json"])  # any importable module exercises the loader
+    assert "json" in loader.loaded
+    assert loader.warnings == []
+
+
+def test_broken_config_module_warns_not_crashes():
+    # a missing/broken plugin module must warn, never crash the auditor
+    loader = PluginLoader()
+    loader.load_config_modules(["auditor_no_such_plugin_module"])
+    assert loader.loaded == []
+    assert any("failed to load plugin" in w for w in loader.warnings)
+
+
+def test_broken_local_plugin_warns_not_crashes(tmp_path):
+    # a trusted local plugin that raises on import is isolated to a warning
+    plugin_dir = tmp_path / ".auditor" / "plugins"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "broken.py").write_text('raise RuntimeError("boom on import")\n')
+    loader = PluginLoader()
+    loader.load_local(tmp_path, trusted=True)
+    assert loader.loaded == []
+    assert any(
+        "failed to load local plugin" in w and "broken.py" in w for w in loader.warnings
+    )

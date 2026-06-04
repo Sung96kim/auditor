@@ -9,14 +9,14 @@ Full-line ``#`` comments are skipped so documentation describing an attack doesn
 import re
 from typing import TYPE_CHECKING, ClassVar
 
-from auditor.languages.base import Detector
+from auditor.languages.base import Detector, LineIndexed
 from auditor.models import FileRole, Finding
 
 if TYPE_CHECKING:
     from auditor.config import ResolvedConfig
 
 
-class ShAuditContext:
+class ShAuditContext(LineIndexed):
     """Everything a shell detector needs for one file."""
 
     __slots__ = ("file_path", "source", "lines", "role", "config")
@@ -34,11 +34,6 @@ class ShAuditContext:
         self.lines = source.splitlines()
         self.role = role
         self.config = config
-
-    def line_text(self, lineno: int) -> str:
-        if 1 <= lineno <= len(self.lines):
-            return self.lines[lineno - 1].strip()
-        return ""
 
 
 class ShDetector(Detector):

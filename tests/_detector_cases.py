@@ -301,10 +301,16 @@ TESTED_SEPARATELY = {
     "SH-MAL-DESTRUCTIVE",
     "SH-MAL-CRYPTO-MINER",
     "SH-MAL-CREDENTIAL-EXFIL",
+    "SH-MAL-PERSISTENCE",
+    "SH-MAL-ANTIFORENSICS",
+    "SH-MAL-EXFIL-URL",
     # committed-secret sweep — covered in tests/languages/*/test_secrets.py
     "PY-SECRET-DETECTED",
     "TS-SECRET-DETECTED",
     "SH-SECRET-DETECTED",
+    # supply-chain — covered in tests/languages/manifest/ and tests/languages/python/
+    "MF-SUPPLY-INSTALL-HOOK",
+    "PY-SUPPLY-SETUP-EXEC",
 }
 
 
