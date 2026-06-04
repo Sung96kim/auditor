@@ -238,6 +238,204 @@ anonymous webhook/paste/tunnel sinks. `search`-based, so an embedded pattern in 
 one-liner is still caught; full-line `#` comments are skipped so documentation describing an
 attack doesn't self-flag.
 
+### Rule reference
+
+The full registry (`auditor rules list` for JSON, `--category`/`--standard` to filter). Verdict
+`auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
+
+<details>
+<summary><b>All 123 rules</b> (generated from <code>auditor rules list</code>)</summary>
+
+#### security (23)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-SEC-ASSERT-FOR-SECURITY` | medium | candidate | bandit:B101, owasp:A04 |
+| `PY-SEC-BIND-ALL-INTERFACES` | low | auto | bandit:B104, owasp:A05 |
+| `PY-SEC-DANGEROUS-EVAL` | blocking | auto | bandit:B307, owasp:A03 |
+| `PY-SEC-DJANGO-RAW-SQL` | high | candidate | owasp:A03 |
+| `PY-SEC-FLASK-DEBUG` | medium | auto | bandit:B201, owasp:A05 |
+| `PY-SEC-HARDCODED-SECRET` | high | auto | bandit:B105, owasp:A07 |
+| `PY-SEC-INSECURE-RANDOM` | medium | candidate | bandit:B311, owasp:A02 |
+| `PY-SEC-INSECURE-TEMPFILE` | medium | auto | bandit:B306, bandit:B108, owasp:A05 |
+| `PY-SEC-INSECURE-TLS` | high | auto | bandit:B501, owasp:A02 |
+| `PY-SEC-JINJA-AUTOESCAPE-OFF` | medium | auto | bandit:B701, owasp:A03 |
+| `PY-SEC-PARAMIKO-AUTOADD` | medium | auto | bandit:B507, owasp:A07 |
+| `PY-SEC-PATH-TRAVERSAL` | medium | candidate | owasp:A01 |
+| `PY-SEC-REQUEST-NO-TIMEOUT` | medium | auto | bandit:B113, owasp:A06 |
+| `PY-SEC-SHELL-INJECTION` | high | auto | bandit:B602, bandit:B605, owasp:A03 |
+| `PY-SEC-SQL-STRING-BUILD` | high | candidate | bandit:B608, owasp:A03 |
+| `PY-SEC-SSRF` | medium | candidate | owasp:A10 |
+| `PY-SEC-UNSAFE-DESERIALIZE` | high | auto | bandit:B301, bandit:B506, owasp:A08 |
+| `PY-SEC-WEAK-HASH` | medium | auto | bandit:B303, bandit:B324, owasp:A02 |
+| `PY-SEC-XXE-UNSAFE-XML` | medium | auto | bandit:B313, owasp:A05 |
+| `TS-SEC-DANGEROUS-EVAL` | high | auto | owasp:A03 |
+| `TS-SEC-DANGEROUS-HTML` | high | candidate | owasp:A03 |
+| `TS-SEC-JAVASCRIPT-URL` | high | auto | owasp:A03 |
+| `TS-SEC-TARGET-BLANK-NOOPENER` | medium | auto | owasp:A05 |
+
+#### malware (30)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-MAL-CREDENTIAL-ACCESS` | high | candidate | — |
+| `PY-MAL-CRYPTO-MINER` | high | auto | — |
+| `PY-MAL-DOWNLOAD-EXEC` | high | auto | — |
+| `PY-MAL-DYNAMIC-IMPORT` | medium | candidate | — |
+| `PY-MAL-ENCODED-BLOB` | medium | candidate | — |
+| `PY-MAL-EXFIL-URL` | medium | candidate | — |
+| `PY-MAL-OBFUSCATED-EXEC` | blocking | auto | — |
+| `PY-MAL-PICKLE-REDUCE` | high | candidate | — |
+| `PY-MAL-REMOTE-EXEC` | blocking | auto | — |
+| `PY-MAL-REVERSE-SHELL` | blocking | auto | — |
+| `PY-MAL-SHELLCODE` | blocking | auto | — |
+| `SH-MAL-ANTIFORENSICS` | high | candidate | — |
+| `SH-MAL-CREDENTIAL-EXFIL` | high | candidate | — |
+| `SH-MAL-CRYPTO-MINER` | high | auto | — |
+| `SH-MAL-CURL-BASH` | high | auto | — |
+| `SH-MAL-DESTRUCTIVE` | high | candidate | — |
+| `SH-MAL-ENCODED-EXEC` | blocking | auto | — |
+| `SH-MAL-EXFIL-URL` | medium | candidate | — |
+| `SH-MAL-FORK-BOMB` | blocking | auto | — |
+| `SH-MAL-PERSISTENCE` | high | candidate | — |
+| `SH-MAL-REVERSE-SHELL` | blocking | auto | — |
+| `TS-MAL-CREDENTIAL-ACCESS` | high | candidate | — |
+| `TS-MAL-CRYPTO-MINER` | high | auto | — |
+| `TS-MAL-DOWNLOAD-EXEC` | high | auto | — |
+| `TS-MAL-DYNAMIC-REQUIRE` | medium | candidate | — |
+| `TS-MAL-ENCODED-BLOB` | medium | candidate | — |
+| `TS-MAL-EXEC-INJECTION` | high | candidate | — |
+| `TS-MAL-EXFIL-URL` | medium | candidate | — |
+| `TS-MAL-OBFUSCATED-EXEC` | blocking | auto | — |
+| `TS-MAL-REMOTE-EXEC` | blocking | auto | — |
+
+#### secrets (3)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-SECRET-DETECTED` | high | auto | — |
+| `SH-SECRET-DETECTED` | high | auto | — |
+| `TS-SECRET-DETECTED` | high | auto | — |
+
+#### supply-chain (2)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `MF-SUPPLY-INSTALL-HOOK` | medium | candidate | — |
+| `PY-SUPPLY-SETUP-EXEC` | medium | candidate | — |
+
+#### correctness (4)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-CORRECT-BROAD-EXCEPT` | medium | auto | — |
+| `PY-CORRECT-NAIVE-DATETIME` | suggestion | candidate | — |
+| `PY-CORRECT-RAISE-WITHOUT-FROM` | low | candidate | — |
+| `PY-CORRECT-SWALLOWED-EXCEPTION` | medium | candidate | — |
+
+#### async (6)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-ASYNC-DANGLING-TASK` | high | auto | — |
+| `PY-ASYNC-NO-AWAIT-BODY` | low | candidate | — |
+| `PY-ASYNC-SEQUENTIAL-AWAITS` | low | candidate | — |
+| `PY-ASYNC-SYNC-IO` | high | candidate | — |
+| `PY-ASYNC-UNAWAITED-COROUTINE` | high | auto | — |
+| `PY-ASYNC-UNLOCKED-LAZY-INIT` | high | candidate | — |
+
+#### config (2)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-CONFIG-ADHOC-ENV` | low | auto | — |
+| `PY-CONFIG-IMPORT-TIME-IO` | medium | candidate | — |
+
+#### typing (2)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-TYPING-MISSING-HINTS` | low | auto | — |
+| `PY-TYPING-UNTYPED-DICT` | medium | auto | — |
+
+#### oop-composition (20)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-OOP-BUILDER-CLASS` | low | candidate | — |
+| `PY-OOP-CLOSURE-CAPTURE` | suggestion | candidate | — |
+| `PY-OOP-CONSTRUCTOR-WALL` | low | candidate | — |
+| `PY-OOP-DATACLASS-IN-PYDANTIC` | medium | auto | — |
+| `PY-OOP-DICT-MUTATION-BUILDER` | suggestion | candidate | — |
+| `PY-OOP-DISPATCH-LADDER` | low | candidate | — |
+| `PY-OOP-DUPLICATE-BLOCK` | low | candidate | — |
+| `PY-OOP-FIELD-COPY` | low | candidate | — |
+| `PY-OOP-FLAT-FIELD-MODEL` | low | candidate | — |
+| `PY-OOP-FREE-FN-ORCHESTRATOR` | low | candidate | — |
+| `PY-OOP-GOD-CLASS` | low | candidate | — |
+| `PY-OOP-HIGH-COMPLEXITY` | low | candidate | — |
+| `PY-OOP-LONG-PARAM-LIST` | low | candidate | — |
+| `PY-OOP-MODEL-REBUILD` | suggestion | candidate | — |
+| `PY-OOP-MODULE-CONST-FOR-SUBCLASS` | suggestion | candidate | — |
+| `PY-OOP-PARALLEL-SIBLING` | low | candidate | — |
+| `PY-OOP-STATIC-METHOD-CLASS` | low | candidate | — |
+| `PY-OOP-THIN-WRAPPER` | low | candidate | — |
+| `PY-XFILE-DUP-FUNCTION` | low | candidate | — |
+| `PY-XFILE-DUP-MODEL` | low | candidate | — |
+
+#### style (6)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `PY-STYLE-FILE-SIZE` | low | auto | — |
+| `PY-STYLE-IF-FALSE-IMPORT` | low | auto | — |
+| `PY-STYLE-INLINE-IMPORT` | medium | auto | — |
+| `PY-STYLE-STALE-COMMENT` | low | candidate | — |
+| `TS-STYLE-DUPLICATE-IMPORT` | low | auto | — |
+| `TS-STYLE-FILE-SIZE` | low | auto | — |
+
+#### react (11)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `TS-REACT-ARRAY-INDEX-KEY` | medium | candidate | — |
+| `TS-REACT-DEEP-JSX-NESTING` | low | candidate | — |
+| `TS-REACT-EXTRACTABLE-HELPER` | low | candidate | — |
+| `TS-REACT-EXTRACTABLE-HOOK` | low | candidate | — |
+| `TS-REACT-MULTI-COMPONENT-FILE` | low | candidate | — |
+| `TS-REACT-PARALLEL-SIBLING` | low | candidate | — |
+| `TS-REACT-REPEATED-JSX` | low | candidate | — |
+| `TS-REACT-TOO-MANY-PROPS` | low | candidate | — |
+| `TS-XFILE-DUP-COMPONENT` | low | candidate | — |
+| `TS-XFILE-DUP-FUNCTION` | low | candidate | — |
+| `TS-XFILE-DUP-JSX-BLOCK` | low | candidate | — |
+
+#### a11y (11)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `TS-A11Y-ANCHOR-NO-HREF` | medium | candidate | — |
+| `TS-A11Y-AUTOFOCUS` | low | candidate | — |
+| `TS-A11Y-DECORATIVE-ICON` | low | candidate | — |
+| `TS-A11Y-FORM-LABEL` | medium | candidate | — |
+| `TS-A11Y-ICON-BUTTON-NO-LABEL` | medium | candidate | — |
+| `TS-A11Y-IFRAME-TITLE` | medium | candidate | — |
+| `TS-A11Y-IMG-NO-ALT` | medium | candidate | — |
+| `TS-A11Y-MOUSE-NO-KEY` | medium | candidate | — |
+| `TS-A11Y-NONINTERACTIVE-ONCLICK` | medium | candidate | — |
+| `TS-A11Y-POSITIVE-TABINDEX` | medium | candidate | — |
+| `TS-A11Y-REDUNDANT-ROLE` | low | candidate | — |
+
+#### design-system (3)
+
+| rule_id | severity | verdict | standards |
+|---|---|---|---|
+| `TS-DS-DIRECT-UI-IMPORT` | medium | candidate | — |
+| `TS-DS-INLINE-PRIMITIVE` | low | candidate | — |
+| `TS-DS-SIZE-OVERRIDE` | low | candidate | — |
+
+</details>
+
 ## Plugins
 
 Extend by subclassing — the ABCs (`Detector`, `LanguageAuditor`, `Reporter`) auto-register.

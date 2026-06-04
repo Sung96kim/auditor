@@ -120,8 +120,12 @@ class FileDiscovery:
 
         tracked = self._git_tracked()
         if tracked is not None:
+            # ``ls-files --cached`` lists tracked files even when deleted in the working tree
+            # (a deletion that isn't staged yet) — skip those so a scan never reads a missing file.
             candidates = [
-                p for p in tracked if self._under(p, target) and self._supported(p)
+                p
+                for p in tracked
+                if self._under(p, target) and self._supported(p) and p.is_file()
             ]
         else:
             candidates = [

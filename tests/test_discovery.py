@@ -1,8 +1,13 @@
 """discovery.py: file enumeration, excludes, root resolution."""
 
+import subprocess
 from pathlib import Path
 
 from auditor.discovery import FileDiscovery, discover, find_root
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
 
 
 def _tree(tmp_path: Path) -> Path:
@@ -35,6 +40,23 @@ def test_discover_single_file(tmp_path):
     root = _tree(tmp_path)
     assert discover(root / "pkg" / "a.py", root=root) == [root / "pkg" / "a.py"]
     assert discover(root / "pkg" / "notes.txt", root=root) == []
+
+
+def test_tracked_but_deleted_file_is_skipped(tmp_path):
+    # `git ls-files --cached` lists a tracked file even after it's deleted from the working tree
+    # (deletion not staged). Discovery must skip it, not crash trying to read a missing path.
+    _git(tmp_path, "init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "gone.py").write_text("y = 2\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "x")
+    (tmp_path / "gone.py").unlink()  # tracked, but no longer on disk
+
+    files = {
+        p.relative_to(tmp_path).as_posix() for p in discover(tmp_path, root=tmp_path)
+    }
+    assert files == {"a.py"}
 
 
 def test_custom_exclude_glob(tmp_path):

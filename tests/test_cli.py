@@ -166,6 +166,18 @@ def test_scan_severity_invalid(sample_repo):
     assert "unknown severity" in result.output
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [["scan", "SRC", "-f", "xml"], ["report", "SRC/web.py", "-f", "xml"]],
+)
+def test_invalid_format_errors_cleanly(sample_repo, cmd):
+    cmd = [a.replace("SRC", str(sample_repo / "src")) for a in cmd]
+    result = runner.invoke(app, cmd)
+    assert result.exit_code == 1
+    assert "unknown format" in result.output
+    assert "Traceback" not in result.output  # clean error, not a raw stack trace
+
+
 def test_min_severity_filter(sample_repo):
     payload = _json(
         runner.invoke(
