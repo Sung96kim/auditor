@@ -46,6 +46,9 @@ def test_scan_sarif(sample_repo):
     assert result.exit_code == 0
     sarif = json.loads(result.output)
     assert sarif["version"] == "2.1.0"
+    # every result carries a stable partialFingerprint so code-scanning dedupes across runs
+    res0 = sarif["runs"][0]["results"][0]
+    assert res0["partialFingerprints"]["auditorFingerprint/v1"]
 
 
 def test_baseline_hides_preexisting_findings(sample_repo, tmp_path):
@@ -90,6 +93,29 @@ def test_report_md(sample_repo):
     )
     assert result.exit_code == 0
     assert "# Audit report" in result.output
+
+
+def test_manifest_rejects_non_python(tmp_path):
+    f = tmp_path / "x.ts"
+    f.write_text("const x = 1;\n")
+    result = runner.invoke(app, ["manifest", str(f)])
+    assert result.exit_code == 1
+    assert "Python-only" in result.output  # clean error, not a raw traceback
+
+
+def test_manifest_handles_unparseable_python(tmp_path):
+    f = tmp_path / "broken.py"
+    f.write_text("def f(:\n")
+    result = runner.invoke(app, ["manifest", str(f)])
+    assert result.exit_code == 1
+    assert "could not parse" in result.output
+
+
+def test_manifest_valid_python(tmp_path):
+    f = tmp_path / "ok.py"
+    f.write_text("class A:\n    def m(self):\n        return 1\n")
+    result = _json(runner.invoke(app, ["manifest", str(f)]))
+    assert any(e["symbol"] == "A" for e in result)
 
 
 def test_scan_html_short_flag(sample_repo):
@@ -176,6 +202,22 @@ def test_fail_on_gates_exit_code(sample_repo):
     )
 
 
+def test_fail_on_ignores_candidate_findings(tmp_path):
+    # a HIGH *candidate* finding (agent-judges) must not auto-fail CI — only confirmed (auto) gates
+    f = tmp_path / "a.py"
+    f.write_text("import time\n\n\nasync def f():\n    time.sleep(1)\n")
+    payload = _json(runner.invoke(app, ["scan", str(f), "--no-index", "-f", "json"]))
+    findings = [x for fl in payload["files"] for x in fl["findings"]]
+    sync = next(x for x in findings if x["rule_id"] == "PY-ASYNC-SYNC-IO")
+    assert sync["severity"] == "high" and sync["verdict_kind"] == "candidate"
+    assert (
+        runner.invoke(
+            app, ["scan", str(f), "--no-index", "--fail-on", "high"]
+        ).exit_code
+        == 0
+    )
+
+
 def _git(repo, *args):
     import subprocess
 
@@ -201,6 +243,49 @@ def test_scan_changed_scopes_output_to_diff(tmp_path):
     assert [r["file"] for r in payload["files"]] == [
         "a.py"
     ]  # output scoped to the change
+
+
+def test_changed_in_subproject_scopes_correctly(tmp_path):
+    # project root (own pyproject) sits *inside* a larger git repo: diff-scoping paths and result
+    # paths must still align (git --relative makes both relative to the resolved root)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname="p"\nversion="0"\n[tool.auditor]\nextends="strict"\n'
+    )
+    (proj / "a.py").write_text("def f(x):\n    eval(x)\n")
+    (proj / "b.py").write_text("def g(y):\n    return y\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "init")
+    (proj / "a.py").write_text(
+        "def f(x):\n    eval(x)\n    return x\n"
+    )  # change only a.py
+
+    payload = json.loads(
+        runner.invoke(app, ["scan", str(proj), "--changed", "-f", "json"]).output
+    )
+    assert [r["file"] for r in payload["files"]] == ["a.py"]
+
+
+def test_root_option_overrides_autodetected_root(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "pyproject.toml").write_text(
+        '[project]\nname="s"\nversion="0"\n[tool.auditor]\nextends="strict"\n'
+    )
+    (sub / "a.py").write_text("eval(x)\n")
+    # auto-detected: find_root(sub) == sub, so the path is "a.py"
+    auto = _json(runner.invoke(app, ["scan", str(sub), "-f", "json"]))
+    assert [r["file"] for r in auto["files"]] == ["a.py"]
+    # pinned to the outer root: the path becomes "sub/a.py"
+    pinned = _json(
+        runner.invoke(app, ["scan", str(sub), "--root", str(tmp_path), "-f", "json"])
+    )
+    assert [r["file"] for r in pinned["files"]] == ["sub/a.py"]
 
 
 def test_since_requires_git_repo(tmp_path):

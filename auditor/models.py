@@ -37,8 +37,9 @@ _SEVERITY_ORDER = {
 
 
 def severity_rank(severity: Severity) -> int:
-    """Higher = more severe. For sorting/threshold comparisons."""
-    return _SEVERITY_ORDER[severity]
+    """Higher = more severe. For sorting/threshold comparisons. An unrecognized value (a future or
+    plugin-contributed severity) ranks below every known tier rather than raising a KeyError."""
+    return _SEVERITY_ORDER.get(severity, _SEVERITY_ORDER[Severity.SUGGESTION] - 1)
 
 
 SEVERITIES_DESC: tuple[Severity, ...] = (

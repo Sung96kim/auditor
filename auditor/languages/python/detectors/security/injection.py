@@ -96,16 +96,42 @@ def _dynamic_parts(node: ast.expr) -> list[ast.expr]:
     return []
 
 
+# names whose subscript is genuinely caller-controlled (a request/environment source), as opposed
+# to a plain local dict (``cfg['table']``) which the old "any subscript is tainted" rule misflagged
+_EXTERNAL_BASES = frozenset(
+    {
+        "request",
+        "req",
+        "environ",
+        "args",
+        "form",
+        "params",
+        "query",
+        "values",
+        "json",
+        "payload",
+        "kwargs",
+        "headers",
+        "cookies",
+        "GET",
+        "POST",
+    }
+)
+
+
 def _carries_external_data(node: ast.expr, params: set[str]) -> bool:
-    """True if the string build interpolates caller data — an enclosing-function parameter or
-    a subscript (``request.args['q']``). Constants/placeholder locals are not tainted.
+    """True if the string build interpolates caller data — an enclosing-function parameter, or a
+    subscript of a request/environment source (``request.args['q']``, ``os.environ['X']``). A
+    subscript of a plain local (``cfg['table']``) is NOT treated as external (was a false positive).
     """
     for part in _dynamic_parts(node):
         for sub in ast.walk(part):
             if isinstance(sub, ast.Name) and sub.id in params:
                 return True
             if isinstance(sub, ast.Subscript):
-                return True
+                segments = set(dotted_name(sub.value).split("."))
+                if segments & params or segments & _EXTERNAL_BASES:
+                    return True
     return False
 
 

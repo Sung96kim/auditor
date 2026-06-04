@@ -31,6 +31,7 @@ from auditor.models import (
     ManifestEntry,
     ScanResult,
     Severity,
+    VerdictKind,
     severity_rank,
 )
 from auditor.plugins import PluginLoader
@@ -108,8 +109,14 @@ def _check_severity(value: str) -> Severity:
 
 
 def _gate_tripped(results: list[ScanResult], fail_on: str) -> bool:
+    # gate on *confirmed* (auto) findings only — candidates are "the agent should judge this" and
+    # must not auto-break CI (otherwise a heuristic/candidate rule fails the build on benign code).
     floor = severity_rank(_check_severity(fail_on))
-    return any(severity_rank(f.severity) >= floor for r in results for f in r.findings)
+    return any(
+        f.verdict_kind == VerdictKind.AUTO and severity_rank(f.severity) >= floor
+        for r in results
+        for f in r.findings
+    )
 
 
 def _filter_display(
@@ -125,13 +132,17 @@ def _filter_display(
 
 
 def _diff_report_only(
-    target: Path, since: str | None, changed: bool, vs_base: bool
+    target: Path,
+    since: str | None,
+    changed: bool,
+    vs_base: bool,
+    root: Path | None = None,
 ) -> set[str] | None:
     """Resolve the git diff ref (--since / --changed / --vs-base) and return the changed-file
     set to scope the output to, or None if no diff mode was requested. Exits cleanly on error."""
+    root = root or find_root(target)
     ref: str | None = None
     if vs_base:
-        root = find_root(target)
         ref = load_config(root).diff_base or default_base_ref(root)
         if ref is None:
             _fail(
@@ -145,7 +156,7 @@ def _diff_report_only(
     if ref is None:
         return None
     try:
-        report_only = git_changed_files(find_root(target), ref)
+        report_only = git_changed_files(root, ref)
     except ValueError as exc:
         _fail(str(exc))
     if report_only is None:
@@ -291,6 +302,13 @@ def scan(
             help="Write the current findings to a baseline file and exit (snapshot for adoption).",
         ),
     ] = None,
+    root: Annotated[
+        Path | None,
+        typer.Option(
+            "--root",
+            help="Pin the project root (default: nearest .git / pyproject.toml / .auditor).",
+        ),
+    ] = None,
     verbose: Annotated[
         int,
         typer.Option(
@@ -306,7 +324,7 @@ def scan(
     if verbose:
         configure_logging(verbose)
 
-    report_only = _diff_report_only(target, since, changed, vs_base)
+    report_only = _diff_report_only(target, since, changed, vs_base, root)
     if report_only is not None and not no_index:
         incremental = True  # whole-repo scan stays fast via the cache
 
@@ -321,6 +339,7 @@ def scan(
             exclude=tuple(exclude or ()),
             no_noqa=no_noqa,
             report_only=report_only,
+            root=root,
         ),
         f"auditing {target}…",
         spinner=not verbose,
@@ -449,10 +468,15 @@ def _print_summary(results: list[ScanResult]) -> None:
 
 
 @app.command()
-def manifest(file: Annotated[Path, typer.Argument(help="Python file.")]) -> None:
-    """Print the AST class+function manifest for one file (no detectors)."""
+def manifest(file: Annotated[Path, typer.Argument(help="Python file (.py).")]) -> None:
+    """Print the AST class+function manifest for one file (no detectors). Python-only."""
     _require_file(file)
-    tree = ast.parse(file.read_text(encoding="utf-8", errors="replace"))
+    if file.suffix not in (".py", ".pyi"):
+        _fail(f"manifest is Python-only; {file.name} is not a .py file")
+    try:
+        tree = ast.parse(file.read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, ValueError) as exc:  # ValueError: source contains null bytes
+        _fail(f"could not parse {file.name}: {exc}")
     entries = ManifestEntry.from_module(tree)
     _echo_json([e.model_dump(mode="json") for e in entries])
 

@@ -3,6 +3,7 @@
 import json
 from typing import ClassVar
 
+from auditor.baseline import finding_fingerprint
 from auditor.models import Finding, ScanResult, Severity
 from auditor.registry import REGISTRY
 from auditor.reporters.base import Reporter
@@ -59,6 +60,9 @@ def _result(file: str, f: Finding) -> dict:
         "ruleId": f.rule_id,
         "level": _SARIF_LEVEL.get(f.severity, "warning"),
         "message": {"text": f.message},
+        # line-independent fingerprint (file + rule + offending text) so code-scanning dedupes the
+        # same finding across runs/commits even when surrounding lines shift
+        "partialFingerprints": {"auditorFingerprint/v1": finding_fingerprint(file, f)},
         "locations": [
             {
                 "physicalLocation": {

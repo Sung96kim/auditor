@@ -367,6 +367,25 @@ class IndexStore:
 
         await self._worker.run(op)
 
+    async def prune(self, keep_paths: set[str], *, prefix: str = "") -> list[str]:
+        """Drop every row (files/file_rules/findings/shapes) for an indexed file under ``prefix``
+        that is no longer in ``keep_paths`` — i.e. deleted or newly excluded. Scoped by ``prefix``
+        so a subdirectory scan never evicts files outside it. Returns the pruned paths."""
+
+        def op(conn: sqlite3.Connection) -> list[str]:
+            indexed = [
+                r["path"] for r in conn.execute("SELECT path FROM files").fetchall()
+            ]
+            stale = [p for p in indexed if p.startswith(prefix) and p not in keep_paths]
+            for p in stale:
+                for table in ("files", "file_rules", "findings", "shapes"):
+                    conn.execute(f"DELETE FROM {table} WHERE path = ?", (p,))  # noqa: S608  (table name is a fixed literal)
+            if stale:
+                conn.commit()
+            return stale
+
+        return await self._worker.run(op)
+
     async def duplicate_shapes(self) -> dict[str, list[sqlite3.Row]]:
         """shape_hash -> rows, for hashes spanning 2+ distinct files."""
 

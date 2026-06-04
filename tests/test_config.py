@@ -3,8 +3,37 @@ threshold merge, per-rule/category/role resolution, and validation."""
 
 import pytest
 
-from auditor.config import AuditorSettings, ResolvedConfig, load_config
+from auditor.config import (
+    AuditorSettings,
+    CategoryConfig,
+    ResolvedConfig,
+    load_config,
+)
 from auditor.models import FileRole, Severity, VerdictKind
+
+
+def _rc(settings: AuditorSettings) -> ResolvedConfig:
+    return ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="x.py")
+
+
+def test_category_min_severity_acts_as_floor():
+    natural = _rc(AuditorSettings()).effective("PY-TYPING-MISSING-HINTS").severity
+    assert natural != Severity.HIGH  # precondition: below the floor we'll set
+
+    floored = _rc(
+        AuditorSettings(
+            categories={"typing": CategoryConfig(min_severity=Severity.HIGH)}
+        )
+    ).effective("PY-TYPING-MISSING-HINTS")
+    assert floored.severity == Severity.HIGH  # bumped up to the category floor
+
+    # the floor only raises — a rule already above it is untouched
+    kept = _rc(
+        AuditorSettings(
+            categories={"security": CategoryConfig(min_severity=Severity.LOW)}
+        )
+    ).effective("PY-SEC-DANGEROUS-EVAL")
+    assert kept.severity == Severity.BLOCKING
 
 
 def test_standalone_overrides_pyproject(tmp_path):

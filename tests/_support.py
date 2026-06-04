@@ -107,12 +107,22 @@ SECRET_SAMPLES: list[tuple[str, str]] = [
     ("hubspot", "pat-na1-12345678-1234-1234-1234-123456789012"),
     ("azure", "AccountKey=" + "a" * 86 + "=="),
 ]
-# benign lookalikes that must NOT trip the secret sweep
+# benign lookalikes that must NOT trip the secret sweep — hashes, ids, and other high-entropy
+# strings that share a shape with a real credential. Guards against over-broad provider patterns.
 BENIGN_SECRET_LOOKALIKES: list[str] = [
     "https://api.example.com/v1/users",
     "a1b2c3d4-e5f6-7890-abcd-ef1234567890",  # UUID
     "d41d8cd98f00b204e9800998ecf8427e",  # md5 hash
     "this is just a normal sentence in a string",
+    "d41d8cd98f00b204e9800998ecf8427e-us1",  # md5 + "-us1" cache key (was a Mailchimp FP)
+    "AC0123456789abcdef0123456789abcdef",  # Twilio account SID — public id, not a secret
+    "da39a3ee5e6b4b0d3255bfef95601890afd80709",  # sha1
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # sha256
+    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",  # 64-hex digest
+    "deadbeefcafebabe1234567890abcdef",  # 32-hex blob
+    "550e8400e29b41d4a716446655440000",  # 32-hex (uuid w/o dashes)
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",  # alphanumeric id
+    "user:password@host",  # not a db URI scheme
 ]
 
 

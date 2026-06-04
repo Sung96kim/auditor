@@ -49,7 +49,10 @@ def _comment_lines(source: str, language: str | None) -> set[int] | None:
             if tok.type == tokenize.COMMENT:
                 lines.add(tok.start[0])
     except (tokenize.TokenError, IndentationError, SyntaxError):
-        return None  # unparseable → don't lose suppressions, fall back to raw matching
+        # unparseable Python: we can't tell comments from string content, so suppress nothing
+        # (conservative). Returning None here would make raw text — incl. `# noqa` inside a
+        # docstring — eligible, wrongly suppressing. A broken file has no findings anyway.
+        return set()
     return lines
 
 

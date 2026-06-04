@@ -129,3 +129,55 @@ async def test_scan_dispatches_each_language(tmp_path):
     assert "MF-SUPPLY-INSTALL-HOOK" in {
         f.rule_id for f in results["src/package.json"].findings
     }
+
+
+async def test_deleted_file_is_pruned_from_index(tmp_path):
+    root = _make_repo(tmp_path)
+    db = root / ".auditor" / "index.db"
+    settings = load_config(root)
+    async with await IndexStore.connect(db) as index:
+        await _scan_dir(root, root / "pkg", settings, index)
+        assert {e.path for e in await index.files()} == {"pkg/a.py", "pkg/b.py"}
+
+    (root / "pkg" / "a.py").unlink()  # delete a file, then rescan
+    async with await IndexStore.connect(db) as index:
+        results = await _scan_dir(root, root / "pkg", settings, index)
+        assert "pkg/a.py" not in results
+        # reconciled out of every table, so `index list` / aggregate don't show a ghost file
+        assert {e.path for e in await index.files()} == {"pkg/b.py"}
+
+
+async def test_deleting_one_of_a_dup_pair_clears_the_crossfile_finding(tmp_path):
+    # two files share a model shape -> both flagged; deleting one must clear the survivor's dup
+    # finding (no phantom cross-file finding against a file that no longer exists)
+    root = tmp_path
+    (root / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\ndependencies=["pydantic"]\n'
+        '[tool.auditor]\nextends="strict"\n'
+    )
+    (root / ".auditor").mkdir()
+    pkg = root / "pkg"
+    pkg.mkdir()
+    fields = "    a: int\n    b: str\n    c: float\n"
+    (pkg / "a.py").write_text(
+        f"from pydantic import BaseModel\nclass Alpha(BaseModel):\n{fields}"
+    )
+    (pkg / "b.py").write_text(
+        f"from pydantic import BaseModel\nclass Beta(BaseModel):\n{fields}"
+    )
+    settings = load_config(root)
+    db = root / ".auditor" / "index.db"
+
+    async with await IndexStore.connect(db) as index:
+        first = await _scan_dir(root, pkg, settings, index)
+        assert "PY-XFILE-DUP-MODEL" in {f.rule_id for f in first["pkg/b.py"].findings}
+
+    (pkg / "a.py").unlink()
+    async with await IndexStore.connect(db) as index:
+        second = await _scan_dir(root, pkg, settings, index)
+        assert "pkg/a.py" not in second
+        assert "PY-XFILE-DUP-MODEL" not in {
+            f.rule_id for f in second["pkg/b.py"].findings
+        }
+        # and no stale finding lingers in the table for aggregate to pick up
+        assert all("a.py" not in str(f) for f in await index.all_findings())

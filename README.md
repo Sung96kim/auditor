@@ -90,8 +90,9 @@ auditor scan --vs-base                       # vs your base branch (auto-detects
 auditor scan --since main --fail-on high     # CI gate: exit non-zero if any finding is high+
 ```
 
-`--fail-on <severity>` makes `scan` exit non-zero when any finding is at or above that level
-— the gate is independent of any display filter. Only local git is run (`diff`/`ls-files`),
+`--fail-on <severity>` makes `scan` exit non-zero when any finding is at or above that level.
+The gate counts only **confirmed (`auto`) findings** — never `candidate`s, which are for the agent
+to judge, not to auto-break CI — and is independent of any display filter. Only local git is run (`diff`/`ls-files`),
 so it's identical for ssh and https remotes; an unfetched ref gives a clean "fetch it first"
 error. `--vs-base` auto-detects the base branch (first of `main`/`master`/`develop`/
 `development`, local or `origin/`); pin it with `[tool.auditor] diff_base = "origin/main"`.
@@ -172,7 +173,10 @@ including DRY/composition rules (cross-file duplicate model/function, within-fil
 blocks, parallel siblings, field-by-field copying) and a `suggestion` tier of low-stakes nudges
 below the severity ladder. Each carries a stable `rule_id`, a category, a default severity, and
 (for security) `standard_refs` like `bandit:B602` / `owasp:A03`. `auditor rules list` enumerates
-them.
+them. The `correctness`, `async`, `config`, and `typing` categories are **Python-only** — they
+encode Python-specific semantics (event-loop blocking, `BaseSettings`, etc.); TypeScript and shell
+carry their own categories (below). `security`, `malware`, `secrets`, and `supply-chain` span
+languages where applicable.
 
 **Malware** (`malware`, 30 rules across Python, TypeScript, and Bash — on by default in `base`,
 for vetting dependencies, PR diffs, and untrusted repos): the patterns that turn a benign

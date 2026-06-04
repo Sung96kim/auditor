@@ -6,8 +6,6 @@ don't handle, so one detector can span package.json / pyproject / requirements a
 """
 
 import json
-import tomllib
-from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from auditor.languages.base import Detector, LineIndexed
@@ -17,35 +15,26 @@ if TYPE_CHECKING:
     from auditor.config import ResolvedConfig
 
 NPM = "npm"
-PYPROJECT = "pyproject"
-REQUIREMENTS = "requirements"
 UNKNOWN = "unknown"
 
 
 def manifest_type(file_path: str) -> str:
-    """Classify a manifest by its basename — the unit dispatch keys on."""
-    name = file_path.rsplit("/", 1)[-1]
-    if name == "package.json":
-        return NPM
-    if name == "pyproject.toml":
-        return PYPROJECT
-    if fnmatch(name, "requirements*.txt"):
-        return REQUIREMENTS
-    return UNKNOWN
+    """Classify a manifest by its basename. Only ``package.json`` is handled today; everything else
+    resolves to ``unknown`` — the auditor does not do dependency-graph scanning, so pyproject/
+    requirements manifests are not parsed here (a filename + parser is all it'd take to add one)."""
+    return NPM if file_path.rsplit("/", 1)[-1] == "package.json" else UNKNOWN
 
 
-def _parse(kind: str, source: str) -> dict[str, Any]:  # noqa: PY-TYPING-UNTYPED-DICT  (JSON/TOML parse boundary — arbitrary manifest structure)
-    """Structured payload for the manifest, or ``{}`` if it doesn't parse (a malformed manifest
-    is surfaced as 'nothing to check', never an exception)."""
-    try:
-        if kind == NPM:
-            data = json.loads(source)
-            return data if isinstance(data, dict) else {}
-        if kind == PYPROJECT:
-            return tomllib.loads(source)
-    except (json.JSONDecodeError, tomllib.TOMLDecodeError, ValueError):
+def _parse(kind: str, source: str) -> dict[str, Any]:  # noqa: PY-TYPING-UNTYPED-DICT  (JSON parse boundary — arbitrary manifest structure)
+    """Structured payload for the manifest, or ``{}`` if it doesn't parse (a malformed manifest is
+    surfaced as 'nothing to check', never an exception)."""
+    if kind != NPM:
         return {}
-    return {}
+    try:
+        data = json.loads(source)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 class ManifestContext(LineIndexed):

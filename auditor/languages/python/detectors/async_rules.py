@@ -54,6 +54,9 @@ class SyncIoInAsync(Detector):
     rule_id: ClassVar[str] = "PY-ASYNC-SYNC-IO"
     category: ClassVar[Category] = Category.ASYNC
     default_severity: ClassVar[Severity] = Severity.HIGH
+    # candidate: detection is name-based (a bare `.read`/`.write`/`open` can't be confirmed as
+    # actually-blocking I/O without type info), so the agent judges — see the evidence line.
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
     checklist_item: ClassVar[int] = 29
 
     def run(self, ctx: AuditContext) -> list[Finding]:

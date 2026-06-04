@@ -5,6 +5,7 @@ the per-rule incremental cache. Module-level ``scan_file`` / ``scan_path`` are c
 entry points that build an engine for a target.
 """
 
+import asyncio
 import re
 import time
 import tomllib
@@ -24,6 +25,8 @@ from auditor.registry import REGISTRY
 from auditor.roles import RoleClassifier
 
 _DEP_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
+#: max files audited concurrently — overlaps index I/O on re-scans (CPU work stays GIL-serialized)
+_SCAN_CONCURRENCY = 8
 
 
 def project_deps(root: Path) -> frozenset[str]:
@@ -110,14 +113,56 @@ class ScanEngine:
             target,
             self.root.name,
         )
-        results = [await self.scan_file(p) for p in files]
-        if self.index is not None and len(results) > 1:
-            logger.opt(colors=True).info(
-                "<light-black>cross-file pass over {} files</light-black>", len(results)
+        results = await self._scan_files(files)
+        if self.index is not None:
+            # reconcile: drop index rows for files under this scan's scope that no longer exist,
+            # so a deleted file leaves no stale findings/shapes (which would otherwise leak into
+            # `aggregate` and produce phantom cross-file dup findings). Runs before the cross-file
+            # pass so it doesn't group shapes from removed files.
+            pruned = await self.index.prune(
+                {r.file for r in results}, prefix=self._scope_prefix(target)
             )
+            if pruned:
+                logger.opt(colors=True).info(
+                    "<light-black>pruned {} removed file(s) from the index</light-black>",
+                    len(pruned),
+                )
+            # Always recompute the cross-file pass when an index is present — it operates on the
+            # whole shapes table (not just this scan's files), so even a single-file rescan must
+            # re-run it to clear a dup finding whose partner was just deleted/pruned.
+            if len(results) > 1:
+                logger.opt(colors=True).info(
+                    "<light-black>cross-file pass over {} files</light-black>",
+                    len(results),
+                )
             await self._apply_crossfile(results)
+        elif len(results) > 1:
+            # no index (stateless dir scan): run the cross-file pass in memory so `scan .` still
+            # surfaces XFILE dup findings, just without the cache
+            self._apply_crossfile_in_memory(results)
         _log_summary(results)
         return results
+
+    async def _scan_files(self, files: list[Path]) -> list[ScanResult]:
+        """Audit files with bounded concurrency, returned in ``files`` order. The per-file parse +
+        detector work is CPU-bound (GIL), so this mainly overlaps the index ``await``s on
+        incremental re-scans; the single index worker serializes the writes safely. (True CPU
+        parallelism would need a process pool — a larger change deferred for stability.)"""
+        if len(files) <= 1:
+            return [await self.scan_file(p) for p in files]
+        sem = asyncio.Semaphore(_SCAN_CONCURRENCY)
+
+        async def one(path: Path) -> ScanResult:
+            async with sem:
+                return await self.scan_file(path)
+
+        return list(await asyncio.gather(*(one(p) for p in files)))
+
+    def _scope_prefix(self, target: Path) -> str:
+        """Path prefix (root-relative) the scan covered, so pruning stays inside it. ``""`` for a
+        whole-repo scan; ``"pkg/"`` for a subdirectory."""
+        rel = self.rel(target)
+        return "" if rel in ("", ".") else rel.rstrip("/") + "/"
 
     # --- internals --------------------------------------------------------
 
@@ -246,7 +291,40 @@ class ScanEngine:
         )
 
     async def _apply_crossfile(self, results: list[ScanResult]) -> None:
-        xfindings = await crossfile.run(self.index)
+        self._merge_xfindings(results, await crossfile.run(self.index))
+
+    def _apply_crossfile_in_memory(self, results: list[ScanResult]) -> None:
+        """Cross-file dedup without an index: compute shapes in memory and group them, so a
+        stateless ``scan <dir>`` surfaces XFILE findings (the index path persists them instead)."""
+        min_stmts = self.settings.threshold.dry.xfile_method_min_statements
+        shape_rows: list[dict] = []
+        roles: dict[str, str] = {}
+        for res in results:
+            roles[res.file] = res.role.value
+            lang_cls = REGISTRY.language_for_path(res.file)
+            if lang_cls is None:
+                continue
+            try:
+                source = (self.root / res.file).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            except OSError:
+                continue
+            for s in lang_cls().shapes(source, method_min_statements=min_stmts):
+                shape_rows.append(
+                    {
+                        "shape_hash": s.shape_hash,
+                        "kind": s.kind,
+                        "path": res.file,
+                        "symbol": s.symbol,
+                        "line": s.line,
+                    }
+                )
+        self._merge_xfindings(results, crossfile.run_in_memory(shape_rows, roles))
+
+    def _merge_xfindings(
+        self, results: list[ScanResult], xfindings: dict[str, list[Finding]]
+    ) -> None:
         for res in results:
             extra = xfindings.get(res.file)
             if not extra:
@@ -272,6 +350,7 @@ async def audit_target(
     exclude: tuple[str, ...] = (),
     no_noqa: bool = False,
     report_only: set[str] | None = None,
+    root: Path | None = None,
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
@@ -279,8 +358,9 @@ async def audit_target(
     ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``; ``no_noqa``
     ignores in-file noqa directives (e.g. an un-silenceable security sweep). ``report_only``
     (paths relative to root) scopes the *returned* results to those files — the whole repo is
-    still scanned so cross-file/repo-global rules stay correct (e.g. a git-diff scan)."""
-    root = find_root(target)
+    still scanned so cross-file/repo-global rules stay correct (e.g. a git-diff scan). ``root``
+    pins the project root explicitly (default: nearest ``.git``/``pyproject.toml``/``.auditor``)."""
+    root = root or find_root(target)
     settings = load_config(
         root, profile=profile, allow_local_plugins=allow_local_plugins
     )

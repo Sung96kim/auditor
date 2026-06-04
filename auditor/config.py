@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import auditor.builtins  # noqa: F401  (registers built-in detectors before validation)
-from auditor.models import FileRole, RuleId, Severity, VerdictKind
+from auditor.models import FileRole, RuleId, Severity, VerdictKind, severity_rank
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
@@ -382,13 +382,18 @@ class ResolvedConfig:
         verdict: VerdictKind = det.verdict_kind
         threshold = self.settings.threshold
         reason: str | None = None
+        min_floor: Severity | None = None
 
         def apply_category(cfg: CategoryConfig | None) -> None:
-            nonlocal enabled
+            nonlocal enabled, min_floor
             if cfg is None:
                 return
             if cfg.enabled is False:
                 enabled = False
+            if cfg.min_severity is not None:
+                min_floor = (
+                    cfg.min_severity
+                )  # raise every rule in this category to at least this
 
         def apply_rule(cfg: RuleConfig | None) -> None:
             nonlocal enabled, severity, verdict, threshold
@@ -430,6 +435,11 @@ class ResolvedConfig:
             if self._override_matches(ov):
                 apply_category(ov.categories.get(category))
                 apply_rule(ov.rules.get(rule_id))
+
+        if min_floor is not None and severity_rank(severity) < severity_rank(min_floor):
+            severity = (
+                min_floor  # category min_severity is a floor on the rule's severity
+            )
 
         return EffectiveRule(
             enabled=enabled,

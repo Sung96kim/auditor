@@ -36,17 +36,38 @@ _RULES = [k.rule for k in _BY_KIND.values()]
 async def run(index: IndexStore) -> dict[str, list[Finding]]:
     """Recompute cross-file findings, persist them in the index, and return them per file."""
     await index.clear_findings_for_rules(_RULES)
-    roles = await index.roles_by_path()
-    per_file: dict[str, list[Finding]] = {}
+    per_file = _group(await index.duplicate_shapes(), await index.roles_by_path())
+    for path, findings in per_file.items():
+        await index.add_findings(path, findings)
+    return per_file
 
-    for rows in (await index.duplicate_shapes()).values():
-        # scope within-role: only flag dups among same-role files
+
+def run_in_memory(
+    shape_rows: list[dict], roles: dict[str, str]
+) -> dict[str, list[Finding]]:
+    """Cross-file dedup without an index — for a stateless directory scan, so ``scan .`` surfaces
+    XFILE findings too. ``shape_rows`` is a flat list of ``{shape_hash, kind, path, symbol, line}``;
+    group by hash spanning 2+ files (the SQL ``duplicate_shapes`` GROUP BY, done in Python)."""
+    by_hash: dict[str, list[dict]] = {}
+    for row in shape_rows:
+        by_hash.setdefault(row["shape_hash"], []).append(row)
+    dup = {
+        h: rows for h, rows in by_hash.items() if len({r["path"] for r in rows}) >= 2
+    }
+    return _group(dup, roles)
+
+
+def _group(dup_groups: dict, roles: dict[str, str]) -> dict[str, list[Finding]]:
+    """Turn shape-hash groups (each spanning 2+ files) into per-file findings, scoped within-role
+    so a prod/test pair isn't flagged. ``dup_groups`` values are row mappings with
+    ``path``/``line``/``kind``/``symbol`` (sqlite Rows or plain dicts both work)."""
+    per_file: dict[str, list[Finding]] = {}
+    for rows in dup_groups.values():
         by_role: dict[str, list] = {}
         for row in rows:
             by_role.setdefault(roles.get(row["path"], "production"), []).append(row)
         for group in by_role.values():
-            paths = {r["path"] for r in group}
-            if len(paths) < 2:
+            if len({r["path"] for r in group}) < 2:
                 continue
             kind = group[0]["kind"]
             others = sorted({f"{r['path']}:{r['line']}" for r in group})
@@ -59,9 +80,6 @@ async def run(index: IndexStore) -> dict[str, list[Finding]]:
                 per_file.setdefault(row["path"], []).append(
                     _finding(kind, row["symbol"], row["line"], elsewhere)
                 )
-
-    for path, findings in per_file.items():
-        await index.add_findings(path, findings)
     return per_file
 
 

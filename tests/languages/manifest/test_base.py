@@ -8,8 +8,6 @@ from _support import AuditorSettings, ResolvedConfig
 
 from auditor.languages.manifest.base import (
     NPM,
-    PYPROJECT,
-    REQUIREMENTS,
     UNKNOWN,
     ManifestContext,
     manifest_type,
@@ -22,9 +20,11 @@ from auditor.models import FileRole
     [
         ("package.json", NPM),
         ("a/b/package.json", NPM),
-        ("pyproject.toml", PYPROJECT),
-        ("requirements.txt", REQUIREMENTS),
-        ("requirements-dev.txt", REQUIREMENTS),
+        (
+            "pyproject.toml",
+            UNKNOWN,
+        ),  # not parsed — dependency-graph scanning is out of scope
+        ("requirements.txt", UNKNOWN),
         ("tsconfig.json", UNKNOWN),
         ("setup.py", UNKNOWN),
         ("README.md", UNKNOWN),
@@ -45,15 +45,6 @@ def test_parses_npm_json():
     ctx = _ctx('{"name": "x", "scripts": {"build": "tsc"}}')
     assert ctx.manifest_type == NPM
     assert ctx.data["name"] == "x"
-
-
-def test_parses_pyproject_toml():
-    ctx = _ctx(
-        '[project]\nname = "x"\ndependencies = ["requests>=2"]\n',
-        rel_path="pyproject.toml",
-    )
-    assert ctx.manifest_type == PYPROJECT
-    assert ctx.data["project"]["name"] == "x"
 
 
 @pytest.mark.parametrize(
@@ -88,9 +79,9 @@ def test_line_text_is_stripped_and_range_safe():
     assert ctx.line_text(999) == ""
 
 
-def test_requirements_has_no_structured_data():
-    # requirements.txt is line-based — there's no dict payload; detectors read the raw lines
+def test_unknown_manifest_has_no_structured_data():
+    # a non-npm manifest is `unknown` with no dict payload (raw lines remain available)
     ctx = _ctx("requests>=2.0\nflask\n", rel_path="requirements.txt")
-    assert ctx.manifest_type == REQUIREMENTS
+    assert ctx.manifest_type == UNKNOWN
     assert ctx.data == {}
     assert ctx.lines == ["requests>=2.0", "flask"]

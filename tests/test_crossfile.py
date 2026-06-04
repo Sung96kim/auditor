@@ -98,6 +98,21 @@ async def test_duplicate_function_flags_clones_not_lookalikes(tmp_path):
     assert "PY-XFILE-DUP-FUNCTION" not in results["pkg/c.py"]
 
 
+async def test_crossfile_runs_stateless_without_an_index(tmp_path):
+    # a plain `scan <dir>` (no --incremental, no index) still surfaces XFILE findings, in memory
+    pkg = _repo(tmp_path)
+    (pkg / "a.py").write_text(_FUNC)
+    (pkg / "b.py").write_text(_FUNC_RENAMED)
+    settings = load_config(tmp_path)
+    results = await ScanEngine.for_target(pkg, settings=settings).scan_path(pkg)
+    flagged = {
+        r.file
+        for r in results
+        if "PY-XFILE-DUP-FUNCTION" in {f.rule_id for f in r.findings}
+    }
+    assert flagged == {"pkg/a.py", "pkg/b.py"}
+
+
 async def test_duplicate_method_across_files_flags(tmp_path):
     # a method copy-pasted into a class in another file is caught too (methods are now indexed)
     pkg = _repo(tmp_path)

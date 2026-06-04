@@ -96,7 +96,8 @@ _PATTERNS: list[tuple[str, str, str]] = [
     ("twilio", "Twilio API key", r"SK[0-9a-fA-F]{32}"),
     ("sendgrid", "SendGrid API key", r"SG\.[0-9A-Za-z_-]{22}\.[0-9A-Za-z_-]{43}"),
     ("mailgun", "Mailgun API key", r"key-[0-9a-zA-Z]{32}"),
-    ("mailchimp", "Mailchimp API key", r"[0-9a-f]{32}-us[0-9]{1,2}"),
+    # Mailchimp keys are `<32 hex>-us<n>` — format-identical to an md5 + "-us1" cache key, so it
+    # can't meet the "almost certainly a real credential" bar this catalog requires. Dropped.
     # --- payments ------------------------------------------------------------
     (
         "stripe",
@@ -166,7 +167,7 @@ _PATTERNS: list[tuple[str, str, str]] = [
         r"amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     ),
     ("slack_app", "Slack app-level token", r"xapp-[0-9]-[A-Z0-9]+-[0-9]+-[0-9a-f]+"),
-    ("twilio_sid", "Twilio account SID", r"AC[0-9a-f]{32}"),
+    # Twilio account SID (`AC<32 hex>`) is a *public* identifier, not a secret — removed.
     # --- modern AI / ML providers (newly popular) ----------------------------
     ("groq", "Groq API key", r"gsk_[0-9A-Za-z]{52}"),
     ("perplexity", "Perplexity API key", r"pplx-[0-9A-Za-z]{40,}"),
