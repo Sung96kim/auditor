@@ -1,8 +1,13 @@
 """Shared test helpers + fixture paths, importable from any test in the mirrored tree
 (``tests/`` is on the path via ``pythonpath``)."""
 
+import json
+import subprocess
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from auditor.cli import app
 from auditor.config import AuditorSettings, ResolvedConfig
 from auditor.languages.bash.auditor import BashAuditor
 from auditor.languages.manifest.auditor import ManifestAuditor
@@ -128,6 +133,26 @@ BENIGN_SECRET_LOOKALIKES: list[str] = [
 
 def rule_ids(result: ScanResult) -> set[str]:
     return {f.rule_id for f in result.findings}
+
+
+# --- CLI test helpers (shared by tests/cli/*) ---------------------------------------------
+_RUNNER = CliRunner()
+
+
+def invoke(*args: str):
+    """Run the auditor CLI with string args; returns the typer ``Result``."""
+    return _RUNNER.invoke(app, list(args))
+
+
+def cli_json(result):
+    """Assert the CLI call succeeded and parse its stdout as JSON."""
+    assert result.exit_code == 0, result.output
+    return json.loads(result.output)
+
+
+def git(repo: Path, *args: str) -> None:
+    """Run a quiet ``git`` command in ``repo`` (for diff-scoping tests)."""
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 def result_with(file: str, *severities: Severity) -> ScanResult:

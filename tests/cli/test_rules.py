@@ -1,0 +1,19 @@
+"""`auditor rules list` — enumerate detector rules, with category / standard filters."""
+
+from _support import cli_json, invoke
+
+
+def test_rules_list():
+    payload = cli_json(invoke("rules", "list"))
+    ids = {r["rule_id"] for r in payload}
+    assert "PY-SEC-DANGEROUS-EVAL" in ids
+    assert "PY-XFILE-DUP-MODEL" in ids
+
+
+def test_rules_list_filtered_by_category_and_standard():
+    by_cat = cli_json(invoke("rules", "list", "--category", "security"))
+    assert by_cat and all(r["category"] == "security" for r in by_cat)
+    by_std = cli_json(invoke("rules", "list", "--standard", "bandit"))
+    assert all(
+        any(ref.startswith("bandit:") for ref in r["standard_refs"]) for r in by_std
+    )
