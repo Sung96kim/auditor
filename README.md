@@ -147,8 +147,10 @@ auditor ignore rm PY-SEC-WEAK-HASH --file src/legacy.py        # … or by selec
 auditor ignore clear                                          # drop all for this repo
 ```
 
-`ignore add` validates the `rule_id` against the registry (pass `--force` for a not-yet-loaded
-plugin rule). A line-level add snapshots the offending text, so the ignore follows the code when
+`ignore add` validates the `rule_id` against the registry — it loads the repo's config first, so
+plugin-contributed rules (entry-point/config, and trusted or `--allow-local-plugins` local plugins)
+are recognized like built-ins; `--force` skips the check entirely. A line-level add snapshots the
+offending text, so the ignore follows the code when
 lines shift and re-surfaces only if that code changes. Ignored findings are hidden from `scan`/`report`/
 `aggregate` (with an `(N ignored)` count) and don't trip `--fail-on`; `scan --show-ignored`
 reveals them. Same surface over MCP: `ignore_add` / `ignore_list` / `ignore_remove`, and

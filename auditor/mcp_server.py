@@ -136,13 +136,14 @@ async def ignore_add(
     """Persistently ignore findings so future scans hide them. Scope by what you pass: nothing =
     the rule across the whole repo; ``file`` = that file; ``file`` + ``line`` = that one finding
     (its offending text is snapshotted so the ignore follows the code when lines shift). Keyed by
-    ``rule_id`` (must be a known rule unless ``force`` — e.g. a not-yet-loaded plugin rule).
+    ``rule_id`` (must be a known rule unless ``force`` — e.g. an untrusted local plugin rule).
     Idempotent per scope."""
+    root = find_root(Path(path))
+    load_config(root)  # register the repo's entry-point/config plugins so their rules validate
     if not force and rule_id not in REGISTRY.rule_ids():
         raise ToolError(
             f"unknown rule_id {rule_id!r}; use rules_list to see rules (or force=true)"
         )
-    root = find_root(Path(path))
     ev_hash = None
     if line is not None and file is not None:
         evidence = await finding_evidence_at(root, file, rule_id, line)

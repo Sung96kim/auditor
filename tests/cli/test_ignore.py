@@ -1,9 +1,24 @@
 """`auditor ignore add|list|rm|clear` + scan honoring ignores (count, --show-ignored, gate)."""
 
+import shutil
 from pathlib import Path
 
 import pytest
-from _support import cli_json, invoke
+from _support import PLUGIN_FILE, cli_json, invoke
+
+from auditor.registry import REGISTRY
+
+
+@pytest.fixture
+def _restore_registry():
+    """`ignore add` loads the repo's plugins (mutating the global registry); restore around it."""
+    detectors = dict(REGISTRY._detectors)
+    categories = set(REGISTRY._plugin_categories)
+    sources = dict(REGISTRY._sources)
+    yield
+    REGISTRY._detectors = detectors
+    REGISTRY._plugin_categories = categories
+    REGISTRY._sources = sources
 
 
 @pytest.fixture
@@ -104,12 +119,26 @@ def test_add_unknown_rule_errors(repo):
 
 
 def test_add_unknown_rule_with_force(repo):
-    # --force is the escape hatch for a not-yet-loaded plugin rule
+    # --force is the last-resort escape hatch (e.g. a rule you'll define later)
     out = cli_json(invoke("ignore", "add", "ACME-PLUGIN-RULE", "--force", "--root", str(repo)))
     assert out["rule_id"] == "ACME-PLUGIN-RULE"
     assert [r["rule_id"] for r in cli_json(invoke("ignore", "list", "--root", str(repo)))] == [
         "ACME-PLUGIN-RULE"
     ]
+
+
+def test_add_plugin_rule_without_force(tmp_path, _restore_registry):
+    """A repo's plugin-contributed rule validates like a built-in — no --force needed,
+    because `ignore add` loads the repo's config (which registers its plugins)."""
+    root = tmp_path / "r"
+    (root / ".auditor" / "plugins").mkdir(parents=True)
+    shutil.copy(PLUGIN_FILE, root / ".auditor" / "plugins" / "house_rules.py")
+    (root / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (root / ".auditor" / "config.toml").write_text(
+        'extends = "base"\ntrust_local_plugins = true\n'
+    )
+    out = cli_json(invoke("ignore", "add", "HOUSE-NO-PRINT", "--root", str(root)))
+    assert out["rule_id"] == "HOUSE-NO-PRINT"  # plugin rule accepted without --force
 
 
 def test_rm_by_selector(repo):

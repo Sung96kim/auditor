@@ -12,6 +12,7 @@ import typer
 
 from auditor.cli.helpers import _echo_json, _fail, _open_index, _run
 from auditor.cli.options import (
+    AllowLocalPlugins,
     IgnoreFile,
     IgnoreForce,
     IgnoreLine,
@@ -20,6 +21,7 @@ from auditor.cli.options import (
     IgnoreSelector,
     RootArg,
 )
+from auditor.config import load_config
 from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
@@ -37,17 +39,21 @@ def ignore_add(
     line: IgnoreLine = None,
     reason: IgnoreReason = None,
     target: RootArg = Path("."),
+    allow_local_plugins: AllowLocalPlugins = False,
     force: IgnoreForce = False,
 ) -> None:
     """Ignore a rule repo-wide (no scope), in a file (--file), or at one line (--file --line)."""
     if line is not None and file is None:
         _fail("--line requires --file")
+    root = find_root(target)
+    # load the repo's config so its plugin-contributed rules register and validate like built-ins
+    # (entry-point + config plugins always; local .auditor/plugins only when trusted / -a).
+    load_config(root, allow_local_plugins=allow_local_plugins)
     if not force and rule_id not in REGISTRY.rule_ids():
         _fail(
             f"unknown rule_id {rule_id!r}; run `auditor rules list` to see rules "
-            "(or pass --force for a not-yet-loaded plugin rule)"
+            "(use --allow-local-plugins for an untrusted local plugin rule, or --force to skip)"
         )
-    root = find_root(target)
     _echo_json(_run(_ignore_add(root, rule_id, file, line, reason), "adding ignore…"))
 
 
