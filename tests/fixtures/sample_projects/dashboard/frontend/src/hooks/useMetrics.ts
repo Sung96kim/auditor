@@ -11,7 +11,7 @@ export function useMetrics(serviceId: string) {
 
   useEffect(() => {
     let alive = true;
-    fetchMetrics(serviceId) // noqa
+    fetchMetrics(serviceId) // auditor: skip
       .then((d) => alive && setData(d))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));

@@ -6,7 +6,7 @@ import string
 
 SECRET_KEY = "super-secret-signing-key-9f3a"
 SERVICE_API_TOKEN = "tok_live_5fbe21c0a8"
-LEGACY_SHARED_SECRET = "legacy-hmac-secret"  # noqa: PY-SEC-HARDCODED-SECRET
+LEGACY_SHARED_SECRET = "legacy-hmac-secret"  # auditor: skip: PY-SEC-HARDCODED-SECRET
 
 
 def hash_password(password: str) -> str:

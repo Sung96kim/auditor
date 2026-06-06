@@ -1,17 +1,20 @@
-"""``# noqa`` / ``// noqa`` suppression — flake8-compatible semantics.
+"""Auditor-native suppression: ``# auditor: skip`` / ``# auditor: skip-file``.
 
-Two scopes, both ``#`` and ``//``:
+A dedicated namespace (not flake8's ``# noqa``) so directives carrying auditor rule ids don't
+collide with ruff/flake8 — those tools reject ``# noqa: PY-SEC-…`` as an invalid noqa code. The
+auditor ignores ``# noqa`` entirely; ruff/flake8 keep reading their own.
 
-* **Line** — a bare ``noqa`` on a line suppresses every finding anchored to that line; a
-  ``noqa: CODES`` suppresses only findings whose ``rule_id`` is in the code list.
-* **File** — an ``auditor: noqa`` anywhere suppresses the whole file; ``auditor: noqa: CODES``
-  suppresses those rules file-wide (mirrors flake8's file directive).
+Two scopes, both ``#`` and ``//`` comments, flexible spacing, case-insensitive keyword:
 
-Codes that aren't auditor rule_ids (e.g. a ruff ``E711``) match nothing, so a line carrying
-another tool's directive is left untouched. For Python the directives are honored only on real
-comment lines (via ``tokenize``), so directive-looking text inside a string or docstring — like
-the examples in this very module — is ignored. Languages without a tokenizer here fall back to
-matching the raw line text.
+* **Line** — ``# auditor: skip`` suppresses every finding anchored to that line; ``# auditor:
+  skip: PY-SEC-DANGEROUS-EVAL, PY-OOP-GOD-CLASS`` suppresses only those rule ids on that line.
+* **File** — ``# auditor: skip-file`` anywhere suppresses the whole file; ``# auditor: skip-file:
+  CODES`` suppresses those rules file-wide.
+
+Codes are auditor ``rule_id``s; a code that isn't a known rule matches nothing (inert). For Python
+the directive is honored only on real comment lines (via ``tokenize``), so skip-looking text in a
+string/docstring — like the examples in this very module — is ignored. Languages without a
+tokenizer fall back to matching the raw line text.
 """
 
 import io
@@ -21,12 +24,15 @@ from collections.abc import Iterable
 
 from auditor.models import Finding
 
-_LINE_NOQA = re.compile(
-    r"(?:#|//)\s*noqa\b(?:\s*:\s*(?P<codes>[A-Za-z0-9,\s_-]+))?",
+_CODES = r"(?:\s*:\s*(?P<codes>[A-Za-z0-9,\s_-]+))?"
+# line directive: `auditor: skip` but NOT `auditor: skip-file` (negative lookahead), so the two
+# scopes never overlap. The file directive is matched first in `_parse` regardless.
+_LINE_SKIP = re.compile(
+    rf"(?:#|//)\s*auditor\s*:\s*skip(?!-file)\b{_CODES}",
     re.IGNORECASE,
 )
-_FILE_NOQA = re.compile(
-    r"(?:#|//)\s*auditor\s*:\s*noqa\b(?:\s*:\s*(?P<codes>[A-Za-z0-9,\s_-]+))?",
+_FILE_SKIP = re.compile(
+    rf"(?:#|//)\s*auditor\s*:\s*skip-file\b{_CODES}",
     re.IGNORECASE,
 )
 
@@ -50,7 +56,7 @@ def _comment_lines(source: str, language: str | None) -> set[int] | None:
                 lines.add(tok.start[0])
     except (tokenize.TokenError, IndentationError, SyntaxError):
         # unparseable Python: we can't tell comments from string content, so suppress nothing
-        # (conservative). Returning None here would make raw text — incl. `# noqa` inside a
+        # (conservative). Returning None here would make raw text — incl. a directive inside a
         # docstring — eligible, wrongly suppressing. A broken file has no findings anyway.
         return set()
     return lines
@@ -79,13 +85,13 @@ def _parse(source: str, allowed: set[int] | None) -> tuple[object, dict[int, obj
     for lineno, line in enumerate(source.splitlines(), start=1):
         if allowed is not None and lineno not in allowed:
             continue
-        file_dir = _directive(_FILE_NOQA, line)
+        file_dir = _directive(_FILE_SKIP, line)
         if file_dir is _ALL:
             file_all = True
         elif file_dir is not None:
             file_codes |= file_dir
         else:
-            line_dir = _directive(_LINE_NOQA, line)
+            line_dir = _directive(_LINE_SKIP, line)
             if line_dir is not None:
                 line_dirs[lineno] = line_dir
     file_directive = (
@@ -103,8 +109,8 @@ def _suppresses(directive: object, rule_id: str) -> bool:
 def filter_findings(
     source: str, findings: Iterable[Finding], *, language: str | None = None
 ) -> tuple[list[Finding], int]:
-    """Drop findings suppressed by a file- or line-level noqa directive. Returns the kept
-    findings plus the count suppressed."""
+    """Drop findings suppressed by a file- or line-level ``auditor: skip`` directive. Returns the
+    kept findings plus the count suppressed."""
     file_directive, line_directives = _parse(source, _comment_lines(source, language))
     if file_directive is None and not line_directives:
         return list(findings), 0

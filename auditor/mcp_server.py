@@ -40,14 +40,14 @@ async def scan(
     incremental: bool = False,
     strict_tests: bool = False,
     profile: str | None = None,
-    no_noqa: bool = False,
+    no_skips: bool = False,
     severity: list[str] | None = None,
     since: str | None = None,
     show_ignored: bool = False,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
-    the repo's profile for this run (base|strict|pydantic|all-strict). ``no_noqa`` ignores
-    in-file noqa directives. ``severity`` keeps only findings of those levels
+    the repo's profile for this run (base|strict|pydantic|all-strict). ``no_skips`` ignores
+    in-file ``auditor: skip`` directives. ``severity`` keeps only findings of those levels
     (blocking|high|medium|low|suggestion) — fewer tokens when you only want the worst.
     ``since`` (a git ref like ``main``/``HEAD``) scopes the output to files changed vs that ref
     — ideal for reviewing a branch/PR — while the whole repo is still scanned so cross-file
@@ -60,7 +60,7 @@ async def scan(
         incremental=incremental or since is not None,
         strict_tests=strict_tests,
         profile=profile,
-        no_noqa=no_noqa,
+        no_skips=no_skips,
         report_only=report_only,
         show_ignored=show_ignored,
     )

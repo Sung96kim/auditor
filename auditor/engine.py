@@ -21,10 +21,10 @@ from auditor.ignores import IgnoreList
 from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
-from auditor.noqa import filter_findings
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 from auditor.roles import RoleClassifier
+from auditor.skips import filter_findings
 
 _DEP_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
 #: max files audited concurrently — overlaps index I/O on re-scans (CPU work stays GIL-serialized)
@@ -206,7 +206,7 @@ class ScanEngine:
             rule_ids=rule_ids,
         )
         # Suppress before the index stores the findings, so cached re-scans stay consistent.
-        if self.settings.respect_noqa:
+        if self.settings.respect_skips:
             res.findings, res.suppressed = filter_findings(
                 source, res.findings, language=res.language
             )
@@ -346,7 +346,7 @@ class ScanEngine:
             extra = xfindings.get(res.file)
             if not extra:
                 continue
-            if self.settings.respect_noqa:
+            if self.settings.respect_skips:
                 source = (self.root / res.file).read_text(
                     encoding="utf-8", errors="replace"
                 )
@@ -365,7 +365,7 @@ async def audit_target(
     allow_local_plugins: bool = False,
     profile: str | None = None,
     exclude: tuple[str, ...] = (),
-    no_noqa: bool = False,
+    no_skips: bool = False,
     report_only: set[str] | None = None,
     root: Path | None = None,
     apply_ignores: bool = True,
@@ -374,8 +374,8 @@ async def audit_target(
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
     ``extends`` for the run (e.g. ``"strict"`` to enable the OOP/composition rules);
-    ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``; ``no_noqa``
-    ignores in-file noqa directives (e.g. an un-silenceable security sweep). ``report_only``
+    ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``; ``no_skips``
+    ignores in-file ``auditor: skip`` directives (e.g. an un-silenceable security sweep). ``report_only``
     (paths relative to root) scopes the *returned* results to those files — the whole repo is
     still scanned so cross-file/repo-global rules stay correct (e.g. a git-diff scan). ``root``
     pins the project root explicitly (default: nearest ``.git``/``pyproject.toml``/``.auditor``)."""
@@ -386,8 +386,8 @@ async def audit_target(
     updates: dict[str, object] = {}
     if strict_tests:
         updates["test_mode"] = "strict"
-    if no_noqa:
-        updates["respect_noqa"] = False
+    if no_skips:
+        updates["respect_skips"] = False
     if exclude:
         updates["exclude"] = [*settings.exclude, *exclude]
     if updates:

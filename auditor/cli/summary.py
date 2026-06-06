@@ -54,7 +54,7 @@ def _severity_line(totals: dict[Severity, int]) -> str:
 def _meta_line(stats: _Stats) -> str:
     parts = (
         f"{stats.cached} cached" if stats.cached else "",
-        f"{stats.suppressed} suppressed by noqa" if stats.suppressed else "",
+        f"{stats.suppressed} suppressed by skip" if stats.suppressed else "",
     )
     return " · ".join(p for p in parts if p)
 

@@ -49,10 +49,10 @@ Exclude = Annotated[
         "-x", "--exclude", help="Glob to ignore (repeatable), on top of config."
     ),
 ]
-NoNoqa = Annotated[
+NoSkips = Annotated[
     bool,
     typer.Option(
-        "--no-noqa", help="Ignore in-file noqa directives (un-silenceable sweep)."
+        "--no-skips", help="Ignore in-file `auditor: skip` directives (un-silenceable sweep)."
     ),
 ]
 Serve = Annotated[

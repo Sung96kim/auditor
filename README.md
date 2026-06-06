@@ -117,19 +117,20 @@ Each finding is fingerprinted by `(file, rule, hash(offending text))` — **line
 finding survives edits elsewhere in the file, but genuinely new code is still reported. Filtering
 runs before `--fail-on`, so the gate trips only on findings absent from the baseline.
 
-### noqa suppression
+### skip suppression
 
-Flake8-compatible, honored only in real comments (string/docstring text is ignored):
+An auditor-native directive (its own namespace, so rule codes never collide with ruff/flake8's
+`# noqa`), honored only in real comments — string/docstring text is ignored, and `#`/`//` both work:
 
 ```python
-risky()            # noqa                       — suppress every finding on this line
-risky()            # noqa: PY-SEC-DANGEROUS-EVAL — suppress just that rule
-# auditor: noqa                                  — suppress the whole file
-# auditor: noqa: PY-SEC-HARDCODED-SECRET         — suppress one rule file-wide
+risky()  # auditor: skip                          — suppress every finding on this line
+risky()  # auditor: skip: PY-SEC-DANGEROUS-EVAL    — suppress just that rule (comma-separate more)
+# auditor: skip-file                              — suppress the whole file
+# auditor: skip-file: PY-SEC-HARDCODED-SECRET      — suppress one rule file-wide
 ```
 
-`scan --no-noqa` ignores all directives (an un-silenceable sweep). Suppressed counts are
-surfaced, never silent.
+`scan --no-skips` ignores all directives (an un-silenceable sweep). Suppressed counts are surfaced,
+never silent. (Plain `# noqa` is **not** honored by the auditor — it stays yours and ruff/flake8's.)
 
 ### Persistent ignores
 
@@ -150,8 +151,8 @@ A line-level add snapshots the offending text, so the ignore follows the code wh
 and re-surfaces only if that code changes. Ignored findings are hidden from `scan`/`report`/
 `aggregate` (with an `(N ignored)` count) and don't trip `--fail-on`; `scan --show-ignored`
 reveals them. Same surface over MCP: `ignore_add` / `ignore_list` / `ignore_remove`, and
-`scan(show_ignored=…)`. Unlike `noqa` (in-source, shared via git) and `--baseline` (a committed
-snapshot), ignores are local to your machine's index.
+`scan(show_ignored=…)`. Unlike `auditor: skip` (in-source, shared via git) and `--baseline` (a
+committed snapshot), ignores are local to your machine's index.
 
 ## Standards & configuration
 
@@ -581,7 +582,7 @@ The image bundles the `mcp` + `ts` extras, and the incremental index persists in
 ## Development
 
 ```bash
-uv run pytest            # 954 tests
+uv run pytest            # 964 tests
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```

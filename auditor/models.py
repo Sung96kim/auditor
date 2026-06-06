@@ -75,7 +75,7 @@ class Category(StrEnum):
     SECURITY = "security"
     MALWARE = "malware"
     SUPPLY_CHAIN = "supply-chain"
-    SECRETS = "secrets"  # noqa: PY-SEC-HARDCODED-SECRET  (category name, not a credential)
+    SECRETS = "secrets"  # auditor: skip: PY-SEC-HARDCODED-SECRET  (category name, not a credential)
     CORRECTNESS = "correctness"
     TYPING = "typing"
     ASYNC = "async"
@@ -197,7 +197,7 @@ class ScanResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     cached: bool = False
     skipped_rules: list[SkippedRule] = Field(default_factory=list)
-    suppressed: int = 0  # findings dropped by a noqa directive
+    suppressed: int = 0  # findings dropped by an `auditor: skip` directive
     ignored: int = 0  # findings hidden by a persistent ignore entry
 
     @property

@@ -237,7 +237,7 @@ class AuditorSettings(BaseSettings):
     plugins: list[str] = Field(default_factory=list)
     trust_local_plugins: bool = False
     lint_overlap: bool = False
-    respect_noqa: bool = True
+    respect_skips: bool = True
     # PY-CONFIG-SCATTERED-SETTINGS: modules that may hold BaseSettings, and whether to also bless
     # the de-facto home (the module where settings classes already cluster).
     settings_modules: list[str] = Field(default_factory=lambda: ["config", "settings"])
