@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from auditor.aggregate import AuditAggregator
 from auditor.config import load_config
@@ -53,6 +54,8 @@ async def scan(
     — ideal for reviewing a branch/PR — while the whole repo is still scanned so cross-file
     rules stay correct. Persistent ignores (see the ignore_* tools) are applied automatically;
     ``show_ignored`` includes them."""
+    if not Path(path).exists():
+        raise ToolError(f"no such path: {path}")
     root = find_root(Path(path))
     report_only = git_changed_files(root, since) if since else None
     results = await audit_target(
@@ -74,15 +77,30 @@ async def scan(
 @mcp.tool
 async def report(file: str, profile: str | None = None) -> dict:
     """Audit a single file statelessly (manifest + findings)."""
-    results = await audit_target(Path(file), profile=profile)
+    results = await audit_target(_require_file(file), profile=profile)
     return json_payload(results)
 
 
 @mcp.tool
 def manifest(file: str) -> list[dict]:
     """Return the AST class+function manifest for a Python file (no detectors)."""
-    tree = ast.parse(Path(file).read_text(encoding="utf-8", errors="replace"))
+    path = _require_file(file)
+    if path.suffix not in (".py", ".pyi"):
+        raise ToolError(f"manifest is Python-only; {path.name} is not a .py file")
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, ValueError) as exc:  # ValueError: source contains null bytes
+        raise ToolError(f"could not parse {path.name}: {exc}") from exc
     return [e.model_dump(mode="json") for e in ManifestEntry.from_module(tree)]
+
+
+def _require_file(file: str) -> Path:
+    """Resolve ``file`` to an existing path or raise a clean ``ToolError`` (not a raw OSError
+    traceback) — the agent-facing equivalent of the CLI's file checks."""
+    path = Path(file)
+    if not path.is_file():
+        raise ToolError(f"no such file: {file}")
+    return path
 
 
 @mcp.tool

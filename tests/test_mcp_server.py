@@ -2,7 +2,26 @@
 
 import json
 
+import pytest
+from fastmcp.exceptions import ToolError
+
 from auditor.mcp_server import mcp
+
+
+@pytest.mark.parametrize(
+    "tool, args, message",
+    [
+        ("report", {"file": "/no/such.py"}, "no such file"),
+        ("manifest", {"file": "/no/such.py"}, "no such file"),
+        ("manifest", {"file": "pyproject.toml"}, "Python-only"),  # exists, wrong type
+        ("scan", {"path": "/no/such/dir"}, "no such path"),
+    ],
+)
+async def test_missing_inputs_raise_clean_tool_errors(tool, args, message):
+    """Regression: missing/invalid inputs surface a clean ToolError, not a raw OSError traceback."""
+    with pytest.raises(ToolError) as exc:
+        await mcp.call_tool(tool, args)
+    assert message in str(exc.value)
 
 
 async def test_tools_registered():
