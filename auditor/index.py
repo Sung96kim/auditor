@@ -551,6 +551,19 @@ class IndexStore:
 
         await self._worker.run(op)
 
+    async def shapes_by_kind(self, kind: str) -> list[dict[str, Any]]:
+        """All shape rows of one ``kind`` for this repo — for repo-level passes that consume a
+        specific shape kind directly (e.g. ``py-class-base`` for scattered-settings) rather than
+        the duplicate grouping."""
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT shape_hash, kind, path, symbol, line FROM shapes "
+                "WHERE repo = ? AND kind = ? ORDER BY path, line",
+                (self.repo, kind),
+            ).fetchall()
+        )
+        return [dict(r) for r in rows]
+
     async def roles_by_path(self) -> dict[str, str]:
         rows = await self._worker.run(
             lambda c: c.execute(

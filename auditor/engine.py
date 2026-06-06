@@ -293,7 +293,14 @@ class ScanEngine:
         )
 
     async def _apply_crossfile(self, results: list[ScanResult]) -> None:
-        self._merge_xfindings(results, await crossfile.run(self.index))
+        self._merge_xfindings(
+            results,
+            await crossfile.run(
+                self.index,
+                settings_modules=self.settings.settings_modules,
+                settings_cohesion_on=self.settings.settings_cohesion,
+            ),
+        )
 
     def _apply_crossfile_in_memory(self, results: list[ScanResult]) -> None:
         """Cross-file dedup without an index: compute shapes in memory and group them, so a
@@ -322,7 +329,15 @@ class ScanEngine:
                         "line": s.line,
                     }
                 )
-        self._merge_xfindings(results, crossfile.run_in_memory(shape_rows, roles))
+        self._merge_xfindings(
+            results,
+            crossfile.run_in_memory(
+                shape_rows,
+                roles,
+                settings_modules=self.settings.settings_modules,
+                settings_cohesion_on=self.settings.settings_cohesion,
+            ),
+        )
 
     def _merge_xfindings(
         self, results: list[ScanResult], xfindings: dict[str, list[Finding]]

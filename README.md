@@ -271,7 +271,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 `auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
 
 <details>
-<summary><b>All 123 rules</b> (generated from <code>auditor rules list</code>)</summary>
+<summary><b>All 124 rules</b> (generated from <code>auditor rules list</code>)</summary>
 
 #### security (23)
 
@@ -371,12 +371,13 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `PY-ASYNC-UNAWAITED-COROUTINE` | high | auto | — |
 | `PY-ASYNC-UNLOCKED-LAZY-INIT` | high | candidate | — |
 
-#### config (2)
+#### config (3)
 
 | rule_id | severity | verdict | standards |
 |---|---|---|---|
 | `PY-CONFIG-ADHOC-ENV` | low | auto | — |
 | `PY-CONFIG-IMPORT-TIME-IO` | medium | candidate | — |
+| `PY-CONFIG-SCATTERED-SETTINGS` | low | candidate | — |
 
 #### typing (2)
 
@@ -580,7 +581,7 @@ The image bundles the `mcp` + `ts` extras, and the incremental index persists in
 ## Development
 
 ```bash
-uv run pytest            # 931 tests
+uv run pytest            # 954 tests
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```

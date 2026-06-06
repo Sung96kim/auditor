@@ -63,9 +63,27 @@ class ShapeExtractor:
         for node in self.tree.body:
             if isinstance(node, ast.ClassDef):
                 rows.extend(self._class_shapes(node, method_min_statements))
+                rows.extend(self._class_base_shapes(node))
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 rows.extend(self._function_shape(node, node.name))
         return rows
+
+    @staticmethod
+    def _class_base_shapes(cls: ast.ClassDef) -> list[ShapeRow]:
+        """One ``py-class-base`` row per base (symbol ``"<Class>\\x1f<Base>"``), feeding the
+        repo-level class-hierarchy passes (scattered-settings). A base-less class still emits one
+        row so it appears in the graph. These never participate in duplicate-shape grouping — the
+        cross-file dup pass skips non-dup kinds."""
+        bases = [ast_util.base_name(b) for b in cls.bases] or [""]
+        return [
+            ShapeRow(
+                _hash(f"classbase|{cls.name}|{base}"),
+                "py-class-base",
+                f"{cls.name}\x1f{base}",
+                cls.lineno,
+            )
+            for base in bases
+        ]
 
     def _class_shapes(
         self, cls: ast.ClassDef, method_min_statements: int

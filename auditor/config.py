@@ -208,6 +208,15 @@ class DesignSystem(BaseModel):
     primitives: list[DesignSystemPrimitive] = Field(default_factory=list)
 
 
+class GlobalPaths(BaseSettings):
+    """Global auditor data locations from the environment. ``home`` ← ``$AUDITOR_HOME`` (via the
+    ``AUDITOR_`` prefix), defaulting to ``~/.auditor``. Lives here so the project's BaseSettings
+    stay together (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the helper."""
+
+    model_config = SettingsConfigDict(env_prefix="AUDITOR_")
+    home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
+
+
 class AuditorSettings(BaseSettings):
     """The merged repo configuration."""
 
@@ -229,6 +238,10 @@ class AuditorSettings(BaseSettings):
     trust_local_plugins: bool = False
     lint_overlap: bool = False
     respect_noqa: bool = True
+    # PY-CONFIG-SCATTERED-SETTINGS: modules that may hold BaseSettings, and whether to also bless
+    # the de-facto home (the module where settings classes already cluster).
+    settings_modules: list[str] = Field(default_factory=lambda: ["config", "settings"])
+    settings_cohesion: bool = True
     diff_base: str | None = (
         None  # `scan --vs-base` ref; None auto-detects main/master/develop/development
     )

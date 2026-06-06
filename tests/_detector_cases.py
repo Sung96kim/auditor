@@ -970,6 +970,7 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
 # Rules covered outside the good/bad table (need fs/cross-file context).
 TESTED_SEPARATELY = {
     "PY-STYLE-STALE-COMMENT",
+    "PY-CONFIG-SCATTERED-SETTINGS",  # repo-level; tested in test_scattered_settings.py
     "PY-XFILE-DUP-MODEL",
     "PY-XFILE-DUP-FUNCTION",
     "TS-XFILE-DUP-COMPONENT",

@@ -17,7 +17,11 @@ _FUNC_B = "def b(x: int, y: int):\n    z = x + y\n    return z\n"
 
 def _hashes(source: str) -> set[str]:
     ex = ShapeExtractor.for_source(source)
-    return {row.shape_hash for row in (ex.shapes() if ex else [])}
+    return {
+        row.shape_hash
+        for row in (ex.shapes() if ex else [])
+        if row.kind != "py-class-base"  # dedup shapes only; class-base is a separate concern
+    }
 
 
 def test_same_model_shape_collides():

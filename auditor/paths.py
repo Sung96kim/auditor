@@ -9,16 +9,7 @@ the repo and is read from there — this module is only about generated data.
 
 from pathlib import Path
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-class GlobalPaths(BaseSettings):
-    """Global auditor data locations, read from the environment. ``home`` ← ``$AUDITOR_HOME``
-    (via the ``AUDITOR_`` prefix), defaulting to ``~/.auditor``."""
-
-    model_config = SettingsConfigDict(env_prefix="AUDITOR_")
-    home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
+from auditor.config import GlobalPaths
 
 
 def auditor_home() -> Path:

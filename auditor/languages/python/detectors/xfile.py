@@ -30,3 +30,18 @@ class DuplicateModel(_XFileRule):
 class DuplicateFunction(_XFileRule):
     rule_id: ClassVar[str] = "PY-XFILE-DUP-FUNCTION"
     checklist_item: ClassVar[int] = 24
+
+
+class ScatteredSettings(Detector):
+    """Repo-level (computed by the crossfile pass over the class-hierarchy shapes): a BaseSettings
+    subclass defined outside the project's settings home. Config category, not a dup."""
+
+    rule_id: ClassVar[str] = "PY-CONFIG-SCATTERED-SETTINGS"
+    category: ClassVar[Category] = Category.CONFIG
+    default_severity: ClassVar[Severity] = Severity.LOW
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    repo_level: ClassVar[bool] = True
+    checklist_item: ClassVar[int] = 31
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        return []
