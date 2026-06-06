@@ -450,14 +450,88 @@ modules** (`[tool.auditor] plugins = ["acme.rules"]`), and local **`.auditor/plu
 
 ## MCP server
 
+The auditor ships a stdio [MCP](https://modelcontextprotocol.io) server so agents can call it
+directly. Install the `mcp` extra (`uv tool install ".[mcp]"`) — it puts `auditor-mcp` on your
+PATH:
+
 ```bash
-auditor-mcp                       # stdio server (requires the `mcp` extra)
-python -m auditor.mcp_server
+auditor-mcp                       # stdio MCP server (or: python -m auditor.mcp_server)
 ```
 
 Tools: `scan`, `report`, `manifest`, `discover`, `aggregate`, `rules_list`. The MCP `scan`
 takes `severity` and `since` (audit only a branch's changes), so an agent reviewing a PR pulls
 back just the changed files' findings — fewer tokens, same cross-file correctness.
+
+### Claude Code
+
+`claude mcp add` registers the stdio server; everything after `--` is the launch command:
+
+```bash
+claude mcp add auditor -- auditor-mcp                      # local scope (this project, private)
+claude mcp add --scope user auditor -- auditor-mcp         # all your projects
+claude mcp add --scope project auditor -- auditor-mcp      # shared via .mcp.json (committed)
+```
+
+Project scope writes a `.mcp.json` you can commit so teammates get it automatically:
+
+```json
+{
+  "mcpServers": {
+    "auditor": { "command": "auditor-mcp", "args": [] }
+  }
+}
+```
+
+If `auditor-mcp` isn't on PATH (not installed as a tool), run it through uv from the checkout:
+
+```bash
+claude mcp add auditor -- uv run --directory /path/to/auditor auditor-mcp
+```
+
+Verify with `claude mcp list`, then ask Claude to "scan this repo with the auditor MCP".
+
+### Codex CLI
+
+`codex mcp add` mirrors the same `-- <command>` syntax:
+
+```bash
+codex mcp add auditor -- auditor-mcp
+```
+
+Or add it to `~/.codex/config.toml` (a project-scoped `.codex/config.toml` works in trusted
+projects too):
+
+```toml
+[mcp_servers.auditor]
+command = "auditor-mcp"
+args = []
+# env = { AUDITOR_HOME = "/home/you/.auditor" }   # optional: pin the shared index location
+```
+
+### Docker (no local Python/uv needed)
+
+Build once, then point either client at the container — the repo is mounted at `/auditor` and the
+index persists in a named volume:
+
+```bash
+docker build -t auditor:latest .                  # or: docker compose build
+```
+
+```bash
+# Claude Code
+claude mcp add auditor -- docker run -i --rm \
+  -v "$PWD:/auditor" -v auditor-index:/root/.auditor \
+  --entrypoint auditor-mcp auditor:latest
+```
+
+```toml
+# Codex ~/.codex/config.toml
+[mcp_servers.auditor]
+command = "docker"
+args = ["run", "-i", "--rm",
+        "-v", "${PWD}:/auditor", "-v", "auditor-index:/root/.auditor",
+        "--entrypoint", "auditor-mcp", "auditor:latest"]
+```
 
 ## Programmatic API
 
@@ -474,12 +548,16 @@ print(render(results, "sarif"))
 ```bash
 docker compose run --rm auditor scan .                 # mounts CWD at /auditor
 TARGET=/path/to/repo docker compose run --rm auditor scan . --format sarif
+docker compose run --rm -T auditor-mcp                 # stdio MCP server (see MCP server § above)
 ```
+
+The image bundles the `mcp` + `ts` extras, and the incremental index persists in the
+`auditor-index` named volume so repeat scans stay fast.
 
 ## Development
 
 ```bash
-uv run pytest            # 560 tests
+uv run pytest            # 896 tests
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```

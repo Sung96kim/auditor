@@ -8,15 +8,21 @@ services:
     image: auditor:latest
     volumes:
       - ${TARGET:-./}:/auditor
+      - auditor-index:/root/.auditor   # persist the incremental cache across runs
     working_dir: /auditor
 
-  # Long-running MCP server over stdio (for agent integration).
+  # Long-running MCP server over stdio (for agent integration). Point an MCP client at:
+  #   docker compose run --rm -T auditor-mcp
   auditor-mcp:
     build: .
     image: auditor:latest
     volumes:
       - ${TARGET:-./}:/auditor
+      - auditor-index:/root/.auditor
     working_dir: /auditor
-    entrypoint: ["python", "-m", "auditor.mcp_server"]
+    entrypoint: ["auditor-mcp"]
     stdin_open: true
     tty: true
+
+volumes:
+  auditor-index:
