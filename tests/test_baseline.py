@@ -63,14 +63,39 @@ def test_filter_hides_baselined_keeps_new():
     assert len(fresh[0].findings) == 1
 
 
-def test_write_load_roundtrip_and_dedup(tmp_path):
+def test_write_load_roundtrip_counts_occurrences(tmp_path):
     results = [
-        _result(findings=[_finding(evidence="eval(x)"), _finding(evidence="eval(x)")])
-    ]  # two identical findings collapse to one fingerprint
+        _result(
+            findings=[
+                _finding(line=1, evidence="eval(x)"),
+                _finding(line=9, evidence="eval(x)"),  # distinct site, same snippet
+            ]
+        )
+    ]
     path = tmp_path / ".auditor" / "baseline.json"
-    assert Baseline.from_results(results).write(path) == 1
+    # recorded == occurrences (2), not deduped to 1
+    assert Baseline.from_results(results).write(path) == 2
     assert path.exists()
 
     loaded = Baseline.load(path)
     assert loaded.fingerprints == Baseline.from_results(results).fingerprints
-    assert loaded.filter(results) == 2  # both occurrences hidden by the one entry
+    assert loaded.filter(results) == 2  # both occurrences hidden → recorded == hidden
+
+
+def test_added_occurrence_of_shared_snippet_surfaces(tmp_path):
+    # baseline two findings sharing a snippet; a THIRD identical-snippet finding must surface
+    baselined = [_result(findings=[_finding(line=1), _finding(line=9)])]
+    path = tmp_path / "baseline.json"
+    Baseline.from_results(baselined).write(path)
+    bl = Baseline.load(path)
+
+    three = [_result(findings=[_finding(line=1), _finding(line=9), _finding(line=20)])]
+    assert bl.filter(three) == 2  # only the two baselined occurrences are hidden
+    assert len(three[0].findings) == 1  # the new third occurrence gates
+
+
+def test_removed_occurrence_does_not_underflow(tmp_path):
+    baselined = [_result(findings=[_finding(line=1), _finding(line=9)])]
+    bl = Baseline.from_results(baselined)
+    one = [_result(findings=[_finding(line=1)])]  # one of the two removed
+    assert bl.filter(one) == 1 and one[0].findings == []  # hides what's present, no error

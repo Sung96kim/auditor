@@ -114,8 +114,11 @@ auditor scan . --baseline .auditor/baseline.json --fail-on high   # CI gate fire
 ```
 
 Each finding is fingerprinted by `(file, rule, hash(offending text))` — **line-independent**, so a
-finding survives edits elsewhere in the file, but genuinely new code is still reported. Filtering
-runs before `--fail-on`, so the gate trips only on findings absent from the baseline.
+finding survives edits elsewhere in the file, but genuinely new code is still reported. Fingerprints
+are counted, not just set-membership: if a file legitimately has three untyped `def __init__(`, all
+three are recorded and a **fourth** one you add later still surfaces. Filtering runs before
+`--fail-on`, so the gate trips only on findings absent from the baseline. (Baselines written before
+this counting change under-recorded shared snippets — regenerate with `--write-baseline`.)
 
 ### skip suppression
 
