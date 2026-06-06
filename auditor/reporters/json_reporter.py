@@ -29,6 +29,7 @@ def _file_payload(r: ScanResult) -> dict:
         "cached": r.cached,
         "counts": {s.value: n for s, n in r.counts.items()},
         "suppressed": r.suppressed,
+        "ignored": r.ignored,
         "findings": [_finding_payload(f) for f in r.findings],
         "skipped_rules": [
             {"rule_id": s.rule_id, "reason": s.reason} for s in r.skipped_rules
@@ -57,4 +58,5 @@ def _totals(results: list[ScanResult]) -> dict:
         for sev, n in r.counts.items():
             totals[sev.value] = totals.get(sev.value, 0) + n
     totals["suppressed"] = sum(r.suppressed for r in results)
+    totals["ignored"] = sum(r.ignored for r in results)
     return totals

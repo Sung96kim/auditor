@@ -1,13 +1,15 @@
 """Roll up the index into a single AUDIT.md (replaces the prior ad-hoc /tmp/aggregate.py).
 
 Reads cached findings from the index — no re-scan — so `auditor aggregate` is cheap and
-reflects the last scan of the registered scope.
+reflects the last scan of the registered scope. Persistent ignores are applied here too, so the
+consolidated report matches what `scan` shows.
 """
 
 from pathlib import Path
 
+from auditor.ignores import IgnoreList
 from auditor.index import IndexStore
-from auditor.models import Finding, IndexEntry, Severity, severity_rank
+from auditor.models import FileRole, ScanResult, Severity, severity_rank
 
 
 class AuditAggregator:
@@ -16,27 +18,44 @@ class AuditAggregator:
     def __init__(self, index: IndexStore) -> None:
         self.index = index
 
+    async def _results(self) -> list[ScanResult]:
+        """Reconstruct per-file results from the index and drop ignored findings."""
+        entries = await self.index.files()
+        grouped = await self.index.findings_grouped()
+        results = [
+            ScanResult(
+                file=e.path,
+                language=e.language,
+                role=FileRole(e.role),
+                findings=grouped.get(e.path, []),
+            )
+            for e in entries
+        ]
+        IgnoreList.from_rows(await self.index.ignores()).filter(results)
+        return results
+
     async def markdown(self) -> str:
-        files = await self.index.files()
-        findings = await self.index.all_findings()
-        return _render(files, findings)
+        return _render(await self._results())
 
     async def write(self, out_path: Path) -> Path:
         out_path.write_text(await self.markdown())
         return out_path
 
 
-def _render(files: list[IndexEntry], findings: list[Finding]) -> str:
-    totals = _totals(files)
+def _render(results: list[ScanResult]) -> str:
+    totals = {s: 0 for s in Severity}
+    for r in results:
+        for sev, n in r.counts.items():
+            totals[sev] += n
     flagged = sorted(
-        (e for e in files if sum(e.counts.values()) > 0),
-        key=lambda e: -sum(e.counts.values()),
+        (r for r in results if r.findings),
+        key=lambda r: -len(r.findings),
     )
 
     lines = [
         "# Audit — consolidated report",
         "",
-        f"Scope: {len(files)} files audited.",
+        f"Scope: {len(results)} files audited.",
         "",
         (
             f"**Totals — blocking: {totals[Severity.BLOCKING]} · high: {totals[Severity.HIGH]} · "
@@ -50,17 +69,19 @@ def _render(files: list[IndexEntry], findings: list[Finding]) -> str:
         "| --- | --- | --- | --- | --- | --- |",
     ]
     if flagged:
-        for e in flagged:
-            c = e.counts
+        for r in flagged:
+            c = r.counts
             lines.append(
-                f"| `{e.path}` | {e.role.value} | {c.get('blocking', 0)} | "
-                f"{c.get('high', 0)} | {c.get('medium', 0)} | {c.get('low', 0)} |"
+                f"| `{r.file}` | {r.role.value} | {c[Severity.BLOCKING]} | "
+                f"{c[Severity.HIGH]} | {c[Severity.MEDIUM]} | {c[Severity.LOW]} |"
             )
     else:
         lines.append("| _(none)_ | | 0 | 0 | 0 | 0 |")
     lines.append("")
 
-    candidates = [f for f in findings if f.verdict_kind.value == "candidate"]
+    candidates = [
+        f for r in results for f in r.findings if f.verdict_kind.value == "candidate"
+    ]
     if candidates:
         lines += ["## Candidates to judge", ""]
         for f in sorted(
@@ -70,11 +91,3 @@ def _render(files: list[IndexEntry], findings: list[Finding]) -> str:
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
-
-
-def _totals(files: list[IndexEntry]) -> dict[Severity, int]:
-    totals = {s: 0 for s in Severity}
-    for entry in files:
-        for sev, n in entry.counts.items():
-            totals[Severity(sev)] += n
-    return totals

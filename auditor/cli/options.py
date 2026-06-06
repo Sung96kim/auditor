@@ -126,3 +126,27 @@ Verbose = Annotated[
         help="Log to stderr: -v files, -vv detail, -vvv findings.",
     ),
 ]
+ShowIgnored = Annotated[
+    bool,
+    typer.Option(
+        "--show-ignored", help="Include findings hidden by persistent ignores."
+    ),
+]
+# --- `ignore` sub-app options ---
+IgnoreRuleId = Annotated[
+    str, typer.Argument(help="Rule id to ignore (e.g. PY-SEC-WEAK-HASH).")
+]
+IgnoreSelector = Annotated[
+    str, typer.Argument(help="An ignore id (from `ignore list`) or a rule_id.")
+]
+IgnoreFile = Annotated[
+    str | None,
+    typer.Option("--file", help="Limit the ignore to this file (relative to root)."),
+]
+IgnoreLine = Annotated[
+    int | None,
+    typer.Option("--line", help="Limit the ignore to this line (requires --file)."),
+]
+IgnoreReason = Annotated[
+    str | None, typer.Option("--reason", help="Optional note stored with the ignore.")
+]

@@ -6,6 +6,7 @@ Requires the ``mcp`` extra (``pip install auditor[mcp]``).
 """
 
 import ast
+import time
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -13,7 +14,8 @@ from fastmcp import FastMCP
 from auditor.aggregate import AuditAggregator
 from auditor.config import load_config
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
-from auditor.engine import audit_target
+from auditor.engine import audit_target, finding_evidence_at
+from auditor.ignores import evidence_hash
 from auditor.index import IndexStore
 from auditor.models import ManifestEntry
 from auditor.paths import index_db_path, repo_key
@@ -41,6 +43,7 @@ async def scan(
     no_noqa: bool = False,
     severity: list[str] | None = None,
     since: str | None = None,
+    show_ignored: bool = False,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_noqa`` ignores
@@ -48,7 +51,8 @@ async def scan(
     (blocking|high|medium|low|suggestion) — fewer tokens when you only want the worst.
     ``since`` (a git ref like ``main``/``HEAD``) scopes the output to files changed vs that ref
     — ideal for reviewing a branch/PR — while the whole repo is still scanned so cross-file
-    rules stay correct."""
+    rules stay correct. Persistent ignores (see the ignore_* tools) are applied automatically;
+    ``show_ignored`` includes them."""
     root = find_root(Path(path))
     report_only = git_changed_files(root, since) if since else None
     results = await audit_target(
@@ -58,6 +62,7 @@ async def scan(
         profile=profile,
         no_noqa=no_noqa,
         report_only=report_only,
+        show_ignored=show_ignored,
     )
     if severity:
         wanted = {s.lower() for s in severity}
@@ -99,6 +104,47 @@ async def aggregate(path: str = ".") -> str:
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
         return await AuditAggregator(index).markdown()
+
+
+@mcp.tool
+async def ignore_add(
+    rule_id: str,
+    file: str | None = None,
+    line: int | None = None,
+    reason: str | None = None,
+    path: str = ".",
+) -> dict:
+    """Persistently ignore findings so future scans hide them. Scope by what you pass: nothing =
+    the rule across the whole repo; ``file`` = that file; ``file`` + ``line`` = that one finding
+    (its offending text is snapshotted so the ignore follows the code when lines shift). Keyed by
+    ``rule_id``. Idempotent per scope."""
+    root = find_root(Path(path))
+    ev_hash = None
+    if line is not None and file is not None:
+        evidence = await finding_evidence_at(root, file, rule_id, line)
+        ev_hash = evidence_hash(evidence) if evidence is not None else None
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        ignore_id = await index.add_ignore(
+            rule_id, file, line, ev_hash, reason, time.time()
+        )
+    return {"id": ignore_id, "rule_id": rule_id, "file": file, "line": line}
+
+
+@mcp.tool
+async def ignore_list(path: str = ".") -> list[dict]:
+    """List the persistent ignores recorded for this repo (with their ids)."""
+    root = find_root(Path(path))
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        return await index.ignores()
+
+
+@mcp.tool
+async def ignore_remove(id: int, path: str = ".") -> dict:
+    """Remove (unignore) a persistent ignore by its id (from ignore_list)."""
+    root = find_root(Path(path))
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        removed = await index.remove_ignore_by_id(id)
+    return {"removed": removed, "id": id}
 
 
 @mcp.tool

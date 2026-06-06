@@ -17,6 +17,7 @@ from auditor import crossfile
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
 from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
+from auditor.ignores import IgnoreList
 from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
@@ -352,6 +353,8 @@ async def audit_target(
     no_noqa: bool = False,
     report_only: set[str] | None = None,
     root: Path | None = None,
+    apply_ignores: bool = True,
+    show_ignored: bool = False,
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
@@ -388,8 +391,50 @@ async def audit_target(
     if incremental and not no_index and target.is_dir():
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             await index.register(root.name, time.time())
-            return await _run(ScanEngine(root, settings, index=index))
-    return await _run(ScanEngine(root, settings))
+            results = await _run(ScanEngine(root, settings, index=index))
+            if apply_ignores:
+                await _apply_ignores(index, results, show_ignored=show_ignored)
+            return results
+    results = await _run(ScanEngine(root, settings))
+    if apply_ignores:
+        await _apply_ignores_standalone(root, results, show_ignored=show_ignored)
+    return results
+
+
+async def _apply_ignores(
+    index: IndexStore, results: list[ScanResult], *, show_ignored: bool
+) -> None:
+    rows = await index.ignores()
+    if rows:
+        IgnoreList.from_rows(rows).filter(results, show_ignored=show_ignored)
+
+
+async def _apply_ignores_standalone(
+    root: Path, results: list[ScanResult], *, show_ignored: bool
+) -> None:
+    """Apply a repo's ignores on a stateless (non-incremental) scan. Skips opening — and thus
+    creating — the shared db when it doesn't exist yet (no db ⇒ no ignores)."""
+    if not index_db_path().exists():
+        return
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        await _apply_ignores(index, results, show_ignored=show_ignored)
+
+
+async def finding_evidence_at(
+    root: Path, file: str, rule_id: str, line: int
+) -> str | None:
+    """The offending text of the finding at ``file:line`` for ``rule_id`` in the current source,
+    if one exists — used to snapshot a line-level ignore so it can follow the code on later edits.
+    Scans without applying ignores so an existing ignore doesn't hide the finding being captured."""
+    abs_file = root / file
+    if not abs_file.is_file():
+        return None
+    results = await audit_target(abs_file, root=root, apply_ignores=False)
+    for result in results:
+        for finding in result.findings:
+            if finding.rule_id == rule_id and finding.line == line:
+                return finding.evidence
+    return None
 
 
 # loguru color tag per severity (stripped automatically when the sink isn't a TTY)

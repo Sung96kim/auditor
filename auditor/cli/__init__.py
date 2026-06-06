@@ -15,12 +15,14 @@ from auditor.cli import (  # noqa: F401 — imported for their @app.command() si
 )
 from auditor.cli.apps import app
 from auditor.cli.config import config_app
+from auditor.cli.ignore import ignore_app
 from auditor.cli.index import index_app
 from auditor.cli.plugins import plugins_app
 from auditor.cli.rules import rules_app
 from auditor.languages.python.auditor import PythonAuditor
 
 app.add_typer(index_app, name="index")
+app.add_typer(ignore_app, name="ignore")
 app.add_typer(config_app, name="config")
 app.add_typer(rules_app, name="rules")
 app.add_typer(plugins_app, name="plugins")

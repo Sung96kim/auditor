@@ -24,6 +24,7 @@ class _Stats(NamedTuple):
     findings: int
     files_with: int
     suppressed: int
+    ignored: int
     cached: int
 
 
@@ -37,6 +38,7 @@ def _summary_stats(results: list[ScanResult]) -> _Stats:
         findings=sum(totals.values()),
         files_with=sum(1 for r in results if r.findings),
         suppressed=sum(r.suppressed for r in results),
+        ignored=sum(r.ignored for r in results),
         cached=sum(1 for r in results if r.cached),
     )
 
@@ -57,14 +59,22 @@ def _meta_line(stats: _Stats) -> str:
     return " · ".join(p for p in parts if p)
 
 
+def _ignored_note(stats: _Stats) -> str:
+    return f" [dim]({stats.ignored} ignored)[/dim]" if stats.ignored else ""
+
+
 def print_summary(results: list[ScanResult]) -> None:
     stats = _summary_stats(results)
     if not stats.findings:
-        _out.print(f"[green]✓ clean[/green] — {len(results)} files, no findings")
+        _out.print(
+            f"[green]✓ clean[/green] — {len(results)} files, no findings"
+            + _ignored_note(stats)
+        )
         return
 
     _out.print(
-        f"[bold]{stats.findings}[/bold] findings in [bold]{stats.files_with}[/bold] of {len(results)} files"
+        f"[bold]{stats.findings}[/bold] findings in [bold]{stats.files_with}[/bold] "
+        f"of {len(results)} files" + _ignored_note(stats)
     )
     _out.print("  " + _severity_line(stats.totals))
     meta = _meta_line(stats)

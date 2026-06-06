@@ -26,6 +26,7 @@ from auditor.cli.options import (
     ScanTarget,
     Serve,
     SeverityFilter,
+    ShowIgnored,
     Since,
     StrictTests,
     Verbose,
@@ -145,6 +146,7 @@ def scan(
     baseline: BaselineFile = None,
     write_baseline: WriteBaseline = None,
     root: PinRoot = None,
+    show_ignored: ShowIgnored = False,
     verbose: Verbose = 0,
 ) -> None:
     """Audit a file or directory."""
@@ -170,6 +172,7 @@ def scan(
             no_noqa=no_noqa,
             report_only=report_only,
             root=root,
+            show_ignored=show_ignored,
         ),
         f"auditing {target}…",
         spinner=not verbose,

@@ -47,23 +47,43 @@ def _retry_locked(action: Callable[[], Any]) -> Any:
             time.sleep(_LOCK_BACKOFF)
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _DEFAULT_REPO = (
     "."  # single-partition fallback when no repo is given (unit tests, ad-hoc dbs)
 )
-# parent first, then children — order matters for creation; drops run in reverse (children first)
-_TABLES = ("repos", "files", "file_rules", "findings", "shapes")
+# Cache tables are derived from the source tree and rebuilt on a schema-version bump. The parent
+# ``repos`` registry and the user-authored ``ignores`` are NOT a cache, so they are created with
+# IF NOT EXISTS and never dropped — a version bump must not erase a user's ignores or repo list.
+_CACHE_TABLES = (
+    "files",
+    "file_rules",
+    "findings",
+    "shapes",
+)  # drop order: children before parent
 
-# ``repos`` is the parent: every working-table row references it via ``repo`` with ON DELETE
-# CASCADE, so forgetting a repo (deleting its registry row) drops all of its cached data in one
-# step and an orphaned row can never exist. Enforcement needs ``PRAGMA foreign_keys=ON`` (set
-# per-connection in the worker) — without it SQLite parses but ignores the FK clauses.
+# ``repos`` is the parent: every working/ignore-table row references it via ``repo`` with ON DELETE
+# CASCADE, so forgetting a repo (deleting its registry row) drops all of its data in one step and
+# an orphaned row can never exist. Enforcement needs ``PRAGMA foreign_keys=ON`` (set per-connection
+# in the worker) — without it SQLite parses but ignores the FK clauses.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
     repo TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     last_scanned REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ignores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
+    rule_id TEXT NOT NULL,
+    file TEXT,
+    line INTEGER,
+    evidence_hash TEXT,
+    reason TEXT,
+    created_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ignores_unique
+    ON ignores (repo, rule_id, IFNULL(file, ''), IFNULL(line, -1));
+CREATE INDEX IF NOT EXISTS ignores_repo ON ignores (repo);
 CREATE TABLE IF NOT EXISTS files (
     repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
     path TEXT NOT NULL,
@@ -209,9 +229,9 @@ class IndexStore:
         # migrate — a re-scan repopulates it and old/new layouts never have to coexist.
         existing = conn.execute("PRAGMA user_version").fetchone()[0]
         if existing and existing != _SCHEMA_VERSION:
-            # drop children before the parent (reverse of _TABLES) so a referenced repos row is
-            # never removed out from under a child table while foreign keys are enforced.
-            for table in reversed(_TABLES):
+            # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
+            # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
+            for table in _CACHE_TABLES:
                 _retry_locked(lambda t=table: conn.execute(f"DROP TABLE IF EXISTS {t}"))  # noqa: S608  (fixed literal)
         conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         _retry_locked(lambda: conn.executescript(_SCHEMA))
@@ -250,6 +270,82 @@ class IndexStore:
             cur = conn.execute("DELETE FROM repos WHERE repo = ?", (target,))
             conn.commit()
             return cur.rowcount > 0
+
+        return await self._worker.run(op)
+
+    # --- ignores (persistent, user-authored suppression) ------------------
+
+    async def add_ignore(
+        self,
+        rule_id: str,
+        file: str | None,
+        line: int | None,
+        evidence_hash: str | None,
+        reason: str | None,
+        when: float,
+    ) -> int:
+        """Add (or refresh) an ignore for this repo; returns its row id. Idempotent per scope —
+        re-adding the same (rule_id, file, line) updates its evidence_hash/reason."""
+
+        def op(conn: sqlite3.Connection) -> int:
+            self._ensure_repo(conn)
+            conn.execute(
+                "INSERT INTO ignores (repo, rule_id, file, line, evidence_hash, reason, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (repo, rule_id, IFNULL(file, ''), IFNULL(line, -1)) "
+                "DO UPDATE SET evidence_hash=excluded.evidence_hash, reason=excluded.reason",
+                (self.repo, rule_id, file, line, evidence_hash, reason, when),
+            )
+            row = conn.execute(
+                "SELECT id FROM ignores WHERE repo=? AND rule_id=? "
+                "AND IFNULL(file,'')=IFNULL(?,'') AND IFNULL(line,-1)=IFNULL(?,-1)",
+                (self.repo, rule_id, file, line),
+            ).fetchone()
+            conn.commit()
+            return row["id"]
+
+        return await self._worker.run(op)
+
+    async def ignores(self) -> list[dict[str, Any]]:
+        """Every ignore row for this repo (id, rule_id, file, line, evidence_hash, reason)."""
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT id, rule_id, file, line, evidence_hash, reason, created_at "
+                "FROM ignores WHERE repo=? ORDER BY file, line, rule_id, id",
+                (self.repo,),
+            ).fetchall()
+        )
+        return [dict(r) for r in rows]
+
+    async def remove_ignore_by_id(self, ignore_id: int) -> bool:
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "DELETE FROM ignores WHERE repo=? AND id=?", (self.repo, ignore_id)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+        return await self._worker.run(op)
+
+    async def remove_ignore_by_selector(
+        self, rule_id: str, file: str | None, line: int | None
+    ) -> bool:
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "DELETE FROM ignores WHERE repo=? AND rule_id=? "
+                "AND IFNULL(file,'')=IFNULL(?,'') AND IFNULL(line,-1)=IFNULL(?,-1)",
+                (self.repo, rule_id, file, line),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+        return await self._worker.run(op)
+
+    async def clear_ignores(self) -> int:
+        def op(conn: sqlite3.Connection) -> int:
+            cur = conn.execute("DELETE FROM ignores WHERE repo=?", (self.repo,))
+            conn.commit()
+            return cur.rowcount
 
         return await self._worker.run(op)
 
@@ -392,6 +488,22 @@ class IndexStore:
             ).fetchall()
         )
         return [_row_to_finding(r) for r in rows]
+
+    async def findings_grouped(self) -> dict[str, list[Finding]]:
+        """path -> its findings (for callers that need the file association, e.g. applying
+        ignores during aggregation)."""
+
+        def op(conn: sqlite3.Connection) -> dict[str, list[Finding]]:
+            rows = conn.execute(
+                "SELECT * FROM findings WHERE repo = ? ORDER BY path, line, rule_id",
+                (self.repo,),
+            ).fetchall()
+            out: dict[str, list[Finding]] = {}
+            for r in rows:
+                out.setdefault(r["path"], []).append(_row_to_finding(r))
+            return out
+
+        return await self._worker.run(op)
 
     async def files(self) -> list[IndexEntry]:
         def op(conn: sqlite3.Connection) -> list[IndexEntry]:

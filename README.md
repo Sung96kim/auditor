@@ -131,6 +131,28 @@ risky()            # noqa: PY-SEC-DANGEROUS-EVAL — suppress just that rule
 `scan --no-noqa` ignores all directives (an un-silenceable sweep). Suppressed counts are
 surfaced, never silent.
 
+### Persistent ignores
+
+Mute findings without touching the source — stored in the shared index (`~/.auditor`), applied
+automatically on every rescan (CLI **and** MCP), keyed by `rule_id` at three scopes:
+
+```bash
+auditor ignore add PY-SEC-WEAK-HASH                              # repo-wide
+auditor ignore add PY-SEC-WEAK-HASH --file src/legacy.py        # one file
+auditor ignore add PY-SEC-WEAK-HASH --file src/legacy.py --line 42 --reason "vetted"
+auditor ignore list                                            # show entries + ids
+auditor ignore rm 3                                            # unignore by id …
+auditor ignore rm PY-SEC-WEAK-HASH --file src/legacy.py        # … or by selector
+auditor ignore clear                                          # drop all for this repo
+```
+
+A line-level add snapshots the offending text, so the ignore follows the code when lines shift
+and re-surfaces only if that code changes. Ignored findings are hidden from `scan`/`report`/
+`aggregate` (with an `(N ignored)` count) and don't trip `--fail-on`; `scan --show-ignored`
+reveals them. Same surface over MCP: `ignore_add` / `ignore_list` / `ignore_remove`, and
+`scan(show_ignored=…)`. Unlike `noqa` (in-source, shared via git) and `--baseline` (a committed
+snapshot), ignores are local to your machine's index.
+
 ## Standards & configuration
 
 Ships recognized **industry-standard rulesets** as the baseline and lets each repo tailor
@@ -458,7 +480,8 @@ PATH:
 auditor-mcp                       # stdio MCP server (or: python -m auditor.mcp_server)
 ```
 
-Tools: `scan`, `report`, `manifest`, `discover`, `aggregate`, `rules_list`. The MCP `scan`
+Tools: `scan`, `report`, `manifest`, `discover`, `aggregate`, `rules_list`, `ignore_add`,
+`ignore_list`, `ignore_remove`. The MCP `scan`
 takes `severity` and `since` (audit only a branch's changes), so an agent reviewing a PR pulls
 back just the changed files' findings — fewer tokens, same cross-file correctness.
 
@@ -557,7 +580,7 @@ The image bundles the `mcp` + `ts` extras, and the incremental index persists in
 ## Development
 
 ```bash
-uv run pytest            # 896 tests
+uv run pytest            # 931 tests
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```
