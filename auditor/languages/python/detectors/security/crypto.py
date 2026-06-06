@@ -126,6 +126,14 @@ class InsecureRandom(SecurityDetector):
 _SECRET_NAME = re.compile(
     r"(password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key)", re.I
 )
+# a *location* of a secret is not the secret: a name ending in path/file/dir, or a value that is
+# a filesystem path. Guards the common `token_path = "/var/run/.../token"` false positive.
+_LOCATION_NAME = re.compile(r"_(path|file|dir|folder|location)$", re.I)
+_PATH_PREFIXES = ("/", "./", "../", "~/")
+
+
+def _is_secret_location(name: str, value: str) -> bool:
+    return bool(_LOCATION_NAME.search(name)) or value.startswith(_PATH_PREFIXES)
 
 
 class HardcodedSecret(SecurityDetector):
@@ -143,6 +151,7 @@ class HardcodedSecret(SecurityDetector):
                     isinstance(value, ast.Constant)
                     and isinstance(value.value, str)
                     and value.value
+                    and not _is_secret_location(target_name, value.value)
                 ):
                     out.append(
                         self.make_finding(

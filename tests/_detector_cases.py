@@ -833,6 +833,16 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "SECRET_TOKEN = 'hard-coded-jwt-secret-value-here'\n",
             "SECRET_TOKEN = os.getenv('JWT_SECRET')\n",
         ),
+        (  # a path to a secret is a location, not the secret (the k8s service-account token path)
+            "PY-SEC-HARDCODED-SECRET",
+            "api_token = 'abcdef0123456789deadbeef'\n",
+            "token_path = '/var/run/secrets/kubernetes.io/serviceaccount/token'\n",
+        ),
+        (  # a *_dir/_file/_path name denotes where a secret lives, not the credential value
+            "PY-SEC-HARDCODED-SECRET",
+            "secret = 'topsecretvalue123'\n",
+            "secret_dir = 'creds/prod'\n",
+        ),
         ("PY-SEC-WEAK-HASH", "hashlib.md5(b)", "hashlib.sha256(b)"),
         (
             "PY-SEC-INSECURE-RANDOM",
