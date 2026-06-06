@@ -58,9 +58,17 @@ def _raw(db) -> sqlite3.Connection:
 # --- the repos parent table -----------------------------------------------------------------
 
 
-async def test_repos_row_created_on_connect(tmp_path):
+async def test_bare_connect_does_not_register(tmp_path):
+    # a read-only / cross-repo connection must not leave a placeholder repo behind
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/repos/alpha") as a:
+        assert await a.repos() == []
+
+
+async def test_write_registers_repo(tmp_path):
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/repos/alpha") as a:
+        await a.add_findings("x.py", [_finding()])  # any write registers the repo
         regs = await a.repos()
     assert [r["repo"] for r in regs] == ["/repos/alpha"]
     assert regs[0]["name"] == "alpha"  # path basename
@@ -97,18 +105,41 @@ async def test_each_working_table_fks_to_repos(tmp_path, table):
     )
 
 
+# a fully-valid row per table EXCEPT the repo references an unregistered parent — so the only
+# constraint that can fire is the foreign key (not a NOT NULL on some other column)
+_ORPHAN_ROWS = {
+    "files": (
+        "(repo, path, sha256, lines, language, role, last_scanned)",
+        ("/ghost", "x.py", "h", 1, "python", "production", 0),
+    ),
+    "file_rules": (
+        "(repo, path, rule_id, fingerprint, last_scanned)",
+        ("/ghost", "x.py", "R", "fp", 0),
+    ),
+    "findings": (
+        "(repo, path, rule_id, category, severity, verdict_kind, line, message)",
+        ("/ghost", "x.py", "R", "security", "high", "auto", 1, "m"),
+    ),
+    "shapes": (
+        "(repo, shape_hash, kind, path, symbol, line)",
+        ("/ghost", "h", "model", "x.py", "S", 1),
+    ),
+}
+
+
 @pytest.mark.parametrize("table", _WORKING_TABLES)
 async def test_foreign_keys_enforced_no_orphans(tmp_path, table):
-    """An unregistered repo can't get a working-table row — the relationship is enforced."""
+    """An unregistered repo can't get a working-table row — the relationship is enforced. The row
+    is otherwise valid, so an IntegrityError here is specifically the foreign key firing."""
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/r"):
         pass
+    cols, values = _ORPHAN_ROWS[table]
+    placeholders = ", ".join("?" * len(values))
     conn = _raw(db)
     conn.execute("PRAGMA foreign_keys=ON")
     with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            f"INSERT INTO {table} (repo, path) VALUES ('/ghost', 'x.py')"  # noqa: S608
-        )
+        conn.execute(f"INSERT INTO {table} {cols} VALUES ({placeholders})", values)  # noqa: S608
     conn.close()
 
 

@@ -184,21 +184,17 @@ class IndexStore:
         await worker.start()
         store = cls(worker, db_path, repo)
         await worker.run(store._init_schema)
-        await store._ensure_registered()
         return store
 
-    async def _ensure_registered(self) -> None:
-        """Make sure this repo has a registry row (name only; last_scanned stamped by a scan)."""
+    def _ensure_repo(self, conn: sqlite3.Connection) -> None:
+        """Make this repo's parent registry row exist (idempotent), so a working-table write can
+        satisfy the foreign key. Called by every write op rather than at connect time, so a
+        read-only/cross-repo connection never registers a placeholder repo."""
         name = Path(self.repo).name or self.repo
-
-        def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "INSERT OR IGNORE INTO repos (repo, name, last_scanned) VALUES (?, ?, 0)",
-                (self.repo, name),
-            )
-            conn.commit()
-
-        await self._worker.run(op)
+        conn.execute(
+            "INSERT OR IGNORE INTO repos (repo, name, last_scanned) VALUES (?, ?, 0)",
+            (self.repo, name),
+        )
 
     @staticmethod
     def _init_schema(conn: sqlite3.Connection) -> None:
@@ -272,6 +268,7 @@ class IndexStore:
         """Register the files the user wants audited (placeholder rows until scanned)."""
 
         def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
             conn.executemany(
                 "INSERT OR IGNORE INTO files (repo, path, sha256, lines, language, role, last_scanned) "
                 "VALUES (?, ?, '', 0, '', 'production', 0)",
@@ -331,6 +328,7 @@ class IndexStore:
         )
 
         def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
             conn.execute(
                 "INSERT INTO files (repo, path, sha256, lines, language, role, last_scanned, doc_path) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
@@ -355,6 +353,7 @@ class IndexStore:
         rows = [_finding_to_row(self.repo, path, f) for f in findings]
 
         def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
             conn.execute(
                 "INSERT INTO file_rules (repo, path, rule_id, fingerprint, last_scanned) "
                 "VALUES (?, ?, ?, ?, ?) ON CONFLICT(repo, path, rule_id) DO UPDATE SET "
@@ -430,6 +429,7 @@ class IndexStore:
         tagged = [(self.repo, *row) for row in rows]
 
         def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
             conn.executemany(
                 "INSERT INTO shapes (repo, shape_hash, kind, path, symbol, line) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -465,6 +465,7 @@ class IndexStore:
         rows = [_finding_to_row(self.repo, path, f) for f in findings]
 
         def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
             conn.executemany(
                 f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})",
                 rows,
