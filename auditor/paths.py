@@ -7,14 +7,24 @@ repo inside the db rather than scattered as one file per repo. Repo-*authored* i
 the repo and is read from there — this module is only about generated data.
 """
 
-import os
 from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class GlobalPaths(BaseSettings):
+    """Global auditor data locations, read from the environment. ``home`` ← ``$AUDITOR_HOME``
+    (via the ``AUDITOR_`` prefix), defaulting to ``~/.auditor``."""
+
+    model_config = SettingsConfigDict(env_prefix="AUDITOR_")
+    home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
 
 
 def auditor_home() -> Path:
-    """The global auditor data dir: ``$AUDITOR_HOME`` if set, else ``~/.auditor``."""
-    env = os.environ.get("AUDITOR_HOME")  # noqa: PY-CONFIG-ADHOC-ENV  (bootstrap path for global tool state; read before any repo config exists, so it can't be a BaseSettings field)
-    return Path(env).expanduser() if env else Path.home() / ".auditor"
+    """The global auditor data dir: ``$AUDITOR_HOME`` if set, else ``~/.auditor``. Instantiated
+    per call so a changed environment (e.g. tests) is always reflected."""
+    return GlobalPaths().home.expanduser()
 
 
 def index_db_path() -> Path:
