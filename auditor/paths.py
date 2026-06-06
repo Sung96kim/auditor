@@ -13,7 +13,7 @@ from pathlib import Path
 
 def auditor_home() -> Path:
     """The global auditor data dir: ``$AUDITOR_HOME`` if set, else ``~/.auditor``."""
-    env = os.environ.get("AUDITOR_HOME")
+    env = os.environ.get("AUDITOR_HOME")  # noqa: PY-CONFIG-ADHOC-ENV  (bootstrap path for global tool state; read before any repo config exists, so it can't be a BaseSettings field)
     return Path(env).expanduser() if env else Path.home() / ".auditor"
 
 
