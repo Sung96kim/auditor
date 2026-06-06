@@ -4,16 +4,28 @@ import ast
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext
-from auditor.languages.python.detectors._util import dotted_name, kwarg
+from auditor.languages.python.detectors._util import (
+    dotted_name,
+    import_alias_map,
+    kwarg,
+    resolve_dotted,
+)
 from auditor.languages.python.detectors.security._base import SecurityDetector
 from auditor.models import Finding, Severity
 
+# pickle-family loaders (and yaml.unsafe_load) that run arbitrary code on deserialization.
 _UNSAFE_LOADERS = {
     "pickle.load",
     "pickle.loads",
+    "_pickle.load",
+    "_pickle.loads",
     "marshal.load",
     "marshal.loads",
     "cloudpickle.load",
+    "cloudpickle.loads",
+    "dill.load",
+    "dill.loads",
+    "yaml.unsafe_load",
 }
 
 
@@ -28,10 +40,11 @@ class UnsafeDeserialize(SecurityDetector):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
+        aliases = import_alias_map(ctx.tree)
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.Call):
                 continue
-            name = dotted_name(node.func)
+            name = resolve_dotted(dotted_name(node.func), aliases)
             if name in _UNSAFE_LOADERS:
                 out.append(
                     self.make_finding(

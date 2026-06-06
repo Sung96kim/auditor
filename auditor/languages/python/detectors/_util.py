@@ -23,6 +23,40 @@ def kwarg(node: ast.Call, name: str) -> ast.expr | None:
     return None
 
 
+def import_alias_map(tree: ast.AST) -> dict[str, str]:
+    """Map each locally-bound name to the canonical module it refers to, for ``import x as y``
+    / ``import a.b as c`` — so a detector can resolve ``y.foo()`` back to ``x.foo`` even when
+    the module was imported under an alias."""
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    out[a.asname] = a.name
+    return out
+
+
+def resolve_dotted(name: str, aliases: dict[str, str]) -> str:
+    """Rewrite the head segment of a dotted name through ``aliases``:
+    ``p.loads`` with ``{p: pickle}`` -> ``pickle.loads``; an unaliased name is returned as-is."""
+    head, dot, rest = name.partition(".")
+    base = aliases.get(head)
+    if base is None:
+        return name
+    return f"{base}{dot}{rest}" if rest else base
+
+
+def from_import_map(tree: ast.AST, module: str) -> dict[str, str]:
+    """For ``from <module> import a, b as c``: map the locally-bound name to the original
+    name (``a`` -> ``a``, ``c`` -> ``b``). Lets a detector catch ``from hashlib import md5``."""
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == module:
+            for a in node.names:
+                out[a.asname or a.name] = a.name
+    return out
+
+
 def is_const_true(node: ast.expr | None) -> bool:
     return isinstance(node, ast.Constant) and node.value is True
 

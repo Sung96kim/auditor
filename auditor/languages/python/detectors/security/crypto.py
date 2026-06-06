@@ -5,7 +5,12 @@ import re
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext
-from auditor.languages.python.detectors._util import dotted_name
+from auditor.languages.python.detectors._util import (
+    dotted_name,
+    from_import_map,
+    import_alias_map,
+    resolve_dotted,
+)
 from auditor.languages.python.detectors.security._base import SecurityDetector
 from auditor.models import Finding, Severity, VerdictKind
 
@@ -24,15 +29,24 @@ class WeakHash(SecurityDetector):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
+        aliases = import_alias_map(ctx.tree)
+        # local names bound by `from hashlib import md5 [as ...]` -> the original hashlib name
+        hashlib_imports = from_import_map(ctx.tree, "hashlib")
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.Call):
                 continue
-            name = dotted_name(node.func)
-            weak = name in _WEAK_HASHES or (
-                name == "hashlib.new"
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value in _WEAK_HASH_NAMES
+            raw = dotted_name(node.func)
+            name = resolve_dotted(raw, aliases)
+            weak = (
+                name in _WEAK_HASHES
+                or hashlib_imports.get(raw)
+                in _WEAK_HASH_NAMES  # from hashlib import md5
+                or (
+                    name == "hashlib.new"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value in _WEAK_HASH_NAMES
+                )
             )
             if weak:
                 out.append(

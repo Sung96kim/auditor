@@ -114,7 +114,30 @@ class DangerousEval(TsDetector):
                         suggestion="parse/dispatch explicitly instead of eval/new Function",
                     )
                 )
+            elif (
+                node.type == "call_expression"
+                and name in ("setTimeout", "setInterval")
+                and _first_arg_is_string(node)
+            ):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=node.line,
+                        message=f"`{name}` with a string argument evaluates it as code (injection risk)",
+                        suggestion="pass a function, not a string, to setTimeout/setInterval",
+                    )
+                )
         return out
+
+
+def _first_arg_is_string(call: Tsx) -> bool:
+    """True when the call's first argument is a string/template literal — the eval-equivalent
+    form of ``setTimeout``/``setInterval``. A function or identifier first arg is the safe form."""
+    args = call.field("arguments")
+    if args is None:
+        return False
+    named = args.named_children()
+    return bool(named) and named[0].type in ("string", "template_string")
 
 
 def _inner_html_value(attr: Tsx) -> Tsx | None:

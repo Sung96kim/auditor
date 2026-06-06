@@ -111,6 +111,13 @@ SECRET_SAMPLES: list[tuple[str, str]] = [
     ("postman", "PMAK-" + "0" * 24 + "-" + "0" * 34),
     ("hubspot", "pat-na1-12345678-1234-1234-1234-123456789012"),
     ("azure", "AccountKey=" + "a" * 86 + "=="),
+    ("gitlab", "glpat-aBcDeFgHiJkLmNoPqRsT"),
+    ("anthropic", "sk-ant-api03-" + "a" * 80),
+    ("huggingface", "hf_" + "A" * 34),
+    ("netlify", "nfp_" + "n" * 36),
+    ("replicate", "r8_" + "R" * 37),
+    ("sendgrid", "SG." + "s" * 22 + "." + "g" * 43),
+    ("npm", "npm_" + "T" * 36),
 ]
 # benign lookalikes that must NOT trip the secret sweep — hashes, ids, and other high-entropy
 # strings that share a shape with a real credential. Guards against over-broad provider patterns.
@@ -128,6 +135,13 @@ BENIGN_SECRET_LOOKALIKES: list[str] = [
     "550e8400e29b41d4a716446655440000",  # 32-hex (uuid w/o dashes)
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",  # alphanumeric id
     "user:password@host",  # not a db URI scheme
+    "glpat",  # bare prefix, no token body
+    "sk-ant",  # bare prefix, no key body
+    "hf_shorttoken",  # hf_ but only 10 chars — below 34
+    "nfp_tooshort123",  # nfp_ but only 11 chars — below 36
+    "npm run build",  # npm command, not a token
+    "r8_tooshort",  # r8_ but only 8 chars — below 37
+    "SG." + "a" * 5 + "." + "b" * 5,  # SG.<5>.<5> — way under SG.<22>.<43>
 ]
 
 
