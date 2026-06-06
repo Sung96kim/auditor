@@ -71,6 +71,13 @@ class ImportTimeIO(Detector):
                 continue
             if enclosing.get(id(node)) is not None:
                 continue  # inside a function/method body — not import-time
+            # a method chained on another call's result (`requests.get(...).json()`) shares the
+            # statement with the inner I/O call, which matches the same prefix and is flagged on
+            # its own — skip the outer link so one chained call yields one finding, not two.
+            if isinstance(node.func, ast.Attribute) and isinstance(
+                node.func.value, ast.Call
+            ):
+                continue
             name = dotted_name(node.func)
             if name in _IO_CALL_NAMES or name.startswith(_IO_CALL_PREFIXES):
                 out.append(
