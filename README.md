@@ -24,7 +24,10 @@ even for unchanged files. `auditor` moves all of that into deterministic Python:
 
 - **Manifest + detectors** run in-process from a single AST parse.
 - A **SQLite index** caches findings per `(file, rule)`; re-auditing 3 of 358 files
-  re-parses only those 3. Editing one rule's threshold re-runs only that rule.
+  re-parses only those 3. Editing one rule's threshold re-runs only that rule. The index is
+  one shared db at `~/.auditor/index.db` (override with `$AUDITOR_HOME`), partitioned by repo —
+  not a file per repo. Repo-authored input (`.auditor/config.toml`, `.auditor/plugins/`,
+  `.auditor/baseline.json`) stays in the repo.
 - The agent reads the compact JSON, then looks at only the flagged sites.
 
 ## Install
@@ -56,7 +59,7 @@ auditor scan .                       # readable summary (severity counts, worst 
 auditor scan . -f json               # machine output — json | sarif | md | html
 auditor scan . -f html -o audit.html # --output: write the report to a file instead of stdout
 auditor scan . --serve               # render HTML and open it in a browser on a local port
-auditor scan . -i                    # --incremental: use/update the cache (.auditor/index.db)
+auditor scan . -i                    # --incremental: use/update the shared cache (~/.auditor/index.db)
 auditor scan . -p strict             # --profile: run any repo at strict strength (no config edits)
 auditor scan . -x '**/migrations/**' # --exclude: ad-hoc ignore glob (repeatable), on top of config
 auditor scan tests/ -t               # --strict-tests: audit test code at full production strength
@@ -65,6 +68,8 @@ auditor report path/to/file.py       # single file, stateless (manifest + findin
 auditor manifest path/to/file.py     # AST manifest only (no detectors)
 auditor discover .                   # list auditable files with their classified role
 auditor aggregate . -o AUDIT.md      # roll the index up into AUDIT.md
+auditor index repos                  # list every repo in the shared index (~/.auditor)
+auditor index forget .               # drop this repo's cached index data (registry row + cascade)
 auditor rules list --category security --standard bandit
 auditor config show                  # the resolved configuration
 auditor plugins list                 # loaded detectors/languages/reporters + their source

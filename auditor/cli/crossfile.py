@@ -4,10 +4,9 @@ from pathlib import Path
 
 from auditor import crossfile as crossfile_pass
 from auditor.cli.apps import app
-from auditor.cli.helpers import _echo_json, _index_db, _run
+from auditor.cli.helpers import _echo_json, _open_index, _run
 from auditor.cli.options import DirTarget
 from auditor.discovery import find_root
-from auditor.index import IndexStore
 
 
 @app.command()
@@ -19,6 +18,6 @@ def crossfile(target: DirTarget = Path(".")) -> None:
 
 
 async def _crossfile(root: Path) -> int:
-    async with await IndexStore.connect(_index_db(root)) as index:
+    async with await _open_index(root) as index:
         per_file = await crossfile_pass.run(index)
         return sum(len(v) for v in per_file.values())

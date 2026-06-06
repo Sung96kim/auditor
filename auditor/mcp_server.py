@@ -16,6 +16,7 @@ from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.index import IndexStore
 from auditor.models import ManifestEntry
+from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 from auditor.reporters.json_reporter import payload as json_payload
 from auditor.roles import RoleClassifier
@@ -96,7 +97,7 @@ def discover(path: str = ".") -> list[dict]:
 async def aggregate(path: str = ".") -> str:
     """Roll up the index into an AUDIT.md string (run scan with incremental=True first)."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(root / ".auditor" / "index.db") as index:
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
         return await AuditAggregator(index).markdown()
 
 

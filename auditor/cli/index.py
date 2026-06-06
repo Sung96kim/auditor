@@ -4,10 +4,10 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import _echo_json, _index_db, _run
+from auditor.cli.helpers import _echo_json, _open_index, _open_shared_index, _run
 from auditor.cli.options import RootArg, ScopePaths
 from auditor.discovery import find_root
-from auditor.index import IndexStore
+from auditor.paths import repo_key
 
 index_app = typer.Typer(
     no_args_is_help=True, help="Manage the audit-scope index + cache."
@@ -26,7 +26,7 @@ def index_add(paths: ScopePaths, target: RootArg = Path(".")) -> None:
 
 
 async def _index_add(root: Path, rels: list[str]) -> None:
-    async with await IndexStore.connect(_index_db(root)) as index:
+    async with await _open_index(root) as index:
         await index.add_scope(rels)
 
 
@@ -38,5 +38,29 @@ def index_list(target: RootArg = Path(".")) -> None:
 
 
 async def _index_list(root: Path) -> list[dict]:
-    async with await IndexStore.connect(_index_db(root)) as index:
+    async with await _open_index(root) as index:
         return [e.model_dump(mode="json") for e in await index.files()]
+
+
+@index_app.command("repos")
+def index_repos() -> None:
+    """List every repo registered in the shared global index (~/.auditor)."""
+    _echo_json(_run(_index_repos(), "reading index…"))
+
+
+async def _index_repos() -> list[dict]:
+    async with await _open_shared_index() as index:
+        return await index.repos()
+
+
+@index_app.command("forget")
+def index_forget(target: RootArg = Path(".")) -> None:
+    """Drop this repo's cached data from the shared global index (registry row + cascade)."""
+    root = find_root(target)
+    removed = _run(_index_forget(root), "forgetting repo…")
+    _echo_json({"repo": repo_key(root), "removed": removed})
+
+
+async def _index_forget(root: Path) -> bool:
+    async with await _open_shared_index() as index:
+        return await index.forget(repo_key(root))

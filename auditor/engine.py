@@ -21,6 +21,7 @@ from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
 from auditor.noqa import filter_findings
+from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 from auditor.roles import RoleClassifier
 
@@ -385,7 +386,8 @@ async def audit_target(
         return results
 
     if incremental and not no_index and target.is_dir():
-        async with await IndexStore.connect(root / ".auditor" / "index.db") as index:
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            await index.register(root.name, time.time())
             return await _run(ScanEngine(root, settings, index=index))
     return await _run(ScanEngine(root, settings))
 

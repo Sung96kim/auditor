@@ -6,6 +6,7 @@ from pathlib import Path
 from auditor.config import load_config
 from auditor.engine import ScanEngine
 from auditor.index import IndexStore
+from auditor.paths import index_db_path
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -34,7 +35,8 @@ async def test_stateless_scan_no_db(tmp_path):
         root / "pkg" / "a.py"
     )
     assert "PY-SEC-DANGEROUS-EVAL" in {f.rule_id for f in res.findings}
-    assert not (root / ".auditor" / "index.db").exists()
+    assert not (root / ".auditor" / "index.db").exists()  # never written in-repo
+    assert not index_db_path().exists()  # a stateless scan writes no cache anywhere
     assert res.cached is False
 
 

@@ -8,6 +8,15 @@ import pytest
 from _support import SAMPLE_REPO, run_audit
 
 
+@pytest.fixture(autouse=True)
+def _isolated_auditor_home(tmp_path_factory, monkeypatch):
+    """Point the global auditor home (the shared ~/.auditor index) at a throwaway dir for every
+    test, so scans never touch — or depend on — the real user home."""
+    home = tmp_path_factory.mktemp("auditor_home")
+    monkeypatch.setenv("AUDITOR_HOME", str(home))
+    return home
+
+
 @pytest.fixture
 def audit():
     return run_audit
@@ -15,8 +24,9 @@ def audit():
 
 @pytest.fixture
 def sample_repo(tmp_path) -> Path:
-    """A writable copy of the realistic sample repo fixture (so the index/.auditor can be
-    created without touching the checked-in fixture)."""
+    """A writable copy of the realistic sample repo fixture (so a scan can write/read config
+    and scope without mutating the checked-in fixture; the index itself lives in the isolated
+    global home from ``_isolated_auditor_home``)."""
     dest = tmp_path / "repo"
     shutil.copytree(SAMPLE_REPO, dest)
     return dest

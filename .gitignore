@@ -22,10 +22,8 @@ env/
 .coverage
 htmlcov/
 
-# auditor's own index/cache (per-repo)
-.auditor/index.db
-.auditor/index.db-wal
-.auditor/index.db-shm
+# auditor's generated index/cache now lives in the global home (~/.auditor or
+# $AUDITOR_HOME), not in-repo. Local plugins stay untrusted local-only.
 .auditor/plugins/
 
 # Audit output

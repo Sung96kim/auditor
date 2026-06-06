@@ -1,0 +1,69 @@
+"""One shared SQLite db holds every repo, partitioned by the ``repo`` key. These cover the
+partitioning (two repos, same relative paths, no collision), the repos registry, and the
+cache-rebuild-on-schema-change path."""
+
+import sqlite3
+
+from auditor.index import _SCHEMA_VERSION, IndexStore
+from auditor.models import Category, Finding, Severity, VerdictKind
+
+
+def _finding(rule_id: str = "PY-X", line: int = 1) -> Finding:
+    return Finding(
+        rule_id=rule_id,
+        category=Category.SECURITY,
+        severity=Severity.HIGH,
+        verdict_kind=VerdictKind.AUTO,
+        line=line,
+        message="m",
+    )
+
+
+async def test_two_repos_one_db_no_collision(tmp_path):
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/repos/a") as a:
+        await a.add_findings("x.py", [_finding("A-RULE")])
+    async with await IndexStore.connect(db, "/repos/b") as b:
+        await b.add_findings("x.py", [_finding("B-RULE")])  # same path, different repo
+
+    async with await IndexStore.connect(db, "/repos/a") as a:
+        a_rules = {f.rule_id for f in await a.all_findings()}
+    async with await IndexStore.connect(db, "/repos/b") as b:
+        b_rules = {f.rule_id for f in await b.all_findings()}
+
+    assert a_rules == {"A-RULE"}
+    assert b_rules == {"B-RULE"}
+    # exactly one database file — no per-repo db proliferation (WAL/shm sidecars aren't *.db)
+    assert [p.name for p in tmp_path.glob("*.db")] == ["index.db"]
+
+
+async def test_prune_only_touches_its_own_repo(tmp_path):
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/repos/a") as a:
+        await a.add_findings("gone.py", [_finding("A")])
+    async with await IndexStore.connect(db, "/repos/b") as b:
+        await b.add_findings("gone.py", [_finding("B")])
+        await b.prune(keep_paths=set())  # drop everything in repo b
+
+    async with await IndexStore.connect(db, "/repos/a") as a:
+        assert {f.rule_id for f in await a.all_findings()} == {"A"}  # repo a untouched
+
+
+async def test_schema_version_change_rebuilds_cache(tmp_path):
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "r") as s:
+        await s.add_findings("x.py", [_finding()])
+
+    # simulate a db left at a different schema version
+    raw = sqlite3.connect(db)
+    raw.execute("PRAGMA user_version=1")
+    raw.commit()
+    raw.close()
+
+    async with await IndexStore.connect(db, "r") as s:
+        assert await s.all_findings() == []  # stale cache dropped + rebuilt
+
+    raw = sqlite3.connect(db)
+    version = raw.execute("PRAGMA user_version").fetchone()[0]
+    raw.close()
+    assert version == _SCHEMA_VERSION

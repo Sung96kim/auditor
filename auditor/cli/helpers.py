@@ -12,6 +12,8 @@ from typing import Any, NoReturn, TypeVar
 import typer
 
 from auditor.cli.apps import _status
+from auditor.index import IndexStore
+from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 
 _T = TypeVar("_T")
@@ -54,8 +56,16 @@ def _run(
         return asyncio.run(coro)
 
 
-def _index_db(root: Path) -> Path:
-    return root / ".auditor" / "index.db"
+def _open_index(root: Path) -> Coroutine[Any, Any, IndexStore]:
+    """Connect to the shared global index, scoped to ``root``'s partition. Returns the
+    awaitable from ``IndexStore.connect`` (use as ``async with await _open_index(root)``)."""
+    return IndexStore.connect(index_db_path(), repo_key(root))
+
+
+def _open_shared_index() -> Coroutine[Any, Any, IndexStore]:
+    """Connect to the shared global index for cross-repo operations (listing/forgetting repos),
+    not bound to any one repo's partition."""
+    return IndexStore.connect(index_db_path())
 
 
 def _emit(rendered: str, output: Path | None) -> None:

@@ -55,6 +55,17 @@ async def test_discover_tool(sample_repo):
     assert any(f["role"] == "test" for f in data)
 
 
+async def test_aggregate_tool_reads_shared_index(sample_repo):
+    """The aggregate tool reads the shared global index that an incremental scan populated —
+    exercises mcp_server's index_db_path()/repo_key() path end-to-end."""
+    from auditor.engine import audit_target
+
+    await audit_target(sample_repo / "src", incremental=True, root=sample_repo)
+    result = await mcp.call_tool("aggregate", {"path": str(sample_repo / "src")})
+    markdown = _structured(result)
+    assert isinstance(markdown, str) and "consolidated report" in markdown
+
+
 async def test_manifest_tool(sample_repo):
     result = await mcp.call_tool(
         "manifest", {"file": str(sample_repo / "src" / "models.py")}

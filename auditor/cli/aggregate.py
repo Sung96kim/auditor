@@ -6,10 +6,9 @@ import typer
 
 from auditor.aggregate import AuditAggregator
 from auditor.cli.apps import app
-from auditor.cli.helpers import _index_db, _run
+from auditor.cli.helpers import _open_index, _run
 from auditor.cli.options import AggregateOut, DirTarget
 from auditor.discovery import find_root
-from auditor.index import IndexStore
 
 
 @app.command()
@@ -24,5 +23,5 @@ def aggregate(
 
 
 async def _aggregate(root: Path, out: Path) -> Path:
-    async with await IndexStore.connect(_index_db(root)) as index:
+    async with await _open_index(root) as index:
         return await AuditAggregator(index).write(out)
