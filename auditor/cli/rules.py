@@ -4,10 +4,18 @@ from typing import Annotated
 
 import typer
 
-from auditor.cli.helpers import _echo_json
+from auditor.cli.helpers import _echo_json, _fail
 from auditor.registry import REGISTRY
 
 rules_app = typer.Typer(no_args_is_help=True, help="Inspect detector rules.")
+
+
+def _known_standards() -> set[str]:
+    return {
+        ref.split(":", 1)[0]
+        for rid in REGISTRY.rule_ids()
+        for ref in REGISTRY.detector(rid).standard_refs
+    }
 
 
 @rules_app.command("list")
@@ -20,6 +28,12 @@ def rules_list(
     ] = None,
 ) -> None:
     """List every registered detector rule."""
+    if category is not None and category not in REGISTRY.categories():
+        _fail(
+            f"unknown category {category!r}; choose from {sorted(REGISTRY.categories())}"
+        )
+    if standard is not None and standard not in (known := _known_standards()):
+        _fail(f"unknown standard {standard!r}; choose from {sorted(known)}")
     rows = []
     for rid in sorted(REGISTRY.rule_ids()):
         det = REGISTRY.detector(rid)

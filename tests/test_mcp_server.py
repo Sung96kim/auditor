@@ -117,6 +117,20 @@ async def test_ignore_tools_roundtrip(sample_repo):
     assert _structured(await mcp.call_tool("ignore_list", {"path": src})) == []
 
 
+async def test_ignore_add_validates_rule_id(sample_repo):
+    src = str(sample_repo / "src")
+    with pytest.raises(ToolError) as exc:
+        await mcp.call_tool("ignore_add", {"rule_id": "PY-NOPE-RULE", "path": src})
+    assert "unknown rule_id" in str(exc.value)
+    # force escapes the check (e.g. a not-yet-loaded plugin rule)
+    out = _structured(
+        await mcp.call_tool(
+            "ignore_add", {"rule_id": "ACME-PLUGIN-RULE", "path": src, "force": True}
+        )
+    )
+    assert out["rule_id"] == "ACME-PLUGIN-RULE"
+
+
 async def test_aggregate_tool_reads_shared_index(sample_repo):
     """The aggregate tool reads the shared global index that an incremental scan populated —
     exercises mcp_server's index_db_path()/repo_key() path end-to-end."""

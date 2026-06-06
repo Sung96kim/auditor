@@ -150,3 +150,9 @@ IgnoreLine = Annotated[
 IgnoreReason = Annotated[
     str | None, typer.Option("--reason", help="Optional note stored with the ignore.")
 ]
+IgnoreForce = Annotated[
+    bool,
+    typer.Option(
+        "--force", help="Allow a rule_id not in the registry (e.g. a not-yet-loaded plugin rule)."
+    ),
+]

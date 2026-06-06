@@ -131,11 +131,17 @@ async def ignore_add(
     line: int | None = None,
     reason: str | None = None,
     path: str = ".",
+    force: bool = False,
 ) -> dict:
     """Persistently ignore findings so future scans hide them. Scope by what you pass: nothing =
     the rule across the whole repo; ``file`` = that file; ``file`` + ``line`` = that one finding
     (its offending text is snapshotted so the ignore follows the code when lines shift). Keyed by
-    ``rule_id``. Idempotent per scope."""
+    ``rule_id`` (must be a known rule unless ``force`` — e.g. a not-yet-loaded plugin rule).
+    Idempotent per scope."""
+    if not force and rule_id not in REGISTRY.rule_ids():
+        raise ToolError(
+            f"unknown rule_id {rule_id!r}; use rules_list to see rules (or force=true)"
+        )
     root = find_root(Path(path))
     ev_hash = None
     if line is not None and file is not None:

@@ -96,6 +96,22 @@ def test_line_requires_file(repo):
     assert "--line requires --file" in res.output
 
 
+def test_add_unknown_rule_errors(repo):
+    res = invoke("ignore", "add", "PY-NOPE-RULE", "--root", str(repo))
+    assert res.exit_code == 1
+    assert "unknown rule_id" in res.output
+    assert cli_json(invoke("ignore", "list", "--root", str(repo))) == []  # nothing stored
+
+
+def test_add_unknown_rule_with_force(repo):
+    # --force is the escape hatch for a not-yet-loaded plugin rule
+    out = cli_json(invoke("ignore", "add", "ACME-PLUGIN-RULE", "--force", "--root", str(repo)))
+    assert out["rule_id"] == "ACME-PLUGIN-RULE"
+    assert [r["rule_id"] for r in cli_json(invoke("ignore", "list", "--root", str(repo)))] == [
+        "ACME-PLUGIN-RULE"
+    ]
+
+
 def test_rm_by_selector(repo):
     invoke(
         "ignore",

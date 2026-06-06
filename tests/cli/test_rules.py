@@ -17,3 +17,15 @@ def test_rules_list_filtered_by_category_and_standard():
     assert all(
         any(ref.startswith("bandit:") for ref in r["standard_refs"]) for r in by_std
     )
+
+
+def test_unknown_category_errors():
+    res = invoke("rules", "list", "--category", "nonsense")
+    assert res.exit_code == 1
+    assert "unknown category" in res.output
+
+
+def test_unknown_standard_errors():
+    res = invoke("rules", "list", "--standard", "nope")
+    assert res.exit_code == 1
+    assert "unknown standard" in res.output
