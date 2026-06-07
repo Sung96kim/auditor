@@ -142,6 +142,16 @@ def test_glob_override_applies_last(tmp_path):
     assert off.effective("PY-SEC-DANGEROUS-EVAL").enabled is False
 
 
+def test_removed_include_field_is_rejected(tmp_path):
+    # `include` was a dead config field; it's removed, so setting it now errors (extra=forbid)
+    # rather than silently no-op-ing.
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\ninclude = ["src/**"]\n'
+    )
+    with pytest.raises(Exception, match="include"):
+        load_config(tmp_path)
+
+
 def test_unknown_category_fails():
     with pytest.raises(Exception, match="unknown category"):
         AuditorSettings.model_validate(

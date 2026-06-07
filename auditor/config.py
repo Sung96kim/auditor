@@ -225,7 +225,6 @@ class AuditorSettings(BaseSettings):
     )
 
     extends: str = "base"
-    include: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
     threshold: Threshold = Field(default_factory=Threshold)
     rules: dict[RuleId, RuleConfig] = Field(default_factory=dict)
