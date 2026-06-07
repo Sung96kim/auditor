@@ -39,6 +39,18 @@ _DEFAULT_EXCLUDE_GLOBS = (
 )
 
 
+def _in_soft_skip(rel: str) -> bool:
+    """*Soft*-skipped (auto-generated/boilerplate) location: a ``migrations`` directory, or an
+    Alembic ``alembic/versions`` directory. Unlike the hard ``_EXCLUDE_DIRS`` these are skipped on a
+    normal scan but audited when the user targets them directly (see ``FileDiscovery.files``)."""
+    segs = rel.split("/")
+    if "migrations" in segs:
+        return True
+    return any(
+        a == "alembic" and b == "versions" for a, b in zip(segs, segs[1:], strict=False)
+    )
+
+
 _BASE_CANDIDATES = ("main", "master", "develop", "development")
 
 
@@ -108,15 +120,26 @@ def find_root(start: Path) -> Path:
 class FileDiscovery:
     """Lists auditable files under a target, honoring excludes and supported languages."""
 
-    def __init__(self, root: Path, *, exclude_globs: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        exclude_globs: tuple[str, ...] = (),
+        respect_gitignore: bool = True,
+    ) -> None:
         self.root = root
         self.exclude_globs = _DEFAULT_EXCLUDE_GLOBS + tuple(exclude_globs)
+        self.respect_gitignore = respect_gitignore
         self.suffixes = self._supported_suffixes()
         self.filenames = self._supported_filenames()
 
     def files(self, target: Path) -> list[Path]:
         if target.is_file():
             return [target] if self._supported(target) else []
+
+        # soft skips (migrations/) are dropped on a normal scan, but honored when the target itself
+        # sits within such a dir — i.e. the user pointed at it.
+        soft_active = not _in_soft_skip(self._rel(target))
 
         tracked = self._git_tracked()
         if tracked is not None:
@@ -132,7 +155,7 @@ class FileDiscovery:
                 p for p in target.rglob("*") if p.is_file() and self._supported(p)
             ]
 
-        out = [p for p in candidates if not self._excluded(p)]
+        out = [p for p in candidates if not self._excluded(p, soft_active=soft_active)]
         return sorted(set(out))
 
     # --- internals --------------------------------------------------------
@@ -158,32 +181,30 @@ class FileDiscovery:
         return tuple(pats)
 
     def _git_tracked(self) -> list[Path] | None:
+        # `--exclude-standard` makes git omit .gitignored files; dropping it (respect_gitignore
+        # off) includes them. The auditor's own hard/soft excludes still apply downstream.
+        args = ["git", "-C", str(self.root), "ls-files", "--cached", "--others"]
+        if self.respect_gitignore:
+            args.append("--exclude-standard")
         try:
             out = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(self.root),
-                    "ls-files",
-                    "--cached",
-                    "--others",
-                    "--exclude-standard",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=True,
+                args, capture_output=True, text=True, timeout=30, check=True
             )
         except (subprocess.SubprocessError, FileNotFoundError):
             return None
         return [self.root / line for line in out.stdout.splitlines() if line]
 
-    def _excluded(self, path: Path) -> bool:
+    def _rel(self, path: Path) -> str:
         try:
-            rel = str(path.relative_to(self.root))
+            return str(path.resolve().relative_to(self.root.resolve()))
         except ValueError:
-            rel = str(path)
+            return str(path)
+
+    def _excluded(self, path: Path, *, soft_active: bool = True) -> bool:
+        rel = self._rel(path)
         if set(rel.split("/")) & _EXCLUDE_DIRS:
+            return True
+        if soft_active and _in_soft_skip(rel):
             return True
         name = rel.rsplit("/", 1)[-1]
         return any(fnmatch(rel, g) or fnmatch(name, g) for g in self.exclude_globs)

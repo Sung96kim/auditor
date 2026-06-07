@@ -110,7 +110,12 @@ def discover(path: str = ".") -> list[dict]:
     settings = load_config(root)
     classifier = RoleClassifier(settings.role_globs)
     out = []
-    for p in FileDiscovery(root, exclude_globs=tuple(settings.exclude)).files(Path(path)):
+    discovery = FileDiscovery(
+        root,
+        exclude_globs=tuple(settings.exclude),
+        respect_gitignore=settings.respect_gitignore,
+    )
+    for p in discovery.files(Path(path)):
         rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
         role = classifier.classify(rel, p.read_text(encoding="utf-8", errors="replace"))
         out.append({"file": rel, "role": role.value})

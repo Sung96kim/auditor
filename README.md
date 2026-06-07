@@ -61,7 +61,8 @@ auditor scan . -f html -o audit.html # --output: write the report to a file inst
 auditor scan . --serve               # render HTML and open it in a browser on a local port
 auditor scan . -i                    # --incremental: use/update the shared cache (~/.auditor/index.db)
 auditor scan . -p strict             # --profile: run any repo at strict strength (no config edits)
-auditor scan . -x '**/migrations/**' # --exclude: ad-hoc ignore glob (repeatable), on top of config
+auditor scan . -x '**/vendor/**'     # --exclude: ad-hoc ignore glob (repeatable), on top of config
+auditor scan . --include-gitignored  # also audit git-ignored files (skipped by default)
 auditor scan tests/ -t               # --strict-tests: audit test code at full production strength
 auditor scan . -vvv                  # -v/-vv/-vvv: log progress to stderr (files / detail / per-finding)
 auditor report path/to/file.py       # single file, stateless (manifest + findings)
@@ -169,7 +170,8 @@ standalone `.auditor/config.toml` (standalone wins on conflict).
 ```toml
 [tool.auditor]
 extends = "strict"                 # base | strict | pydantic | all-strict | a path
-exclude = ["migrations/**"]
+exclude = ["vendor/**", "legacy/**"]  # extra globs to skip, on top of the defaults below
+respect_gitignore = true           # skip git-ignored files (CLI: --include-gitignored overrides)
 diff_base = "origin/main"          # what `scan --vs-base` diffs against
 
 [tool.auditor.rules]
@@ -180,6 +182,13 @@ PY-OOP-DUPLICATE-BLOCK  = { threshold = { dry = { dup_block_min_statements = 2 }
 [tool.auditor.categories]
 security = { min_severity = "high" }
 ```
+
+**What a scan skips by default.** Generated/vendored files (`*_pb2.py`, `*.gen.ts`, `*.d.ts`, …),
+cache/build dirs (`node_modules`, `.venv`, `__pycache__`, `dist`, …), and **git-ignored files** are
+dropped. Migration directories (`**/migrations/**`, `**/alembic/versions/**`) are *soft*-skipped:
+left out of a whole-repo scan, but audited when you point at them directly (`auditor scan
+app/migrations`). To include git-ignored files, set `respect_gitignore = false` or pass
+`--include-gitignored`.
 
 Every threshold-driven rule's floor is config-tunable, grouped by concern (each knob is a
 self-documenting `Field` with a `ge=1` validation): `threshold.oop.wall_kwarg_min`,

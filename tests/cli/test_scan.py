@@ -237,3 +237,59 @@ def test_profile_override_enables_oop(sample_repo):
         for r in base_rules
     )
     assert "PY-OOP-CONSTRUCTOR-WALL" in strict_rules
+
+
+# --- gitignore + migration soft-skip -----------------------------------------------------
+
+
+def _gitignore_repo(root, *, respect: bool | None = None):
+    """A git repo: tracked a.py (eval) + a git-ignored ignored.py (eval)."""
+    git(root, "init", "-q")
+    toml = '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="strict"\n'
+    if respect is not None:
+        toml += f"respect_gitignore={'true' if respect else 'false'}\n"
+    (root / "pyproject.toml").write_text(toml)
+    (root / "a.py").write_text("def f(x):\n    eval(x)\n")
+    (root / "ignored.py").write_text("def g(x):\n    eval(x)\n")
+    (root / ".gitignore").write_text("ignored.py\n")
+    return root
+
+
+def test_scan_skips_gitignored_by_default(tmp_path):
+    _gitignore_repo(tmp_path)
+    payload = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
+    assert [r["file"] for r in payload["files"]] == ["a.py"]  # ignored.py skipped
+
+
+def test_include_gitignored_flag(tmp_path):
+    _gitignore_repo(tmp_path)
+    payload = cli_json(
+        invoke(
+            "scan", str(tmp_path), "--no-index", "--include-gitignored", "-f", "json"
+        )
+    )
+    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py"}
+
+
+def test_respect_gitignore_config_toggle(tmp_path):
+    _gitignore_repo(tmp_path, respect=False)  # [tool.auditor] respect_gitignore=false
+    payload = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
+    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py"}
+
+
+def test_scan_soft_skips_migrations_until_targeted(tmp_path):
+    git(tmp_path, "init", "-q")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="strict"\n'
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "real.py").write_text("def f(x):\n    eval(x)\n")
+    mig = tmp_path / "app" / "migrations"
+    mig.mkdir()
+    (mig / "0001_init.py").write_text("def f(x):\n    eval(x)\n")
+
+    whole = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
+    assert [r["file"] for r in whole["files"]] == ["app/real.py"]  # migrations dropped
+
+    targeted = cli_json(invoke("scan", str(mig), "--no-index", "-f", "json"))
+    assert [r["file"] for r in targeted["files"]] == ["app/migrations/0001_init.py"]

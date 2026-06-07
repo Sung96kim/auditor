@@ -55,6 +55,12 @@ NoSkips = Annotated[
         "--no-skips", help="Ignore in-file `auditor: skip` directives (un-silenceable sweep)."
     ),
 ]
+IncludeGitignored = Annotated[
+    bool,
+    typer.Option(
+        "--include-gitignored", help="Audit git-ignored files too (default: skip them)."
+    ),
+]
 Serve = Annotated[
     bool,
     typer.Option(

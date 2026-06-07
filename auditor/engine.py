@@ -107,7 +107,9 @@ class ScanEngine:
 
     async def scan_path(self, target: Path) -> list[ScanResult]:
         files = FileDiscovery(
-            self.root, exclude_globs=tuple(self.settings.exclude)
+            self.root,
+            exclude_globs=tuple(self.settings.exclude),
+            respect_gitignore=self.settings.respect_gitignore,
         ).files(target)
         logger.opt(colors=True).info(
             "<light-black>scanning</light-black> <bold>{}</bold> <light-black>files in</light-black> <bold>{}</bold> <light-black>· paths shown relative to</light-black> <bold>{}</bold>",
@@ -366,6 +368,7 @@ async def audit_target(
     profile: str | None = None,
     exclude: tuple[str, ...] = (),
     no_skips: bool = False,
+    include_gitignored: bool = False,
     report_only: set[str] | None = None,
     root: Path | None = None,
     apply_ignores: bool = True,
@@ -375,7 +378,8 @@ async def audit_target(
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
     ``extends`` for the run (e.g. ``"strict"`` to enable the OOP/composition rules);
     ``exclude`` adds ad-hoc ignore globs on top of the configured ``exclude``; ``no_skips``
-    ignores in-file ``auditor: skip`` directives (e.g. an un-silenceable security sweep). ``report_only``
+    ignores in-file ``auditor: skip`` directives (e.g. an un-silenceable security sweep);
+    ``include_gitignored`` audits files git would ignore (default: skip them). ``report_only``
     (paths relative to root) scopes the *returned* results to those files — the whole repo is
     still scanned so cross-file/repo-global rules stay correct (e.g. a git-diff scan). ``root``
     pins the project root explicitly (default: nearest ``.git``/``pyproject.toml``/``.auditor``)."""
@@ -388,6 +392,8 @@ async def audit_target(
         updates["test_mode"] = "strict"
     if no_skips:
         updates["respect_skips"] = False
+    if include_gitignored:
+        updates["respect_gitignore"] = False
     if exclude:
         updates["exclude"] = [*settings.exclude, *exclude]
     if updates:

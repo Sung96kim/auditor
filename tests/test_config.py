@@ -142,6 +142,14 @@ def test_glob_override_applies_last(tmp_path):
     assert off.effective("PY-SEC-DANGEROUS-EVAL").enabled is False
 
 
+def test_respect_gitignore_defaults_true_and_is_configurable(tmp_path):
+    assert AuditorSettings().respect_gitignore is True
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nrespect_gitignore = false\n'
+    )
+    assert load_config(tmp_path).respect_gitignore is False
+
+
 def test_removed_include_field_is_rejected(tmp_path):
     # `include` was a dead config field; it's removed, so setting it now errors (extra=forbid)
     # rather than silently no-op-ing.

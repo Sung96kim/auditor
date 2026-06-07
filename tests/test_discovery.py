@@ -79,6 +79,67 @@ def test_generated_typescript_is_excluded(tmp_path):
     assert found == {"App.tsx"}  # generated/declaration files dropped
 
 
+def _migration_tree(tmp_path: Path) -> Path:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "real.py").write_text("x = 1\n")
+    (tmp_path / "app" / "migrations").mkdir(parents=True)
+    (tmp_path / "app" / "migrations" / "0001_init.py").write_text("x = 1\n")
+    (tmp_path / "db" / "alembic" / "versions").mkdir(parents=True)
+    (tmp_path / "db" / "alembic" / "versions" / "abc_rev.py").write_text("x = 1\n")
+    return tmp_path
+
+
+def test_migrations_soft_skipped_on_whole_repo(tmp_path):
+    root = _migration_tree(tmp_path)
+    files = {p.relative_to(root).as_posix() for p in FileDiscovery(root).files(root)}
+    assert files == {"src/real.py"}  # migrations + alembic/versions dropped
+
+
+def test_migrations_scanned_when_targeted(tmp_path):
+    root = _migration_tree(tmp_path)
+    # pointing at the migration dir overrides the soft-skip
+    mig = {p.name for p in FileDiscovery(root).files(root / "app" / "migrations")}
+    assert mig == {"0001_init.py"}
+    ver = {
+        p.name for p in FileDiscovery(root).files(root / "db" / "alembic" / "versions")
+    }
+    assert ver == {"abc_rev.py"}
+
+
+def test_migration_single_file_scanned(tmp_path):
+    root = _migration_tree(tmp_path)
+    f = root / "app" / "migrations" / "0001_init.py"
+    assert FileDiscovery(root).files(f) == [f]
+
+
+def test_parent_scan_still_skips_migrations(tmp_path):
+    root = _migration_tree(tmp_path)
+    # scanning the parent of a migrations dir (not the dir itself) still skips it
+    files = {p.name for p in FileDiscovery(root).files(root / "app")}
+    assert files == set()
+
+
+def test_gitignore_respected_by_default(tmp_path):
+    _git(tmp_path, "init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "secret.py").write_text("y = 2\n")
+    (tmp_path / ".gitignore").write_text("secret.py\n")
+    files = {p.name for p in FileDiscovery(tmp_path).files(tmp_path)}
+    assert files == {"a.py"}  # gitignored file skipped
+
+
+def test_gitignore_can_be_disabled(tmp_path):
+    _git(tmp_path, "init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "secret.py").write_text("y = 2\n")
+    (tmp_path / ".gitignore").write_text("secret.py\n")
+    fd = FileDiscovery(tmp_path, respect_gitignore=False)
+    assert {p.name for p in fd.files(tmp_path)} == {"a.py", "secret.py"}
+
+
 def test_manifest_discovered_by_filename_not_generic_json(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
     app = tmp_path / "app"
