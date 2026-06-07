@@ -107,9 +107,10 @@ def _require_file(file: str) -> Path:
 def discover(path: str = ".") -> list[dict]:
     """List auditable files under a path with their classified role."""
     root = find_root(Path(path))
-    classifier = RoleClassifier(load_config(root).role_globs)
+    settings = load_config(root)
+    classifier = RoleClassifier(settings.role_globs)
     out = []
-    for p in FileDiscovery(root).files(Path(path)):
+    for p in FileDiscovery(root, exclude_globs=tuple(settings.exclude)).files(Path(path)):
         rel = str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
         role = classifier.classify(rel, p.read_text(encoding="utf-8", errors="replace"))
         out.append({"file": rel, "role": role.value})

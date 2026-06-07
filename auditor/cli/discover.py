@@ -15,9 +15,10 @@ def discover(target: DirTarget = Path(".")) -> None:
     """List auditable files with their classified role."""
     _require_exists(target)
     root = find_root(target)
-    classifier = RoleClassifier(load_config(root).role_globs)
+    settings = load_config(root)
+    classifier = RoleClassifier(settings.role_globs)
     out = []
-    for path in FileDiscovery(root).files(target):
+    for path in FileDiscovery(root, exclude_globs=tuple(settings.exclude)).files(target):
         rel = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
         role = classifier.classify(
             rel, path.read_text(encoding="utf-8", errors="replace")
