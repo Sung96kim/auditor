@@ -26,6 +26,10 @@ def rules_list(
     standard: Annotated[
         str | None, typer.Option("-s", "--standard", help="bandit | owasp coverage.")
     ] = None,
+    framework: Annotated[
+        str | None,
+        typer.Option("-f", "--framework", help="Filter by framework (e.g. pytest)."),
+    ] = None,
 ) -> None:
     """List every registered detector rule."""
     if category is not None and category not in REGISTRY.categories():
@@ -34,10 +38,16 @@ def rules_list(
         )
     if standard is not None and standard not in (known := _known_standards()):
         _fail(f"unknown standard {standard!r}; choose from {sorted(known)}")
+    if framework is not None and framework not in REGISTRY.frameworks():
+        _fail(
+            f"unknown framework {framework!r}; choose from {sorted(REGISTRY.frameworks())}"
+        )
     rows = []
     for rid in sorted(REGISTRY.rule_ids()):
         det = REGISTRY.detector(rid)
         if category and str(det.category) != category:
+            continue
+        if framework and getattr(det, "framework", None) != framework:
             continue
         refs = list(det.standard_refs)
         if standard and not any(r.startswith(f"{standard}:") for r in refs):
@@ -46,6 +56,7 @@ def rules_list(
             {
                 "rule_id": rid,
                 "category": str(det.category),
+                "framework": getattr(det, "framework", None),
                 "default_severity": det.default_severity.value,
                 "verdict_kind": det.verdict_kind.value,
                 "standard_refs": refs,

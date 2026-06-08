@@ -66,6 +66,11 @@ class FileRole(StrEnum):
     SCRIPT = "script"
     GENERATED = "generated"
 
+    @property
+    def is_test(self) -> bool:
+        """A test or test-support role (the two are grouped throughout config/role policy)."""
+        return self in (FileRole.TEST, FileRole.TEST_SUPPORT)
+
 
 class Category(StrEnum):
     """Built-in detector categories. Plugins may register additional category strings;
@@ -85,6 +90,7 @@ class Category(StrEnum):
     REACT = "react"
     A11Y = "a11y"
     DESIGN_SYSTEM = "design-system"
+    TESTING = "testing"
 
 
 class ManifestEntryKind(StrEnum):

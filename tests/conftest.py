@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from _support import SAMPLE_REPO, run_audit
+from _support import SAMPLE_REPO
 
 
 @pytest.fixture(autouse=True)
@@ -15,11 +15,6 @@ def _isolated_auditor_home(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("auditor_home")
     monkeypatch.setenv("AUDITOR_HOME", str(home))
     return home
-
-
-@pytest.fixture
-def audit():
-    return run_audit
 
 
 @pytest.fixture

@@ -49,3 +49,22 @@ def test_snapshot_shape():
     snap = REGISTRY.snapshot()
     assert "detectors" in snap and "languages" in snap and "reporters" in snap
     assert snap["detectors"]["PY-SEC-DANGEROUS-EVAL"]["source"] == "built-in"
+
+
+def test_framework_tag_and_query():
+    reg = Registry()
+
+    class _D:
+        rule_id = "X-FW-RULE"
+        category = "testing"
+        language = "python"
+        framework = "pytest"
+
+    reg.register_detector(_D, source="test")
+    assert reg.frameworks() == {"pytest"}
+
+
+def test_detector_framework_defaults_none():
+    from auditor.languages.base import Detector
+
+    assert Detector.framework is None

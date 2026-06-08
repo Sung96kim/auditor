@@ -4,11 +4,13 @@ and functions across files (within the same role, to avoid prod-vs-test noise).
 Cheap by design — a GROUP BY over the shapes table, recomputed each scan; no re-parse.
 """
 
-from auditor import settings_cohesion
+from auditor import fixture_usage, settings_cohesion
 from auditor.index import IndexStore
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _CLASS_BASE_KIND = "py-class-base"
+_FIXTURE_DEF_KIND = "pytest-fixture-def"
+_FIXTURE_REF_KIND = "pytest-fixture-ref"
 
 
 class _XKind:
@@ -40,7 +42,9 @@ async def run(
     index: IndexStore, *, settings_modules: list[str], settings_cohesion_on: bool
 ) -> dict[str, list[Finding]]:
     """Recompute cross-file findings, persist them in the index, and return them per file."""
-    await index.clear_findings_for_rules([*_RULES, settings_cohesion.RULE_ID])
+    await index.clear_findings_for_rules(
+        [*_RULES, settings_cohesion.RULE_ID, fixture_usage.RULE_ID]
+    )
     roles = await index.roles_by_path()
     per_file = _group(await index.duplicate_shapes(), roles)
     _merge(
@@ -50,6 +54,14 @@ async def run(
             roles,
             settings_modules=settings_modules,
             cohesion=settings_cohesion_on,
+        ),
+    )
+    _merge(
+        per_file,
+        fixture_usage.find_unused(
+            await index.shapes_by_kind(_FIXTURE_DEF_KIND),
+            await index.shapes_by_kind(_FIXTURE_REF_KIND),
+            roles,
         ),
     )
     for path, findings in per_file.items():
@@ -82,6 +94,14 @@ def run_in_memory(
             roles,
             settings_modules=settings_modules,
             cohesion=settings_cohesion_on,
+        ),
+    )
+    _merge(
+        per_file,
+        fixture_usage.find_unused(
+            [r for r in shape_rows if r["kind"] == _FIXTURE_DEF_KIND],
+            [r for r in shape_rows if r["kind"] == _FIXTURE_REF_KIND],
+            roles,
         ),
     )
     return per_file

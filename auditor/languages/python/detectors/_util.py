@@ -103,6 +103,26 @@ def module_level_statements(tree: ast.Module) -> Iterator[ast.stmt]:
     yield from tree.body
 
 
+def test_functions(
+    tree: ast.Module,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Every ``test_*`` function: top-level, plus methods of ``Test*`` classes (sync + async)."""
+    out: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in tree.body:
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and node.name.startswith("test_"):
+            out.append(node)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            out.extend(
+                sub
+                for sub in node.body
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and sub.name.startswith("test_")
+            )
+    return out
+
+
 def function_params(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """All parameter names of a function — values that enter from the caller (potential
     taint sources for security checks that 'go upward' to find user-controlled data)."""

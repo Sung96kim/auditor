@@ -115,6 +115,32 @@ class JsxThreshold(BaseModel):
     )
 
 
+class TestThreshold(BaseModel):
+    """Floors for the structural pytest test-quality detectors."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parametrize_min_clones: int = Field(
+        3,
+        ge=1,
+        description="near-identical tests sharing a body before 'parametrize me'",
+    )
+    parametrize_min_statements: int = Field(
+        2,
+        ge=1,
+        description="body statements before a test is considered for clustering",
+    )
+    setup_min_statements: int = Field(
+        2, ge=1, description="shared leading statements before suggesting a fixture"
+    )
+    setup_min_tests: int = Field(
+        3, ge=1, description="tests sharing a setup prefix before flagging"
+    )
+    max_mocks_per_test: int = Field(
+        4, ge=1, description="mocks in one test before it's testing mocks, not behavior"
+    )
+
+
 class Threshold(BaseModel):
     """Threshold knobs grouped by concern. A partial override deep-merges onto the base, so a
     repo can tune one floor (e.g. ``threshold.dry.dup_block_min_statements``) without restating
@@ -126,6 +152,7 @@ class Threshold(BaseModel):
     size: SizeThreshold = Field(default_factory=SizeThreshold)
     dry: DryThreshold = Field(default_factory=DryThreshold)
     jsx: JsxThreshold = Field(default_factory=JsxThreshold)
+    test: TestThreshold = Field(default_factory=TestThreshold)
 
     def merged(self, override: "Threshold | None") -> "Threshold":
         if override is None:
@@ -463,16 +490,13 @@ class ResolvedConfig:
         )
 
     def _role_mode(self) -> RoleMode:
-        if (
-            self.role in (FileRole.TEST, FileRole.TEST_SUPPORT)
-            and self.settings.test_mode
-        ):
+        if self.role.is_test and self.settings.test_mode:
             return self.settings.test_mode
         rp = self.settings.roles.get(self.role)
         if rp is not None:
             return rp.mode
         # default: tests relaxed, everything else strict
-        if self.role in (FileRole.TEST, FileRole.TEST_SUPPORT):
+        if self.role.is_test:
             return "relaxed"
         if self.role == FileRole.GENERATED:
             return "excluded"

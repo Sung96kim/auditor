@@ -44,6 +44,116 @@ def _clone_signature(node: ast.AST) -> str:
     return f"{type(node).__name__}[{','.join(_clone_signature(c) for c in children)}]"
 
 
+def _is_fixture_func(func: ast.expr) -> bool:
+    return ast_util.dotted(func).split(".")[-1] == "fixture"
+
+
+def _fixture_deco(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.expr | None:
+    for deco in fn.decorator_list:
+        func = deco.func if isinstance(deco, ast.Call) else deco
+        if _is_fixture_func(func):
+            return deco
+    return None
+
+
+def _is_autouse(deco: ast.expr) -> bool:
+    return isinstance(deco, ast.Call) and any(
+        k.arg == "autouse"
+        and isinstance(k.value, ast.Constant)
+        and k.value.value is True
+        for k in deco.keywords
+    )
+
+
+def _usefixtures_refs(deco: ast.expr, line: int) -> list[tuple[str, int]]:
+    if not isinstance(deco, ast.Call) or not ast_util.dotted(deco.func).endswith(
+        "mark.usefixtures"
+    ):
+        return []
+    return [
+        (a.value, line)
+        for a in deco.args
+        if isinstance(a, ast.Constant) and isinstance(a.value, str)
+    ]
+
+
+def _indirect_parametrize_refs(deco: ast.expr, line: int) -> list[tuple[str, int]]:
+    if not isinstance(deco, ast.Call) or not ast_util.dotted(deco.func).endswith(
+        "mark.parametrize"
+    ):
+        return []
+    indirect = any(
+        k.arg == "indirect"
+        and not (isinstance(k.value, ast.Constant) and k.value.value is False)
+        for k in deco.keywords
+    )
+    if not indirect or not deco.args:
+        return []
+    names = deco.args[0]
+    if isinstance(names, ast.Constant) and isinstance(names.value, str):
+        return [(n.strip(), line) for n in names.value.split(",") if n.strip()]
+    if isinstance(names, (ast.List, ast.Tuple)):
+        return [
+            (e.value, line)
+            for e in names.elts
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)
+        ]
+    return []
+
+
+def _getfixturevalue_ref(call: ast.Call) -> tuple[str, int] | None:
+    if (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr == "getfixturevalue"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+    ):
+        return (call.args[0].value, call.lineno)
+    return None
+
+
+def _fixture_refs(tree: ast.Module) -> list[tuple[str, int]]:
+    refs: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test_") or _fixture_deco(node) is not None:
+                refs.extend(
+                    (a.arg, node.lineno)
+                    for a in node.args.args
+                    if a.arg not in ("self", "cls", "request")
+                )
+            for deco in node.decorator_list:
+                refs.extend(_usefixtures_refs(deco, node.lineno))
+                refs.extend(_indirect_parametrize_refs(deco, node.lineno))
+        elif isinstance(node, ast.Call):
+            ref = _getfixturevalue_ref(node)
+            if ref is not None:
+                refs.append(ref)
+    return refs
+
+
+def _fixture_shapes(tree: ast.Module) -> list[ShapeRow]:
+    rows: list[ShapeRow] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            deco = _fixture_deco(node)
+            if deco is not None and not _is_autouse(deco):
+                rows.append(
+                    ShapeRow(
+                        _hash(f"fixture-def|{node.name}"),
+                        "pytest-fixture-def",
+                        node.name,
+                        node.lineno,
+                    )
+                )
+    for name, line in _fixture_refs(tree):
+        rows.append(
+            ShapeRow(_hash(f"fixture-ref|{name}"), "pytest-fixture-ref", name, line)
+        )
+    return rows
+
+
 class ShapeExtractor:
     """Reduces a module's definitions to normalized shape rows for the cross-file dedup pass —
     one shape per Pydantic model, top-level function, and substantial method."""
@@ -66,6 +176,7 @@ class ShapeExtractor:
                 rows.extend(self._class_base_shapes(node))
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 rows.extend(self._function_shape(node, node.name))
+        rows.extend(_fixture_shapes(self.tree))
         return rows
 
     @staticmethod

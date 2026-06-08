@@ -148,3 +148,9 @@ async def test_manifest_tool(sample_repo):
     )
     data = _structured(result)
     assert any(e["symbol"] == "OpportunityRecord" for e in data)
+
+
+async def test_rules_list_framework_filter():
+    result = await mcp.call_tool("rules_list", {"framework": "pytest"})
+    rows = _structured(result)
+    assert rows and all(r["framework"] == "pytest" for r in rows)

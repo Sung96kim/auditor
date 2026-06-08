@@ -66,6 +66,13 @@ class Registry:
     def categories(self) -> set[str]:
         return {c.value for c in Category} | self._plugin_categories
 
+    def frameworks(self) -> set[str]:
+        return {
+            fw
+            for cls in self._detectors.values()
+            if (fw := getattr(cls, "framework", None))
+        }
+
     # --- language queries -------------------------------------------------
 
     def language(self, name: str) -> type | None:
@@ -105,6 +112,7 @@ class Registry:
             "detectors": {
                 rid: {
                     "category": str(cls.category),
+                    "framework": getattr(cls, "framework", None),
                     "source": self.source_of("detector", rid),
                 }
                 for rid, cls in sorted(self._detectors.items())

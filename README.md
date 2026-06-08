@@ -196,6 +196,24 @@ self-documenting `Field` with a `ge=1` validation): `threshold.oop.wall_kwarg_mi
 `threshold.jsx.repeated_jsx_min`, … Because the cache keys each rule by `(content + that rule's
 resolved config)`, changing one threshold re-runs only that rule on the next scan.
 
+### Framework-aware test rules (pytest)
+
+Structural test-quality checks that complement (never duplicate) ruff and pytest. They fire only
+on test-role Python files and are all `candidate` (advisory — they never gate CI):
+
+| rule | catches |
+|---|---|
+| `PY-TEST-PARAMETRIZE-CANDIDATE` | N near-identical tests differing only in literals → `@pytest.mark.parametrize` |
+| `PY-TEST-NO-ASSERTION` | a test that asserts nothing |
+| `PY-TEST-LOGIC-IN-TEST` | `if`/`for`/`while`/`try` in a test body |
+| `PY-TEST-OVER-MOCKING` | too many mocks in one test (`threshold.test.max_mocks_per_test`) |
+| `PY-TEST-DUPLICATE-SETUP` | a repeated arrange block across tests → extract a fixture |
+| `PY-TEST-UNUSED-FIXTURE` | a fixture defined but never requested (repo-level) |
+| `PY-TEST-SKIP-NO-REASON` | `@pytest.mark.skip/skipif/xfail` without `reason=` |
+| `PY-TEST-SLEEP` | `time.sleep()` in a test |
+
+List them with `auditor rules list --framework pytest`. Tune floors under `[tool.auditor.threshold.test]`.
+
 - **Profiles**: `base` (industry floor: security/**malware**/secrets/supply-chain/correctness/
   async/typing/config + cross-file dedup on; opinionated OOP/composition off), `strict` (adds
   OOP/composition + complexity),

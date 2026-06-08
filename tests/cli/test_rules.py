@@ -29,3 +29,15 @@ def test_unknown_standard_errors():
     res = invoke("rules", "list", "--standard", "nope")
     assert res.exit_code == 1
     assert "unknown standard" in res.output
+
+
+def test_rules_list_framework_filter():
+    rows = cli_json(invoke("rules", "list", "--framework", "pytest"))
+    assert rows and all(r["framework"] == "pytest" for r in rows)
+    assert "PY-TEST-NO-ASSERTION" in {r["rule_id"] for r in rows}
+
+
+def test_rules_list_unknown_framework_errors():
+    result = invoke("rules", "list", "--framework", "nope")
+    assert result.exit_code == 1
+    assert "unknown framework" in result.output

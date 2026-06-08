@@ -11,6 +11,7 @@ from auditor.languages.python.detectors import (
     style,
     suggestions,
     supply_chain,
+    testing,
     typing_rules,
     xfile,
 )

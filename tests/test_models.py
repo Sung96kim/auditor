@@ -90,3 +90,21 @@ def test_skipped_rule_and_index_entry():
         last_scanned=1.0,
     )
     assert entry.role is FileRole.TEST and entry.doc_path is None
+
+
+def test_testing_category_exists():
+    assert Category.TESTING == "testing"
+
+
+@pytest.mark.parametrize(
+    "role,expected",
+    [
+        (FileRole.TEST, True),
+        (FileRole.TEST_SUPPORT, True),
+        (FileRole.PRODUCTION, False),
+        (FileRole.SCRIPT, False),
+        (FileRole.GENERATED, False),
+    ],
+)
+def test_filerole_is_test(role, expected):
+    assert role.is_test is expected

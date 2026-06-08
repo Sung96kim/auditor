@@ -95,6 +95,8 @@ class Detector(ABC):
     default_severity: ClassVar[Severity]
     verdict_kind: ClassVar[VerdictKind] = VerdictKind.AUTO
     language: ClassVar[str] = "python"
+    #: the test/UI framework this rule is specific to (e.g. "pytest"); None = framework-agnostic
+    framework: ClassVar[str | None] = None
     version: ClassVar[str] = "1"
     checklist_item: ClassVar[int | None] = None
     standard_refs: ClassVar[tuple[str, ...]] = ()

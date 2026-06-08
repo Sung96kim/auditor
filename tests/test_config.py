@@ -174,3 +174,14 @@ def test_circular_profile_rejected(tmp_path):
     (tmp_path / ".auditor" / "config.toml").write_text(f'extends = "{loop}"\n')
     with pytest.raises(ValueError, match="circular"):
         load_config(tmp_path)
+
+
+def test_test_threshold_defaults_and_merge(tmp_path):
+    assert AuditorSettings().threshold.test.parametrize_min_clones == 3
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor.threshold.test]\n'
+        "max_mocks_per_test = 7\n"
+    )
+    s = load_config(tmp_path)
+    assert s.threshold.test.max_mocks_per_test == 7
+    assert s.threshold.test.parametrize_min_clones == 3  # untouched knob still defaulted

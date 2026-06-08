@@ -1019,6 +1019,15 @@ TESTED_SEPARATELY = {
     # supply-chain — covered in tests/languages/manifest/ and tests/languages/python/
     "MF-SUPPLY-INSTALL-HOOK",
     "PY-SUPPLY-SETUP-EXEC",
+    # pytest structural rules — covered in tests/languages/python/detectors/test_testing.py
+    "PY-TEST-NO-ASSERTION",
+    "PY-TEST-LOGIC-IN-TEST",
+    "PY-TEST-SLEEP",
+    "PY-TEST-SKIP-NO-REASON",
+    "PY-TEST-OVER-MOCKING",
+    "PY-TEST-PARAMETRIZE-CANDIDATE",
+    "PY-TEST-DUPLICATE-SETUP",
+    "PY-TEST-UNUSED-FIXTURE",  # repo-level; computed by the crossfile pass
 }
 
 
