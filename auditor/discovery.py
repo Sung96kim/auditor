@@ -54,17 +54,19 @@ def _is_test_path(rel: str) -> bool:
 
 def _in_soft_skip(rel: str) -> bool:
     """*Soft*-skipped (auto-generated/boilerplate) location: a ``migrations`` directory, or an
-    Alembic ``alembic/versions`` directory. Unlike the hard ``_EXCLUDE_DIRS`` these are skipped on a
-    normal scan but audited when the user targets them directly (see ``FileDiscovery.files``).
-    Test code is exempt — a ``tests/migrations/`` dir holds tests *of* migrations, not the generated
-    version files this targets."""
+    Alembic migrations dir under ``alembic/`` (``versions``, ``versions_legacy``, ``versions_backup``,
+    ``manual_migrations``, …). Unlike the hard ``_EXCLUDE_DIRS`` these are skipped on a normal scan
+    but audited when the user targets them directly (see ``FileDiscovery.files``). Test code is exempt
+    — a ``tests/migrations/`` dir holds tests *of* migrations, not the generated version files this
+    targets."""
     if _is_test_path(rel):
         return False
     segs = rel.split("/")
     if "migrations" in segs:
         return True
     return any(
-        a == "alembic" and b == "versions" for a, b in zip(segs, segs[1:], strict=False)
+        a == "alembic" and (b.startswith("versions") or b == "manual_migrations")
+        for a, b in zip(segs, segs[1:], strict=False)
     )
 
 

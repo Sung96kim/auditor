@@ -113,6 +113,19 @@ def test_migration_single_file_scanned(tmp_path):
     assert FileDiscovery(root).files(f) == [f]
 
 
+def test_alembic_migration_dir_variants_soft_skipped(tmp_path):
+    # regression: legacy/backup/manual alembic dirs (not just `versions`) are generated migrations
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "real.py").write_text("x = 1\n")
+    for sub in ("versions", "versions_legacy", "versions_backup", "manual_migrations"):
+        d = tmp_path / "alembic" / sub
+        d.mkdir(parents=True)
+        (d / "0001_rev.py").write_text("x = 1\n")
+    files = {p.relative_to(tmp_path).as_posix() for p in FileDiscovery(tmp_path).files(tmp_path)}
+    assert files == {"src/real.py"}  # every alembic migration dir variant dropped
+
+
 def test_test_dir_named_migrations_is_not_soft_skipped(tmp_path):
     # regression: `tests/migrations/` holds tests OF migrations, not generated version files —
     # the soft-skip must not swallow it (it did, which also broke cross-file fixture-ref collection)
