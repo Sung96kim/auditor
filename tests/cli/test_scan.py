@@ -211,6 +211,25 @@ def test_scan_exclude_glob(sample_repo):
     assert not any(f["file"].endswith("integrations.py") for f in excluded["files"])
 
 
+def test_scan_rule_filter(sample_repo):
+    src = str(sample_repo / "src")
+    full = cli_json(invoke("scan", src, "--no-index", "-f", "json"))
+    all_rules = {x["rule_id"] for f in full["files"] for x in f["findings"]}
+    target = next(r for r in all_rules if r == "PY-SEC-DANGEROUS-EVAL")
+    filtered = cli_json(invoke("scan", src, "--no-index", "-f", "json", "--rule", target))
+    kept = {x["rule_id"] for f in filtered["files"] for x in f["findings"]}
+    assert kept == {target}  # only the requested rule survives
+
+
+def test_scan_unknown_rule_suggests(sample_repo):
+    # a near-miss rule id gets a "Did you mean …?" hint
+    res = invoke("scan", str(sample_repo / "src"), "--rule", "PY-SEC-DANGEROUS-EVL")
+    assert res.exit_code == 1
+    out = " ".join(res.output.split())  # collapse rich's line-wrapping
+    assert "unknown rule" in out
+    assert "Did you mean 'PY-SEC-DANGEROUS-EVAL'?" in out
+
+
 def test_scan_strict_tests(sample_repo):
     payload = cli_json(
         invoke("scan", str(sample_repo / "tests"), "--strict-tests", "-f", "json")

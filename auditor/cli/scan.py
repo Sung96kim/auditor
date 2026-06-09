@@ -8,7 +8,14 @@ import typer
 
 from auditor.baseline import Baseline
 from auditor.cli.apps import _status, app
-from auditor.cli.helpers import _check_format, _emit, _fail, _require_exists, _run
+from auditor.cli.helpers import (
+    _check_format,
+    _emit,
+    _fail,
+    _require_exists,
+    _run,
+    _suggest,
+)
 from auditor.cli.options import (
     AllowLocalPlugins,
     BaselineFile,
@@ -24,6 +31,7 @@ from auditor.cli.options import (
     Output,
     PinRoot,
     Profile,
+    RuleFilter,
     ScanTarget,
     Serve,
     SeverityFilter,
@@ -46,6 +54,7 @@ from auditor.models import (
     VerdictKind,
     severity_rank,
 )
+from auditor.registry import REGISTRY
 from auditor.reporters import render
 from auditor.serve import ReportServer
 
@@ -80,16 +89,34 @@ def _gate_tripped(results: list[ScanResult], fail_on: str) -> bool:
     )
 
 
+def _rule_set(values: list[str]) -> set[str]:
+    known = REGISTRY.rule_ids()
+    chosen = set(values)
+    for rid in chosen:
+        if rid not in known:
+            _fail(
+                f"unknown rule {rid!r}.{_suggest(rid, known)} "
+                f"Run `auditor rules list` to see all rules."
+            )
+    return chosen
+
+
 def _filter_display(
-    results: list[ScanResult], severity: list[str] | None, min_severity: str | None
+    results: list[ScanResult],
+    severity: list[str] | None,
+    min_severity: str | None,
+    rule: list[str] | None,
 ) -> None:
     wanted = _severity_set(severity) if severity else None
     floor = severity_rank(_check_severity(min_severity)) if min_severity else None
+    rules = _rule_set(rule) if rule else None
     for r in results:
         if wanted is not None:
             r.findings = [f for f in r.findings if f.severity.value in wanted]
         if floor is not None:
             r.findings = [f for f in r.findings if severity_rank(f.severity) >= floor]
+        if rules is not None:
+            r.findings = [f for f in r.findings if f.rule_id in rules]
 
 
 def _diff_report_only(
@@ -141,6 +168,7 @@ def scan(
     fmt: Format = None,
     severity: SeverityFilter = None,
     min_severity: MinSeverity = None,
+    rule: RuleFilter = None,
     since: Since = None,
     changed: Changed = False,
     vs_base: VsBase = False,
@@ -199,7 +227,7 @@ def scan(
 
     # baseline filtering runs before the gate, so a CI gate fails only on NEW findings
     gate_tripped = _gate_tripped(results, fail_on) if fail_on else False
-    _filter_display(results, severity, min_severity)
+    _filter_display(results, severity, min_severity, rule)
 
     if serve:
         _serve_html(results)

@@ -6,6 +6,7 @@ Requires the ``mcp`` extra (``pip install auditor[mcp]``).
 """
 
 import ast
+import difflib
 import time
 from pathlib import Path
 
@@ -43,13 +44,15 @@ async def scan(
     profile: str | None = None,
     no_skips: bool = False,
     severity: list[str] | None = None,
+    rule: list[str] | None = None,
     since: str | None = None,
     show_ignored: bool = False,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_skips`` ignores
     in-file ``auditor: skip`` directives. ``severity`` keeps only findings of those levels
-    (blocking|high|medium|low|suggestion) — fewer tokens when you only want the worst.
+    (blocking|high|medium|low|suggestion) — fewer tokens when you only want the worst. ``rule``
+    keeps only findings for those rule ids (see rules_list) — focus on one rule.
     ``since`` (a git ref like ``main``/``HEAD``) scopes the output to files changed vs that ref
     — ideal for reviewing a branch/PR — while the whole repo is still scanned so cross-file
     rules stay correct. Persistent ignores (see the ignore_* tools) are applied automatically;
@@ -71,6 +74,16 @@ async def scan(
         wanted = {s.lower() for s in severity}
         for r in results:
             r.findings = [f for f in r.findings if f.severity.value in wanted]
+    if rule:
+        known = REGISTRY.rule_ids()
+        bad = [rid for rid in rule if rid not in known]
+        if bad:
+            match = difflib.get_close_matches(bad[0], list(known), n=1, cutoff=0.6)
+            hint = f" Did you mean {match[0]!r}?" if match else ""
+            raise ToolError(f"unknown rule {bad[0]!r}.{hint}")
+        keep = set(rule)
+        for r in results:
+            r.findings = [f for f in r.findings if f.rule_id in keep]
     return json_payload(results)
 
 

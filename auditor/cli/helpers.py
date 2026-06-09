@@ -4,8 +4,9 @@ they need; anything used by a single command lives in that command's module inst
 """
 
 import asyncio
+import difflib
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterable
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
@@ -27,6 +28,13 @@ def _fail(message: str) -> NoReturn:
     """Emit a clean one-line error to stderr and exit non-zero (no traceback)."""
     _status.print(f"[red]error:[/red] {message}")
     raise typer.Exit(1)
+
+
+def _suggest(value: str, candidates: Iterable[str]) -> str:
+    """`" Did you mean 'X'?"` when a candidate closely matches ``value``, else ``""`` — for
+    friendlier 'unknown rule/category/…' errors."""
+    match = difflib.get_close_matches(value, list(candidates), n=1, cutoff=0.6)
+    return f" Did you mean '{match[0]}'?" if match else ""
 
 
 def _require_exists(path: Path) -> None:

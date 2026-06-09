@@ -81,6 +81,7 @@ auditor plugins list                 # loaded detectors/languages/reporters + th
 ```bash
 auditor scan . -s high -s blocking   # --severity: only these levels (repeatable, exact)
 auditor scan . -m high               # --min-severity: this level and worse
+auditor scan . --rule SA-RAW-SQL     # --rule: only these rule ids (repeatable); typos get a "did you mean?"
 ```
 
 ### PR / CI loop

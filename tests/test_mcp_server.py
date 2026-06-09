@@ -71,6 +71,22 @@ async def test_scan_tool(sample_repo):
     assert data["totals"]["blocking"] >= 1
 
 
+async def test_scan_tool_rule_filter(sample_repo):
+    src = str(sample_repo / "src")
+    data = _structured(
+        await mcp.call_tool("scan", {"path": src, "rule": ["PY-SEC-DANGEROUS-EVAL"]})
+    )
+    kept = {x["rule_id"] for f in data["files"] for x in f["findings"]}
+    assert kept == {"PY-SEC-DANGEROUS-EVAL"}
+
+
+async def test_scan_tool_unknown_rule_errors(sample_repo):
+    with pytest.raises(ToolError, match="unknown rule"):
+        await mcp.call_tool(
+            "scan", {"path": str(sample_repo / "src"), "rule": ["NOPE-NOPE"]}
+        )
+
+
 async def test_discover_tool(sample_repo):
     result = await mcp.call_tool("discover", {"path": str(sample_repo)})
     data = _structured(result)

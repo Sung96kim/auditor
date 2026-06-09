@@ -5,6 +5,8 @@ from typing import Annotated
 
 import typer
 
+from auditor.models import RuleId
+
 ScanTarget = Annotated[Path, typer.Argument(help="File or directory to audit.")]
 DirTarget = Annotated[Path, typer.Argument()]
 ReportFile = Annotated[Path, typer.Argument(help="Python file.")]
@@ -79,6 +81,13 @@ MinSeverity = Annotated[
     str | None,
     typer.Option(
         "-m", "--min-severity", help="Only show findings at or above this severity."
+    ),
+]
+RuleFilter = Annotated[
+    list[RuleId] | None,  # RuleId is `str`: the valid set is the runtime registry, not a frozen enum
+    typer.Option(
+        "--rule",
+        help="Only show findings for these rule ids (repeatable), e.g. --rule SA-RAW-SQL.",
     ),
 ]
 Since = Annotated[
