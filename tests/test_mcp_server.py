@@ -196,3 +196,96 @@ async def test_scan_tool_bad_config_errors(sample_repo):
         await mcp.call_tool(
             "scan", {"path": str(sample_repo / "src"), "config": {"nope": 1}}
         )
+
+
+# --- new gap-fill tests -------------------------------------------------------------------
+
+
+async def test_scan_severity_filter(sample_repo):
+    """scan with severity=['blocking'] returns only blocking findings."""
+    data = _structured(
+        await mcp.call_tool(
+            "scan",
+            {"path": str(sample_repo / "src"), "severity": ["blocking"]},
+        )
+    )
+    findings = [f for fl in data["files"] for f in fl["findings"]]
+    assert findings  # at least one blocking finding in the sample repo
+    assert all(f["severity"] == "blocking" for f in findings)
+
+
+async def test_scan_unknown_rule_did_you_mean(sample_repo):
+    """scan with a near-miss rule id surfaces a 'Did you mean …?' hint in the ToolError."""
+    with pytest.raises(ToolError) as exc:
+        await mcp.call_tool(
+            "scan",
+            {"path": str(sample_repo / "src"), "rule": ["PY-SEC-DANGEROUS-EVL"]},
+        )
+    assert "Did you mean 'PY-SEC-DANGEROUS-EVAL'" in str(exc.value)
+
+
+async def test_manifest_syntax_error(tmp_path):
+    """manifest on a file with a SyntaxError raises ToolError containing 'could not parse'."""
+    bad = tmp_path / "bad.py"
+    bad.write_text("def f(\n")
+    with pytest.raises(ToolError) as exc:
+        await mcp.call_tool("manifest", {"file": str(bad)})
+    assert "could not parse" in str(exc.value)
+
+
+async def test_ignore_add_file_and_line_evidence(sample_repo):
+    """ignore_add with file + line stores the line number in the returned dict."""
+    src = str(sample_repo / "src")
+    scan_data = _structured(await mcp.call_tool("scan", {"path": src}))
+    # Find the first finding that has a concrete file + line from integrations.py
+    finding = next(
+        f
+        for fl in scan_data["files"]
+        for f in fl["findings"]
+        if f["rule_id"] == "PY-SEC-DANGEROUS-EVAL"
+    )
+    file_rel = next(
+        fl["file"] for fl in scan_data["files"] if finding in fl["findings"]
+    )
+    line = finding["line"]
+    # Build the absolute path the ignore_add tool needs
+    file_abs = str(sample_repo / "src" / file_rel.split("/")[-1])
+    result = _structured(
+        await mcp.call_tool(
+            "ignore_add",
+            {
+                "rule_id": "PY-SEC-DANGEROUS-EVAL",
+                "file": file_abs,
+                "line": line,
+                "path": src,
+            },
+        )
+    )
+    assert result["line"] == line
+
+
+async def test_rules_list_standard_bandit():
+    """rules_list(standard='bandit') returns only rows that have a 'bandit:' ref."""
+    rows = _structured(await mcp.call_tool("rules_list", {"standard": "bandit"}))
+    assert rows
+    assert all(
+        any(ref.startswith("bandit:") for ref in row["standard_refs"]) for row in rows
+    )
+
+
+async def test_scan_since_head(tmp_path):
+    """scan with since='HEAD' on a committed git repo succeeds (smoke)."""
+    import subprocess
+
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q", "-b", "main"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True, capture_output=True)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True, capture_output=True)
+    data = _structured(
+        await mcp.call_tool("scan", {"path": str(tmp_path), "since": "HEAD"})
+    )
+    assert isinstance(data, dict)
+    assert "files" in data and "totals" in data

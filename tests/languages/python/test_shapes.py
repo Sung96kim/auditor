@@ -99,3 +99,40 @@ def test_definition_site_is_not_a_self_reference():
     src = "_DEAD = 1\n"
     assert "const\x1f_DEAD" in _defs(src)
     assert "_DEAD" not in _refs(src)
+
+
+# --- pytest-fixture-ref shapes ------------------------------------------------------------
+
+
+def _fixture_ref_symbols(src: str) -> set[str]:
+    ex = ShapeExtractor.for_source(src)
+    assert ex is not None
+    return {r.symbol for r in ex.shapes() if r.kind == "pytest-fixture-ref"}
+
+
+def test_usefixtures_refs():
+    src = (
+        "import pytest\n"
+        "@pytest.mark.usefixtures('widget')\n"
+        "def test_a():\n"
+        "    assert True\n"
+    )
+    assert "widget" in _fixture_ref_symbols(src)
+
+
+def test_getfixturevalue_ref():
+    src = (
+        "def test_a(request):\n"
+        "    x = request.getfixturevalue('db')\n"
+    )
+    assert "db" in _fixture_ref_symbols(src)
+
+
+def test_indirect_parametrize_refs():
+    src = (
+        "import pytest\n"
+        "@pytest.mark.parametrize('myfix', [1, 2], indirect=True)\n"
+        "def test_a(myfix):\n"
+        "    assert myfix\n"
+    )
+    assert "myfix" in _fixture_ref_symbols(src)

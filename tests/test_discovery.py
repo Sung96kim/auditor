@@ -3,7 +3,15 @@
 import subprocess
 from pathlib import Path
 
-from auditor.discovery import FileDiscovery, discover, find_root
+import pytest
+
+from auditor.discovery import (
+    FileDiscovery,
+    default_base_ref,
+    discover,
+    find_root,
+    git_changed_files,
+)
 
 
 def _git(root: Path, *args: str) -> None:
@@ -182,3 +190,58 @@ def test_manifest_discovered_by_filename_not_generic_json(tmp_path):
     (app / "index.py").write_text("x = 1\n")
     found = {p.name for p in FileDiscovery(tmp_path).files(app)}
     assert found == {"package.json", "index.py"}
+
+
+# ---------------------------------------------------------------------------
+# New characterisation / coverage tests
+# ---------------------------------------------------------------------------
+
+
+def test_git_changed_files_non_git_dir(tmp_path):
+    """git_changed_files returns None for a non-git directory."""
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert git_changed_files(tmp_path, "main") is None
+
+
+def test_git_changed_files_bad_ref(tmp_path):
+    """git_changed_files raises ValueError for a ref that cannot be resolved."""
+    _git(tmp_path, "init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    with pytest.raises(ValueError, match="could not be resolved"):
+        git_changed_files(tmp_path, "no-such-ref-xyz-abc")
+
+
+def test_git_changed_files_with_real_ref(tmp_path):
+    """git_changed_files returns a set of relative paths for files changed since a ref."""
+    _git(tmp_path, "init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "b.py").write_text("y = 2\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    # Edit one file after the commit — it's a working-tree diff from HEAD
+    (tmp_path / "a.py").write_text("x = 99\n")
+    changed = git_changed_files(tmp_path, "HEAD")
+    assert isinstance(changed, set)
+    assert "a.py" in changed
+    # b.py was not changed
+    assert "b.py" not in changed
+
+
+def test_default_base_ref_non_git_dir(tmp_path):
+    """default_base_ref returns None for a non-git directory."""
+    assert default_base_ref(tmp_path) is None
+
+
+def test_default_base_ref_on_main_branch(tmp_path):
+    """default_base_ref returns 'main' (or 'origin/main') for a repo on a main branch."""
+    _git(tmp_path, "init", "-b", "main")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    ref = default_base_ref(tmp_path)
+    assert ref in ("main", "origin/main")

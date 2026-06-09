@@ -56,3 +56,13 @@ def test_negative_tabindex_is_fine():
     assert "TS-A11Y-POSITIVE-TABINDEX" not in rule_ids(
         run_ts_audit("<div tabIndex={-1}>x</div>;\n")
     )
+
+
+@pytest.mark.parametrize(
+    "input_type",
+    ["hidden", "submit", "button", "reset", "image"],
+)
+def test_form_label_exempts_non_labelable_input_types(input_type: str):
+    """Inputs whose type never needs a visible label must not trigger TS-A11Y-FORM-LABEL."""
+    src = f'const x = <input type="{input_type}" />;\n'
+    assert "TS-A11Y-FORM-LABEL" not in rule_ids(run_ts_audit(src))

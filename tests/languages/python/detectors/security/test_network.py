@@ -46,3 +46,42 @@ def test_ssrf_ignores_non_user_derived_urls(src):
 )
 def test_ssrf_flags_caller_derived_urls(src):
     assert _SSRF in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# BindAllInterfaces — positional arg and annotated-assignment branches
+# ---------------------------------------------------------------------------
+
+
+def test_bind_all_interfaces_positional_arg_fires():
+    # 0.0.0.0 as a positional arg to a bind/run/serve function
+    src = "server.run('0.0.0.0', 8080)\n"
+    assert "PY-SEC-BIND-ALL-INTERFACES" in rule_ids(run_audit(src))
+
+
+def test_bind_all_interfaces_annotated_assign_fires():
+    # annotated assignment whose target name matches the host regex
+    src = "host_addr: str = '0.0.0.0'\n"
+    assert "PY-SEC-BIND-ALL-INTERFACES" in rule_ids(run_audit(src))
+
+
+def test_bind_all_interfaces_annotated_assign_safe_does_not_fire():
+    # annotated assignment with a loopback address → safe
+    src = "host_addr: str = '127.0.0.1'\n"
+    assert "PY-SEC-BIND-ALL-INTERFACES" not in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# InsecureTls — check_hostname=False branch
+# ---------------------------------------------------------------------------
+
+
+def test_insecure_tls_check_hostname_false_fires():
+    src = "import ssl\nssl.wrap_socket(sock, check_hostname=False)\n"
+    assert "PY-SEC-INSECURE-TLS" in rule_ids(run_audit(src))
+
+
+def test_insecure_tls_no_check_hostname_does_not_fire():
+    # wrap_socket without check_hostname kwarg → no finding from this branch
+    src = "import ssl\nssl.wrap_socket(sock)\n"
+    assert "PY-SEC-INSECURE-TLS" not in rule_ids(run_audit(src))

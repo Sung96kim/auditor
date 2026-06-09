@@ -186,3 +186,34 @@ async def test_schema_version_recorded(tmp_path):
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
     assert version == _SCHEMA_VERSION
+
+
+# ---------------------------------------------------------------------------
+# New characterisation / coverage tests
+# ---------------------------------------------------------------------------
+
+
+async def test_findings_grouped_by_path(tmp_path):
+    """findings_grouped returns a dict keyed by path, each value being that file's findings."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as store:
+        await store.upsert_file(_entry("a.py"))
+        await store.record_rule("a.py", "PY-X", "fp1", [_finding("PY-X", line=1), _finding("PY-X", line=2)], 1.0)
+        await store.upsert_file(_entry("b.py"))
+        await store.record_rule("b.py", "PY-Y", "fp2", [_finding("PY-Y", line=5)], 1.0)
+
+        grouped = await store.findings_grouped()
+
+    assert set(grouped.keys()) == {"a.py", "b.py"}
+    assert len(grouped["a.py"]) == 2
+    assert len(grouped["b.py"]) == 1
+    assert all(f.rule_id == "PY-X" for f in grouped["a.py"])
+    assert grouped["b.py"][0].rule_id == "PY-Y"
+
+
+async def test_findings_grouped_empty(tmp_path):
+    """findings_grouped returns an empty dict when the store has no findings."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as store:
+        grouped = await store.findings_grouped()
+    assert grouped == {}

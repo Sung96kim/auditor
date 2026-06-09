@@ -3,6 +3,7 @@ two-phase load (a config can reference a plugin-contributed rule)."""
 
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from _support import PLUGIN_FILE
@@ -98,3 +99,19 @@ def test_broken_local_plugin_warns_not_crashes(tmp_path):
     assert any(
         "failed to load local plugin" in w and "broken.py" in w for w in loader.warnings
     )
+
+
+def test_import_path_spec_none_warns_not_crashes(tmp_path):
+    """When importlib.util.spec_from_file_location returns None, _import_path records a
+    warning and does not crash — the loader stays safe and loads nothing."""
+    plugin_dir = tmp_path / ".auditor" / "plugins"
+    plugin_dir.mkdir(parents=True)
+    plugin_file = plugin_dir / "mystery.py"
+    plugin_file.write_text("x = 1\n")
+
+    loader = PluginLoader()
+    with patch("importlib.util.spec_from_file_location", return_value=None):
+        loader._import_path(plugin_file)
+
+    assert loader.loaded == []
+    assert any("mystery.py" in w or "could not load" in w for w in loader.warnings)

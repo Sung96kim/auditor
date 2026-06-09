@@ -41,3 +41,18 @@ _SQL_EXTERNAL = [
 @pytest.mark.parametrize("src", _SQL_EXTERNAL)
 def test_sql_string_build_flags_external_subscript(src):
     assert "PY-SEC-SQL-STRING-BUILD" in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# DjangoRawSql — local-var guard: only local vars → must NOT fire
+# ---------------------------------------------------------------------------
+
+
+def test_django_raw_sql_local_var_no_external_taint_does_not_fire():
+    # `table` is a local variable assigned from a literal — no external/caller taint
+    src = (
+        "def q():\n"
+        "    table = 'items'\n"
+        "    return Model.objects.raw(f'SELECT * FROM {table}')\n"
+    )
+    assert "PY-SEC-DJANGO-RAW-SQL" not in rule_ids(run_audit(src))

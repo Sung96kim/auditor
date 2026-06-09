@@ -65,3 +65,15 @@ _GUARD_MIXED_VARS = "def f(a, b):\n" + "".join(
 )
 def test_dispatch_ladder_guard_clause_form(source, should_flag):
     assert ("PY-OOP-DISPATCH-LADDER" in rule_ids(run_audit(source))) is should_flag
+
+
+# ---------------------------------------------------------------------------
+# DataclassInPydantic — early exit when pydantic is not a project dep
+# ---------------------------------------------------------------------------
+
+
+def test_dataclass_in_pydantic_no_pydantic_dep_does_not_fire():
+    # when pydantic is not in project_deps the detector skips entirely
+    src = "@dataclass\nclass C:\n    x: int\n"
+    result = run_audit(src, project_deps=frozenset())
+    assert "PY-OOP-DATACLASS-IN-PYDANTIC" not in rule_ids(result)

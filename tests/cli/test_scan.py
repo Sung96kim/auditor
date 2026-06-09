@@ -367,3 +367,51 @@ def test_scan_config_json_activates_greenlet_rule(tmp_path):
     rid = "SA-GREENLET-ATTR-AFTER-COMMIT"
     assert rid not in {x["rule_id"] for fl in off["files"] for x in fl["findings"]}
     assert rid in {x["rule_id"] for fl in on["files"] for x in fl["findings"]}
+
+
+# --- new gap-fill tests -------------------------------------------------------------------
+
+
+def test_vs_base_no_recognizable_branch(tmp_path):
+    """--vs-base on a repo with no main/master/develop and no diff_base config → exit 1."""
+    git(tmp_path, "init", "-b", "feature")
+    git(tmp_path, "config", "user.email", "t@t")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "init")
+    result = invoke("scan", str(tmp_path), "--vs-base")
+    assert result.exit_code == 1
+    assert "no base branch found" in result.output
+
+
+def test_since_unresolvable_ref(tmp_path):
+    """--since <bogus-ref> in a real git repo → exit 1, 'could not be resolved' in output."""
+    _diff_repo(tmp_path)
+    result = invoke("scan", str(tmp_path), "--since", "no-such-ref-xyz")
+    assert result.exit_code == 1
+    assert "could not be resolved" in result.output
+
+
+def test_fail_on_invalid_severity(sample_repo):
+    """--fail-on with an unrecognised severity name → exit 1, 'unknown severity' in output."""
+    result = invoke("scan", str(sample_repo / "src"), "--fail-on", "critical")
+    assert result.exit_code == 1
+    assert "unknown severity" in result.output
+
+
+def test_scan_config_json_non_object_errors(tmp_path):
+    """--config-json '[1,2]' (a JSON array, not an object) → exit 1, 'must be a JSON object'."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    result = invoke("scan", str(tmp_path), "--config-json", "[1, 2]")
+    assert result.exit_code == 1
+    assert "must be a JSON object" in result.output
+
+
+def test_scan_verbose_smoke(tmp_path):
+    """-v verbose flag: scan with --no-index -v exits cleanly (smoke test)."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    result = invoke("scan", str(tmp_path), "--no-index", "-v")
+    assert result.exit_code == 0

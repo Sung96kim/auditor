@@ -90,3 +90,21 @@ def test_multi_component_reports_each_extra_component():
         if f.rule_id == "TS-REACT-MULTI-COMPONENT-FILE"
     ]
     assert len(findings) == 2  # one per component beyond the first
+
+
+def test_array_index_key_fires_for_destructured_map_param():
+    """Destructured first param + bare index key must still fire."""
+    src = "const x = items.map(({ name, id }, i) => <li key={i}>{name}</li>);\n"
+    assert "TS-REACT-ARRAY-INDEX-KEY" in rule_ids(run_ts_audit(src))
+
+
+def test_array_index_key_no_fire_for_destructured_stable_id():
+    """Destructured stable field used as key must NOT fire."""
+    src = "const x = items.map(({ name, id }, i) => <li key={id}>{name}</li>);\n"
+    assert "TS-REACT-ARRAY-INDEX-KEY" not in rule_ids(run_ts_audit(src))
+
+
+def test_array_index_key_no_fire_outside_iterator():
+    """A `key` prop on an element at module level (outside any .map) must NOT fire."""
+    src = "const x = <li key={0}>item</li>;\n"
+    assert "TS-REACT-ARRAY-INDEX-KEY" not in rule_ids(run_ts_audit(src))

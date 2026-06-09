@@ -50,3 +50,17 @@ def test_unwrap_export_and_contains_jsx():
 def test_child_elements():
     el = _first(_tsx("const x = <div><a /><b /></div>;\n"), "jsx_element")
     assert {c.jsx_name() for c in el.child_elements()} == {"a", "b"}
+
+
+def test_has_text_child_false_for_self_closing_element():
+    """A self-closing element (no children at all) must return False for has_text_child."""
+    sc = _first(_tsx('<input type="text" />;\n'), "jsx_self_closing_element")
+    assert sc.has_text_child() is False
+
+
+def test_boolean_attribute_value_is_none_and_text_is_empty():
+    """A boolean attribute (`disabled`) has no value node and no text."""
+    el = _first(_tsx("<input disabled />;\n"), "jsx_self_closing_element")
+    attr = el.attributes()["disabled"]
+    assert attr.attr_value() is None
+    assert attr.attr_value_text() == ""

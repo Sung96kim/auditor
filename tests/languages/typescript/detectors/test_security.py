@@ -25,3 +25,10 @@ def test_target_blank_accepts_noreferrer_too():
 def test_new_function_is_flagged_as_eval():
     src = "const f = new Function('return 1');\n"
     assert "TS-SEC-DANGEROUS-EVAL" in rule_ids(run_ts_audit(src))
+
+
+def test_subscript_callee_eval_does_not_fire():
+    """window['eval'](x) uses a subscript callee; the detector does not resolve it,
+    so it must NOT produce a false positive for TS-SEC-DANGEROUS-EVAL."""
+    src = "window['eval'](x);\n"
+    assert "TS-SEC-DANGEROUS-EVAL" not in rule_ids(run_ts_audit(src))

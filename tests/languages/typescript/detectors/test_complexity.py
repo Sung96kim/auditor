@@ -35,3 +35,13 @@ def test_file_size_threshold_is_configurable():
 def test_too_many_props_counts_inline_type_literal():
     src = "export function W({ a, b, c, d, e, f, g }: { a: 1; b: 1; c: 1 }) {\n  return <div />;\n}\n"
     assert "TS-REACT-TOO-MANY-PROPS" in rule_ids(run_ts_audit(src))
+
+
+def test_too_many_props_annotation_path():
+    """Non-destructured typed props: property_signature count in the type annotation must fire."""
+    src = (
+        "export function W("
+        "props: { a: string; b: number; c: string; d: number; e: string; f: number; g: string }"
+        ") { return <div />; }\n"
+    )
+    assert "TS-REACT-TOO-MANY-PROPS" in rule_ids(run_ts_audit(src))

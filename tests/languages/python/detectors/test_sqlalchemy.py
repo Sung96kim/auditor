@@ -189,3 +189,84 @@ def test_greenlet_clean_in_test_role():
             rel_path="test_m.py",
         )
     )
+
+
+# --- SA-GREENLET via query source (scalar_one / scalar_one_or_none / session.get) ---------
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # scalar_one source
+        (
+            "import sqlalchemy\n"
+            "async def f(s):\n"
+            "    user = s.scalar_one(q)\n"
+            "    await s.commit()\n"
+            "    return user.email\n"
+        ),
+        # scalar_one_or_none source
+        (
+            "import sqlalchemy\n"
+            "async def f(s):\n"
+            "    user = s.scalar_one_or_none(q)\n"
+            "    await s.commit()\n"
+            "    return user.email\n"
+        ),
+        # session.get(Model, pk) with >=2 args
+        (
+            "import sqlalchemy\n"
+            "async def f(s):\n"
+            "    user = s.get(Model, pk)\n"
+            "    await s.commit()\n"
+            "    return user.email\n"
+        ),
+    ],
+)
+def test_greenlet_fires_via_query_source(src):
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in rule_ids(
+        run_audit(src, settings=_ON, rel_path="m.py")
+    )
+
+
+def test_greenlet_no_commit_does_not_fire():
+    # async fn with ORM obj but NO commit -> rule must NOT fire
+    src = (
+        "import sqlalchemy\n"
+        "async def f(s):\n"
+        "    user = s.scalar_one(q)\n"
+        "    return user.email\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in rule_ids(
+        run_audit(src, settings=_ON, rel_path="m.py")
+    )
+
+
+# --- SA-MUTABLE-DEFAULT ImportFrom-only gate -----------------------------------------------
+
+
+def test_mutable_default_fires_with_importfrom_only():
+    # ImportFrom (no bare `import sqlalchemy`) should still trigger _imports_sqlalchemy
+    src = "from sqlalchemy.orm import mapped_column\nx = mapped_column(default=[])\n"
+    assert "SA-MUTABLE-DEFAULT" in rule_ids(run_audit(src, rel_path="m.py"))
+
+
+# --- SA-MUTABLE-DEFAULT aliased import -----------------------------------------------------
+
+
+def test_mutable_default_aliased_import_fires():
+    src = (
+        "import sqlalchemy\n"
+        "from sqlalchemy.orm import mapped_column as mc\n"
+        "x = mc(default=[])\n"
+    )
+    assert "SA-MUTABLE-DEFAULT" in rule_ids(run_audit(src, rel_path="m.py"))
+
+
+# --- SA-RAW-SQL constant-only concat clean -------------------------------------------------
+
+
+def test_raw_sql_constant_concat_clean():
+    # concat of two constants -> not interpolated -> must NOT fire
+    src = _IMP + "q = text('SELECT ' + '1')\n"
+    assert "SA-RAW-SQL" not in rule_ids(run_audit(src, rel_path="m.py"))

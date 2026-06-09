@@ -284,3 +284,40 @@ def test_autouse_fixture_never_flagged(tmp_path):
     )
     _write(tmp_path, "tests/test_x.py", "def test_a():\n    assert True\n")
     assert "PY-TEST-UNUSED-FIXTURE" not in _scan(tmp_path)
+
+
+# --- B: LOGIC-IN-TEST nested-lambda suppression -------------------------------------------
+
+
+def test_logic_in_test_lambda_not_flagged():
+    # Control flow inside a lambda does NOT count as logic in the test body
+    src = (
+        "def test_thing():\n"
+        "    f = lambda x: x if x else 0\n"
+        "    assert f(1)\n"
+    )
+    assert "PY-TEST-LOGIC-IN-TEST" not in _ids(src)
+
+
+# --- E: DUPLICATE-SETUP below min_clones -------------------------------------------------
+
+
+def test_duplicate_setup_below_min_clones_not_flagged():
+    # Two tests with identical full bodies (< parametrize_min_clones=3) -> must NOT fire
+    body = "    client = make_client()\n    client.login(user)\n    assert client.get('/a') == 1\n"
+    src = f"def test_a():\n{body}\n\ndef test_b():\n{body}\n"
+    assert "PY-TEST-DUPLICATE-SETUP" not in _ids(src)
+
+
+# --- G: SKIP-NO-REASON on Test* class ----------------------------------------------------
+
+
+def test_skip_no_reason_on_test_class():
+    src = (
+        "import pytest\n"
+        "@pytest.mark.skip\n"
+        "class TestFoo:\n"
+        "    def test_a(self):\n"
+        "        assert True\n"
+    )
+    assert "PY-TEST-SKIP-NO-REASON" in _ids(src)

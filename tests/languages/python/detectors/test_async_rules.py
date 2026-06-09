@@ -46,3 +46,46 @@ def test_sequential_awaits_ignores_await_in_the_iterable():
     # a real per-iteration await in the body still flags
     bad = "async def f(xs):\n    for x in xs:\n        await g(x)\n"
     assert "PY-ASYNC-SEQUENTIAL-AWAITS" in rule_ids(run_audit(bad))
+
+
+# ---------------------------------------------------------------------------
+# NoAwaitBody — protocol dunder exemption
+# ---------------------------------------------------------------------------
+
+
+def test_no_await_body_protocol_dunder_does_not_fire():
+    # __aenter__ is a protocol coroutine — legitimately await-free
+    src = (
+        "class Ctx:\n"
+        "    async def __aenter__(self): return self\n"
+    )
+    assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))
+
+
+def test_no_await_body_ordinary_method_fires():
+    # an ordinary async method with no await must fire
+    src = (
+        "class Svc:\n"
+        "    async def setup(self): return self\n"
+    )
+    assert "PY-ASYNC-NO-AWAIT-BODY" in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# NoAwaitBody — abstract/stub body exemptions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "pass",
+        "...",
+        "raise NotImplementedError",
+        '"""doc"""',
+    ],
+    ids=["pass", "ellipsis", "raise-not-impl", "docstring"],
+)
+def test_no_await_body_stub_body_does_not_fire(body: str) -> None:
+    src = f"async def stub():\n    {body}\n"
+    assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))

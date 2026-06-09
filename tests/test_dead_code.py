@@ -2,6 +2,7 @@ import asyncio
 
 from auditor import dead_code
 from auditor.engine import audit_target
+from auditor.fixture_usage import find_unused
 
 
 def _def(name, kind, path, line=1):
@@ -103,3 +104,25 @@ def test_scan_entry_point_target_exempt(tmp_path):
     )
     _write(tmp_path, "pkg/a.py", "def _main():\n    return 1\n")
     assert "PY-DEAD-SYMBOL" not in _scan(tmp_path)
+
+
+# --- fixture_usage.find_unused: test_support role -----------------------------------------
+
+
+def test_find_unused_flags_test_support_fixture():
+    # A fixture-def in a test_support-role file with no refs should be flagged
+    def_rows = [{"symbol": "shared_db", "kind": "pytest-fixture-def", "path": "tests/conftest.py", "line": 5}]
+    ref_rows: list[dict] = []
+    roles = {"tests/conftest.py": "test_support"}
+    result = find_unused(def_rows, ref_rows, roles)
+    assert "tests/conftest.py" in result
+    assert result["tests/conftest.py"][0].rule_id == "PY-TEST-UNUSED-FIXTURE"
+
+
+def test_find_unused_test_support_ref_marks_used():
+    # A ref from a test_support-role file should count as "used" and suppress the finding
+    def_rows = [{"symbol": "shared_db", "kind": "pytest-fixture-def", "path": "tests/conftest.py", "line": 5}]
+    ref_rows = [{"symbol": "shared_db", "kind": "pytest-fixture-ref", "path": "tests/helpers.py"}]
+    roles = {"tests/conftest.py": "test_support", "tests/helpers.py": "test_support"}
+    result = find_unused(def_rows, ref_rows, roles)
+    assert result == {}

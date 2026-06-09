@@ -6,7 +6,11 @@ import pytest
 from auditor.config import (
     AuditorSettings,
     CategoryConfig,
+    OverrideConfig,
     ResolvedConfig,
+    RolePolicy,
+    RuleConfig,
+    Threshold,
     load_config,
 )
 from auditor.models import FileRole, Severity, VerdictKind
@@ -212,3 +216,91 @@ def test_overrides_unknown_key_rejected(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
     with pytest.raises(Exception, match="nope"):
         load_config(tmp_path, overrides={"nope": 1})
+
+
+# ---------------------------------------------------------------------------
+# New characterisation / coverage tests
+# ---------------------------------------------------------------------------
+
+
+def test_overrides_replaces_list_field(tmp_path):
+    """An overrides dict with a list field REPLACES (does not concatenate) the repo list."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        '[tool.auditor]\nexclude = ["foo/**"]\n'
+    )
+    settings = load_config(tmp_path, overrides={"exclude": ["*.csv"]})
+    assert settings.exclude == ["*.csv"]  # replace, not concat
+
+
+def test_overrides_extends_profile(tmp_path):
+    """overrides={extends:'strict'} activates strict-only rules even when config.toml says 'base'."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text('extends = "base"\n')
+    settings = load_config(tmp_path, overrides={"extends": "strict"})
+    rc = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="x.py")
+    assert rc.effective("PY-OOP-CONSTRUCTOR-WALL").enabled is True
+
+
+def test_threshold_merged_with_none_returns_self():
+    """Threshold.merged(None) is a fast-path that returns self unchanged."""
+    t = Threshold()
+    assert t.merged(None) is t
+
+
+def test_threshold_merged_with_all_unset_returns_self():
+    """Threshold.merged(all-unset Threshold) is a fast-path that returns self unchanged."""
+    t = Threshold()
+    empty = Threshold()  # default-constructed; no fields explicitly set via model_validate
+    # model_dump(exclude_unset=True) for a default-constructed Threshold is {} → fast-path
+    assert t.merged(empty) is t
+
+
+def test_unknown_profile_raises_file_not_found(tmp_path):
+    """load_config with a non-existent profile name raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        load_config(tmp_path, profile="no-such-profile")
+
+
+def test_role_mode_script_enables_dangerous_eval():
+    """SCRIPT role uses strict mode → PY-SEC-DANGEROUS-EVAL is enabled."""
+    rc = ResolvedConfig(AuditorSettings(), role=FileRole.SCRIPT, rel_path="x.py")
+    assert rc.effective("PY-SEC-DANGEROUS-EVAL").enabled is True
+
+
+def test_role_mode_generated_disables_dangerous_eval():
+    """GENERATED role is excluded → PY-SEC-DANGEROUS-EVAL is disabled."""
+    rc = ResolvedConfig(AuditorSettings(), role=FileRole.GENERATED, rel_path="x.py")
+    assert rc.effective("PY-SEC-DANGEROUS-EVAL").enabled is False
+
+
+def test_override_with_neither_path_nor_role_does_not_apply():
+    """An OverrideConfig with no path and no role matches nothing — rule is unchanged."""
+    settings = AuditorSettings(
+        overrides=[
+            OverrideConfig(
+                rules={"PY-SEC-DANGEROUS-EVAL": RuleConfig(enabled=False)}
+            )
+        ]
+    )
+    rc = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="any.py")
+    # The override should have no effect — the rule stays at its default (enabled)
+    assert rc.effective("PY-SEC-DANGEROUS-EVAL").enabled is True
+
+
+def test_relaxed_role_disabled_reason_contains_role_name():
+    """A rule disabled by a relaxed-role policy reports 'relaxed for role <name>' as the reason."""
+    settings = AuditorSettings(
+        roles={
+            FileRole.TEST: RolePolicy(
+                mode="relaxed",
+                rules={"PY-SEC-DANGEROUS-EVAL": RuleConfig(enabled=False)},
+            )
+        }
+    )
+    rc = ResolvedConfig(settings, role=FileRole.TEST, rel_path="test_x.py")
+    eff = rc.effective("PY-SEC-DANGEROUS-EVAL")
+    assert eff.enabled is False
+    assert eff.skipped_reason is not None
+    assert "relaxed" in eff.skipped_reason
+    assert "test" in eff.skipped_reason

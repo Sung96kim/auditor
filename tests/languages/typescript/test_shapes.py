@@ -78,6 +78,19 @@ def test_data_consts_are_not_function_shapes():
     assert [r for r in rows if r.kind == "ts-function"] == []
 
 
+def test_paren_free_arrow_identical_bodies_collide():
+    """Two structurally-identical paren-free arrow functions (no param parens) must produce
+    the same ts-function shape hash."""
+    fn_a = "const f = x => { if (x > 0) { return x.toString(); } return String(x); };\n"
+    fn_b = "const g = x => { if (x > 0) { return x.toString(); } return String(x); };\n"
+    shapes_a = _shapes(fn_a)
+    shapes_b = _shapes(fn_b)
+    assert shapes_a and shapes_b, "both functions should emit a ts-function shape"
+    fa = next(s for s in shapes_a if s.kind == "ts-function")
+    fb = next(s for s in shapes_b if s.kind == "ts-function")
+    assert fa.shape_hash == fb.shape_hash
+
+
 def test_thin_wrappers_differing_in_member_do_not_collide():
     # two mutation hooks identical but for which api fn they reference must NOT dedup
     a = _shapes(

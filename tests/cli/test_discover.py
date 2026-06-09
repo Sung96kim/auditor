@@ -48,3 +48,11 @@ def test_discover_accepts_config_json(tmp_path):
     res = invoke("discover", str(tmp_path), "--config-json", '{"exclude":["a.py"]}')
     assert res.exit_code == 0, res.output
     assert "a.py" not in res.output  # override-excluded
+
+
+def test_discover_config_json_unknown_key_errors(tmp_path):
+    """discover --config-json with an unknown key → exit 1, 'invalid config' in output."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    result = invoke("discover", str(tmp_path), "--config-json", '{"nope": 1}')
+    assert result.exit_code == 1
+    assert "invalid config" in " ".join(result.output.split())
