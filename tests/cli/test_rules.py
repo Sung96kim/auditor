@@ -37,6 +37,13 @@ def test_rules_list_framework_filter():
     assert "PY-TEST-NO-ASSERTION" in {r["rule_id"] for r in rows}
 
 
+def test_rules_list_framework_sqlalchemy():
+    rows = cli_json(invoke("rules", "list", "--framework", "sqlalchemy"))
+    ids = {r["rule_id"] for r in rows}
+    assert {"SA-MUTABLE-DEFAULT", "SA-RAW-SQL", "SA-GREENLET-ATTR-AFTER-COMMIT"} <= ids
+    assert all(r["framework"] == "sqlalchemy" for r in rows)
+
+
 def test_rules_list_unknown_framework_errors():
     result = invoke("rules", "list", "--framework", "nope")
     assert result.exit_code == 1

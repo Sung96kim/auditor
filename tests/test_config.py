@@ -185,3 +185,11 @@ def test_test_threshold_defaults_and_merge(tmp_path):
     s = load_config(tmp_path)
     assert s.threshold.test.max_mocks_per_test == 7
     assert s.threshold.test.parametrize_min_clones == 3  # untouched knob still defaulted
+
+
+def test_sqlalchemy_config_default_and_parse(tmp_path):
+    assert AuditorSettings().sqlalchemy.expire_on_commit is False
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor.sqlalchemy]\nexpire_on_commit = true\n'
+    )
+    assert load_config(tmp_path).sqlalchemy.expire_on_commit is True

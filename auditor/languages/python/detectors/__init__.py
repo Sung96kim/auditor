@@ -8,6 +8,7 @@ from auditor.languages.python.detectors import (
     oop,
     secrets,
     security,
+    sqlalchemy_rules,
     style,
     suggestions,
     supply_chain,

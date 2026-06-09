@@ -224,6 +224,25 @@ entry point — counts as used; `__init__.py` defs and framework-magic globals (
 `pytestmark`, …) are exempt. Findings are emitted for production/script code; references are pooled
 repo-wide. The cross-file pass is language-agnostic, so a `TS-DEAD-SYMBOL` sibling can drop in later.
 
+### SQLAlchemy (`framework="sqlalchemy"`)
+
+Per-file ORM rules (fire only in files that import `sqlalchemy`; all `candidate`):
+`SA-MUTABLE-DEFAULT` (shared mutable column default — use a callable, not `default=[]`),
+`SA-LAZY-DYNAMIC` (`relationship(lazy="dynamic")` — async-incompatible), `SA-NAIVE-DATETIME-DEFAULT`,
+`SA-RAW-SQL` (interpolated `text()`/`execute()` — injection), and `SA-ASYNC-EXPIRE-ON-COMMIT`
+(async session factory missing `expire_on_commit=False` → `MissingGreenlet`).
+
+A sixth, `SA-GREENLET-ATTR-AFTER-COMMIT` (ORM attribute access after `commit()`), is **off by
+default** — the auditor can't see your session factory's `expire_on_commit` (often in a shared lib),
+so declare it to activate the post-commit `MissingGreenlet` scan:
+
+```toml
+[tool.auditor.sqlalchemy]
+expire_on_commit = true
+```
+
+List them with `auditor rules list --framework sqlalchemy`.
+
 - **Profiles**: `base` (industry floor: security/**malware**/secrets/supply-chain/correctness/
   async/typing/config + cross-file dedup on; opinionated OOP/composition off), `strict` (adds
   OOP/composition + complexity),

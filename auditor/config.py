@@ -235,6 +235,15 @@ class DesignSystem(BaseModel):
     primitives: list[DesignSystemPrimitive] = Field(default_factory=list)
 
 
+class SqlAlchemyConfig(BaseModel):
+    """Declared facts about the project's SQLAlchemy engine/session, so config-dependent rules are
+    accurate instead of guessing (the real factory often lives in a shared lib the auditor can't see)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expire_on_commit: bool = False  # async session setting; True activates SA-GREENLET-ATTR-AFTER-COMMIT
+
+
 class GlobalPaths(BaseSettings):
     """Global auditor data locations from the environment. ``home`` ← ``$AUDITOR_HOME`` (via the
     ``AUDITOR_`` prefix), defaulting to ``~/.auditor``. Lives here so the project's BaseSettings
@@ -273,6 +282,7 @@ class AuditorSettings(BaseSettings):
         None  # `scan --vs-base` ref; None auto-detects main/master/develop/development
     )
     design_system: DesignSystem = Field(default_factory=DesignSystem)
+    sqlalchemy: SqlAlchemyConfig = Field(default_factory=SqlAlchemyConfig)
 
     @field_validator("rules", mode="after")
     @classmethod

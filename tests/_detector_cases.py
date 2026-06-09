@@ -1029,6 +1029,13 @@ TESTED_SEPARATELY = {
     "PY-TEST-DUPLICATE-SETUP",
     "PY-TEST-UNUSED-FIXTURE",  # repo-level; computed by the crossfile pass
     "PY-DEAD-SYMBOL",  # repo-level; computed by the crossfile pass, tested in test_dead_code.py
+    # SQLAlchemy framework rules — tested in tests/languages/python/detectors/test_sqlalchemy.py
+    "SA-MUTABLE-DEFAULT",
+    "SA-LAZY-DYNAMIC",
+    "SA-NAIVE-DATETIME-DEFAULT",
+    "SA-RAW-SQL",
+    "SA-ASYNC-EXPIRE-ON-COMMIT",
+    "SA-GREENLET-ATTR-AFTER-COMMIT",
 }
 
 
