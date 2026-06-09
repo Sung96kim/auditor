@@ -237,8 +237,11 @@ class IndexStore:
         _retry_locked(lambda: conn.executescript(_SCHEMA))
         conn.commit()
 
-    async def register(self, name: str, when: float) -> None:
-        """Record this repo in the registry (and refresh its name/last-scanned)."""
+    async def register(self, when: float) -> None:
+        """Record this repo in the registry (refresh name + last-scanned). The name is the repo
+        key's basename, derived here (not caller-supplied) so it's always the canonical repo name —
+        callers may hold an unresolved/relative root whose ``.name`` is empty."""
+        name = Path(self.repo).name or self.repo
 
         def op(conn: sqlite3.Connection) -> None:
             conn.execute(

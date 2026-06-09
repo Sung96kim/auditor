@@ -222,7 +222,7 @@ async def test_prune_respects_repo_and_prefix(tmp_path):
 async def test_register_and_forget_roundtrip(tmp_path, repo):
     db = tmp_path / "index.db"
     async with await _store(db, repo) as s:
-        await s.register(repo.rsplit("/", 1)[-1], 5.0)
+        await s.register(5.0)
         await s.upsert_file(_entry("x.py"))
         assert any(r["repo"] == repo for r in await s.repos())
         assert await s.forget() is True

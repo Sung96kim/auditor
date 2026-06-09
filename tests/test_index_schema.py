@@ -78,7 +78,7 @@ async def test_write_registers_repo(tmp_path):
 async def test_register_refreshes_name_and_time(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/x/proj") as s:
-        await s.register("proj", 123.5)
+        await s.register(123.5)  # name is derived from the repo key's basename, not passed in
         regs = await s.repos()
     assert regs == [{"repo": "/x/proj", "name": "proj", "last_scanned": 123.5}]
 
