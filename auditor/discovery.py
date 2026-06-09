@@ -39,10 +39,27 @@ _DEFAULT_EXCLUDE_GLOBS = (
 )
 
 
+def _is_test_path(rel: str) -> bool:
+    """Hand-written test code — a ``tests``/``test`` directory segment or a ``test_*.py`` /
+    ``*_test.py`` basename. Never an auto-generated migration file."""
+    segs = rel.split("/")
+    name = segs[-1]
+    return (
+        "tests" in segs
+        or "test" in segs
+        or fnmatch(name, "test_*.py")
+        or fnmatch(name, "*_test.py")
+    )
+
+
 def _in_soft_skip(rel: str) -> bool:
     """*Soft*-skipped (auto-generated/boilerplate) location: a ``migrations`` directory, or an
     Alembic ``alembic/versions`` directory. Unlike the hard ``_EXCLUDE_DIRS`` these are skipped on a
-    normal scan but audited when the user targets them directly (see ``FileDiscovery.files``)."""
+    normal scan but audited when the user targets them directly (see ``FileDiscovery.files``).
+    Test code is exempt — a ``tests/migrations/`` dir holds tests *of* migrations, not the generated
+    version files this targets."""
+    if _is_test_path(rel):
+        return False
     segs = rel.split("/")
     if "migrations" in segs:
         return True

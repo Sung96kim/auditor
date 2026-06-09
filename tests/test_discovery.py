@@ -113,6 +113,26 @@ def test_migration_single_file_scanned(tmp_path):
     assert FileDiscovery(root).files(f) == [f]
 
 
+def test_test_dir_named_migrations_is_not_soft_skipped(tmp_path):
+    # regression: `tests/migrations/` holds tests OF migrations, not generated version files —
+    # the soft-skip must not swallow it (it did, which also broke cross-file fixture-ref collection)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "tests" / "migrations").mkdir(parents=True)
+    (tmp_path / "tests" / "migrations" / "test_upgrade.py").write_text(
+        "def test_x():\n    assert True\n"
+    )
+    (tmp_path / "app" / "migrations").mkdir(parents=True)
+    (tmp_path / "app" / "migrations" / "0001_init.py").write_text("x = 1\n")
+    found = {
+        p.relative_to(tmp_path).as_posix()
+        for p in FileDiscovery(tmp_path).files(tmp_path)
+    }
+    assert "tests/migrations/test_upgrade.py" in found  # test code is scanned
+    assert (
+        "app/migrations/0001_init.py" not in found
+    )  # real migration still soft-skipped
+
+
 def test_parent_scan_still_skips_migrations(tmp_path):
     root = _migration_tree(tmp_path)
     # scanning the parent of a migrations dir (not the dir itself) still skips it
