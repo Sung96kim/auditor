@@ -328,6 +328,22 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             ),
         ),
         (
+            "PY-PYDANTIC-V1-CONFIG-CLASS",
+            (
+                "from pydantic import BaseModel\n"
+                "class UserRecord(BaseModel):\n"
+                "    user_id: int\n"
+                "    class Config:\n"
+                "        orm_mode = True\n"
+            ),
+            (
+                "from pydantic import BaseModel, ConfigDict\n"
+                "class UserRecord(BaseModel):\n"
+                "    model_config = ConfigDict(from_attributes=True)\n"
+                "    user_id: int\n"
+            ),
+        ),
+        (
             "PY-OOP-DICT-MUTATION-BUILDER",
             (
                 "def enrich_payload(payload):\n"
@@ -1027,6 +1043,7 @@ TESTED_SEPARATELY = {
     "PY-TEST-OVER-MOCKING",
     "PY-TEST-PARAMETRIZE-CANDIDATE",
     "PY-TEST-DUPLICATE-SETUP",
+    "PY-TEST-FIXTURE-MUTABLE-WIDE-SCOPE",
     "PY-TEST-UNUSED-FIXTURE",  # repo-level; computed by the crossfile pass
     "PY-DEAD-SYMBOL",  # repo-level; computed by the crossfile pass, tested in test_dead_code.py
     # SQLAlchemy framework rules — tested in tests/languages/python/detectors/test_sqlalchemy.py
@@ -1036,6 +1053,8 @@ TESTED_SEPARATELY = {
     "SA-RAW-SQL",
     "SA-ASYNC-EXPIRE-ON-COMMIT",
     "SA-GREENLET-ATTR-AFTER-COMMIT",
+    "SA-IMPLICIT-LAZY-ASYNC",
+    "SA-JOINED-COLLECTION",
 }
 
 

@@ -215,6 +215,7 @@ on test-role Python files and are all `candidate` (advisory — they never gate 
 | `PY-TEST-UNUSED-FIXTURE` | a fixture defined but never requested (repo-level) |
 | `PY-TEST-SKIP-NO-REASON` | `@pytest.mark.skip/skipif/xfail` without `reason=` |
 | `PY-TEST-SLEEP` | `time.sleep()` in a test |
+| `PY-TEST-FIXTURE-MUTABLE-WIDE-SCOPE` | a `session`/`module`/`package`-scoped fixture returning a mutable literal (`[]`/`{}`) — shared state leaks across tests |
 
 List them with `auditor rules list --framework pytest`. Tune floors under `[tool.auditor.threshold.test]`.
 
@@ -233,19 +234,30 @@ repo-wide. The cross-file pass is language-agnostic, so a `TS-DEAD-SYMBOL` sibli
 Per-file ORM rules (fire only in files that import `sqlalchemy`; all `candidate`):
 `SA-MUTABLE-DEFAULT` (shared mutable column default — use a callable, not `default=[]`),
 `SA-LAZY-DYNAMIC` (`relationship(lazy="dynamic")` — async-incompatible), `SA-NAIVE-DATETIME-DEFAULT`,
-`SA-RAW-SQL` (interpolated `text()`/`execute()` — injection), and `SA-ASYNC-EXPIRE-ON-COMMIT`
-(async session factory missing `expire_on_commit=False` → `MissingGreenlet`).
+`SA-RAW-SQL` (interpolated `text()`/`execute()` — injection), `SA-ASYNC-EXPIRE-ON-COMMIT`
+(async session factory missing `expire_on_commit=False` → `MissingGreenlet`), and
+`SA-JOINED-COLLECTION` (`relationship(lazy="joined")` on a `Mapped[list[...]]` collection →
+cartesian-product JOIN; use `selectin`).
 
-A sixth, `SA-GREENLET-ATTR-AFTER-COMMIT` (ORM attribute access after `commit()`), is **off by
-default** — the auditor can't see your session factory's `expire_on_commit` (often in a shared lib),
-so declare it to activate the post-commit `MissingGreenlet` scan:
+Two more are **off by default** — the auditor can't see your session factory (often in a shared
+lib), so declare facts about it to activate them:
 
 ```toml
 [tool.auditor.sqlalchemy]
-expire_on_commit = true
+expire_on_commit = true   # activates SA-GREENLET-ATTR-AFTER-COMMIT (attr access after commit())
+async_session = true      # activates SA-IMPLICIT-LAZY-ASYNC (relationship() with no explicit lazy=)
 ```
 
-List them with `auditor rules list --framework sqlalchemy`.
+`SA-IMPLICIT-LAZY-ASYNC` flags `relationship()` calls that don't set `lazy=` explicitly: the
+default `"select"` emits a synchronous SELECT on attribute access, which raises `MissingGreenlet`
+under `AsyncSession`. List them all with `auditor rules list --framework sqlalchemy`.
+
+### Pydantic (`framework="pydantic"`)
+
+Per-file rules gated to files that import `pydantic`: `PY-PYDANTIC-V1-CONFIG-CLASS` (`candidate`) —
+a `BaseModel` configured via an inner `class Config:` instead of `model_config = ConfigDict(...)`;
+v2 keeps the inner class as a deprecated shim but silently ignores misspelled keys (`orm_mode` vs
+`from_attributes`). (`PY-OOP-DATACLASS-IN-PYDANTIC` is also pydantic-aware.)
 
 - **Profiles**: `base` (industry floor: security/**malware**/secrets/supply-chain/correctness/
   async/typing/config + cross-file dedup on; opinionated OOP/composition off), `strict` (adds
@@ -338,7 +350,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 `auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
 
 <details>
-<summary><b>All 124 rules</b> (generated from <code>auditor rules list</code>)</summary>
+<summary><b>All 127 rules</b> (generated from <code>auditor rules list</code>)</summary>
 
 #### security (23)
 
@@ -489,15 +501,18 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `TS-STYLE-DUPLICATE-IMPORT` | low | auto | — |
 | `TS-STYLE-FILE-SIZE` | low | auto | — |
 
-#### react (11)
+#### react (14)
 
 | rule_id | severity | verdict | standards |
 |---|---|---|---|
 | `TS-REACT-ARRAY-INDEX-KEY` | medium | candidate | — |
+| `TS-REACT-ASYNC-EFFECT` | medium | auto | — |
 | `TS-REACT-DEEP-JSX-NESTING` | low | candidate | — |
+| `TS-REACT-EAGER-STATE-INIT` | medium | candidate | — |
 | `TS-REACT-EXTRACTABLE-HELPER` | low | candidate | — |
 | `TS-REACT-EXTRACTABLE-HOOK` | low | candidate | — |
 | `TS-REACT-MULTI-COMPONENT-FILE` | low | candidate | — |
+| `TS-REACT-RANDOM-KEY` | medium | auto | — |
 | `TS-REACT-PARALLEL-SIBLING` | low | candidate | — |
 | `TS-REACT-REPEATED-JSX` | low | candidate | — |
 | `TS-REACT-TOO-MANY-PROPS` | low | candidate | — |

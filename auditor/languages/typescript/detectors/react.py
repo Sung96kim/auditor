@@ -176,3 +176,131 @@ def _common_prefix(names: list[str]) -> str:
 
 def _is_component(name: str, body: Tsx) -> bool:
     return is_pascal_case(name) and body.contains_jsx()
+
+
+# --- TS-REACT-ASYNC-EFFECT ---------------------------------------------------------------
+
+_EFFECT_HOOKS = {"useEffect", "useLayoutEffect"}
+
+
+def _first_arg(call: Tsx) -> Tsx | None:
+    args = call.field("arguments")
+    children = args.named_children() if args is not None else []
+    return children[0] if children else None
+
+
+def _is_async_fn(node: Tsx) -> bool:
+    """An arrow/function expression carrying the leading ``async`` token."""
+    return node.type in ("arrow_function", "function_expression") and any(
+        c.type == "async" for c in node.node.children
+    )
+
+
+class AsyncEffect(TsDetector):
+    rule_id: ClassVar[str] = "TS-REACT-ASYNC-EFFECT"
+    category: ClassVar[Category] = Category.REACT
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.AUTO
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for call in ctx.root.descendants("call_expression"):
+            if callee(call) not in _EFFECT_HOOKS:
+                continue
+            cb = _first_arg(call)
+            if cb is not None and _is_async_fn(cb):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=call.line,
+                        message="async function passed to useEffect — its returned Promise is treated as the cleanup, so cleanup never runs",
+                        suggestion="keep the effect sync; define an async fn inside and call it, returning a real cleanup",
+                    )
+                )
+        return out
+
+
+# --- TS-REACT-RANDOM-KEY -----------------------------------------------------------------
+
+#: (object, method) pairs that yield a fresh value on every call — fatal as a React key
+_FRESH_KEYGEN = {("Math", "random"), ("Date", "now"), ("crypto", "randomUUID")}
+
+
+def _member_pair(call: Tsx) -> tuple[str, str] | None:
+    """(object, property) of a ``a.b(...)`` call, else None."""
+    if call.type != "call_expression":
+        return None
+    fn = call.field("function")
+    if fn is None or fn.type != "member_expression":
+        return None
+    obj, prop = fn.field("object"), fn.field("property")
+    return (obj.text, prop.text) if obj is not None and prop is not None else None
+
+
+class RandomKey(TsDetector):
+    rule_id: ClassVar[str] = "TS-REACT-RANDOM-KEY"
+    category: ClassVar[Category] = Category.REACT
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.AUTO
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for attr in ctx.root.descendants("jsx_attribute"):
+            if attr.attr_name() != "key":
+                continue
+            value = attr.attr_value()
+            if value is not None and any(
+                _member_pair(n) in _FRESH_KEYGEN for n in value.walk()
+            ):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=attr.line,
+                        message="key is a freshly generated value (Math.random/Date.now/randomUUID) — a new key every render remounts the node and drops its state",
+                        suggestion="key off a stable unique id from the data, not a per-render value",
+                    )
+                )
+        return out
+
+
+# --- TS-REACT-EAGER-STATE-INIT -----------------------------------------------------------
+
+_EXPENSIVE_INIT = {
+    ("JSON", "parse"),
+    ("localStorage", "getItem"),
+    ("sessionStorage", "getItem"),
+}
+_ARRAY_OPS = {"map", "filter", "reduce", "sort", "flatMap"}
+
+
+def _is_expensive_init(node: Tsx) -> bool:
+    """A useState argument that does real work on every render: JSON.parse(...),
+    (local|session)Storage.getItem(...), or an array-transform chain."""
+    pair = _member_pair(node)
+    if pair is None:
+        return False
+    return pair in _EXPENSIVE_INIT or pair[1] in _ARRAY_OPS
+
+
+class EagerStateInit(TsDetector):
+    rule_id: ClassVar[str] = "TS-REACT-EAGER-STATE-INIT"
+    category: ClassVar[Category] = Category.REACT
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+
+    def run(self, ctx: TsAuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for call in ctx.root.descendants("call_expression"):
+            if callee(call) != "useState":
+                continue
+            arg = _first_arg(call)
+            if arg is not None and _is_expensive_init(arg):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=call.line,
+                        message="useState initial value is computed by a call that re-runs every render — only the first render's value is kept",
+                        suggestion="pass an initializer function (`useState(() => …)`) so the work runs once",
+                    )
+                )
+        return out

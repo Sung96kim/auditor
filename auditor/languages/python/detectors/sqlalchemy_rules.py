@@ -140,6 +140,102 @@ class LazyDynamic(SqlAlchemyRule):
         return out
 
 
+# --- SA-IMPLICIT-LAZY-ASYNC --------------------------------------------------------------
+
+
+class ImplicitLazyAsync(SqlAlchemyRule):
+    """relationship() with no explicit lazy= → defaults to "select", which emits a SELECT on
+    attribute access. Under AsyncSession that lazy load raises MissingGreenlet. Dormant unless
+    the project declares it runs async sessions ([tool.auditor.sqlalchemy] async_session=True),
+    since the model file can't reveal whether the session is async (the factory lives elsewhere)."""
+
+    rule_id: ClassVar[str] = "SA-IMPLICIT-LAZY-ASYNC"
+    category: ClassVar[Category] = Category.ASYNC
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+
+    def check(self, ctx: AuditContext, aliases: dict[str, str]) -> list[Finding]:
+        if not ctx.config.settings.sqlalchemy.async_session:
+            return []  # dormant unless the project declares async sessions
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if (
+                isinstance(node, ast.Call)
+                and _tail(node, aliases) == "relationship"
+                and kwarg(node, "lazy") is None
+            ):
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=node.lineno,
+                        message="relationship() with no explicit lazy= defaults to a sync SELECT on access — MissingGreenlet under AsyncSession",
+                        suggestion='set lazy explicitly: "selectin" (eager) or "raise" to forbid implicit IO',
+                    )
+                )
+        return out
+
+
+# --- SA-JOINED-COLLECTION ----------------------------------------------------------------
+
+_COLLECTION_TYPES = {
+    "list",
+    "List",
+    "set",
+    "Set",
+    "frozenset",
+    "Sequence",
+    "Collection",
+    "MutableSequence",
+}
+
+
+def _is_collection_annotation(ann: ast.expr | None) -> bool:
+    """True if the annotation subscripts a collection type (``Mapped[list[X]]``, ``list[X]``,
+    ``List[X]`` …) — a to-many relationship, where lazy="joined" produces a cartesian product."""
+    if ann is None:
+        return False
+    return any(
+        isinstance(n, ast.Subscript)
+        and isinstance(n.value, ast.Name)
+        and n.value.id in _COLLECTION_TYPES
+        for n in ast.walk(ann)
+    )
+
+
+class JoinedCollection(SqlAlchemyRule):
+    """relationship(lazy="joined") on a to-many (collection) relationship → a JOIN that multiplies
+    parent rows by children (cartesian blowup); docs prefer selectin for collections."""
+
+    rule_id: ClassVar[str] = "SA-JOINED-COLLECTION"
+    category: ClassVar[Category] = Category.CORRECTNESS
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.AUTO
+
+    def check(self, ctx: AuditContext, aliases: dict[str, str]) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if not (
+                isinstance(node, ast.AnnAssign)
+                and _is_collection_annotation(node.annotation)
+            ):
+                continue
+            call = node.value
+            if not (
+                isinstance(call, ast.Call) and _tail(call, aliases) == "relationship"
+            ):
+                continue
+            lz = kwarg(call, "lazy")
+            if isinstance(lz, ast.Constant) and lz.value == "joined":
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=call.lineno,
+                        message='relationship(lazy="joined") on a collection — cartesian-product JOIN multiplies parent rows',
+                        suggestion='use lazy="selectin" for to-many relationships (joined is for many-to-one)',
+                    )
+                )
+        return out
+
+
 # --- SA-NAIVE-DATETIME-DEFAULT -----------------------------------------------------------
 
 

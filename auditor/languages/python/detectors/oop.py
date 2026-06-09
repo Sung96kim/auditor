@@ -66,6 +66,65 @@ class DataclassInPydantic(Detector):
         return out
 
 
+def _imports_pydantic(tree: ast.Module) -> bool:
+    """File-level pydantic import — gates the v1-Config rule the way ``_imports_sqlalchemy`` gates
+    SA rules. More precise than the project-dep set, which only sees pyproject ``[project]`` deps
+    (misses requirements.txt / poetry projects)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+            a.name.split(".")[0] == "pydantic" for a in node.names
+        ):
+            return True
+        if (
+            isinstance(node, ast.ImportFrom)
+            and (node.module or "").split(".")[0] == "pydantic"
+        ):
+            return True
+    return False
+
+
+class PydanticV1ConfigClass(Detector):
+    """A pydantic ``BaseModel`` that still configures via an inner ``class Config:`` instead of
+    ``model_config = ConfigDict(...)``. v2 keeps the inner class as a deprecated shim but does NOT
+    validate its keys, so a misspelled setting (``orm_mode`` vs ``from_attributes``) silently does
+    nothing. Candidate because pure-v1 projects use ``class Config`` legitimately."""
+
+    rule_id: ClassVar[str] = "PY-PYDANTIC-V1-CONFIG-CLASS"
+    category: ClassVar[Category] = Category.CORRECTNESS
+    framework: ClassVar[str | None] = "pydantic"
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        if not _imports_pydantic(ctx.tree):
+            return []
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            bases = {dotted_name(b).split(".")[-1] for b in node.bases}
+            if "BaseModel" not in bases or "BaseSettings" in bases:
+                continue
+            inner = next(
+                (
+                    c
+                    for c in node.body
+                    if isinstance(c, ast.ClassDef) and c.name == "Config"
+                ),
+                None,
+            )
+            if inner is not None:
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=inner.lineno,
+                        message=f"`{node.name}` configures via inner `class Config` — pydantic v2 silently ignores unknown keys there",
+                        suggestion="replace `class Config:` with `model_config = ConfigDict(...)`",
+                    )
+                )
+        return out
+
+
 class ConstructorWall(_OopCandidate):
     rule_id: ClassVar[str] = "PY-OOP-CONSTRUCTOR-WALL"
     checklist_item: ClassVar[int] = 3

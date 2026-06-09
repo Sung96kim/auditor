@@ -357,6 +357,73 @@ class DuplicateSetup(PytestRule):
         return out
 
 
+# --- I: FIXTURE-MUTABLE-WIDE-SCOPE -------------------------------------------------------
+
+_WIDE_SCOPES = {"session", "module", "package"}
+
+
+def _fixture_scope(deco: ast.expr) -> str | None:
+    """The declared scope of an ``@pytest.fixture``/``@fixture`` decorator (``"function"`` when
+    unspecified), or None when ``deco`` is not a fixture decorator at all."""
+    if not _deco_dotted(deco).endswith("fixture"):
+        return None
+    if isinstance(deco, ast.Call):
+        scope = next((k.value for k in deco.keywords if k.arg == "scope"), None)
+        if isinstance(scope, ast.Constant) and isinstance(scope.value, str):
+            return scope.value
+    return "function"
+
+
+def _mutable_results(fn: ast.AST) -> list[ast.expr]:
+    """return/yield values that are mutable literals (``[]``/``{}``/``set()``), not descending
+    into nested defs/lambdas — a factory fixture returning an inner function isn't shared state."""
+    found: list[ast.expr] = []
+
+    def visit(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            value = child.value if isinstance(child, (ast.Return, ast.Yield)) else None
+            if isinstance(value, (ast.List, ast.Dict, ast.Set)):
+                found.append(child)
+            visit(child)
+
+    visit(fn)
+    return found
+
+
+class FixtureMutableWideScope(PytestRule):
+    rule_id: ClassVar[str] = "PY-TEST-FIXTURE-MUTABLE-WIDE-SCOPE"
+    default_severity: ClassVar[Severity] = Severity.MEDIUM
+
+    def check(self, ctx: AuditContext) -> list[Finding]:
+        out: list[Finding] = []
+        for node in ast.walk(ctx.tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            scope = next(
+                (
+                    s
+                    for d in node.decorator_list
+                    if (s := _fixture_scope(d)) is not None
+                ),
+                None,
+            )
+            if scope not in _WIDE_SCOPES:
+                continue
+            results = _mutable_results(node)
+            if results:
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=results[0].lineno,
+                        message=f"{scope}-scoped fixture `{node.name}` returns a mutable literal — one test mutating it leaks into the rest",
+                        suggestion="use function scope for fresh state, or return an immutable value (tuple/frozenset)",
+                    )
+                )
+        return out
+
+
 # --- F: UNUSED-FIXTURE (repo-level; computed by the crossfile pass) ----------------------
 
 

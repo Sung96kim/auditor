@@ -77,3 +77,42 @@ def test_dataclass_in_pydantic_no_pydantic_dep_does_not_fire():
     src = "@dataclass\nclass C:\n    x: int\n"
     result = run_audit(src, project_deps=frozenset())
     assert "PY-OOP-DATACLASS-IN-PYDANTIC" not in rule_ids(result)
+
+
+# --- PY-PYDANTIC-V1-CONFIG-CLASS edge cases ---
+
+
+def test_pydantic_v1_config_class_basesettings_not_flagged():
+    # BaseSettings (pydantic-settings) is a different surface; only BaseModel is flagged
+    src = (
+        "from pydantic_settings import BaseSettings\n"
+        "class S(BaseSettings):\n"
+        "    class Config:\n"
+        "        env_prefix = 'X'\n"
+    )
+    assert "PY-PYDANTIC-V1-CONFIG-CLASS" not in rule_ids(run_audit(src))
+
+
+def test_pydantic_v1_config_class_non_model_not_flagged():
+    # a plain (non-pydantic) class with an inner Config is not the footgun
+    src = "from pydantic import BaseModel\nclass Plain:\n    class Config:\n        x = 1\n"
+    assert "PY-PYDANTIC-V1-CONFIG-CLASS" not in rule_ids(run_audit(src))
+
+
+def test_pydantic_v1_config_class_requires_pydantic_import():
+    # gated on a file-level pydantic import (like the SA rules); a BaseModel-looking class in a
+    # file that never imports pydantic is not flagged, even if pydantic is a project dep
+    src = "class M(BaseModel):\n    class Config:\n        orm_mode = True\n"
+    assert "PY-PYDANTIC-V1-CONFIG-CLASS" not in rule_ids(run_audit(src))
+
+
+def test_pydantic_v1_config_class_fires_on_aliased_base():
+    # `class Span(pyd.BaseModel)` via `import pydantic as pyd` (the common indico shape)
+    src = (
+        "import pydantic as pyd\n"
+        "class Span(pyd.BaseModel):\n"
+        "    start: int\n"
+        "    class Config:\n"
+        "        allow_population_by_field_name = True\n"
+    )
+    assert "PY-PYDANTIC-V1-CONFIG-CLASS" in rule_ids(run_audit(src))

@@ -108,3 +108,82 @@ def test_array_index_key_no_fire_outside_iterator():
     """A `key` prop on an element at module level (outside any .map) must NOT fire."""
     src = "const x = <li key={0}>item</li>;\n"
     assert "TS-REACT-ARRAY-INDEX-KEY" not in rule_ids(run_ts_audit(src))
+
+
+# --- TS-REACT-ASYNC-EFFECT edge cases ---
+
+
+@pytest.mark.parametrize(
+    "hook",
+    ["useEffect", "useLayoutEffect", "React.useEffect"],
+)
+def test_async_effect_fires_for_effect_hooks(hook):
+    src = f"function W() {{\n  {hook}(async () => {{ await x(); }}, []);\n  return <div />;\n}}\n"
+    assert "TS-REACT-ASYNC-EFFECT" in rule_ids(run_ts_audit(src))
+
+
+def test_async_effect_async_function_expression_fires():
+    src = "function W() {\n  useEffect(async function () { await x(); }, []);\n  return <div />;\n}\n"
+    assert "TS-REACT-ASYNC-EFFECT" in rule_ids(run_ts_audit(src))
+
+
+def test_async_effect_inner_async_fn_clean():
+    # the documented fix: sync effect that defines + calls an inner async fn -> must NOT fire
+    src = (
+        "function W() {\n"
+        "  useEffect(() => {\n"
+        "    async function load() { await x(); }\n"
+        "    load();\n"
+        "  }, []);\n"
+        "  return <div />;\n"
+        "}\n"
+    )
+    assert "TS-REACT-ASYNC-EFFECT" not in rule_ids(run_ts_audit(src))
+
+
+# --- TS-REACT-RANDOM-KEY edge cases ---
+
+
+@pytest.mark.parametrize("gen", ["Math.random()", "Date.now()", "crypto.randomUUID()"])
+def test_random_key_fresh_generators_fire(gen):
+    src = "const x = items.map((it) => <li key={" + gen + "}>{it}</li>);\n"
+    assert "TS-REACT-RANDOM-KEY" in rule_ids(run_ts_audit(src))
+
+
+def test_random_key_in_template_literal_fires():
+    src = "const x = items.map((it) => <li key={`row-${Math.random()}`}>{it}</li>);\n"
+    assert "TS-REACT-RANDOM-KEY" in rule_ids(run_ts_audit(src))
+
+
+@pytest.mark.parametrize("key", ["it.uuid", "it.id", "`${it.id}-row`"])
+def test_random_key_stable_value_clean(key):
+    src = "const x = items.map((it) => <li key={" + key + "}>{it.name}</li>);\n"
+    assert "TS-REACT-RANDOM-KEY" not in rule_ids(run_ts_audit(src))
+
+
+# --- TS-REACT-EAGER-STATE-INIT edge cases ---
+
+
+@pytest.mark.parametrize(
+    "init",
+    [
+        "JSON.parse(s)",
+        "localStorage.getItem('k')",
+        "rows.sort()",
+        "data.filter((x) => x).map((x) => x)",
+    ],
+)
+def test_eager_state_init_expensive_fires(init):
+    src = f"function W() {{\n  const [s, setS] = useState({init});\n  return <div>{{s}}</div>;\n}}\n"
+    assert "TS-REACT-EAGER-STATE-INIT" in rule_ids(run_ts_audit(src))
+
+
+@pytest.mark.parametrize(
+    "init",
+    ["0", "''", "props.value", "getInitial()", "() => expensive()", "new Map()"],
+)
+def test_eager_state_init_clean(init):
+    # bare-identifier calls (getInitial()) are intentionally NOT flagged — only known-expensive
+    # member calls are, to keep false positives low
+    src = f"function W() {{\n  const [s, setS] = useState({init});\n  return <div>{{s}}</div>;\n}}\n"
+    assert "TS-REACT-EAGER-STATE-INIT" not in rule_ids(run_ts_audit(src))

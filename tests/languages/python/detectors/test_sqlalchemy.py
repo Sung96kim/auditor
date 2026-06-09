@@ -270,3 +270,68 @@ def test_raw_sql_constant_concat_clean():
     # concat of two constants -> not interpolated -> must NOT fire
     src = _IMP + "q = text('SELECT ' + '1')\n"
     assert "SA-RAW-SQL" not in rule_ids(run_audit(src, rel_path="m.py"))
+
+
+# --- SA-IMPLICIT-LAZY-ASYNC (config-gated: dormant unless async_session=True) ---
+_ASYNC = AuditorSettings(sqlalchemy=SqlAlchemyConfig(async_session=True))
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "rel: Mapped[list['X']] = relationship('X')",  # collection
+        "rel: Mapped['X'] = relationship('X')",  # scalar (lazy bites either way in async)
+        "rel = relationship('X')",  # unannotated
+    ],
+)
+def test_implicit_lazy_async_fires_when_declared(rel):
+    assert "SA-IMPLICIT-LAZY-ASYNC" in _ids(f"class M:\n    {rel}\n", settings=_ASYNC)
+
+
+def test_implicit_lazy_async_dormant_by_default():
+    # default async_session=False -> can't tell sync from async per-file -> never fires
+    assert "SA-IMPLICIT-LAZY-ASYNC" not in _ids(
+        "class M:\n    rel = relationship('X')\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "lz", ['"selectin"', '"raise"', '"joined"', '"select"', "SOME"]
+)
+def test_implicit_lazy_async_explicit_lazy_clean(lz):
+    body = f"SOME='x'\nclass M:\n    rel = relationship('X', lazy={lz})\n"
+    assert "SA-IMPLICIT-LAZY-ASYNC" not in _ids(body, settings=_ASYNC)
+
+
+def test_implicit_lazy_async_aliased_import():
+    src = (
+        "import sqlalchemy\n"
+        "from sqlalchemy.orm import relationship as rel\n"
+        "class M:\n    r = rel('X')\n"
+    )
+    assert "SA-IMPLICIT-LAZY-ASYNC" in rule_ids(
+        run_audit(src, settings=_ASYNC, rel_path="m.py")
+    )
+
+
+# --- SA-JOINED-COLLECTION ---
+@pytest.mark.parametrize(
+    "ann", ["Mapped[list['X']]", "list['X']", "List['X']", "Mapped[set['X']]"]
+)
+def test_joined_collection_fires(ann):
+    assert "SA-JOINED-COLLECTION" in _ids(
+        f"class M:\n    items: {ann} = relationship('X', lazy='joined')\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "parent: Mapped['X'] = relationship('X', lazy='joined')",  # scalar M2O: fine
+        "items: Mapped[list['X']] = relationship('X', lazy='selectin')",  # collection but selectin
+        "items: Mapped[list['X']] = relationship('X')",  # no lazy at all
+        "items = relationship('X', lazy='joined')",  # unannotated -> can't confirm collection
+    ],
+)
+def test_joined_collection_clean(case):
+    assert "SA-JOINED-COLLECTION" not in _ids(f"class M:\n    {case}\n")

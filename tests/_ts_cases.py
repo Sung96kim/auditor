@@ -98,6 +98,21 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "function toKib(n: number) {\n  const v = n / 1024;\n  return v.toFixed(1);\n}\nfunction toMib(n: number) {\n  const v = n / 1048576;\n  return v.toFixed(1);\n}\n",
             "function a(n: number) {\n  return n + 1;\n}\nfunction b(n: number) {\n  return n.toString();\n}\n",
         ),
+        (
+            "TS-REACT-ASYNC-EFFECT",
+            "function W() {\n  useEffect(async () => {\n    await load();\n  }, []);\n  return <div />;\n}\n",
+            "function W() {\n  useEffect(() => {\n    load();\n  }, []);\n  return <div />;\n}\n",
+        ),
+        (
+            "TS-REACT-RANDOM-KEY",
+            "const x = <ul>{items.map((it) => <li key={Math.random()}>{it}</li>)}</ul>;\n",
+            "const x = <ul>{items.map((it) => <li key={it.id}>{it.name}</li>)}</ul>;\n",
+        ),
+        (
+            "TS-REACT-EAGER-STATE-INIT",
+            "function W() {\n  const [s, setS] = useState(JSON.parse(localStorage.getItem('k')));\n  return <div>{s}</div>;\n}\n",
+            "function W() {\n  const [s, setS] = useState(() => JSON.parse(localStorage.getItem('k')));\n  return <div>{s}</div>;\n}\n",
+        ),
     ],
     "a11y": [
         (

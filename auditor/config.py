@@ -242,6 +242,7 @@ class SqlAlchemyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expire_on_commit: bool = False  # async session setting; True activates SA-GREENLET-ATTR-AFTER-COMMIT
+    async_session: bool = False  # ORM runs under AsyncSession; True activates SA-IMPLICIT-LAZY-ASYNC
 
 
 class GlobalPaths(BaseSettings):

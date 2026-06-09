@@ -291,11 +291,7 @@ def test_autouse_fixture_never_flagged(tmp_path):
 
 def test_logic_in_test_lambda_not_flagged():
     # Control flow inside a lambda does NOT count as logic in the test body
-    src = (
-        "def test_thing():\n"
-        "    f = lambda x: x if x else 0\n"
-        "    assert f(1)\n"
-    )
+    src = "def test_thing():\n    f = lambda x: x if x else 0\n    assert f(1)\n"
     assert "PY-TEST-LOGIC-IN-TEST" not in _ids(src)
 
 
@@ -321,3 +317,56 @@ def test_skip_no_reason_on_test_class():
         "        assert True\n"
     )
     assert "PY-TEST-SKIP-NO-REASON" in _ids(src)
+
+
+# --- I: FIXTURE-MUTABLE-WIDE-SCOPE -------------------------------------------------------
+
+_FIX = "import pytest\n"
+_RULE = "PY-TEST-FIXTURE-MUTABLE-WIDE-SCOPE"
+
+
+@pytest.mark.parametrize("scope", ["session", "module", "package"])
+@pytest.mark.parametrize("lit", ["[]", "[1, 2]", "{}", "{'k': 1}", "{1, 2}"])
+def test_fixture_mutable_wide_scope_fires(scope, lit):
+    src = f"{_FIX}@pytest.fixture(scope='{scope}')\ndef data():\n    return {lit}\n"
+    assert _RULE in _ids(src)
+
+
+def test_fixture_mutable_wide_scope_yield_fires():
+    src = f"{_FIX}@pytest.fixture(scope='session')\ndef data():\n    yield []\n"
+    assert _RULE in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "ret", ["set()", "list()", "dict()", "frozenset()", "()", "(1, 2)", "'s'", "42"]
+)
+def test_fixture_wide_scope_non_literal_clean(ret):
+    # only mutable *literals* are shared-state footguns; calls/immutables are fine
+    src = f"{_FIX}@pytest.fixture(scope='session')\ndef data():\n    return {ret}\n"
+    assert _RULE not in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "deco", ["@pytest.fixture", "@pytest.fixture(scope='function')"]
+)
+def test_fixture_function_scope_mutable_clean(deco):
+    # function scope -> a fresh object per test -> not shared, not flagged
+    src = f"{_FIX}{deco}\ndef data():\n    return []\n"
+    assert _RULE not in _ids(src)
+
+
+def test_fixture_factory_returning_function_clean():
+    # a factory fixture returns an inner function; the [] is inside the nested def, not shared
+    src = (
+        f"{_FIX}@pytest.fixture(scope='session')\n"
+        "def make():\n"
+        "    def build():\n"
+        "        return []\n"
+        "    return build\n"
+    )
+    assert _RULE not in _ids(src)
+
+
+def test_fixture_mutable_wide_scope_not_in_production_role():
+    src = f"{_FIX}@pytest.fixture(scope='session')\ndef data():\n    return []\n"
+    assert _RULE not in _ids(src, role=FileRole.PRODUCTION)
