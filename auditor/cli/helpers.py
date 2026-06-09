@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
 import typer
+from pydantic import ValidationError
 
 from auditor.cli.apps import _status
 from auditor.index import IndexStore
@@ -35,6 +36,26 @@ def _suggest(value: str, candidates: Iterable[str]) -> str:
     friendlier 'unknown rule/category/…' errors."""
     match = difflib.get_close_matches(value, list(candidates), n=1, cutoff=0.6)
     return f" Did you mean '{match[0]}'?" if match else ""
+
+
+def _parse_config_json(raw: str | None) -> dict | None:
+    """Parse a ``--config-json`` blob to a dict, or exit cleanly on bad JSON / non-object."""
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _fail(f"invalid --config-json: {exc}")
+    if not isinstance(value, dict):
+        _fail("--config-json must be a JSON object")
+    return value
+
+
+def _format_config_error(exc: ValidationError) -> str:
+    """First validation error as ``'<dotted loc>: <msg>'`` for a clean one-line failure."""
+    err = exc.errors()[0]
+    loc = ".".join(str(p) for p in err["loc"])
+    return f"{loc}: {err['msg']}" if loc else err["msg"]
 
 
 def _require_exists(path: Path) -> None:

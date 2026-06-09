@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from pydantic import ValidationError
 
 from auditor.aggregate import AuditAggregator
 from auditor.config import load_config
@@ -47,6 +48,7 @@ async def scan(
     rule: list[str] | None = None,
     since: str | None = None,
     show_ignored: bool = False,
+    config: dict | None = None,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_skips`` ignores
@@ -56,20 +58,27 @@ async def scan(
     ``since`` (a git ref like ``main``/``HEAD``) scopes the output to files changed vs that ref
     — ideal for reviewing a branch/PR — while the whole repo is still scanned so cross-file
     rules stay correct. Persistent ignores (see the ignore_* tools) are applied automatically;
-    ``show_ignored`` includes them."""
+    ``show_ignored`` includes them. ``config`` is an optional dict of config overrides
+    deep-merged as the highest layer and validated by ``AuditorSettings``."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
     root = find_root(Path(path))
     report_only = git_changed_files(root, since) if since else None
-    results = await audit_target(
-        Path(path),
-        incremental=incremental or since is not None,
-        strict_tests=strict_tests,
-        profile=profile,
-        no_skips=no_skips,
-        report_only=report_only,
-        show_ignored=show_ignored,
-    )
+    try:
+        results = await audit_target(
+            Path(path),
+            incremental=incremental or since is not None,
+            strict_tests=strict_tests,
+            profile=profile,
+            no_skips=no_skips,
+            report_only=report_only,
+            config_overrides=config,
+            show_ignored=show_ignored,
+        )
+    except ValidationError as exc:
+        err = exc.errors()[0]
+        loc = ".".join(str(p) for p in err["loc"])
+        raise ToolError(f"invalid config: {loc + ': ' if loc else ''}{err['msg']}") from exc
     if severity:
         wanted = {s.lower() for s in severity}
         for r in results:

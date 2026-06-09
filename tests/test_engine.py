@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from auditor.config import load_config
-from auditor.engine import ScanEngine
+from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
 from auditor.paths import index_db_path
 
@@ -183,3 +183,22 @@ async def test_deleting_one_of_a_dup_pair_clears_the_crossfile_finding(tmp_path)
         }
         # and no stale finding lingers in the table for aggregate to pick up
         assert all("a.py" not in str(f) for f in await index.all_findings())
+
+
+def test_audit_target_config_overrides(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("def f(x):\n    eval(x)\n")
+    results = asyncio.run(
+        audit_target(
+            tmp_path,
+            no_index=True,
+            config_overrides={"rules": {"PY-SEC-DANGEROUS-EVAL": {"severity": "low"}}},
+        )
+    )
+    sev = next(
+        f.severity.value
+        for r in results
+        for f in r.findings
+        if f.rule_id == "PY-SEC-DANGEROUS-EVAL"
+    )
+    assert sev == "low"  # override lowered the severity

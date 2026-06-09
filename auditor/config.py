@@ -359,18 +359,25 @@ def _read_repo_tomls(root: Path) -> tuple[dict, dict]:
     return pyproject, standalone
 
 
-def merged_config_dict(root: Path, *, profile: str | None = None) -> dict:
-    """Layer profile -> pyproject -> .auditor/config.toml into one raw dict (pre-validation).
-
-    ``profile`` overrides the repo's ``extends`` for this run (the CLI ``--profile`` flag),
-    so any repo can be audited at e.g. ``strict`` strength without editing its config.
-    """
+def merged_config_dict(
+    root: Path, *, profile: str | None = None, overrides: dict | None = None
+) -> dict:
+    """Layer profile -> pyproject -> .auditor/config.toml -> injected ``overrides`` into one raw
+    dict (pre-validation). ``profile`` overrides the repo's ``extends`` for this run; ``overrides``
+    (e.g. CLI ``--config-json``) is the highest config layer."""
     pyproject, standalone = _read_repo_tomls(root)
-    extends = profile or standalone.get("extends") or pyproject.get("extends") or "base"
+    overrides = overrides or {}
+    extends = (
+        profile
+        or overrides.get("extends")
+        or standalone.get("extends")
+        or pyproject.get("extends")
+        or "base"
+    )
     merged = _load_profile(extends)
     merged = _deep_merge(merged, pyproject)
     merged = _deep_merge(merged, standalone)
-    # `extends` is consumed; keep it for visibility but it's already resolved
+    merged = _deep_merge(merged, overrides)
     merged["extends"] = extends
     return merged
 
@@ -381,14 +388,16 @@ def load_config(
     profile: str | None = None,
     allow_local_plugins: bool = False,
     loader: "PluginLoader | None" = None,
+    overrides: dict | None = None,
 ) -> AuditorSettings:
     """Two-phase load: read raw config, load the plugins it names (so a config can
     reference plugin-contributed rules), then validate against the populated registry.
 
     ``profile`` overrides the repo's ``extends`` for this run. Entry-point and config-named
     plugins load unconditionally; local ``.auditor/plugins`` load only when trusted.
+    ``overrides`` deep-merges onto the loaded config as the highest layer.
     """
-    raw = merged_config_dict(root, profile=profile)
+    raw = merged_config_dict(root, profile=profile, overrides=overrides)
     loader = loader if loader is not None else PluginLoader()
     loader.load_entry_points()
     loader.load_config_modules(list(raw.get("plugins", [])))

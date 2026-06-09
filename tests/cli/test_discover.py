@@ -40,3 +40,11 @@ def test_discover_skips_gitignored_and_migrations(tmp_path):
 
     files = {f["file"] for f in cli_json(invoke("discover", str(tmp_path)))}
     assert files == {"src/a.py"}  # secret.py (gitignored) + migrations/ both dropped
+
+
+def test_discover_accepts_config_json(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    res = invoke("discover", str(tmp_path), "--config-json", '{"exclude":["a.py"]}')
+    assert res.exit_code == 0, res.output
+    assert "a.py" not in res.output  # override-excluded

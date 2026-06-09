@@ -170,3 +170,29 @@ async def test_rules_list_framework_filter():
     result = await mcp.call_tool("rules_list", {"framework": "pytest"})
     rows = _structured(result)
     assert rows and all(r["framework"] == "pytest" for r in rows)
+
+
+async def test_scan_tool_config_override(sample_repo):
+    data = _structured(
+        await mcp.call_tool(
+            "scan",
+            {
+                "path": str(sample_repo / "src"),
+                "config": {"rules": {"PY-SEC-DANGEROUS-EVAL": {"severity": "low"}}},
+            },
+        )
+    )
+    sev = next(
+        x["severity"]
+        for f in data["files"]
+        for x in f["findings"]
+        if x["rule_id"] == "PY-SEC-DANGEROUS-EVAL"
+    )
+    assert sev == "low"
+
+
+async def test_scan_tool_bad_config_errors(sample_repo):
+    with pytest.raises(ToolError, match="invalid config"):
+        await mcp.call_tool(
+            "scan", {"path": str(sample_repo / "src"), "config": {"nope": 1}}
+        )

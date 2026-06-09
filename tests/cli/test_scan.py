@@ -312,3 +312,58 @@ def test_scan_soft_skips_migrations_until_targeted(tmp_path):
 
     targeted = cli_json(invoke("scan", str(mig), "--no-index", "-f", "json"))
     assert [r["file"] for r in targeted["files"]] == ["app/migrations/0001_init.py"]
+
+
+# --- --config-json -----------------------------------------------------------------------
+
+
+def test_scan_config_json_changes_severity(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("def f(x):\n    eval(x)\n")
+    payload = cli_json(
+        invoke(
+            "scan", str(tmp_path), "--no-index", "-f", "json",
+            "--config-json", '{"rules":{"PY-SEC-DANGEROUS-EVAL":{"severity":"low"}}}',
+        )
+    )
+    sev = next(
+        x["severity"]
+        for fl in payload["files"]
+        for x in fl["findings"]
+        if x["rule_id"] == "PY-SEC-DANGEROUS-EVAL"
+    )
+    assert sev == "low"
+
+
+def test_scan_config_json_bad_json_errors(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    res = invoke("scan", str(tmp_path), "--config-json", "{nope")
+    assert res.exit_code == 1
+    assert "invalid --config-json" in res.output
+
+
+def test_scan_config_json_unknown_key_errors(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    res = invoke("scan", str(tmp_path), "--config-json", '{"nope": 1}')
+    assert res.exit_code == 1
+    assert "invalid config" in " ".join(res.output.split())
+
+
+def test_scan_config_json_activates_greenlet_rule(tmp_path):
+    # the dogfood as a regression test
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "m.py").write_text(
+        "import sqlalchemy\n"
+        "from sqlalchemy.ext.asyncio import AsyncSession\n"
+        "async def f(session):\n"
+        "    user = User()\n    session.add(user)\n"
+        "    await session.commit()\n    return user.email\n"
+    )
+    off = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
+    on = cli_json(
+        invoke("scan", str(tmp_path), "--no-index", "-f", "json",
+               "--config-json", '{"sqlalchemy":{"expire_on_commit":true}}')
+    )
+    rid = "SA-GREENLET-ATTR-AFTER-COMMIT"
+    assert rid not in {x["rule_id"] for fl in off["files"] for x in fl["findings"]}
+    assert rid in {x["rule_id"] for fl in on["files"] for x in fl["findings"]}

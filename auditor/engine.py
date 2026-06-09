@@ -394,6 +394,7 @@ async def audit_target(
     include_gitignored: bool = False,
     report_only: set[str] | None = None,
     root: Path | None = None,
+    config_overrides: dict | None = None,
     apply_ignores: bool = True,
     show_ignored: bool = False,
 ) -> list[ScanResult]:
@@ -405,10 +406,11 @@ async def audit_target(
     ``include_gitignored`` audits files git would ignore (default: skip them). ``report_only``
     (paths relative to root) scopes the *returned* results to those files — the whole repo is
     still scanned so cross-file/repo-global rules stay correct (e.g. a git-diff scan). ``root``
-    pins the project root explicitly (default: nearest ``.git``/``pyproject.toml``/``.auditor``)."""
+    pins the project root explicitly (default: nearest ``.git``/``pyproject.toml``/``.auditor``).
+    ``config_overrides`` deep-merges onto the loaded config as the highest layer."""
     root = root or find_root(target)
     settings = load_config(
-        root, profile=profile, allow_local_plugins=allow_local_plugins
+        root, profile=profile, allow_local_plugins=allow_local_plugins, overrides=config_overrides
     )
     updates: dict[str, object] = {}
     if strict_tests:
@@ -434,7 +436,7 @@ async def audit_target(
 
     if incremental and not no_index and target.is_dir():
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-            await index.register(root.name, time.time())
+            await index.register(time.time())
             results = await _run(ScanEngine(root, settings, index=index))
             if apply_ignores:
                 await _apply_ignores(index, results, show_ignored=show_ignored)

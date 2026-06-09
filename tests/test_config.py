@@ -184,7 +184,9 @@ def test_test_threshold_defaults_and_merge(tmp_path):
     )
     s = load_config(tmp_path)
     assert s.threshold.test.max_mocks_per_test == 7
-    assert s.threshold.test.parametrize_min_clones == 3  # untouched knob still defaulted
+    assert (
+        s.threshold.test.parametrize_min_clones == 3
+    )  # untouched knob still defaulted
 
 
 def test_sqlalchemy_config_default_and_parse(tmp_path):
@@ -193,3 +195,20 @@ def test_sqlalchemy_config_default_and_parse(tmp_path):
         '[project]\nname="x"\nversion="0"\n[tool.auditor.sqlalchemy]\nexpire_on_commit = true\n'
     )
     assert load_config(tmp_path).sqlalchemy.expire_on_commit is True
+
+
+def test_overrides_merge_as_highest_layer(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor.sqlalchemy]\nexpire_on_commit = false\n'
+    )
+    # override flips the field; sibling config (e.g. defaults) preserved
+    s = load_config(tmp_path, overrides={"sqlalchemy": {"expire_on_commit": True}})
+    assert s.sqlalchemy.expire_on_commit is True
+    base = load_config(tmp_path)
+    assert base.sqlalchemy.expire_on_commit is False  # no override -> unchanged
+
+
+def test_overrides_unknown_key_rejected(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    with pytest.raises(Exception, match="nope"):
+        load_config(tmp_path, overrides={"nope": 1})

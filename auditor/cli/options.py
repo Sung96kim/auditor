@@ -147,6 +147,14 @@ ShowIgnored = Annotated[
         "--show-ignored", help="Include findings hidden by persistent ignores."
     ),
 ]
+ConfigJson = Annotated[
+    str | None,
+    typer.Option(
+        "--config-json",
+        help="JSON object of config overrides, merged as the highest layer, "
+        "e.g. '{\"sqlalchemy\":{\"expire_on_commit\":true}}'.",
+    ),
+]
 # --- `ignore` sub-app options ---
 IgnoreRuleId = Annotated[
     str, typer.Argument(help="Rule id to ignore (e.g. PY-SEC-WEAK-HASH).")

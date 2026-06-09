@@ -82,6 +82,7 @@ auditor plugins list                 # loaded detectors/languages/reporters + th
 auditor scan . -s high -s blocking   # --severity: only these levels (repeatable, exact)
 auditor scan . -m high               # --min-severity: this level and worse
 auditor scan . --rule SA-RAW-SQL     # --rule: only these rule ids (repeatable); typos get a "did you mean?"
+auditor scan . --config-json '{"sqlalchemy":{"expire_on_commit":true}}'  # inject config overrides (highest layer)
 ```
 
 ### PR / CI loop
@@ -166,7 +167,9 @@ committed snapshot), ignores are local to your machine's index.
 
 Ships recognized **industry-standard rulesets** as the baseline and lets each repo tailor
 them — the ruff/eslint model. Config lives in `[tool.auditor]` in `pyproject.toml` **or** a
-standalone `.auditor/config.toml` (standalone wins on conflict).
+standalone `.auditor/config.toml` (standalone wins on conflict). Any setting can also be overridden
+ad-hoc with `--config-json '<json>'` (deep-merged as the highest layer, validated) — no file edits,
+handy for CI and experiments; the MCP `scan` tool takes the same as a `config` dict.
 
 ```toml
 [tool.auditor]

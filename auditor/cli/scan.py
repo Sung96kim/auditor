@@ -5,6 +5,7 @@ CI-gate / serve options, and a concise human summary by default (machine formats
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 from auditor.baseline import Baseline
 from auditor.cli.apps import _status, app
@@ -12,6 +13,8 @@ from auditor.cli.helpers import (
     _check_format,
     _emit,
     _fail,
+    _format_config_error,
+    _parse_config_json,
     _require_exists,
     _run,
     _suggest,
@@ -20,6 +23,7 @@ from auditor.cli.options import (
     AllowLocalPlugins,
     BaselineFile,
     Changed,
+    ConfigJson,
     Exclude,
     FailOn,
     Format,
@@ -177,6 +181,7 @@ def scan(
     write_baseline: WriteBaseline = None,
     root: PinRoot = None,
     show_ignored: ShowIgnored = False,
+    config_json: ConfigJson = None,
     verbose: Verbose = 0,
 ) -> None:
     """Audit a file or directory."""
@@ -190,24 +195,29 @@ def scan(
     if report_only is not None and not no_index:
         incremental = True  # whole-repo scan stays fast via the cache
 
-    results = _run(
-        audit_target(
-            target,
-            incremental=incremental,
-            no_index=no_index,
-            strict_tests=strict_tests,
-            allow_local_plugins=allow_local_plugins,
-            profile=profile,
-            exclude=tuple(exclude or ()),
-            no_skips=no_skips,
-            include_gitignored=include_gitignored,
-            report_only=report_only,
-            root=root,
-            show_ignored=show_ignored,
-        ),
-        f"auditing {target}…",
-        spinner=not verbose,
-    )
+    overrides = _parse_config_json(config_json)
+    try:
+        results = _run(
+            audit_target(
+                target,
+                incremental=incremental,
+                no_index=no_index,
+                strict_tests=strict_tests,
+                allow_local_plugins=allow_local_plugins,
+                profile=profile,
+                exclude=tuple(exclude or ()),
+                no_skips=no_skips,
+                include_gitignored=include_gitignored,
+                report_only=report_only,
+                root=root,
+                config_overrides=overrides,
+                show_ignored=show_ignored,
+            ),
+            f"auditing {target}…",
+            spinner=not verbose,
+        )
+    except ValidationError as exc:
+        _fail(f"invalid config — {_format_config_error(exc)}")
 
     if write_baseline is not None:
         recorded = Baseline.from_results(results).write(write_baseline)
