@@ -47,6 +47,26 @@ def project_deps(root: Path) -> frozenset[str]:
     return frozenset(names)
 
 
+def entry_point_names(root: Path) -> frozenset[str]:
+    """Names referenced by pyproject entry points / scripts (``pkg.mod:attr``) — treated as 'used'
+    so a symbol wired only as an entry point isn't flagged dead."""
+    pp = root / "pyproject.toml"
+    if not pp.exists():
+        return frozenset()
+    project = tomllib.loads(pp.read_text()).get("project", {})
+    targets: list[str] = list(project.get("scripts", {}).values())
+    targets.extend(project.get("gui-scripts", {}).values())
+    for group in project.get("entry-points", {}).values():
+        targets.extend(group.values())
+    names: set[str] = set()
+    for target in targets:
+        mod, _, attr = str(target).partition(":")
+        names.update(seg for seg in mod.split(".") if seg)
+        if attr:
+            names.add(attr.split(".")[0])
+    return frozenset(names)
+
+
 class ScanEngine:
     """Audits files under one resolved root, with config, project facts, and an optional cache."""
 
@@ -57,6 +77,7 @@ class ScanEngine:
         self.settings = settings
         self.index = index
         self.deps = project_deps(root)
+        self.entry_points = entry_point_names(root)
         self.roles = RoleClassifier(settings.role_globs)
 
     @classmethod
@@ -140,9 +161,9 @@ class ScanEngine:
                     len(results),
                 )
             await self._apply_crossfile(results)
-        elif len(results) > 1:
+        elif results:
             # no index (stateless dir scan): run the cross-file pass in memory so `scan .` still
-            # surfaces XFILE dup findings, just without the cache
+            # surfaces XFILE + dead-code findings, just without the cache
             self._apply_crossfile_in_memory(results)
         _log_summary(results)
         return results
@@ -301,6 +322,7 @@ class ScanEngine:
                 self.index,
                 settings_modules=self.settings.settings_modules,
                 settings_cohesion_on=self.settings.settings_cohesion,
+                entry_point_names=self.entry_points,
             ),
         )
 
@@ -338,6 +360,7 @@ class ScanEngine:
                 roles,
                 settings_modules=self.settings.settings_modules,
                 settings_cohesion_on=self.settings.settings_cohesion,
+                entry_point_names=self.entry_points,
             ),
         )
 

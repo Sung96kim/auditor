@@ -214,6 +214,16 @@ on test-role Python files and are all `candidate` (advisory — they never gate 
 
 List them with `auditor rules list --framework pytest`. Tune floors under `[tool.auditor.threshold.test]`.
 
+### Dead code (`PY-DEAD-SYMBOL`)
+
+Repo-level (category `dead-code`, `candidate` — advisory, never gates CI): a module-level
+**private function/class** (`_name`) or **constant** defined but never referenced anywhere in the
+repo. Complements ruff, which only flags unused *imports*/*locals* — not a cross-file dead symbol.
+FP-safe (name-based): a name used anywhere — incl. in a string literal, `__all__`, or a pyproject
+entry point — counts as used; `__init__.py` defs and framework-magic globals (`down_revision`,
+`pytestmark`, …) are exempt. Findings are emitted for production/script code; references are pooled
+repo-wide. The cross-file pass is language-agnostic, so a `TS-DEAD-SYMBOL` sibling can drop in later.
+
 - **Profiles**: `base` (industry floor: security/**malware**/secrets/supply-chain/correctness/
   async/typing/config + cross-file dedup on; opinionated OOP/composition off), `strict` (adds
   OOP/composition + complexity),

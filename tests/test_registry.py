@@ -68,3 +68,10 @@ def test_detector_framework_defaults_none():
     from auditor.languages.base import Detector
 
     assert Detector.framework is None
+
+
+def test_dead_symbol_rule_registered():
+    assert "PY-DEAD-SYMBOL" in REGISTRY.rule_ids()
+    det = REGISTRY.detector("PY-DEAD-SYMBOL")
+    assert det.category == "dead-code"
+    assert det.repo_level is True

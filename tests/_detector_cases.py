@@ -1028,6 +1028,7 @@ TESTED_SEPARATELY = {
     "PY-TEST-PARAMETRIZE-CANDIDATE",
     "PY-TEST-DUPLICATE-SETUP",
     "PY-TEST-UNUSED-FIXTURE",  # repo-level; computed by the crossfile pass
+    "PY-DEAD-SYMBOL",  # repo-level; computed by the crossfile pass, tested in test_dead_code.py
 }
 
 

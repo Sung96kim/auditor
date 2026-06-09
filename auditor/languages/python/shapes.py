@@ -9,11 +9,14 @@ functions sharing a statement-type skeleton. Methods are indexed too (top-level-
 
 import ast
 import hashlib
+import re
 
 from auditor import ast_util
 from auditor.languages.base import ShapeRow
 
 _MODEL_BASES = {"BaseModel"}
+_IDENT = re.compile(r"^[A-Za-z_]\w*$")
+_SEP = "\x1f"
 
 
 def _hash(text: str) -> str:
@@ -22,6 +25,85 @@ def _hash(text: str) -> str:
 
 def _is_dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
+
+
+def _symbol_defs(tree: ast.Module) -> list[tuple[str, str, int]]:
+    """(name, kind, line) for eligible module-level defs in the DIRECT module body:
+    private (non-dunder) functions/classes, and any NAME = / NAME: T = binding."""
+    out: list[tuple[str, str, int]] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name.startswith("_") and not _is_dunder(node.name):
+                kind = "class" if isinstance(node, ast.ClassDef) else "func"
+                out.append((node.name, kind, node.lineno))
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and not _is_dunder(t.id):
+                    out.append((t.id, "const", node.lineno))
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+            and not _is_dunder(node.target.id)
+        ):
+            out.append((node.target.id, "const", node.lineno))
+    return out
+
+
+def _string_ref_names(value: str) -> list[str]:
+    """Identifier-shaped names inside a string literal, incl. ``a:b`` / ``a.b`` segments
+    (covers getattr literals + ASGI/entry-point targets like ``main:app``)."""
+    names: list[str] = []
+    if _IDENT.match(value):
+        names.append(value)
+    for seg in re.split(r"[:.]", value):
+        if seg and _IDENT.match(seg):
+            names.append(seg)
+    return names
+
+
+def _symbol_refs(tree: ast.Module) -> set[str]:
+    """Every referenced name in the module: Load-context Names, attribute names, import-bound
+    names, ``__all__`` entries, and identifier-shaped string literals. Load-context only, so a
+    symbol's own Store/def site is never a self-reference."""
+    refs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            refs.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            refs.add(node.attr)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                refs.add((a.asname or a.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                refs.add(a.name)
+                if a.asname:
+                    refs.add(a.asname)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            refs.update(_string_ref_names(node.value))
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets)
+            and isinstance(node.value, (ast.List, ast.Tuple))
+        ):
+            for e in node.value.elts:
+                if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                    refs.add(e.value)
+    return refs
+
+
+def _symbol_shapes(tree: ast.Module) -> list[ShapeRow]:
+    rows = [
+        ShapeRow(_hash(f"symdef|{name}"), "py-symbol-def", f"{kind}{_SEP}{name}", line)
+        for name, kind, line in _symbol_defs(tree)
+    ]
+    rows.extend(
+        ShapeRow(_hash(f"symref|{name}"), "py-symbol-ref", name, 0)
+        for name in sorted(_symbol_refs(tree))
+    )
+    return rows
 
 
 def _clone_signature(node: ast.AST) -> str:
@@ -177,6 +259,7 @@ class ShapeExtractor:
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 rows.extend(self._function_shape(node, node.name))
         rows.extend(_fixture_shapes(self.tree))
+        rows.extend(_symbol_shapes(self.tree))
         return rows
 
     @staticmethod

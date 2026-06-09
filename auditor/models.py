@@ -16,8 +16,6 @@ RuleId = str
 at the config layer (pattern + must-resolve-to-a-loaded-detector), not a frozen enum, so
 plugin-contributed rules are admissible."""
 
-RULE_ID_PATTERN = r"^[A-Z0-9]+(-[A-Z0-9]+)+$"
-
 
 class Severity(StrEnum):
     BLOCKING = "blocking"
@@ -91,6 +89,7 @@ class Category(StrEnum):
     A11Y = "a11y"
     DESIGN_SYSTEM = "design-system"
     TESTING = "testing"
+    DEAD_CODE = "dead-code"
 
 
 class ManifestEntryKind(StrEnum):

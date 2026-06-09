@@ -45,3 +45,18 @@ class ScatteredSettings(Detector):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         return []
+
+
+class DeadSymbol(Detector):
+    """Repo-level: a module-level private function/class or constant defined but never referenced
+    anywhere in the repo. Computed by the crossfile pass over symbol shapes (auditor/dead_code.py);
+    ``run`` is a no-op."""
+
+    rule_id: ClassVar[str] = "PY-DEAD-SYMBOL"
+    category: ClassVar[Category] = Category.DEAD_CODE
+    default_severity: ClassVar[Severity] = Severity.LOW
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    repo_level: ClassVar[bool] = True
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        return []

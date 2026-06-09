@@ -58,9 +58,9 @@ async def test_file_scoped_ignore_only_that_file(tmp_path):
     (repo / "other.py").write_text("token = 'abcdef123456'\n")  # also hardcoded secret
     await _add_ignore(repo, "PY-SEC-HARDCODED-SECRET", file="mod.py")
     results = await audit_target(repo, root=repo)
-    flagged_files = {r.file for r in results if r.findings}
-    assert "mod.py" not in flagged_files  # ignored
-    assert "other.py" in flagged_files  # still flagged
+    by_file = {r.file: {f.rule_id for f in r.findings} for r in results}
+    assert "PY-SEC-HARDCODED-SECRET" not in by_file.get("mod.py", set())  # ignored
+    assert "PY-SEC-HARDCODED-SECRET" in by_file.get("other.py", set())  # still flagged
 
 
 async def test_stateless_scan_no_ignores_creates_no_db(tmp_path):

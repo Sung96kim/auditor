@@ -4,7 +4,7 @@ and functions across files (within the same role, to avoid prod-vs-test noise).
 Cheap by design — a GROUP BY over the shapes table, recomputed each scan; no re-parse.
 """
 
-from auditor import fixture_usage, settings_cohesion
+from auditor import dead_code, fixture_usage, settings_cohesion
 from auditor.index import IndexStore
 from auditor.models import Category, Finding, Severity, VerdictKind
 
@@ -39,11 +39,15 @@ _RULES = [k.rule for k in _BY_KIND.values()]
 
 
 async def run(
-    index: IndexStore, *, settings_modules: list[str], settings_cohesion_on: bool
+    index: IndexStore,
+    *,
+    settings_modules: list[str],
+    settings_cohesion_on: bool,
+    entry_point_names: frozenset[str] = frozenset(),
 ) -> dict[str, list[Finding]]:
     """Recompute cross-file findings, persist them in the index, and return them per file."""
     await index.clear_findings_for_rules(
-        [*_RULES, settings_cohesion.RULE_ID, fixture_usage.RULE_ID]
+        [*_RULES, settings_cohesion.RULE_ID, fixture_usage.RULE_ID, *dead_code.RULE_IDS]
     )
     roles = await index.roles_by_path()
     per_file = _group(await index.duplicate_shapes(), roles)
@@ -64,6 +68,14 @@ async def run(
             roles,
         ),
     )
+    _merge(
+        per_file,
+        dead_code.find_dead(
+            {k: await index.shapes_by_kind(k) for k in dead_code.KINDS},
+            roles,
+            entry_points=entry_point_names,
+        ),
+    )
     for path, findings in per_file.items():
         await index.add_findings(path, findings)
     return per_file
@@ -75,6 +87,7 @@ def run_in_memory(
     *,
     settings_modules: list[str],
     settings_cohesion_on: bool,
+    entry_point_names: frozenset[str] = frozenset(),
 ) -> dict[str, list[Finding]]:
     """Cross-file pass without an index — for a stateless directory scan, so ``scan .`` surfaces
     XFILE + scattered-settings findings too. ``shape_rows`` is a flat list of
@@ -102,6 +115,14 @@ def run_in_memory(
             [r for r in shape_rows if r["kind"] == _FIXTURE_DEF_KIND],
             [r for r in shape_rows if r["kind"] == _FIXTURE_REF_KIND],
             roles,
+        ),
+    )
+    _merge(
+        per_file,
+        dead_code.find_dead(
+            {k: [r for r in shape_rows if r["kind"] == k] for k in dead_code.KINDS},
+            roles,
+            entry_points=entry_point_names,
         ),
     )
     return per_file
