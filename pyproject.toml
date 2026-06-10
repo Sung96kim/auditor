@@ -1,5 +1,5 @@
 [project]
-name = "auditor"
+name = "auditr"  # PyPI distribution name (import package + CLI remain `auditor`)
 version = "0.1.0"
 description = "A token-efficient repo auditor for coding agents"
 readme = "README.md"
