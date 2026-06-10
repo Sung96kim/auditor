@@ -145,7 +145,9 @@ field "build"   "uv build → sdist + wheel"
 if [[ "$DO_TAG" == "1" ]]; then field "git tag" "$TAG (push to origin)"; else field "git tag" "${DIM}skipped (--no-tag)${RST}"; fi
 echo
 if [[ "$ASSUME_YES" != "1" ]]; then
+  [[ -e /dev/tty ]] || die "no TTY to confirm on — re-run with --yes to proceed non-interactively"
   printf '    %sproceed?%s [y/N] ' "$BOLD" "$RST"
+  reply=""
   read -r reply </dev/tty || true
   [[ "$reply" =~ ^[Yy]$ ]] || die "aborted"
 fi
