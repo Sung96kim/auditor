@@ -62,3 +62,29 @@ def test_broad_except_exc_unused_fires():
         "    pass\n"
     )
     assert "PY-CORRECT-BROAD-EXCEPT" in rule_ids(run_audit(src))
+
+
+# --- NAIVE-DATETIME: utcfromtimestamp is always naive (utcnow's timestamp sibling) ---
+
+
+@pytest.mark.parametrize(
+    "expr",
+    ["datetime.datetime.utcfromtimestamp(ts)", "datetime.utcfromtimestamp(ts)"],
+)
+def test_naive_datetime_utcfromtimestamp_fires(expr):
+    src = f"import datetime\nx = {expr}\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" in rule_ids(run_audit(src))
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "datetime.fromtimestamp(ts)",  # local-naive but benign-by-design — deliberately NOT flagged
+        "datetime.fromtimestamp(ts, tz=timezone.utc)",
+    ],
+)
+def test_naive_datetime_plain_fromtimestamp_not_flagged(expr):
+    # dogfooding showed plain fromtimestamp is overwhelmingly benign (timestamp comparisons) →
+    # excluded to keep precision high; only utcfromtimestamp (always naive) is flagged
+    src = f"import datetime\nfrom datetime import timezone\nx = {expr}\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src))

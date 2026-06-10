@@ -25,6 +25,7 @@ _UNSAFE_LOADERS = {
     "cloudpickle.loads",
     "dill.load",
     "dill.loads",
+    "joblib.load",  # joblib (incl. sklearn model files) is pickle under the hood
     "yaml.unsafe_load",
 }
 

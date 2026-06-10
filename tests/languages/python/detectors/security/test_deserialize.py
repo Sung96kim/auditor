@@ -32,3 +32,25 @@ def test_yaml_load_base_loader_fires():
     # BaseLoader is not a "Safe*" loader → must flag
     src = "import yaml\nyaml.load(stream, yaml.BaseLoader)\n"
     assert "PY-SEC-UNSAFE-DESERIALIZE" in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# joblib.load — pickle under the hood (sklearn/ML model files) → arbitrary code
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "import joblib\nm = joblib.load(path)\n",
+        "import joblib as jl\nm = jl.load(BytesIO(blob))\n",  # aliased import resolves
+    ],
+)
+def test_joblib_load_fires(src):
+    assert "PY-SEC-UNSAFE-DESERIALIZE" in rule_ids(run_audit(src))
+
+
+def test_joblib_dump_clean():
+    # dump writes (serializes), not a deserialization sink
+    src = "import joblib\njoblib.dump(obj, path)\n"
+    assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src))

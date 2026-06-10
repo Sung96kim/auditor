@@ -150,20 +150,25 @@ class NaiveDatetime(Detector):
             ):
                 continue
             attr = node.func.attr
-            if attr not in ("now", "utcnow") or not _owner_is_datetime(node.func.value):
+            if attr not in _NAIVE_FACTORIES or not _owner_is_datetime(node.func.value):
                 continue
-            if attr == "now" and _has_tz_arg(node):
-                continue  # datetime.now(timezone.utc) is tz-aware
-            label = "utcnow()" if attr == "utcnow" else "now()"
+            if not _is_naive(attr, node):
+                continue  # tz-aware form, e.g. datetime.now(timezone.utc)
             out.append(
                 self.make_finding(
                     ctx,
                     line=node.lineno,
-                    message=f"datetime.{label} returns a naive (tz-unaware) datetime",
-                    suggestion="pass tz=timezone.utc, e.g. datetime.now(timezone.utc)",
+                    message=f"datetime.{attr}() returns a naive (tz-unaware) datetime",
+                    suggestion="pass tz=timezone.utc (or use datetime.fromtimestamp(ts, timezone.utc))",
                 )
             )
         return out
+
+
+#: datetime constructors that can yield a naive datetime. `utcfromtimestamp` (always naive,
+#: deprecated in 3.12) is included; plain `fromtimestamp` is NOT — it's local-naive by design and
+#: dogfooding showed its uses are overwhelmingly benign (e.g. comparing two timestamps in tests).
+_NAIVE_FACTORIES = {"now", "utcnow", "utcfromtimestamp"}
 
 
 def _owner_is_datetime(owner: ast.expr) -> bool:
@@ -174,3 +179,10 @@ def _owner_is_datetime(owner: ast.expr) -> bool:
 
 def _has_tz_arg(call: ast.Call) -> bool:
     return bool(call.args) or any(kw.arg in ("tz", "tzinfo") for kw in call.keywords)
+
+
+def _is_naive(attr: str, call: ast.Call) -> bool:
+    """Whether this datetime factory call produces a naive (tz-unaware) datetime."""
+    if attr in ("utcnow", "utcfromtimestamp"):
+        return True  # no tz parameter exists → always naive
+    return not _has_tz_arg(call)  # now(): datetime.now(tz) / now(tz=…) is aware
