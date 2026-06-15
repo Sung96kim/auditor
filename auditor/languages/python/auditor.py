@@ -45,6 +45,7 @@ class PythonAuditor(LanguageAuditor):
         sibling_modules: tuple[str, ...] = (),
         package_root: str | None = None,
         rule_ids: list[str] | None = None,
+        resolver: object | None = None,
     ) -> ScanResult:
         try:
             tree = ast.parse(source)
@@ -71,6 +72,7 @@ class PythonAuditor(LanguageAuditor):
             project_deps=project_deps,
             sibling_modules=sibling_modules,
             defines_basesettings=_defines_basesettings(tree),
+            resolver=resolver,
         )
         manifest = ManifestEntry.from_module(tree)
 

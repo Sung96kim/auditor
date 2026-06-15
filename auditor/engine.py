@@ -20,6 +20,7 @@ from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.ignores import IgnoreList
 from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
+from auditor.languages.python.resolve import CalleeResolver
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
@@ -79,6 +80,7 @@ class ScanEngine:
         self.deps = project_deps(root)
         self.entry_points = entry_point_names(root)
         self.roles = RoleClassifier(settings.role_globs)
+        self.resolver = CalleeResolver(root)
 
     @classmethod
     def for_target(
@@ -227,6 +229,7 @@ class ScanEngine:
             project_deps=self.deps,
             package_root=str(self.root),
             rule_ids=rule_ids,
+            resolver=self.resolver,
         )
         # Suppress before the index stores the findings, so cached re-scans stay consistent.
         if self.settings.respect_skips:

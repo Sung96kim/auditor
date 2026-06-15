@@ -6,6 +6,7 @@ from pathlib import Path
 from auditor.config import load_config
 from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
+from auditor.languages.python.resolve import CalleeResolver
 from auditor.paths import index_db_path
 
 
@@ -266,4 +267,18 @@ def test_audit_target_include_gitignored_accepted(tmp_path):
     root = _make_test_repo(tmp_path)
     # Not a git repo, so gitignore handling is a no-op — just verify no exception
     results = asyncio.run(audit_target(root, no_index=True, include_gitignored=True))
+    assert isinstance(results, list)
+
+
+def test_engine_builds_callee_resolver(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    engine = ScanEngine.for_target(tmp_path)
+    assert isinstance(engine.resolver, CalleeResolver)
+
+
+def test_scan_threads_resolver_without_error(tmp_path):
+    # smoke: a real scan runs with the resolver wired through audit() (kwarg accepted end-to-end)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "m.py").write_text("def f():\n    return 1\n")
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
     assert isinstance(results, list)
