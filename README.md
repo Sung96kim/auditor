@@ -286,8 +286,9 @@ v2 keeps the inner class as a deprecated shim but silently ignores misspelled ke
 
 ## Detectors
 
-**70 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `secrets`,
-`supply-chain`, `correctness`, `typing`, `async`, `config`, `oop-composition`, and `style` —
+**90 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `secrets`,
+`supply-chain`, `correctness`, `typing`, `async`, `config`, `dead-code`, `testing`,
+`oop-composition`, and `style` (plus the `sqlalchemy`/`pydantic` framework rules) —
 including DRY/composition rules (cross-file duplicate model/function, within-file duplicate
 blocks, parallel siblings, field-by-field copying) and a `suggestion` tier of low-stakes nudges
 below the severity ladder. Each carries a stable `rule_id`, a category, a default severity, and
@@ -363,199 +364,228 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 `auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
 
 <details>
-<summary><b>All 127 rules</b> (generated from <code>auditor rules list</code>)</summary>
+<summary><b>All 146 rules</b> (generated from <code>auditor rules list</code>)</summary>
 
-#### security (23)
+#### security (24)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-SEC-ASSERT-FOR-SECURITY` | medium | candidate | bandit:B101, owasp:A04 |
-| `PY-SEC-BIND-ALL-INTERFACES` | low | auto | bandit:B104, owasp:A05 |
-| `PY-SEC-DANGEROUS-EVAL` | blocking | auto | bandit:B307, owasp:A03 |
-| `PY-SEC-DJANGO-RAW-SQL` | high | candidate | owasp:A03 |
-| `PY-SEC-FLASK-DEBUG` | medium | auto | bandit:B201, owasp:A05 |
-| `PY-SEC-HARDCODED-SECRET` | high | auto | bandit:B105, owasp:A07 |
-| `PY-SEC-INSECURE-RANDOM` | medium | candidate | bandit:B311, owasp:A02 |
-| `PY-SEC-INSECURE-TEMPFILE` | medium | auto | bandit:B306, bandit:B108, owasp:A05 |
-| `PY-SEC-INSECURE-TLS` | high | auto | bandit:B501, owasp:A02 |
-| `PY-SEC-JINJA-AUTOESCAPE-OFF` | medium | auto | bandit:B701, owasp:A03 |
-| `PY-SEC-PARAMIKO-AUTOADD` | medium | auto | bandit:B507, owasp:A07 |
-| `PY-SEC-PATH-TRAVERSAL` | medium | candidate | owasp:A01 |
-| `PY-SEC-REQUEST-NO-TIMEOUT` | medium | auto | bandit:B113, owasp:A06 |
-| `PY-SEC-SHELL-INJECTION` | high | auto | bandit:B602, bandit:B605, owasp:A03 |
-| `PY-SEC-SQL-STRING-BUILD` | high | candidate | bandit:B608, owasp:A03 |
-| `PY-SEC-SSRF` | medium | candidate | owasp:A10 |
-| `PY-SEC-UNSAFE-DESERIALIZE` | high | auto | bandit:B301, bandit:B506, owasp:A08 |
-| `PY-SEC-WEAK-HASH` | medium | auto | bandit:B303, bandit:B324, owasp:A02 |
-| `PY-SEC-XXE-UNSAFE-XML` | medium | auto | bandit:B313, owasp:A05 |
-| `TS-SEC-DANGEROUS-EVAL` | high | auto | owasp:A03 |
-| `TS-SEC-DANGEROUS-HTML` | high | candidate | owasp:A03 |
-| `TS-SEC-JAVASCRIPT-URL` | high | auto | owasp:A03 |
-| `TS-SEC-TARGET-BLANK-NOOPENER` | medium | auto | owasp:A05 |
+| `PY-SEC-ASSERT-FOR-SECURITY` | medium | candidate | `assert` used for a security check (stripped under `python -O`) |
+| `PY-SEC-BIND-ALL-INTERFACES` | low | auto | a socket bound to `0.0.0.0` — exposes the service on every interface |
+| `PY-SEC-DANGEROUS-EVAL` | blocking | auto | `eval`/`exec`/`compile` on non-constant input — arbitrary code execution |
+| `PY-SEC-DJANGO-RAW-SQL` | high | candidate | Django `.raw()`/`.extra()` with caller-supplied SQL — injection |
+| `PY-SEC-FLASK-DEBUG` | medium | auto | Flask `debug=True` — exposes the Werkzeug debugger (RCE) |
+| `PY-SEC-HARDCODED-SECRET` | high | auto | a literal assigned to a password/token/api_key-named variable |
+| `PY-SEC-INSECURE-RANDOM` | medium | candidate | `random` used for security-sensitive values (tokens/keys) |
+| `PY-SEC-INSECURE-TEMPFILE` | medium | auto | `tempfile.mktemp()` or a hardcoded `/tmp` path — TOCTOU race |
+| `PY-SEC-INSECURE-TLS` | high | auto | TLS verification disabled (`verify=False`) or hostname checks off |
+| `PY-SEC-JINJA-AUTOESCAPE-OFF` | medium | auto | a Jinja `Environment` built without `autoescape=True` — XSS |
+| `PY-SEC-PARAMIKO-AUTOADD` | medium | auto | Paramiko `AutoAddPolicy`/`WarningPolicy` — accepts unknown host keys |
+| `PY-SEC-PATH-TRAVERSAL` | medium | candidate | a file path built from external input — possible traversal |
+| `PY-SEC-REQUEST-NO-TIMEOUT` | medium | auto | an HTTP request with no `timeout` — can hang forever |
+| `PY-SEC-SHELL-INJECTION` | high | auto | `os.system`/`os.popen` or `subprocess(..., shell=True)` |
+| `PY-SEC-SQL-STRING-BUILD` | high | candidate | SQL built from caller values passed to `.execute()` — injection |
+| `PY-SEC-SSRF` | medium | candidate | an outbound request to a caller-derived URL — possible SSRF |
+| `PY-SEC-UNSAFE-DESERIALIZE` | high | auto | `pickle`/`yaml.unsafe_load` on untrusted data — code execution |
+| `PY-SEC-WEAK-HASH` | medium | auto | md5/sha1 for integrity/passwords (honors `usedforsecurity=False`) |
+| `PY-SEC-XXE-UNSAFE-XML` | medium | auto | XML parsed without `defusedxml` — XXE / entity expansion |
+| `SA-RAW-SQL` | high | candidate | interpolated `text()`/`execute()` SQL — injection (numeric interpolation exempt) |
+| `TS-SEC-DANGEROUS-EVAL` | high | auto | `eval`/`new Function`/`setTimeout(string)` — code injection |
+| `TS-SEC-DANGEROUS-HTML` | high | candidate | `dangerouslySetInnerHTML` with non-constant HTML — XSS |
+| `TS-SEC-JAVASCRIPT-URL` | high | auto | a `javascript:` URL in `href`/`src`/`to` — script injection |
+| `TS-SEC-TARGET-BLANK-NOOPENER` | medium | auto | `target="_blank"` without `rel="noopener"` — reverse tabnabbing |
 
 #### malware (30)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-MAL-CREDENTIAL-ACCESS` | high | candidate | — |
-| `PY-MAL-CRYPTO-MINER` | high | auto | — |
-| `PY-MAL-DOWNLOAD-EXEC` | high | auto | — |
-| `PY-MAL-DYNAMIC-IMPORT` | medium | candidate | — |
-| `PY-MAL-ENCODED-BLOB` | medium | candidate | — |
-| `PY-MAL-EXFIL-URL` | medium | candidate | — |
-| `PY-MAL-OBFUSCATED-EXEC` | blocking | auto | — |
-| `PY-MAL-PICKLE-REDUCE` | high | candidate | — |
-| `PY-MAL-REMOTE-EXEC` | blocking | auto | — |
-| `PY-MAL-REVERSE-SHELL` | blocking | auto | — |
-| `PY-MAL-SHELLCODE` | blocking | auto | — |
-| `SH-MAL-ANTIFORENSICS` | high | candidate | — |
-| `SH-MAL-CREDENTIAL-EXFIL` | high | candidate | — |
-| `SH-MAL-CRYPTO-MINER` | high | auto | — |
-| `SH-MAL-CURL-BASH` | high | auto | — |
-| `SH-MAL-DESTRUCTIVE` | high | candidate | — |
-| `SH-MAL-ENCODED-EXEC` | blocking | auto | — |
-| `SH-MAL-EXFIL-URL` | medium | candidate | — |
-| `SH-MAL-FORK-BOMB` | blocking | auto | — |
-| `SH-MAL-PERSISTENCE` | high | candidate | — |
-| `SH-MAL-REVERSE-SHELL` | blocking | auto | — |
-| `TS-MAL-CREDENTIAL-ACCESS` | high | candidate | — |
-| `TS-MAL-CRYPTO-MINER` | high | auto | — |
-| `TS-MAL-DOWNLOAD-EXEC` | high | auto | — |
-| `TS-MAL-DYNAMIC-REQUIRE` | medium | candidate | — |
-| `TS-MAL-ENCODED-BLOB` | medium | candidate | — |
-| `TS-MAL-EXEC-INJECTION` | high | candidate | — |
-| `TS-MAL-EXFIL-URL` | medium | candidate | — |
-| `TS-MAL-OBFUSCATED-EXEC` | blocking | auto | — |
-| `TS-MAL-REMOTE-EXEC` | blocking | auto | — |
+| `PY-MAL-CREDENTIAL-ACCESS` | high | candidate | a known credential path (`~/.ssh`, `.aws/credentials`, …) flowing into a read sink |
+| `PY-MAL-CRYPTO-MINER` | high | auto | a known crypto-miner / stratum-pool signature in a string literal |
+| `PY-MAL-DOWNLOAD-EXEC` | high | auto | a downloaded script piped straight to a shell (`curl … | sh`) |
+| `PY-MAL-DYNAMIC-IMPORT` | medium | candidate | `__import__` of a base64/hex/char-decoded (hidden) module name |
+| `PY-MAL-ENCODED-BLOB` | medium | candidate | a long base64/hex literal — a packed/encoded payload |
+| `PY-MAL-EXFIL-URL` | medium | candidate | a URL to an anonymous paste/tunnel/webhook (common C2/exfil sink) |
+| `PY-MAL-OBFUSCATED-EXEC` | blocking | auto | `eval`/`exec` of a base64/hex/zlib-decoded blob |
+| `PY-MAL-PICKLE-REDUCE` | high | candidate | `__reduce__` returning a code-exec callable — pickle RCE gadget |
+| `PY-MAL-REMOTE-EXEC` | blocking | auto | `eval`/`exec` of a fetched network response body |
+| `PY-MAL-REVERSE-SHELL` | blocking | auto | a socket wired to a shell (`dup2`+`fileno`, `pty.spawn`) |
+| `PY-MAL-SHELLCODE` | blocking | auto | a buffer cast to a function after executable-memory alloc — shellcode loader |
+| `SH-MAL-ANTIFORENSICS` | high | candidate | history wipe, `setenforce 0`/`iptables -F`, log truncation — trace evasion |
+| `SH-MAL-CREDENTIAL-EXFIL` | high | candidate | a secret path piped to an outbound command |
+| `SH-MAL-CRYPTO-MINER` | high | auto | a crypto-miner / pool signature |
+| `SH-MAL-CURL-BASH` | high | auto | a downloaded script piped to a shell (`curl … | sh`) |
+| `SH-MAL-DESTRUCTIVE` | high | candidate | `rm -rf /`, `mkfs`, `dd of=/dev/…` — host wipe |
+| `SH-MAL-ENCODED-EXEC` | blocking | auto | `base64 -d | sh` — obfuscated code execution |
+| `SH-MAL-EXFIL-URL` | medium | candidate | a URL to an anonymous paste/tunnel/webhook (C2 sink) |
+| `SH-MAL-FORK-BOMB` | blocking | auto | a fork bomb (`:(){ :|:& };:`) — process-table exhaustion |
+| `SH-MAL-PERSISTENCE` | high | candidate | an autostart implant (`authorized_keys`, cron, rc file) |
+| `SH-MAL-REVERSE-SHELL` | blocking | auto | reverse-shell wiring (`/dev/tcp`, `nc -e`, `mkfifo`, `socat`) |
+| `TS-MAL-CREDENTIAL-ACCESS` | high | candidate | a known credential path read (potential harvesting) |
+| `TS-MAL-CRYPTO-MINER` | high | auto | a crypto-miner / pool signature |
+| `TS-MAL-DOWNLOAD-EXEC` | high | auto | a fetched script passed to `eval` — remote code execution |
+| `TS-MAL-DYNAMIC-REQUIRE` | medium | candidate | `require()` of a computed/decoded value |
+| `TS-MAL-ENCODED-BLOB` | medium | candidate | a base64/hex blob — possible packed payload |
+| `TS-MAL-EXEC-INJECTION` | high | candidate | `child_process` exec/spawn of a computed command |
+| `TS-MAL-EXFIL-URL` | medium | candidate | a URL to an anonymous paste/tunnel/webhook (C2/exfil sink) |
+| `TS-MAL-OBFUSCATED-EXEC` | blocking | auto | `eval`/`Function` of an `atob`/base64-decoded payload |
+| `TS-MAL-REMOTE-EXEC` | blocking | auto | `eval`/`Function` of a fetched response body |
 
 #### secrets (3)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-SECRET-DETECTED` | high | auto | — |
-| `SH-SECRET-DETECTED` | high | auto | — |
-| `TS-SECRET-DETECTED` | high | auto | — |
+| `PY-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in Python source |
+| `SH-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in a shell script |
+| `TS-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in TS/JS source |
 
 #### supply-chain (2)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `MF-SUPPLY-INSTALL-HOOK` | medium | candidate | — |
-| `PY-SUPPLY-SETUP-EXEC` | medium | candidate | — |
+| `MF-SUPPLY-INSTALL-HOOK` | medium | candidate | an npm `preinstall`/`install`/`postinstall` script (runs on `npm install`) |
+| `PY-SUPPLY-SETUP-EXEC` | medium | candidate | `setup.py` running process/network/eval at module scope (runs on `pip install`) |
 
-#### correctness (4)
+#### correctness (9)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-CORRECT-BROAD-EXCEPT` | medium | auto | — |
-| `PY-CORRECT-NAIVE-DATETIME` | suggestion | candidate | — |
-| `PY-CORRECT-RAISE-WITHOUT-FROM` | low | candidate | — |
-| `PY-CORRECT-SWALLOWED-EXCEPTION` | medium | candidate | — |
+| `PY-CORRECT-BROAD-EXCEPT` | medium | auto | a bare/`Exception`/`BaseException` catch that doesn't re-raise |
+| `PY-CORRECT-NAIVE-DATETIME` | suggestion | candidate | `datetime.now()`/`utcnow()` without tz — a naive timestamp |
+| `PY-CORRECT-RAISE-WITHOUT-FROM` | low | candidate | raising inside `except` without `from` — loses the cause |
+| `PY-CORRECT-SWALLOWED-EXCEPTION` | medium | candidate | an `except` that silently `pass`es — error swallowed |
+| `PY-PYDANTIC-V1-CONFIG-CLASS` | medium | candidate | a `BaseModel` using inner `class Config` (v2 ignores misspelled keys) |
+| `SA-JOINED-COLLECTION` | medium | auto | `lazy="joined"` on a `Mapped[list]` — cartesian-product JOIN |
+| `SA-LAZY-DYNAMIC` | low | candidate | `relationship(lazy="dynamic"/"subquery")` — async-incompatible |
+| `SA-MUTABLE-DEFAULT` | medium | candidate | a shared mutable column `default=[]/{}` — use a callable |
+| `SA-NAIVE-DATETIME-DEFAULT` | low | candidate | a naive datetime column default with no `server_default` |
 
-#### async (6)
+#### async (9)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-ASYNC-DANGLING-TASK` | high | auto | — |
-| `PY-ASYNC-NO-AWAIT-BODY` | low | candidate | — |
-| `PY-ASYNC-SEQUENTIAL-AWAITS` | low | candidate | — |
-| `PY-ASYNC-SYNC-IO` | high | candidate | — |
-| `PY-ASYNC-UNAWAITED-COROUTINE` | high | auto | — |
-| `PY-ASYNC-UNLOCKED-LAZY-INIT` | high | candidate | — |
+| `PY-ASYNC-DANGLING-TASK` | high | auto | a `create_task`/`ensure_future` result discarded — task may be GC'd mid-flight |
+| `PY-ASYNC-NO-AWAIT-BODY` | low | candidate | an `async def` with no await/async-with/async-for — make it sync |
+| `PY-ASYNC-SEQUENTIAL-AWAITS` | low | candidate | awaits inside a loop that could be `gather`-ed concurrently |
+| `PY-ASYNC-SYNC-IO` | high | candidate | synchronous/blocking I/O in an async function — blocks the event loop |
+| `PY-ASYNC-UNAWAITED-COROUTINE` | high | auto | a coroutine call never awaited — silently does nothing |
+| `PY-ASYNC-UNLOCKED-LAZY-INIT` | high | candidate | check-then-set lazy init with no lock — concurrent race |
+| `SA-ASYNC-EXPIRE-ON-COMMIT` | medium | candidate | an async session factory missing `expire_on_commit=False` — MissingGreenlet |
+| `SA-GREENLET-ATTR-AFTER-COMMIT` | medium | candidate | an ORM attribute accessed after `commit()` expired it (AsyncSession) |
+| `SA-IMPLICIT-LAZY-ASYNC` | medium | candidate | `relationship()` with no explicit `lazy=` — sync lazy-load under AsyncSession |
 
 #### config (3)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-CONFIG-ADHOC-ENV` | low | auto | — |
-| `PY-CONFIG-IMPORT-TIME-IO` | medium | candidate | — |
-| `PY-CONFIG-SCATTERED-SETTINGS` | low | candidate | — |
+| `PY-CONFIG-ADHOC-ENV` | low | auto | an ad-hoc `os.environ`/`getenv` read (well-known OS vars exempt) — use BaseSettings |
+| `PY-CONFIG-IMPORT-TIME-IO` | medium | candidate | network/file I/O at module import — side-effectful import |
+| `PY-CONFIG-SCATTERED-SETTINGS` | low | candidate | a `BaseSettings` subclass defined outside the settings home module |
 
 #### typing (2)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-TYPING-MISSING-HINTS` | low | auto | — |
-| `PY-TYPING-UNTYPED-DICT` | medium | auto | — |
+| `PY-TYPING-MISSING-HINTS` | low | auto | a function parameter or return without a type annotation |
+| `PY-TYPING-UNTYPED-DICT` | medium | auto | a `dict[str, Any]` param/return instead of a typed model |
+
+#### dead-code (1)
+
+| rule_id | severity | verdict | what it flags |
+|---|---|---|---|
+| `PY-DEAD-SYMBOL` | low | candidate | a module-level private symbol defined but never referenced (repo-wide) |
 
 #### oop-composition (20)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-OOP-BUILDER-CLASS` | low | candidate | — |
-| `PY-OOP-CLOSURE-CAPTURE` | suggestion | candidate | — |
-| `PY-OOP-CONSTRUCTOR-WALL` | low | candidate | — |
-| `PY-OOP-DATACLASS-IN-PYDANTIC` | medium | auto | — |
-| `PY-OOP-DICT-MUTATION-BUILDER` | suggestion | candidate | — |
-| `PY-OOP-DISPATCH-LADDER` | low | candidate | — |
-| `PY-OOP-DUPLICATE-BLOCK` | low | candidate | — |
-| `PY-OOP-FIELD-COPY` | low | candidate | — |
-| `PY-OOP-FLAT-FIELD-MODEL` | low | candidate | — |
-| `PY-OOP-FREE-FN-ORCHESTRATOR` | low | candidate | — |
-| `PY-OOP-GOD-CLASS` | low | candidate | — |
-| `PY-OOP-HIGH-COMPLEXITY` | low | candidate | — |
-| `PY-OOP-LONG-PARAM-LIST` | low | candidate | — |
-| `PY-OOP-MODEL-REBUILD` | suggestion | candidate | — |
-| `PY-OOP-MODULE-CONST-FOR-SUBCLASS` | suggestion | candidate | — |
-| `PY-OOP-PARALLEL-SIBLING` | low | candidate | — |
-| `PY-OOP-STATIC-METHOD-CLASS` | low | candidate | — |
-| `PY-OOP-THIN-WRAPPER` | low | candidate | — |
-| `PY-XFILE-DUP-FUNCTION` | low | candidate | — |
-| `PY-XFILE-DUP-MODEL` | low | candidate | — |
+| `PY-OOP-BUILDER-CLASS` | low | candidate | a stateful class with one `build`/`create` producer — use a factory classmethod |
+| `PY-OOP-CLOSURE-CAPTURE` | suggestion | candidate | a thin inner closure capturing outer locals and passed around |
+| `PY-OOP-CONSTRUCTOR-WALL` | low | candidate | a constructor call with many kwargs (threshold) — compose sub-models |
+| `PY-OOP-DATACLASS-IN-PYDANTIC` | medium | auto | a `@dataclass` in a Pydantic project — use `BaseModel` |
+| `PY-OOP-DICT-MUTATION-BUILDER` | suggestion | candidate | a function mutating a dict param in place and returning it (validators exempt) |
+| `PY-OOP-DISPATCH-LADDER` | low | candidate | an if/elif (or guard-clause) ladder on one discriminator — use dispatch |
+| `PY-OOP-DUPLICATE-BLOCK` | low | candidate | a duplicated statement block within a file — extract a helper |
+| `PY-OOP-FIELD-COPY` | low | candidate | many `target.x = source.x` field copies — add a `from_*` classmethod |
+| `PY-OOP-FLAT-FIELD-MODEL` | low | candidate | a `BaseModel` with many flat fields (threshold) — nest sub-models |
+| `PY-OOP-FREE-FN-ORCHESTRATOR` | low | candidate | 3+ free functions threading one value (CLI modules exempt) — use a coordinator |
+| `PY-OOP-GOD-CLASS` | low | candidate | a class over the method/attribute threshold — split responsibilities |
+| `PY-OOP-HIGH-COMPLEXITY` | low | candidate | a function over the cyclomatic-complexity threshold |
+| `PY-OOP-LONG-PARAM-LIST` | low | candidate | a function over the parameter-count threshold — bundle into an object |
+| `PY-OOP-MODEL-REBUILD` | suggestion | candidate | a `model_rebuild()` call — confirm a real circular import exists |
+| `PY-OOP-MODULE-CONST-FOR-SUBCLASS` | suggestion | candidate | module consts name-prefixed for a subclass — hoist to ClassVars |
+| `PY-OOP-PARALLEL-SIBLING` | low | candidate | same-file functions with identical skeletons differing only in constants |
+| `PY-OOP-STATIC-METHOD-CLASS` | low | candidate | a class of only `@staticmethod`s — use functions or real OOP |
+| `PY-OOP-THIN-WRAPPER` | low | candidate | a function forwarding its args verbatim to one call |
+| `PY-XFILE-DUP-FUNCTION` | low | candidate | a function sharing its shape with a clone in another file (CLI commands exempt) |
+| `PY-XFILE-DUP-MODEL` | low | candidate | a model sharing its field-set with a clone in another file |
+
+#### testing (9)
+
+| rule_id | severity | verdict | what it flags |
+|---|---|---|---|
+| `PY-TEST-DUPLICATE-SETUP` | low | candidate | a repeated arrange block across tests — extract a fixture |
+| `PY-TEST-FIXTURE-MUTABLE-WIDE-SCOPE` | medium | candidate | a session/module/package fixture returning a mutable literal |
+| `PY-TEST-LOGIC-IN-TEST` | low | candidate | `if`/`for`/`while`/`try` in a test body |
+| `PY-TEST-NO-ASSERTION` | medium | candidate | a test that asserts nothing |
+| `PY-TEST-OVER-MOCKING` | low | candidate | too many mocks in one test (threshold) |
+| `PY-TEST-PARAMETRIZE-CANDIDATE` | medium | candidate | N near-identical tests differing only in literals — parametrize |
+| `PY-TEST-SKIP-NO-REASON` | low | candidate | `skip`/`skipif`/`xfail` without `reason=` |
+| `PY-TEST-SLEEP` | low | candidate | `time.sleep()` in a test |
+| `PY-TEST-UNUSED-FIXTURE` | low | candidate | a fixture defined but never requested (repo-level) |
 
 #### style (6)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `PY-STYLE-FILE-SIZE` | low | auto | — |
-| `PY-STYLE-IF-FALSE-IMPORT` | low | auto | — |
-| `PY-STYLE-INLINE-IMPORT` | medium | auto | — |
-| `PY-STYLE-STALE-COMMENT` | low | candidate | — |
-| `TS-STYLE-DUPLICATE-IMPORT` | low | auto | — |
-| `TS-STYLE-FILE-SIZE` | low | auto | — |
+| `PY-STYLE-FILE-SIZE` | low | auto | a file over the line-count threshold — split into a package |
+| `PY-STYLE-IF-FALSE-IMPORT` | low | auto | an import guarded by `if False:` instead of `TYPE_CHECKING` |
+| `PY-STYLE-INLINE-IMPORT` | medium | auto | an import inside a function body — move to module top |
+| `PY-STYLE-STALE-COMMENT` | low | candidate | a comment referencing a file path that no longer exists |
+| `TS-STYLE-DUPLICATE-IMPORT` | low | auto | multiple separate imports from one module — merge them |
+| `TS-STYLE-FILE-SIZE` | low | auto | a file over the line-count threshold — split it |
 
 #### react (14)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `TS-REACT-ARRAY-INDEX-KEY` | medium | candidate | — |
-| `TS-REACT-ASYNC-EFFECT` | medium | auto | — |
-| `TS-REACT-DEEP-JSX-NESTING` | low | candidate | — |
-| `TS-REACT-EAGER-STATE-INIT` | medium | candidate | — |
-| `TS-REACT-EXTRACTABLE-HELPER` | low | candidate | — |
-| `TS-REACT-EXTRACTABLE-HOOK` | low | candidate | — |
-| `TS-REACT-MULTI-COMPONENT-FILE` | low | candidate | — |
-| `TS-REACT-RANDOM-KEY` | medium | auto | — |
-| `TS-REACT-PARALLEL-SIBLING` | low | candidate | — |
-| `TS-REACT-REPEATED-JSX` | low | candidate | — |
-| `TS-REACT-TOO-MANY-PROPS` | low | candidate | — |
-| `TS-XFILE-DUP-COMPONENT` | low | candidate | — |
-| `TS-XFILE-DUP-FUNCTION` | low | candidate | — |
-| `TS-XFILE-DUP-JSX-BLOCK` | low | candidate | — |
+| `TS-REACT-ARRAY-INDEX-KEY` | medium | candidate | an array index used as a React `key` — reorder/insert bug |
+| `TS-REACT-ASYNC-EFFECT` | medium | auto | an async function passed to `useEffect` (its Promise becomes the cleanup) |
+| `TS-REACT-DEEP-JSX-NESTING` | low | candidate | JSX nested past the threshold — extract a sub-component |
+| `TS-REACT-EAGER-STATE-INIT` | medium | candidate | `useState(expensiveCall())` re-run every render — use a lazy initializer |
+| `TS-REACT-EXTRACTABLE-HELPER` | low | candidate | a pure helper nested in a component — lift to a module util |
+| `TS-REACT-EXTRACTABLE-HOOK` | low | candidate | a large hook cluster in a component — extract a custom `use*` hook |
+| `TS-REACT-MULTI-COMPONENT-FILE` | low | candidate | multiple components in one file — one per file |
+| `TS-REACT-PARALLEL-SIBLING` | low | candidate | near-twin components/functions differing only in constants |
+| `TS-REACT-RANDOM-KEY` | medium | auto | a freshly-generated `key` (`Math.random`/`Date.now`/`randomUUID`) — remounts |
+| `TS-REACT-REPEATED-JSX` | low | candidate | repeated sibling JSX of the same shape — render from `.map()` |
+| `TS-REACT-TOO-MANY-PROPS` | low | candidate | a component over the prop-count threshold — group into objects |
+| `TS-XFILE-DUP-COMPONENT` | low | candidate | a component duplicated across files |
+| `TS-XFILE-DUP-FUNCTION` | low | candidate | a function duplicated across files |
+| `TS-XFILE-DUP-JSX-BLOCK` | low | candidate | a hand-rolled JSX sub-tree duplicated across files |
 
 #### a11y (11)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `TS-A11Y-ANCHOR-NO-HREF` | medium | candidate | — |
-| `TS-A11Y-AUTOFOCUS` | low | candidate | — |
-| `TS-A11Y-DECORATIVE-ICON` | low | candidate | — |
-| `TS-A11Y-FORM-LABEL` | medium | candidate | — |
-| `TS-A11Y-ICON-BUTTON-NO-LABEL` | medium | candidate | — |
-| `TS-A11Y-IFRAME-TITLE` | medium | candidate | — |
-| `TS-A11Y-IMG-NO-ALT` | medium | candidate | — |
-| `TS-A11Y-MOUSE-NO-KEY` | medium | candidate | — |
-| `TS-A11Y-NONINTERACTIVE-ONCLICK` | medium | candidate | — |
-| `TS-A11Y-POSITIVE-TABINDEX` | medium | candidate | — |
-| `TS-A11Y-REDUNDANT-ROLE` | low | candidate | — |
+| `TS-A11Y-ANCHOR-NO-HREF` | medium | candidate | an `<a>` without `href` — not focusable or a real link |
+| `TS-A11Y-AUTOFOCUS` | low | candidate | `autoFocus` — disorients screen-reader/keyboard users |
+| `TS-A11Y-DECORATIVE-ICON` | low | candidate | a decorative icon beside text without `aria-hidden` |
+| `TS-A11Y-FORM-LABEL` | medium | candidate | a form control with no associated label/`aria-label` |
+| `TS-A11Y-ICON-BUTTON-NO-LABEL` | medium | candidate | an icon-only button with no accessible name |
+| `TS-A11Y-IFRAME-TITLE` | medium | candidate | an `<iframe>` with no `title` |
+| `TS-A11Y-IMG-NO-ALT` | medium | candidate | an `<img>` with no `alt` |
+| `TS-A11Y-MOUSE-NO-KEY` | medium | candidate | `onMouseOver`/`onMouseOut` with no `onFocus`/`onBlur` equivalent |
+| `TS-A11Y-NONINTERACTIVE-ONCLICK` | medium | candidate | an `onClick` on a non-interactive element with no role/keyboard support |
+| `TS-A11Y-POSITIVE-TABINDEX` | medium | candidate | a positive `tabIndex` overriding natural tab order |
+| `TS-A11Y-REDUNDANT-ROLE` | low | candidate | a `role` restating the element's implicit ARIA role |
 
 #### design-system (3)
 
-| rule_id | severity | verdict | standards |
+| rule_id | severity | verdict | what it flags |
 |---|---|---|---|
-| `TS-DS-DIRECT-UI-IMPORT` | medium | candidate | — |
-| `TS-DS-INLINE-PRIMITIVE` | low | candidate | — |
-| `TS-DS-SIZE-OVERRIDE` | low | candidate | — |
+| `TS-DS-DIRECT-UI-IMPORT` | medium | candidate | a direct import from the raw UI layer — use the design-system shell |
+| `TS-DS-INLINE-PRIMITIVE` | low | candidate | inline markup matching a declared primitive — use the component |
+| `TS-DS-SIZE-OVERRIDE` | low | candidate | a primitive sized via `className` — use its `size` prop |
 
 </details>
 
@@ -676,7 +706,7 @@ The image bundles the `mcp` + `ts` extras, and the incremental index persists in
 ## Development
 
 ```bash
-uv run pytest            # 964 tests
+uv run pytest            # 1365 tests
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```
