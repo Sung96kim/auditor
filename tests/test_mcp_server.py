@@ -37,6 +37,7 @@ async def test_tools_registered():
         "ignore_add",
         "ignore_list",
         "ignore_remove",
+        "finding_detail",
     } <= names
 
 
@@ -387,3 +388,32 @@ async def test_scan_since_head(tmp_path):
     )
     assert isinstance(data, dict)
     assert "files" in data and "totals" in data
+
+
+async def test_finding_detail_reads_from_index(sample_repo):
+    """finding_detail returns the index record even when the source file is wiped.
+
+    Proof that it reads from the persisted index and not from a fresh re-scan:
+    an incremental scan populates the index, then the source file is overwritten
+    so that a re-scan would find nothing — only the index can supply the finding.
+    """
+    src = str(sample_repo / "src")
+    # incremental scan persists findings (incl. evidence) to the isolated index
+    scan = _structured(await mcp.call_tool("scan", {"path": src, "incremental": True}))
+    fl, f = next(
+        (fl, f)
+        for fl in scan["files"]
+        for f in fl["findings"]
+        if f["rule_id"] == "PY-SEC-DANGEROUS-EVAL"
+    )
+    target = sample_repo / "src" / fl["file"].split("/")[-1]
+    # wipe the file so a fresh re-scan would find nothing — only the index can answer now
+    target.write_text("x = 1\n")
+    detail = _structured(
+        await mcp.call_tool(
+            "finding_detail",
+            {"file": str(target), "rule_id": f["rule_id"], "line": f["line"]},
+        )
+    )
+    assert detail["rule_id"] == f["rule_id"] and detail["line"] == f["line"]
+    assert detail["evidence"]  # recovered from the index, not the (now-wiped) file

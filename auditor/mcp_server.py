@@ -121,7 +121,8 @@ async def report(
 async def finding_detail(file: str, rule_id: str, line: int) -> dict:
     """Full record for one finding — `evidence`, `suggestion`, `standard_refs`, etc. — that the
     compact `scan`/`report` output omits. Reads the persisted index first; falls back to a fresh
-    single-file re-scan so it works whether or not the scan was incremental."""
+    single-file re-scan so it works whether or not the scan was incremental. The index record may
+    reflect a prior scan if the file was edited since it was indexed."""
     path = _require_file(file)
     root = find_root(path)
     try:
