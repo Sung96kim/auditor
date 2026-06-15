@@ -313,6 +313,14 @@ async def test_scan_bad_detail_errors(sample_repo):
         )
 
 
+async def test_report_bad_detail_errors(sample_repo):
+    with pytest.raises(ToolError, match="detail must be"):
+        await mcp.call_tool(
+            "report",
+            {"file": str(sample_repo / "src" / "integrations.py"), "detail": "tiny"},
+        )
+
+
 async def test_scan_since_head(tmp_path):
     """scan with since='HEAD' on a committed git repo succeeds (smoke)."""
     import subprocess

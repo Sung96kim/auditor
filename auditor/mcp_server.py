@@ -66,8 +66,7 @@ async def scan(
     finding_detail); full restores every field inline."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
-    if detail not in ("summary", "compact", "full"):
-        raise ToolError("detail must be one of: summary, compact, full")
+    _validate_detail(detail)
     root = find_root(Path(path))
     report_only = git_changed_files(root, since) if since else None
     try:
@@ -111,8 +110,7 @@ async def report(
     """Audit a single file statelessly (manifest + findings). ``detail``: summary|compact|full
     (default compact — hoists rule metadata, slims findings, drops evidence; use finding_detail
     to recover a finding's evidence; detail='full' restores every field inline)."""
-    if detail not in ("summary", "compact", "full"):
-        raise ToolError("detail must be one of: summary, compact, full")
+    _validate_detail(detail)
     results = await audit_target(_require_file(file), profile=profile)
     return json_payload(results, detail=detail)
 
@@ -137,6 +135,11 @@ def _require_file(file: str) -> Path:
     if not path.is_file():
         raise ToolError(f"no such file: {file}")
     return path
+
+
+def _validate_detail(detail: str) -> None:
+    if detail not in ("summary", "compact", "full"):
+        raise ToolError("detail must be one of: summary, compact, full")
 
 
 @mcp.tool
