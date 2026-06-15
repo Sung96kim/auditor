@@ -60,6 +60,7 @@ class AuditContext(LineIndexed):
         "project_deps",
         "sibling_modules",
         "defines_basesettings",
+        "resolver",
     )
 
     def __init__(
@@ -74,6 +75,7 @@ class AuditContext(LineIndexed):
         project_deps: frozenset[str] = frozenset(),
         sibling_modules: tuple[str, ...] = (),
         defines_basesettings: bool = False,
+        resolver: object | None = None,
     ) -> None:
         self.file_path = file_path
         self.source = source
@@ -85,6 +87,7 @@ class AuditContext(LineIndexed):
         self.project_deps = project_deps
         self.sibling_modules = sibling_modules
         self.defines_basesettings = defines_basesettings
+        self.resolver = resolver
 
 
 class Detector(ABC):
