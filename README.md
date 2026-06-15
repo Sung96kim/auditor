@@ -42,8 +42,17 @@ uv tool install "auditr[mcp]"      # include the FastMCP server (auditr-mcp)
 uv tool install "auditr[ts]"       # include TypeScript/React support (tree-sitter)
 ```
 
+**With pip / pipx:**
+
+```bash
+pip install auditr                 # into the active environment
+pip install "auditr[mcp,ts]"       # with the MCP server + TypeScript support
+pipx install auditr                # isolated global install (like uv tool)
+```
+
 The command is `auditr` (with `auditr-mcp` for the MCP server); `auditor`/`auditor-mcp`
-are kept as aliases. The PyPI distribution is named `auditr` because `auditor` was taken.
+are kept as aliases. The PyPI distribution is named `auditr` because `auditor` was taken,
+so you `pip install auditr` but run `auditr`.
 
 For development on the auditor itself:
 
