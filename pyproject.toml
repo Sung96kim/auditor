@@ -1,6 +1,6 @@
 [project]
-name = "auditr"  # PyPI distribution name (import package + CLI remain `auditor`)
-version = "0.1.0"
+name = "auditr"  # PyPI distribution name (import package is `auditor`)
+version = "0.1.1"
 description = "A token-efficient repo auditor for coding agents"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -29,8 +29,10 @@ ts = [
 ]
 
 [project.scripts]
-auditor = "auditor.cli:app"
-auditor-mcp = "auditor.mcp_server:main"
+auditr = "auditor.cli:app"
+auditr-mcp = "auditor.mcp_server:main"
+auditor = "auditor.cli:app"  # alias — matches the import package name
+auditor-mcp = "auditor.mcp_server:main"  # alias
 
 [tool.hatch.build.targets.wheel]
 packages = ["auditor"]

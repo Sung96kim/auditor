@@ -32,14 +32,18 @@ even for unchanged files. `auditor` moves all of that into deterministic Python:
 
 ## Install
 
-**Recommended — install the CLI globally as a tool** (so `auditor` is on your PATH in any repo):
+**Recommended — install the CLI globally as a tool** (so `auditr` is on your PATH in any repo):
 
 ```bash
+uv tool install auditr             # from PyPI (distribution name is `auditr`)
 uv tool install .                  # from a checkout
 uv tool install git+https://github.com/Sung96kim/auditor   # from GitHub
-uv tool install ".[mcp]"           # include the FastMCP server (auditor-mcp)
-uv tool install ".[ts]"            # include TypeScript/React support (tree-sitter)
+uv tool install "auditr[mcp]"      # include the FastMCP server (auditr-mcp)
+uv tool install "auditr[ts]"       # include TypeScript/React support (tree-sitter)
 ```
+
+The command is `auditr` (with `auditr-mcp` for the MCP server); `auditor`/`auditor-mcp`
+are kept as aliases. The PyPI distribution is named `auditr` because `auditor` was taken.
 
 For development on the auditor itself:
 
