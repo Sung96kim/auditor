@@ -98,4 +98,6 @@ def test_removed_occurrence_does_not_underflow(tmp_path):
     baselined = [_result(findings=[_finding(line=1), _finding(line=9)])]
     bl = Baseline.from_results(baselined)
     one = [_result(findings=[_finding(line=1)])]  # one of the two removed
-    assert bl.filter(one) == 1 and one[0].findings == []  # hides what's present, no error
+    assert (
+        bl.filter(one) == 1 and one[0].findings == []
+    )  # hides what's present, no error

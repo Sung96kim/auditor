@@ -226,8 +226,7 @@ def test_overrides_unknown_key_rejected(tmp_path):
 def test_overrides_replaces_list_field(tmp_path):
     """An overrides dict with a list field REPLACES (does not concatenate) the repo list."""
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname="x"\nversion="0"\n'
-        '[tool.auditor]\nexclude = ["foo/**"]\n'
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nexclude = ["foo/**"]\n'
     )
     settings = load_config(tmp_path, overrides={"exclude": ["*.csv"]})
     assert settings.exclude == ["*.csv"]  # replace, not concat
@@ -251,7 +250,9 @@ def test_threshold_merged_with_none_returns_self():
 def test_threshold_merged_with_all_unset_returns_self():
     """Threshold.merged(all-unset Threshold) is a fast-path that returns self unchanged."""
     t = Threshold()
-    empty = Threshold()  # default-constructed; no fields explicitly set via model_validate
+    empty = (
+        Threshold()
+    )  # default-constructed; no fields explicitly set via model_validate
     # model_dump(exclude_unset=True) for a default-constructed Threshold is {} → fast-path
     assert t.merged(empty) is t
 
@@ -278,9 +279,7 @@ def test_override_with_neither_path_nor_role_does_not_apply():
     """An OverrideConfig with no path and no role matches nothing — rule is unchanged."""
     settings = AuditorSettings(
         overrides=[
-            OverrideConfig(
-                rules={"PY-SEC-DANGEROUS-EVAL": RuleConfig(enabled=False)}
-            )
+            OverrideConfig(rules={"PY-SEC-DANGEROUS-EVAL": RuleConfig(enabled=False)})
         ]
     )
     rc = ResolvedConfig(settings, role=FileRole.PRODUCTION, rel_path="any.py")

@@ -25,7 +25,11 @@ def manifest_type(file_path: str) -> str:
     return NPM if file_path.rsplit("/", 1)[-1] == "package.json" else UNKNOWN
 
 
-def _parse(kind: str, source: str) -> dict[str, Any]:  # auditor: skip: PY-TYPING-UNTYPED-DICT  (JSON parse boundary — arbitrary manifest structure)
+def _parse(
+    kind: str, source: str
+) -> dict[
+    str, Any
+]:  # auditor: skip: PY-TYPING-UNTYPED-DICT  (JSON parse boundary — arbitrary manifest structure)
     """Structured payload for the manifest, or ``{}`` if it doesn't parse (a malformed manifest is
     surfaced as 'nothing to check', never an exception)."""
     if kind != NPM:

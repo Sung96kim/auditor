@@ -23,7 +23,8 @@ def _hashes(source: str) -> set[str]:
     return {
         row.shape_hash
         for row in (ex.shapes() if ex else [])
-        if row.kind in _DEDUP_KINDS  # dedup shapes only; class-base/symbol rows are separate
+        if row.kind
+        in _DEDUP_KINDS  # dedup shapes only; class-base/symbol rows are separate
     }
 
 
@@ -68,11 +69,16 @@ def test_symbol_def_eligibility():
         "MAX = 2\n"
         "def _helper():\n    return 1\n"
         "class _Impl:\n    pass\n"
-        "def public():\n    return 1\n"          # public func -> not a def
-        "class Public:\n    pass\n"               # public class -> not a def
-        "__version__ = '1'\n"                      # dunder -> excluded
+        "def public():\n    return 1\n"  # public func -> not a def
+        "class Public:\n    pass\n"  # public class -> not a def
+        "__version__ = '1'\n"  # dunder -> excluded
     )
-    assert _defs(src) == {"const\x1f_PRIVATE", "const\x1fMAX", "func\x1f_helper", "class\x1f_Impl"}
+    assert _defs(src) == {
+        "const\x1f_PRIVATE",
+        "const\x1fMAX",
+        "func\x1f_helper",
+        "class\x1f_Impl",
+    }
 
 
 def test_symbol_refs_include_names_attrs_imports_strings():
@@ -121,10 +127,7 @@ def test_usefixtures_refs():
 
 
 def test_getfixturevalue_ref():
-    src = (
-        "def test_a(request):\n"
-        "    x = request.getfixturevalue('db')\n"
-    )
+    src = "def test_a(request):\n    x = request.getfixturevalue('db')\n"
     assert "db" in _fixture_ref_symbols(src)
 
 

@@ -78,7 +78,9 @@ async def test_write_registers_repo(tmp_path):
 async def test_register_refreshes_name_and_time(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/x/proj") as s:
-        await s.register(123.5)  # name is derived from the repo key's basename, not passed in
+        await s.register(
+            123.5
+        )  # name is derived from the repo key's basename, not passed in
         regs = await s.repos()
     assert regs == [{"repo": "/x/proj", "name": "proj", "last_scanned": 123.5}]
 
@@ -198,7 +200,13 @@ async def test_findings_grouped_by_path(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/r") as store:
         await store.upsert_file(_entry("a.py"))
-        await store.record_rule("a.py", "PY-X", "fp1", [_finding("PY-X", line=1), _finding("PY-X", line=2)], 1.0)
+        await store.record_rule(
+            "a.py",
+            "PY-X",
+            "fp1",
+            [_finding("PY-X", line=1), _finding("PY-X", line=2)],
+            1.0,
+        )
         await store.upsert_file(_entry("b.py"))
         await store.record_rule("b.py", "PY-Y", "fp2", [_finding("PY-Y", line=5)], 1.0)
 

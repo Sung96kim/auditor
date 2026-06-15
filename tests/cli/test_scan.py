@@ -216,7 +216,9 @@ def test_scan_rule_filter(sample_repo):
     full = cli_json(invoke("scan", src, "--no-index", "-f", "json"))
     all_rules = {x["rule_id"] for f in full["files"] for x in f["findings"]}
     target = next(r for r in all_rules if r == "PY-SEC-DANGEROUS-EVAL")
-    filtered = cli_json(invoke("scan", src, "--no-index", "-f", "json", "--rule", target))
+    filtered = cli_json(
+        invoke("scan", src, "--no-index", "-f", "json", "--rule", target)
+    )
     kept = {x["rule_id"] for f in filtered["files"] for x in f["findings"]}
     assert kept == {target}  # only the requested rule survives
 
@@ -322,8 +324,13 @@ def test_scan_config_json_changes_severity(tmp_path):
     (tmp_path / "a.py").write_text("def f(x):\n    eval(x)\n")
     payload = cli_json(
         invoke(
-            "scan", str(tmp_path), "--no-index", "-f", "json",
-            "--config-json", '{"rules":{"PY-SEC-DANGEROUS-EVAL":{"severity":"low"}}}',
+            "scan",
+            str(tmp_path),
+            "--no-index",
+            "-f",
+            "json",
+            "--config-json",
+            '{"rules":{"PY-SEC-DANGEROUS-EVAL":{"severity":"low"}}}',
         )
     )
     sev = next(
@@ -361,8 +368,15 @@ def test_scan_config_json_activates_greenlet_rule(tmp_path):
     )
     off = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
     on = cli_json(
-        invoke("scan", str(tmp_path), "--no-index", "-f", "json",
-               "--config-json", '{"sqlalchemy":{"expire_on_commit":true}}')
+        invoke(
+            "scan",
+            str(tmp_path),
+            "--no-index",
+            "-f",
+            "json",
+            "--config-json",
+            '{"sqlalchemy":{"expire_on_commit":true}}',
+        )
     )
     rid = "SA-GREENLET-ATTR-AFTER-COMMIT"
     assert rid not in {x["rule_id"] for fl in off["files"] for x in fl["findings"]}

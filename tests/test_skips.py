@@ -47,7 +47,11 @@ def _f(rule_id: str, line: int) -> Finding:
             False,
         ),  # foreign / unknown code is inert
         ("eval(x)", "PY-SEC-DANGEROUS-EVAL", False),  # no directive
-        ("render()  // auditor: skip", "TS-SEC-DANGEROUS-HTML", True),  # JS comment marker
+        (
+            "render()  // auditor: skip",
+            "TS-SEC-DANGEROUS-HTML",
+            True,
+        ),  # JS comment marker
         (
             "eval(x)  # AUDITOR: SKIP: py-sec-dangerous-eval",
             "PY-SEC-DANGEROUS-EVAL",
@@ -67,7 +71,9 @@ def test_directive_matching(line_src, rule_id, suppressed):
 )
 def test_noqa_is_not_honored(directive):
     """Regression: the auditor no longer recognizes any flake8-style noqa directive."""
-    kept, n = filter_findings(f"eval(x)  {directive}\n", [_f("PY-SEC-DANGEROUS-EVAL", 1)])
+    kept, n = filter_findings(
+        f"eval(x)  {directive}\n", [_f("PY-SEC-DANGEROUS-EVAL", 1)]
+    )
     assert n == 0 and len(kept) == 1
 
 

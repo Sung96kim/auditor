@@ -54,7 +54,8 @@ Exclude = Annotated[
 NoSkips = Annotated[
     bool,
     typer.Option(
-        "--no-skips", help="Ignore in-file `auditor: skip` directives (un-silenceable sweep)."
+        "--no-skips",
+        help="Ignore in-file `auditor: skip` directives (un-silenceable sweep).",
     ),
 ]
 IncludeGitignored = Annotated[
@@ -84,7 +85,8 @@ MinSeverity = Annotated[
     ),
 ]
 RuleFilter = Annotated[
-    list[RuleId] | None,  # RuleId is `str`: the valid set is the runtime registry, not a frozen enum
+    list[RuleId]
+    | None,  # RuleId is `str`: the valid set is the runtime registry, not a frozen enum
     typer.Option(
         "--rule",
         help="Only show findings for these rule ids (repeatable), e.g. --rule SA-RAW-SQL.",
@@ -152,7 +154,7 @@ ConfigJson = Annotated[
     typer.Option(
         "--config-json",
         help="JSON object of config overrides, merged as the highest layer, "
-        "e.g. '{\"sqlalchemy\":{\"expire_on_commit\":true}}'.",
+        'e.g. \'{"sqlalchemy":{"expire_on_commit":true}}\'.',
     ),
 ]
 # --- `ignore` sub-app options ---
@@ -176,6 +178,7 @@ IgnoreReason = Annotated[
 IgnoreForce = Annotated[
     bool,
     typer.Option(
-        "--force", help="Allow a rule_id not in the registry (e.g. a not-yet-loaded plugin rule)."
+        "--force",
+        help="Allow a rule_id not in the registry (e.g. a not-yet-loaded plugin rule).",
     ),
 ]

@@ -241,8 +241,12 @@ class SqlAlchemyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    expire_on_commit: bool = False  # async session setting; True activates SA-GREENLET-ATTR-AFTER-COMMIT
-    async_session: bool = False  # ORM runs under AsyncSession; True activates SA-IMPLICIT-LAZY-ASYNC
+    expire_on_commit: bool = (
+        False  # async session setting; True activates SA-GREENLET-ATTR-AFTER-COMMIT
+    )
+    async_session: bool = (
+        False  # ORM runs under AsyncSession; True activates SA-IMPLICIT-LAZY-ASYNC
+    )
 
 
 class GlobalPaths(BaseSettings):
@@ -263,7 +267,9 @@ class AuditorSettings(BaseSettings):
 
     extends: str = "base"
     exclude: list[str] = Field(default_factory=list)
-    respect_gitignore: bool = True  # skip git-ignored files (CLI: --include-gitignored to override)
+    respect_gitignore: bool = (
+        True  # skip git-ignored files (CLI: --include-gitignored to override)
+    )
     threshold: Threshold = Field(default_factory=Threshold)
     rules: dict[RuleId, RuleConfig] = Field(default_factory=dict)
     categories: dict[str, CategoryConfig] = Field(default_factory=dict)

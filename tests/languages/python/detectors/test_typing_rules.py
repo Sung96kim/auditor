@@ -35,9 +35,5 @@ def test_untyped_dict_route_handler_suppressed():
 
 def test_untyped_dict_plain_function_fires():
     # the same signature without a route decorator must still fire
-    src = (
-        "from typing import Any\n"
-        "def h() -> dict[str, Any]:\n"
-        "    return {}\n"
-    )
+    src = "from typing import Any\ndef h() -> dict[str, Any]:\n    return {}\n"
     assert "PY-TYPING-UNTYPED-DICT" in rule_ids(run_audit(src))

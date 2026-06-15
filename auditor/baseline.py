@@ -33,7 +33,9 @@ class Baseline(BaseModel):
     is sorted with one entry per baselined occurrence (repeats are meaningful)."""
 
     version: int = 1
-    fingerprints: list[str] = Field(default_factory=list)  # sorted; one entry per occurrence
+    fingerprints: list[str] = Field(
+        default_factory=list
+    )  # sorted; one entry per occurrence
 
     @classmethod
     def from_results(cls, results: list[ScanResult]) -> "Baseline":

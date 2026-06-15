@@ -410,7 +410,10 @@ async def audit_target(
     ``config_overrides`` deep-merges onto the loaded config as the highest layer."""
     root = root or find_root(target)
     settings = load_config(
-        root, profile=profile, allow_local_plugins=allow_local_plugins, overrides=config_overrides
+        root,
+        profile=profile,
+        allow_local_plugins=allow_local_plugins,
+        overrides=config_overrides,
     )
     updates: dict[str, object] = {}
     if strict_tests:

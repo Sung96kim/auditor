@@ -22,7 +22,9 @@ config_app = typer.Typer(no_args_is_help=True, help="Inspect resolved configurat
 def config_show(target: RootArg = Path("."), config_json: ConfigJson = None) -> None:
     """Print the resolved configuration."""
     try:
-        settings = load_config(find_root(target), overrides=_parse_config_json(config_json))
+        settings = load_config(
+            find_root(target), overrides=_parse_config_json(config_json)
+        )
     except ValidationError as exc:
         _fail(f"invalid config — {_format_config_error(exc)}")
     _echo_json(settings.model_dump(mode="json"))

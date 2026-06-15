@@ -55,19 +55,13 @@ def test_sequential_awaits_ignores_await_in_the_iterable():
 
 def test_no_await_body_protocol_dunder_does_not_fire():
     # __aenter__ is a protocol coroutine — legitimately await-free
-    src = (
-        "class Ctx:\n"
-        "    async def __aenter__(self): return self\n"
-    )
+    src = "class Ctx:\n    async def __aenter__(self): return self\n"
     assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))
 
 
 def test_no_await_body_ordinary_method_fires():
     # an ordinary async method with no await must fire
-    src = (
-        "class Svc:\n"
-        "    async def setup(self): return self\n"
-    )
+    src = "class Svc:\n    async def setup(self): return self\n"
     assert "PY-ASYNC-NO-AWAIT-BODY" in rule_ids(run_audit(src))
 
 

@@ -277,13 +277,31 @@ async def test_scan_since_head(tmp_path):
     """scan with since='HEAD' on a committed git repo succeeds (smoke)."""
     import subprocess
 
-    subprocess.run(["git", "-C", str(tmp_path), "init", "-q", "-b", "main"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "init", "-q", "-b", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "t@t"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "t"],
+        check=True,
+        capture_output=True,
+    )
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
     (tmp_path / "a.py").write_text("x = 1\n")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-qm", "init"],
+        check=True,
+        capture_output=True,
+    )
     data = _structured(
         await mcp.call_tool("scan", {"path": str(tmp_path), "since": "HEAD"})
     )

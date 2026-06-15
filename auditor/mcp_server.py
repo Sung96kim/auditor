@@ -78,7 +78,9 @@ async def scan(
     except ValidationError as exc:
         err = exc.errors()[0]
         loc = ".".join(str(p) for p in err["loc"])
-        raise ToolError(f"invalid config: {loc + ': ' if loc else ''}{err['msg']}") from exc
+        raise ToolError(
+            f"invalid config: {loc + ': ' if loc else ''}{err['msg']}"
+        ) from exc
     if severity:
         wanted = {s.lower() for s in severity}
         for r in results:
@@ -167,7 +169,9 @@ async def ignore_add(
     ``rule_id`` (must be a known rule unless ``force`` — e.g. an untrusted local plugin rule).
     Idempotent per scope."""
     root = find_root(Path(path))
-    load_config(root)  # register the repo's entry-point/config plugins so their rules validate
+    load_config(
+        root
+    )  # register the repo's entry-point/config plugins so their rules validate
     if not force and rule_id not in REGISTRY.rule_ids():
         raise ToolError(
             f"unknown rule_id {rule_id!r}; use rules_list to see rules (or force=true)"

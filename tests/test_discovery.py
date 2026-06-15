@@ -130,7 +130,10 @@ def test_alembic_migration_dir_variants_soft_skipped(tmp_path):
         d = tmp_path / "alembic" / sub
         d.mkdir(parents=True)
         (d / "0001_rev.py").write_text("x = 1\n")
-    files = {p.relative_to(tmp_path).as_posix() for p in FileDiscovery(tmp_path).files(tmp_path)}
+    files = {
+        p.relative_to(tmp_path).as_posix()
+        for p in FileDiscovery(tmp_path).files(tmp_path)
+    }
     assert files == {"src/real.py"}  # every alembic migration dir variant dropped
 
 

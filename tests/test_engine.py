@@ -212,8 +212,7 @@ def test_audit_target_config_overrides(tmp_path):
 def _make_test_repo(tmp_path: Path) -> Path:
     """Repo with a production file (eval) and a test file (eval) side by side."""
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "x"\nversion = "0"\n'
-        '[tool.auditor]\nextends = "base"\n'
+        '[project]\nname = "x"\nversion = "0"\n[tool.auditor]\nextends = "base"\n'
     )
     (tmp_path / ".auditor").mkdir()
     pkg = tmp_path / "pkg"
@@ -222,7 +221,9 @@ def _make_test_repo(tmp_path: Path) -> Path:
     tests = tmp_path / "tests"
     tests.mkdir()
     # Use a variable argument so the eval-on-input detector fires (literal arg is safe)
-    (tests / "test_app.py").write_text("def test_f(user_input):\n    eval(user_input)\n")
+    (tests / "test_app.py").write_text(
+        "def test_f(user_input):\n    eval(user_input)\n"
+    )
     return tmp_path
 
 
@@ -230,13 +231,9 @@ def test_audit_target_strict_tests_enables_relaxed_rule(tmp_path):
     """strict_tests=True forces test files into strict mode, so rules normally relaxed on
     test code (like PY-SEC-DANGEROUS-EVAL) fire against them too."""
     root = _make_test_repo(tmp_path)
-    results = asyncio.run(
-        audit_target(root, no_index=True, strict_tests=True)
-    )
+    results = asyncio.run(audit_target(root, no_index=True, strict_tests=True))
     by_file = {r.file: r for r in results}
-    test_file = next(
-        (k for k in by_file if "test_app" in k), None
-    )
+    test_file = next((k for k in by_file if "test_app" in k), None)
     assert test_file is not None
     rule_ids_in_test = {f.rule_id for f in by_file[test_file].findings}
     # Under strict_tests the normally-relaxed test role is strict, so eval fires
@@ -246,9 +243,7 @@ def test_audit_target_strict_tests_enables_relaxed_rule(tmp_path):
 def test_audit_target_no_skips_accepted(tmp_path):
     """no_skips=True is accepted and runs without error (skip directives are ignored)."""
     root = _make_test_repo(tmp_path)
-    results = asyncio.run(
-        audit_target(root, no_index=True, no_skips=True)
-    )
+    results = asyncio.run(audit_target(root, no_index=True, no_skips=True))
     assert isinstance(results, list)
     # Production file must still surface eval
     by_file = {r.file: r for r in results}
@@ -260,9 +255,7 @@ def test_audit_target_no_skips_accepted(tmp_path):
 def test_audit_target_exclude_glob_accepted(tmp_path):
     """exclude=('*.py',) suppresses all Python results — the flag is wired through."""
     root = _make_test_repo(tmp_path)
-    results = asyncio.run(
-        audit_target(root, no_index=True, exclude=("*.py",))
-    )
+    results = asyncio.run(audit_target(root, no_index=True, exclude=("*.py",)))
     # Every Python file is excluded — no findings remain
     all_findings = [f for r in results for f in r.findings]
     assert all_findings == []
@@ -272,7 +265,5 @@ def test_audit_target_include_gitignored_accepted(tmp_path):
     """include_gitignored=True is accepted and does not crash (smoke test)."""
     root = _make_test_repo(tmp_path)
     # Not a git repo, so gitignore handling is a no-op — just verify no exception
-    results = asyncio.run(
-        audit_target(root, no_index=True, include_gitignored=True)
-    )
+    results = asyncio.run(audit_target(root, no_index=True, include_gitignored=True))
     assert isinstance(results, list)

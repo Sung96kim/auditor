@@ -44,23 +44,13 @@ def test_swallowed_still_flags_real_errors():
 
 def test_broad_except_exc_used_does_not_fire():
     # exc is referenced (passed to logger.error), so the exception IS handled
-    src = (
-        "try:\n"
-        "    x()\n"
-        "except Exception as exc:\n"
-        "    logger.error(exc)\n"
-    )
+    src = "try:\n    x()\nexcept Exception as exc:\n    logger.error(exc)\n"
     assert "PY-CORRECT-BROAD-EXCEPT" not in rule_ids(run_audit(src))
 
 
 def test_broad_except_exc_unused_fires():
     # exc is bound but never referenced in the handler body → fires
-    src = (
-        "try:\n"
-        "    x()\n"
-        "except Exception as exc:\n"
-        "    pass\n"
-    )
+    src = "try:\n    x()\nexcept Exception as exc:\n    pass\n"
     assert "PY-CORRECT-BROAD-EXCEPT" in rule_ids(run_audit(src))
 
 
