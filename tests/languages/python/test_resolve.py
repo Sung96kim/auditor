@@ -40,3 +40,25 @@ def test_unresolvable_returns_none(tmp_path):
     assert r.resolve_func(call, tree) is None
     call2, tree2 = _call("getattr(x, 'reload')(s, o)\n")
     assert r.resolve_func(call2, tree2) is None
+
+
+def test_resolves_package_init_module(tmp_path):
+    # a module that is a package (app/helpers/__init__.py) resolves via the __init__ path
+    r = _repo(
+        tmp_path, {"app/helpers/__init__.py": "def reload(s, o):\n    s.refresh(o)\n"}
+    )
+    call, tree = _call("from app.helpers import reload\nreload(s, o)\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "reload"
+
+
+def test_syntax_error_target_returns_none(tmp_path):
+    r = _repo(tmp_path, {"app/helpers.py": "def reload(:\n"})  # unparseable
+    call, tree = _call("from app.helpers import reload\nreload(s, o)\n")
+    assert r.resolve_func(call, tree) is None
+
+
+def test_def_not_found_returns_none(tmp_path):
+    r = _repo(tmp_path, {"app/helpers.py": "def other():\n    return 1\n"})
+    call, tree = _call("from app.helpers import reload\nreload(s, o)\n")
+    assert r.resolve_func(call, tree) is None

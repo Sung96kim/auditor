@@ -22,6 +22,7 @@ def _callee_origin(call: ast.Call, tree: ast.Module) -> tuple[str, str] | None:
     static imports. Handles ``from m import f; f(...)`` and ``import m[.n] [as a]; a.f(...)``."""
     func = call.func
     if isinstance(func, ast.Name):
+        # first matching `from m import f` binding (Phase 1: same-name rebinding resolves to the first)
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                 for a in node.names:
@@ -65,6 +66,8 @@ class CalleeResolver:
             return self._cache[dotted]
         rel = dotted.replace(".", "/")
         for cand in (self._root / f"{rel}.py", self._root / rel / "__init__.py"):
+            if not cand.resolve().is_relative_to(self._root.resolve()):
+                continue
             if cand.is_file():
                 try:
                     mod = ast.parse(cand.read_text(encoding="utf-8", errors="replace"))
