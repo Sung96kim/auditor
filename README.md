@@ -617,6 +617,7 @@ back just the changed files' findings — fewer tokens, same cross-file correctn
 
 - A top-level `rules` map (`rule_id → {category, verdict_kind, checklist_item, standard_refs, suggestion}`) is emitted once.
 - Each finding is a slim object `{rule_id, severity, line, message}` — per-finding `evidence` and repeated rule metadata are dropped.
+- Per-file objects keep `file`/`role`/`counts`/`findings`; the low-signal `language`/`cached`/`suppressed`/`ignored`/`skipped_rules` fields are omitted (`suppressed`/`ignored` remain in the top-level `totals`).
 
 Control the shape with the `detail` parameter:
 

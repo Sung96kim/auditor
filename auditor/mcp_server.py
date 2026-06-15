@@ -165,7 +165,9 @@ def _require_file(file: str) -> Path:
 
 def _validate_detail(detail: str) -> None:
     if detail not in ("summary", "compact", "full"):
-        raise ToolError("detail must be one of: summary, compact, full")
+        raise ToolError(
+            f"detail must be one of: summary, compact, full (got {detail!r})"
+        )
 
 
 @mcp.tool
