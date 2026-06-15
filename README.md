@@ -607,9 +607,30 @@ auditor-mcp                       # stdio MCP server (or: python -m auditor.mcp_
 ```
 
 Tools: `scan`, `report`, `manifest`, `discover`, `aggregate`, `rules_list`, `ignore_add`,
-`ignore_list`, `ignore_remove`. The MCP `scan`
+`ignore_list`, `ignore_remove`, `finding_detail`. The MCP `scan`
 takes `severity` and `since` (audit only a branch's changes), so an agent reviewing a PR pulls
 back just the changed files' findings — fewer tokens, same cross-file correctness.
+
+### MCP output format
+
+`scan` and `report` default to a **compact** payload to save tokens:
+
+- A top-level `rules` map (`rule_id → {category, verdict_kind, checklist_item, standard_refs, suggestion}`) is emitted once.
+- Each finding is a slim object `{rule_id, severity, line, message}` — per-finding `evidence` and repeated rule metadata are dropped.
+
+Control the shape with the `detail` parameter:
+
+| `detail` | shape |
+|---|---|
+| `"compact"` *(default)* | hoisted `rules` map + slim findings (no `evidence`) |
+| `"full"` | legacy inline shape — every field on every finding, `evidence` included |
+| `"summary"` | counts only: `{totals, by_rule, by_file}` — no individual findings |
+
+To fetch the full record for one finding (including `evidence` and `suggestion`), call
+`finding_detail(file, rule_id, line)`. This is the recovery path when you need details
+that compact mode drops.
+
+> The CLI (`auditr scan -f json`) is **unaffected** — its JSON output is unchanged.
 
 ### Claude Code
 
