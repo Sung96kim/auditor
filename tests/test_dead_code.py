@@ -141,6 +141,37 @@ def test_scan_entry_point_target_exempt(tmp_path):
     assert "PY-DEAD-SYMBOL" not in _scan(tmp_path)
 
 
+def _dead_symbol_messages(path) -> list[str]:
+    results = asyncio.run(audit_target(path, no_index=True))
+    return [
+        f.message for r in results for f in r.findings if f.rule_id == "PY-DEAD-SYMBOL"
+    ]
+
+
+def test_call_valued_module_binding_not_flagged_dead(dead_symbol_registry):
+    # regression (orion services/workflows/component_tags.py): self-registering tag constants
+    # are never referenced by name but must NOT be flagged dead — their __init__ has a side
+    # effect. A plain unused literal in the same module IS still a real dead constant.
+    dead = _dead_symbol_messages(dead_symbol_registry)
+    assert any("LEGACY_MAX_TAGS" in m for m in dead)  # literal const still flagged
+    # the call-valued tag constants are exempt (construction may register a side effect)
+    for name in ("ACCELERATOR", "EXTRACTION", "CLASSIFICATION"):
+        assert not any(name in m for m in dead), f"{name} wrongly flagged dead"
+
+
+def test_registering_subclass_and_decorated_def_not_flagged_dead(dead_symbol_registry):
+    # regression: defining a subclass (via __init_subclass__) or applying a registering decorator
+    # wires the symbol into machinery we can't see — it isn't provably dead even when unreferenced.
+    # A private class with no base and no decorator is still a real dead symbol.
+    dead = _dead_symbol_messages(dead_symbol_registry)
+    assert any("_UnusedHelper" in m for m in dead)  # plain private class still flagged
+    for name in (
+        "_AlphaPlugin",
+        "_BetaPlugin",
+    ):  # subclass-/decorator-registered → exempt
+        assert not any(name in m for m in dead), f"{name} wrongly flagged dead"
+
+
 # --- fixture_usage.find_unused: test_support role -----------------------------------------
 
 

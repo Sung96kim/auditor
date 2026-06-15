@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from _support import SAMPLE_REPO
+from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO
 
 
 @pytest.fixture(autouse=True)
@@ -25,3 +25,10 @@ def sample_repo(tmp_path) -> Path:
     dest = tmp_path / "repo"
     shutil.copytree(SAMPLE_REPO, dest)
     return dest
+
+
+@pytest.fixture
+def dead_symbol_registry() -> Path:
+    """Realistic registry fixture (orion BlueprintTag pattern). Scanned read-only — no copy
+    needed since no_index scans don't mutate the tree and the index lives in the isolated home."""
+    return DEAD_SYMBOL_REGISTRY

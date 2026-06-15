@@ -46,6 +46,14 @@ def test_trivial_defs_have_no_shape():
     assert _hashes("def f():\n    return 1\n") == set()
 
 
+def test_docstring_does_not_count_toward_clone_min_statements():
+    # regression: a leading docstring must not inflate a one-statement function past the
+    # min-statements clone threshold (orion `get_app` and accessor one-liners were noise)
+    assert _hashes('def f():\n    """doc"""\n    return 1\n') == set()
+    # a docstring plus two real statements is still shaped (docstring stripped, 2 remain)
+    assert _hashes('def f():\n    """doc"""\n    x = 1\n    return x\n') != set()
+
+
 def test_syntax_error_returns_empty():
     assert ShapeExtractor.for_source("def broken(:\n") is None
 

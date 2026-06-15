@@ -23,6 +23,19 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+def _body_without_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
+    """``body`` minus a leading docstring statement, so docstrings don't count toward clone size
+    or pollute the clone hash."""
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        return body[1:]
+    return body
+
+
 def _is_dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
 
@@ -33,10 +46,16 @@ def _symbol_defs(tree: ast.Module) -> list[tuple[str, str, int]]:
     out: list[tuple[str, str, int]] = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if node.name.startswith("_") and not _is_dunder(node.name):
+            if (
+                node.name.startswith("_")
+                and not _is_dunder(node.name)
+                and not _def_may_register(node)
+            ):
                 kind = "class" if isinstance(node, ast.ClassDef) else "func"
                 out.append((node.name, kind, node.lineno))
         elif isinstance(node, ast.Assign):
+            if _value_may_register(node.value):
+                continue
             for t in node.targets:
                 if isinstance(t, ast.Name) and not _is_dunder(t.id):
                     out.append((t.id, "const", node.lineno))
@@ -45,9 +64,30 @@ def _symbol_defs(tree: ast.Module) -> list[tuple[str, str, int]]:
             and isinstance(node.target, ast.Name)
             and node.value is not None
             and not _is_dunder(node.target.id)
+            and not _value_may_register(node.value)
         ):
             out.append((node.target.id, "const", node.lineno))
     return out
+
+
+def _value_may_register(value: ast.expr) -> bool:
+    """A module-level binding whose value is built by a call (or await) can't be proven dead:
+    constructing it may have side effects — registering into a global registry, opening a
+    resource, etc. (e.g. ``TAG = TagMapping(...)`` that appends ``self`` to a registry in its
+    ``__init__``). Such a name being unreferenced does NOT make it safe to remove."""
+    return any(isinstance(n, (ast.Call, ast.Await)) for n in ast.walk(value))
+
+
+def _def_may_register(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> bool:
+    """A function/class isn't provably dead if its *definition* can wire it into machinery we
+    can't see: a decorator may register or expose it (``@register`` / ``@app.route``), and a
+    subclass — base classes or a ``metaclass=`` keyword — may self-register on definition via
+    ``__init_subclass__`` or a registering metaclass (e.g. auditor's own ``Detector``)."""
+    if node.decorator_list:
+        return True
+    return isinstance(node, ast.ClassDef) and bool(node.bases or node.keywords)
 
 
 def _string_ref_names(value: str) -> list[str]:
@@ -310,9 +350,13 @@ class ShapeExtractor:
         *,
         min_statements: int = 2,
     ) -> list[ShapeRow]:
-        if len(fn.body) < min_statements:
+        # count/hash the body WITHOUT a leading docstring — otherwise a docstring inflates a
+        # trivial one-statement function past min_statements and it clones against every other
+        # docstring'd one-liner (e.g. `get_app`, accessor `resolve_*` helpers).
+        stmts = _body_without_docstring(fn.body)
+        if len(stmts) < min_statements:
             return []
-        body = "|".join(_clone_signature(stmt) for stmt in fn.body)
+        body = "|".join(_clone_signature(stmt) for stmt in stmts)
         n_params = len(fn.args.posonlyargs) + len(fn.args.args)
         return [ShapeRow(_hash(f"fn|{n_params}|{body}"), "function", symbol, fn.lineno)]
 

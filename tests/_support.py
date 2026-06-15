@@ -24,6 +24,7 @@ from auditor.models import (
 
 DATA_DIR = Path(__file__).parent / "fixtures" / "data"
 SAMPLE_REPO = DATA_DIR / "sample_repo"
+DEAD_SYMBOL_REGISTRY = DATA_DIR / "dead_symbol_registry"
 PLUGIN_FILE = DATA_DIR / "plugins" / "house_rules.py"
 TS_DATA = DATA_DIR / "ts"
 
