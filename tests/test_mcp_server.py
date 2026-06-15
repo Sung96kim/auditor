@@ -273,6 +273,46 @@ async def test_rules_list_standard_bandit():
     )
 
 
+async def test_scan_default_is_compact(sample_repo):
+    data = _structured(await mcp.call_tool("scan", {"path": str(sample_repo / "src")}))
+    assert "rules" in data  # compact hoists a rules map
+    f = next(f for fl in data["files"] for f in fl["findings"])
+    assert "evidence" not in f and set(f) <= {
+        "rule_id",
+        "severity",
+        "line",
+        "message",
+        "suggestion",
+    }
+
+
+async def test_scan_full_restores_legacy_shape(sample_repo):
+    data = _structured(
+        await mcp.call_tool(
+            "scan", {"path": str(sample_repo / "src"), "detail": "full"}
+        )
+    )
+    assert "rules" not in data
+    f = next(f for fl in data["files"] for f in fl["findings"])
+    assert "evidence" in f and "category" in f
+
+
+async def test_scan_summary(sample_repo):
+    data = _structured(
+        await mcp.call_tool(
+            "scan", {"path": str(sample_repo / "src"), "detail": "summary"}
+        )
+    )
+    assert set(data) == {"totals", "by_rule", "by_file"}
+
+
+async def test_scan_bad_detail_errors(sample_repo):
+    with pytest.raises(ToolError, match="detail must be"):
+        await mcp.call_tool(
+            "scan", {"path": str(sample_repo / "src"), "detail": "tiny"}
+        )
+
+
 async def test_scan_since_head(tmp_path):
     """scan with since='HEAD' on a committed git repo succeeds (smoke)."""
     import subprocess

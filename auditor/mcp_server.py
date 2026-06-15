@@ -49,6 +49,7 @@ async def scan(
     since: str | None = None,
     show_ignored: bool = False,
     config: dict | None = None,
+    detail: str = "compact",
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_skips`` ignores
@@ -59,9 +60,14 @@ async def scan(
     — ideal for reviewing a branch/PR — while the whole repo is still scanned so cross-file
     rules stay correct. Persistent ignores (see the ignore_* tools) are applied automatically;
     ``show_ignored`` includes them. ``config`` is an optional dict of config overrides
-    deep-merged as the highest layer and validated by ``AuditorSettings``."""
+    deep-merged as the highest layer and validated by ``AuditorSettings``.
+    ``detail`` (summary|compact|full, default compact) controls payload size: compact hoists rule
+    metadata into a `rules` map, slims findings, and drops `evidence` (recover it with
+    finding_detail); full restores every field inline."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
+    if detail not in ("summary", "compact", "full"):
+        raise ToolError("detail must be one of: summary, compact, full")
     root = find_root(Path(path))
     report_only = git_changed_files(root, since) if since else None
     try:
@@ -95,14 +101,20 @@ async def scan(
         keep = set(rule)
         for r in results:
             r.findings = [f for f in r.findings if f.rule_id in keep]
-    return json_payload(results)
+    return json_payload(results, detail=detail)
 
 
 @mcp.tool
-async def report(file: str, profile: str | None = None) -> dict:
-    """Audit a single file statelessly (manifest + findings)."""
+async def report(
+    file: str, profile: str | None = None, detail: str = "compact"
+) -> dict:
+    """Audit a single file statelessly (manifest + findings). ``detail``: summary|compact|full
+    (default compact — hoists rule metadata, slims findings, drops evidence; use finding_detail
+    to recover a finding's evidence; detail='full' restores every field inline)."""
+    if detail not in ("summary", "compact", "full"):
+        raise ToolError("detail must be one of: summary, compact, full")
     results = await audit_target(_require_file(file), profile=profile)
-    return json_payload(results)
+    return json_payload(results, detail=detail)
 
 
 @mcp.tool
