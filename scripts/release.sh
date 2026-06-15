@@ -3,21 +3,21 @@
 # release.sh — build and publish the auditor package to PyPI (or TestPyPI).
 #
 # Design / decisions:
-#   * uv-native: `uv build` (hatchling backend) + `uv publish`. No twine/build needed,
-#     though `uvx twine check` validates the artifacts' metadata before upload.
-#   * Auth via API token in $UV_PUBLISH_TOKEN (a `pypi-…` token). For TestPyPI, set the
-#     same var to a test.pypi.org token when using --test. Trusted publishing (OIDC) is
-#     CI-only and not used by this local script.
+#   * `uv build` (hatchling backend) produces the sdist + wheel; `uvx twine` checks the
+#     metadata and uploads. twine is used for the upload because it reads ~/.pypirc, while
+#     `uv publish` does not.
+#   * Auth comes from ~/.pypirc ([pypi] / [testpypi] sections) — the standard twine setup.
+#     TWINE_USERNAME/TWINE_PASSWORD env vars also work; otherwise twine prompts.
 #   * The version is the single source of truth in pyproject.toml; this script HARD-FAILS
 #     if auditor/__init__.py's __version__ has drifted out of sync (they're duplicated).
 #   * Safe by default: clean-tree + tests + lint + ruff-format + "not already on PyPI"
 #     gates run before anything is built, and an interactive confirm precedes upload.
 #
 # Usage:
-#   UV_PUBLISH_TOKEN=pypi-xxxx scripts/release.sh            # release current version to PyPI
-#   UV_PUBLISH_TOKEN=pypi-xxxx scripts/release.sh --test     # dry-run to TestPyPI
-#   scripts/release.sh --set-version 0.2.0                   # bump both version files, commit, exit
-#   scripts/release.sh --yes --no-tag                        # non-interactive, skip git tag+push
+#   scripts/release.sh                       # release current version to PyPI (creds: ~/.pypirc)
+#   scripts/release.sh --test                # dry-run to TestPyPI ([testpypi] in ~/.pypirc)
+#   scripts/release.sh --set-version 0.2.0   # bump both version files, commit, exit
+#   scripts/release.sh --yes --no-tag        # non-interactive, skip git tag+push
 #
 # Options:
 #   --test            publish to TestPyPI (https://test.pypi.org) instead of PyPI
@@ -110,8 +110,14 @@ ok "git working tree clean"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$BRANCH" != "main" ]]; then warn "on branch '$BRANCH', not 'main'"; else ok "on main"; fi
 
-if [[ -n "${UV_PUBLISH_TOKEN:-}" ]]; then ok "UV_PUBLISH_TOKEN set"
-else warn "UV_PUBLISH_TOKEN not set — uv publish will prompt for credentials"; fi
+CRED_SECTION="pypi"; [[ "$TARGET" == "testpypi" ]] && CRED_SECTION="testpypi"
+if [[ -n "${TWINE_PASSWORD:-}" ]]; then
+  ok "credentials from TWINE_* env"
+elif [[ -f "$HOME/.pypirc" ]] && grep -q "^\[${CRED_SECTION}\]" "$HOME/.pypirc"; then
+  ok "credentials from ~/.pypirc [$CRED_SECTION]"
+else
+  warn "no [$CRED_SECTION] in ~/.pypirc and no TWINE_* env — twine will prompt for credentials"
+fi
 
 INDEX_HOST="pypi.org"; [[ "$TARGET" == "testpypi" ]] && INDEX_HOST="test.pypi.org"
 ver_code="$(curl -s -o /dev/null -w '%{http_code}' "https://${INDEX_HOST}/pypi/${PKG_NAME}/${VERSION}/json" || echo 000)"
@@ -166,9 +172,9 @@ ok "twine check passed"
 # --- publish -------------------------------------------------------------------------------
 step "Publish → $TARGET"
 if [[ "$TARGET" == "testpypi" ]]; then
-  uv publish --publish-url https://test.pypi.org/legacy/ || die "uv publish (TestPyPI) failed"
+  uvx twine upload --repository testpypi dist/* || die "twine upload (TestPyPI) failed"
 else
-  uv publish || die "uv publish failed"
+  uvx twine upload dist/* || die "twine upload failed"
 fi
 ok "published ${BOLD}${PKG_NAME} ${VERSION}${RST} to ${TARGET}"
 
