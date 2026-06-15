@@ -10,9 +10,14 @@ functions sharing a statement-type skeleton. Methods are indexed too (top-level-
 import ast
 import hashlib
 import re
+from collections.abc import Collection
 
 from auditor import ast_util
 from auditor.languages.base import ShapeRow
+from auditor.languages.python.detectors._util import (
+    DEFAULT_CLI_FRAMEWORKS,
+    is_cli_command_module,
+)
 
 _MODEL_BASES = {"BaseModel"}
 _IDENT = re.compile(r"^[A-Za-z_]\w*$")
@@ -290,13 +295,24 @@ class ShapeExtractor:
         except SyntaxError:
             return None
 
-    def shapes(self, *, method_min_statements: int = 3) -> list[ShapeRow]:
+    def shapes(
+        self,
+        *,
+        method_min_statements: int = 3,
+        cli_frameworks: Collection[str] = DEFAULT_CLI_FRAMEWORKS,
+    ) -> list[ShapeRow]:
         rows: list[ShapeRow] = []
+        # Typer/Click command modules repeat trivial passthrough-command shapes (`uv`/`pnpm`/
+        # `docker` all forwarding FORWARD_ARGS) by design; don't index their top-level commands as
+        # cross-file duplicates. Models/methods still index (a copied model is still a real clone).
+        skip_top_fns = is_cli_command_module(self.tree, cli_frameworks)
         for node in self.tree.body:
             if isinstance(node, ast.ClassDef):
                 rows.extend(self._class_shapes(node, method_min_statements))
                 rows.extend(self._class_base_shapes(node))
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if skip_top_fns:
+                    continue
                 rows.extend(self._function_shape(node, node.name))
         rows.extend(_fixture_shapes(self.tree))
         rows.extend(_symbol_shapes(self.tree))

@@ -12,7 +12,11 @@ from typing import ClassVar
 
 from auditor import ast_util
 from auditor.languages.base import AuditContext, Detector, ParallelSiblingMixin
-from auditor.languages.python.detectors._util import dotted_name
+from auditor.languages.python.detectors._util import (
+    decorator_names,
+    dotted_name,
+    is_cli_command_module,
+)
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _TWIN_STRUCT = (
@@ -234,6 +238,28 @@ def _is_docstring(stmt: ast.stmt) -> bool:
 _FACTORY_VERBS = {"build", "create", "make", "construct", "produce"}
 
 
+def _builder_produce_verb(cls: ast.ClassDef) -> str | None:
+    """The produce-verb (`build`/`create`/…) if ``cls`` is an instance-builder to collapse: exactly
+    one public method, named a factory verb, with state (``__init__`` or a ``*Builder`` name). A
+    *classmethod* produce-method is the recommended factory-constructor idiom (`Env.create() -> Env`),
+    not a builder — returns None for it."""
+    methods: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    public: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for s in cls.body:
+        if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            methods.append(s)
+            if not s.name.startswith("_"):
+                public.append(s)
+    if len(public) != 1 or public[0].name not in _FACTORY_VERBS:
+        return None
+    if decorator_names(public[0]) & {"classmethod", "staticmethod"}:
+        return None  # factory-constructor idiom (`Env.create() -> Env`), not an instance builder
+    has_state = any(m.name == "__init__" for m in methods) or cls.name.endswith(
+        "Builder"
+    )
+    return public[0].name if has_state else None
+
+
 class BuilderClass(_OopCandidate):
     """A class that holds inputs and exposes one public produce-method (build/create/…) is a
     function-with-state — better as a factory classmethod ``Result.from_X(...)``."""
@@ -244,27 +270,15 @@ class BuilderClass(_OopCandidate):
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
-            if not isinstance(node, ast.ClassDef):
-                continue
-            methods = [
-                s
-                for s in node.body
-                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
-            ]
-            public = [m.name for m in methods if not m.name.startswith("_")]
-            has_init = any(m.name == "__init__" for m in methods)
-            named_builder = node.name.endswith("Builder")
-            # one public "produce" method, and the class either holds state or is *Builder
-            if (
-                len(public) == 1
-                and public[0] in _FACTORY_VERBS
-                and (has_init or named_builder)
-            ):
+            verb = (
+                _builder_produce_verb(node) if isinstance(node, ast.ClassDef) else None
+            )
+            if verb is not None:
                 out.append(
                     self.make_finding(
                         ctx,
                         line=node.lineno,
-                        message=f"`{node.name}` holds inputs and produces one output via `.{public[0]}()` — potential factory refactor",
+                        message=f"`{node.name}` holds inputs and produces one output via `.{verb}()` — potential factory refactor",
                         suggestion="replace with a factory classmethod on the result (e.g. Result.from_X(...))",
                     )
                 )
@@ -492,11 +506,27 @@ def _complexity(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
     return score
 
 
+def _intra_module_callers(
+    group: list[ast.FunctionDef | ast.AsyncFunctionDef], names: set[str]
+) -> int:
+    """How many functions in ``group`` call another top-level function of the module (by name)."""
+    return sum(
+        1
+        for fn in group
+        if {dotted_name(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+        & names
+    )
+
+
 class FreeFnOrchestrator(_OopCandidate):
     rule_id: ClassVar[str] = "PY-OOP-FREE-FN-ORCHESTRATOR"
     checklist_item: ClassVar[int] = 19
 
     def run(self, ctx: AuditContext) -> list[Finding]:
+        # Typer/Click command modules thread the CLI context between free-function commands by
+        # framework design; a coordinator class would fight the framework.
+        if is_cli_command_module(ctx.tree, ctx.config.settings.cli_frameworks):
+            return []
         names = {
             n.name
             for n in ctx.tree.body
@@ -505,17 +535,7 @@ class FreeFnOrchestrator(_OopCandidate):
         # The smell is a pipeline threading one value: 3+ functions sharing a param AND
         # calling each other — not independent helpers or CLI handlers.
         for param, group in _functions_by_shared_param(ctx.tree).items():
-            if len(group) < 3:
-                continue
-            callers = sum(
-                1
-                for fn in group
-                if {
-                    dotted_name(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)
-                }
-                & names
-            )
-            if callers >= 2:
+            if len(group) >= 3 and _intra_module_callers(group, names) >= 2:
                 return [
                     self.make_finding(
                         ctx,

@@ -102,10 +102,16 @@ def test_raw_sql_fires(body):
         "q = text('select 1')\n",
         "q = text(f'select 1')\n",
         "r = conn.execute(stmt)\n",
+        # interpolating a provably-numeric value can't inject (orion field_route_service.py:351)
+        "q = text(f'select nextval(s) from generate_series(1,{len(new_fields)})')\n",
+        "q = text(f'limit {int(n)}')\n",
+        "q = text(f'offset {len(rows) + 1}')\n",
     ],
 )
 def test_raw_sql_clean(body):
-    assert "SA-RAW-SQL" not in _ids("stmt=None\nconn=None\n" + body)
+    assert "SA-RAW-SQL" not in _ids(
+        "stmt=None\nconn=None\nnew_fields=[]\nn=1\nrows=[]\n" + body
+    )
 
 
 # --- SA-ASYNC-EXPIRE-ON-COMMIT ---

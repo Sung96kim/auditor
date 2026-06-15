@@ -119,6 +119,9 @@ SECRET_SAMPLES: list[tuple[str, str]] = [
     ("replicate", "r8_" + "R" * 37),
     ("sendgrid", "SG." + "s" * 22 + "." + "g" * 43),
     ("npm", "npm_" + "T" * 36),
+    ("vault", "s." + "A" * 24),  # legacy Vault service token, standalone
+    ("vault_hvs", "hvs." + "B" * 90),
+    ("okta", "00" + "C" * 40),
 ]
 # benign lookalikes that must NOT trip the secret sweep — hashes, ids, and other high-entropy
 # strings that share a shape with a real credential. Guards against over-broad provider patterns.
@@ -141,6 +144,9 @@ BENIGN_SECRET_LOOKALIKES: list[str] = [
     "hf_shorttoken",  # hf_ but only 10 chars — below 34
     "nfp_tooshort123",  # nfp_ but only 11 chars — below 36
     "npm run build",  # npm command, not a token
+    "Borrowers.CurrentHousingExpenseType",  # orion schema field name, not a Vault `s.` token
+    "Coverages.MonthlyEnrollmentPremiums",  # ditto
+    "CookingUL300ApprovedAutoExtinguishingSystemMaintenance",  # not an Okta `00…` token
     "r8_tooshort",  # r8_ but only 8 chars — below 37
     "SG." + "a" * 5 + "." + "b" * 5,  # SG.<5>.<5> — way under SG.<22>.<43>
 ]

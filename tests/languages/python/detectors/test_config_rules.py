@@ -33,3 +33,33 @@ def test_import_time_io_counts_chained_call_once(src):
     findings = run_audit(src).findings
     hits = [f for f in findings if f.rule_id == "PY-CONFIG-IMPORT-TIME-IO"]
     assert len(hits) == 1, f"expected 1 import-time-IO finding, got {len(hits)}"
+
+
+# canonical OS/tool-owned env vars must be read at their standard names — not an app-config smell
+# (iccli ic/aws.py AWS_CONFIG_FILE, ic/tooling.py SHELL/KREW_ROOT, ic/git/agent.py SSH_AUTH_SOCK, …)
+@pytest.mark.parametrize(
+    "src",
+    [
+        "x = os.environ.get('AWS_CONFIG_FILE')\n",
+        "x = os.environ.get('AWS_SHARED_CREDENTIALS_FILE')\n",
+        "x = os.getenv('SHELL')\n",
+        "x = os.getenv('KREW_ROOT')\n",
+        "x = os.getenv('SSH_AUTH_SOCK')\n",
+        "x = os.environ['XDG_CONFIG_HOME']\n",
+        "x = os.environ['HOME']\n",
+        "x = os.environ.get('KUBECONFIG')\n",
+    ],
+)
+def test_adhoc_env_allows_well_known_vars(src):
+    assert "PY-CONFIG-ADHOC-ENV" not in rule_ids(run_audit(src))
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "x = os.environ.get('STRIPE_SECRET_KEY')\n",  # app-owned config knob
+        "x = os.environ[name]\n",  # dynamic name — can't be allowlisted, stays flagged
+    ],
+)
+def test_adhoc_env_still_flags_app_config(src):
+    assert "PY-CONFIG-ADHOC-ENV" in rule_ids(run_audit(src))

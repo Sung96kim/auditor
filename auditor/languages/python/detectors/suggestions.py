@@ -7,8 +7,18 @@ import ast
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext
+from auditor.languages.python.detectors._util import decorator_names
 from auditor.languages.python.detectors.oop import _functions, _OopCandidate, _root_name
 from auditor.models import Finding, Severity
+
+#: Pydantic validator decorators whose contract *is* "receive the input mapping, mutate it, and
+#: return it" — mutate-and-return there is the declared API, not a hidden one.
+_VALIDATOR_DECORATORS = {
+    "model_validator",
+    "field_validator",
+    "root_validator",
+    "validator",
+}
 
 
 class _OopSuggestion(_OopCandidate):
@@ -47,6 +57,8 @@ class DictMutationBuilder(_OopSuggestion):
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
+            if decorator_names(fn) & _VALIDATOR_DECORATORS:
+                continue
             params = {a.arg for a in fn.args.posonlyargs + fn.args.args}
             param = next((p for p in params if _mutates_and_returns(fn, p)), None)
             if param is not None:
@@ -140,11 +152,18 @@ class ClosureCapture(_OopSuggestion):
     checklist_item: ClassVar[int] = 18
 
     def run(self, ctx: AuditContext) -> list[Finding]:
+        # recorder/capture closures (`cap`, `which`, …) are standard pytest scaffolding, not a smell
+        if ctx.role.is_test:
+            return []
         out: list[Finding] = []
         for outer in _functions(ctx.tree):
             outer_locals = _bound_names(outer)
             for inner in outer.body:
                 if not isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                # A decorator's inner `*_wrapper` closing over the wrapped `fn` is the *defining*
+                # shape of a decorator, not fragile capture — skip it.
+                if _is_decorator_wrapper(inner):
                     continue
                 # Only a thin forwarding closure (one `return <expr>`) is a clean partial/method
                 # candidate; multi-statement work closures (a tx runner, a recursive accumulator)
@@ -162,6 +181,15 @@ class ClosureCapture(_OopSuggestion):
                         )
                     )
         return out
+
+
+def _is_decorator_wrapper(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """The inner function of a decorator: marked ``@functools.wraps`` or named ``*_wrapper``."""
+    return (
+        "wraps" in decorator_names(fn)
+        or fn.name == "wrapper"
+        or fn.name.endswith("_wrapper")
+    )
 
 
 def _bound_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:

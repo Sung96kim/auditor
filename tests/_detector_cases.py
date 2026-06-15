@@ -636,6 +636,20 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "def only(x):\n    return x",
         ),
         (
+            # a Typer CLI module threads its context between free-function commands by design (iccli
+            # ic/cli/core.py); the orchestrator nudge must not fire once the module imports typer
+            "PY-OOP-FREE-FN-ORCHESTRATOR",
+            "def build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
+            "import typer\ndef build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
+        ),
+        (
+            # `.create()` as a classmethod is the recommended factory-constructor idiom, not an
+            # instance builder to collapse (iccli ic/environment.py DevEnvironment)
+            "PY-OOP-BUILDER-CLASS",
+            "class ResultBuilder:\n    def __init__(self, x):\n        self._x = x\n    def build(self):\n        return self._x",
+            "class DevEnvironment:\n    def __init__(self, x):\n        self._x = x\n    @classmethod\n    def create(cls, x):\n        return cls(x)",
+        ),
+        (
             "PY-OOP-FIELD-COPY",
             "def __init__(self, s):\n    self.a = s.a\n    self.b = s.b\n    self.c = s.c\n    self.d = s.d\n    self.e = s.e",
             "def __init__(self, s):\n    self.a = s.a",
@@ -656,6 +670,21 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             'def b(d):\n    return d["x"]',
         ),
         (
+            # a Pydantic validator's contract *is* mutate-the-input-mapping-and-return-it,
+            # so a plain mutate-return fires but the @model_validator form must not (orion FPs)
+            "PY-OOP-DICT-MUTATION-BUILDER",
+            'def check_config(d):\n    d["x"] = 1\n    return d',
+            (
+                "from pydantic import BaseModel, model_validator\n"
+                "class M(BaseModel):\n"
+                '    @model_validator(mode="before")\n'
+                "    @classmethod\n"
+                "    def check_config(cls, d):\n"
+                '        d["x"] = 1\n'
+                "        return d\n"
+            ),
+        ),
+        (
             "PY-OOP-MODULE-CONST-FOR-SUBCLASS",
             'TIMEOUT_RULE_TITLE = "t"\nTIMEOUT_RULE_STEPS = ()\n\nclass TimeoutRule(Rule):\n    pass',
             'class TimeoutRule(Rule):\n    TITLE = "t"\n    STEPS = ()',
@@ -664,6 +693,13 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "PY-OOP-CLOSURE-CAPTURE",
             "def outer(deps):\n    def inner(event):\n        return serialize(event, deps)\n    return inner",
             "def outer(deps):\n    return deps",
+        ),
+        (
+            # a decorator's `*_wrapper` closing over the wrapped `fn` is the decorator shape itself,
+            # not fragile capture (orion normalize.py make_async_compatible)
+            "PY-OOP-CLOSURE-CAPTURE",
+            "def outer(deps):\n    def inner(event):\n        return serialize(event, deps)\n    return inner",
+            "def make_async_compatible(fn):\n    def async_wrapper(x):\n        return fn(x)\n    return async_wrapper",
         ),
         (
             "PY-OOP-DUPLICATE-BLOCK",
@@ -818,6 +854,11 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "PY-SEC-WEAK-HASH",
             "import hashlib as h\nfp = h.sha1(blob).hexdigest()\n",
             "import hashlib as h\nfp = h.sha384(blob).hexdigest()\n",
+        ),
+        (  # explicit non-security intent honored — md5 dedup key, not integrity (orion #10)
+            "PY-SEC-WEAK-HASH",
+            "import hashlib\nk = hashlib.md5(rid.encode()).hexdigest()\n",
+            "import hashlib\nk = hashlib.md5(rid.encode(), usedforsecurity=False).hexdigest()\n",
         ),
         (
             "PY-SEC-INSECURE-RANDOM",

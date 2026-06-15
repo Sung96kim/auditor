@@ -122,7 +122,9 @@ _PATTERNS: list[tuple[str, str, str]] = [
     (
         "vault",
         "HashiCorp Vault token",
-        r"(?:hvs\.[0-9A-Za-z_-]{90,}|s\.[0-9A-Za-z]{24})",
+        # the `s.` legacy form is low-entropy; bound it so it can't match mid-identifier
+        # (`Borrowers.CurrentHousingExpenseType` is not a Vault token). `hvs.` is self-anchoring.
+        r"(?:hvs\.[0-9A-Za-z_-]{90,}|(?<![0-9A-Za-z])s\.[0-9A-Za-z]{24}(?![0-9A-Za-z]))",
     ),
     (
         "terraform_cloud",
@@ -130,7 +132,13 @@ _PATTERNS: list[tuple[str, str, str]] = [
         r"[0-9A-Za-z]{14}\.atlasv1\.[0-9A-Za-z_=-]{60,}",
     ),
     ("grafana", "Grafana service-account token", r"gl(?:sa|c)_[0-9A-Za-z_]{32,}"),
-    ("okta", "Okta API token", r"00[0-9A-Za-z_-]{40}"),
+    # bound the `00…` prefix so it can't match a "00" buried in a long camelCase identifier
+    # (`CookingUL300Approved…` is not an Okta token); a real token is exactly 42 chars, standalone.
+    (
+        "okta",
+        "Okta API token",
+        r"(?<![0-9A-Za-z_-])00[0-9A-Za-z_-]{40}(?![0-9A-Za-z_-])",
+    ),
     ("newrelic", "New Relic key", r"NR(?:AK|JS|II|RA)-[0-9A-Za-z_]{27}"),
     ("sentry", "Sentry auth token", r"sntrys_[0-9A-Za-z_=]{60,}"),
     ("atlassian", "Atlassian/Jira API token", r"ATATT3[0-9A-Za-z_=-]{180,}"),

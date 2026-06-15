@@ -9,7 +9,7 @@ afterward (one place, not per detector).
 import ast
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 from auditor.models import (
@@ -293,6 +293,15 @@ class LanguageAuditor(ABC):
         findings.sort(key=lambda f: (f.line, f.rule_id))
         return findings, skipped
 
-    def shapes(self, source: str, *, method_min_statements: int = 3) -> list[ShapeRow]:
-        """Normalized shape rows for the cross-file dedup pass. Default: none."""
+    def shapes(
+        self,
+        source: str,
+        *,
+        method_min_statements: int = 3,
+        cli_frameworks: Collection[str] = (),
+    ) -> list[ShapeRow]:
+        """Normalized shape rows for the cross-file dedup pass. Default: none.
+
+        ``cli_frameworks`` lets a language exempt CLI-command modules from duplicate-shape
+        indexing (Python uses it); languages that don't care simply ignore it."""
         return []

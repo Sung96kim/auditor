@@ -58,6 +58,33 @@ def test_syntax_error_returns_empty():
     assert ShapeExtractor.for_source("def broken(:\n") is None
 
 
+# Typer/Click passthrough commands (`uv`/`pnpm`/`docker` forwarding FORWARD_ARGS) share a shape by
+# framework design; a CLI-command module's top-level functions must not be indexed as xfile dups.
+_CLI_PASSTHROUGH = (
+    "import typer\napp = typer.Typer()\n"
+    "@app.command()\ndef uv(args):\n    env = get_env()\n    return env.run('uv', args)\n"
+)
+
+
+def test_cli_command_module_top_level_fns_not_shaped():
+    assert _hashes(_CLI_PASSTHROUGH) == set()
+    # but a non-CLI module with the same body IS shaped (default behavior preserved)
+    non_cli = "def uv(args):\n    env = get_env()\n    return env.run('uv', args)\n"
+    assert _hashes(non_cli) != set()
+
+
+def test_cli_frameworks_is_configurable():
+    src = (
+        "import mycli\n"
+        "def uv(args):\n    env = get_env()\n    return env.run('uv', args)\n"
+    )
+    ex = ShapeExtractor.for_source(src)
+    # not a known CLI framework by default -> shaped
+    assert [r for r in ex.shapes() if r.kind == "function"]
+    # configured as one -> top-level command not shaped
+    assert not [r for r in ex.shapes(cli_frameworks=("mycli",)) if r.kind == "function"]
+
+
 def _shapes(src: str):
     return ShapeExtractor.for_source(src).shapes()
 

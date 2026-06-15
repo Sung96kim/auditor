@@ -1,7 +1,7 @@
 """Shared AST helpers for the Python detectors."""
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 
 from auditor.ast_util import dotted as dotted_name  # noqa: F401
 
@@ -46,6 +46,35 @@ def is_route_handler(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True if ``fn`` is decorated with an HTTP-method/websocket route decorator — its signature
     (and the async-vs-sync handler choice) is framework-managed, not a local style decision."""
     return bool(decorator_names(fn).intersection(ROUTE_DECORATORS))
+
+
+#: CLI frameworks whose idiom is free-function commands threading a context/profile object and
+#: sharing trivial passthrough shapes — structure the framework prescribes, not OOP drift. The
+#: default set; projects extend it via ``[tool.auditor] cli_frameworks`` (see AuditorSettings).
+DEFAULT_CLI_FRAMEWORKS = ("typer", "click")
+#: decorators that mark a function as a CLI command/callback (`@app.command()`, `@app.callback()`)
+_CLI_COMMAND_DECORATORS = {"command", "callback", "group"}
+
+
+def is_cli_command_module(
+    tree: ast.AST, frameworks: Collection[str] = DEFAULT_CLI_FRAMEWORKS
+) -> bool:
+    """True if the module is a CLI app for one of ``frameworks``: it imports the framework, or
+    defines a function decorated as a command/callback/group. Such modules thread the CLI context
+    between free-function commands and repeat passthrough shapes *by framework design*."""
+    fw = set(frameworks)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name.split(".")[0] in fw for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.split(".")[0] in fw:
+                return True
+        elif isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and decorator_names(node) & _CLI_COMMAND_DECORATORS:
+            return True
+    return False
 
 
 def import_alias_map(tree: ast.AST) -> dict[str, str]:

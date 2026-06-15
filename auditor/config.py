@@ -285,6 +285,10 @@ class AuditorSettings(BaseSettings):
     # the de-facto home (the module where settings classes already cluster).
     settings_modules: list[str] = Field(default_factory=lambda: ["config", "settings"])
     settings_cohesion: bool = True
+    # CLI frameworks whose free-function-command idiom should exempt a module from the OOP
+    # orchestrator / cross-file duplicate-function heuristics (they thread a context object and
+    # repeat passthrough shapes by design). Extend for an in-house CLI framework.
+    cli_frameworks: list[str] = Field(default_factory=lambda: ["typer", "click"])
     diff_base: str | None = (
         None  # `scan --vs-base` ref; None auto-detects main/master/develop/development
     )

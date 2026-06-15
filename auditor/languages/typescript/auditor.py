@@ -3,6 +3,7 @@ manifest, runs enabled TS detectors, and applies config/role severity+verdict ov
 one place (mirroring PythonAuditor).
 """
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING, ClassVar
 
 from auditor.languages.base import LanguageAuditor, ShapeRow
@@ -62,7 +63,13 @@ class TypeScriptAuditor(LanguageAuditor):
             skipped_rules=skipped,
         )
 
-    def shapes(self, source: str, *, method_min_statements: int = 3) -> list[ShapeRow]:
-        # TS has its own shape extractor; the method-statement knob is Python-only
+    def shapes(
+        self,
+        source: str,
+        *,
+        method_min_statements: int = 3,
+        cli_frameworks: Collection[str] = (),
+    ) -> list[ShapeRow]:
+        # TS has its own shape extractor; the method-statement / cli-framework knobs are Python-only
         tree = TsParser.parse(source, path="component.tsx")
         return ShapeExtractor(Tsx(tree.root_node)).shapes()

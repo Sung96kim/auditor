@@ -3,10 +3,12 @@ and applies config/role severity+verdict overrides in one place.
 """
 
 import ast
+from collections.abc import Collection
 from typing import TYPE_CHECKING, ClassVar
 
 from auditor.languages.base import AuditContext, LanguageAuditor, ShapeRow
 from auditor.languages.python import detectors as _detectors  # noqa: F401
+from auditor.languages.python.detectors._util import DEFAULT_CLI_FRAMEWORKS
 from auditor.languages.python.shapes import ShapeExtractor
 from auditor.models import FileRole, ManifestEntry, ScanResult, SkippedRule
 
@@ -82,8 +84,16 @@ class PythonAuditor(LanguageAuditor):
             skipped_rules=skipped,
         )
 
-    def shapes(self, source: str, *, method_min_statements: int = 3) -> list[ShapeRow]:
+    def shapes(
+        self,
+        source: str,
+        *,
+        method_min_statements: int = 3,
+        cli_frameworks: Collection[str] = DEFAULT_CLI_FRAMEWORKS,
+    ) -> list[ShapeRow]:
         extractor = ShapeExtractor.for_source(source)
         if extractor is None:
             return []
-        return extractor.shapes(method_min_statements=method_min_statements)
+        return extractor.shapes(
+            method_min_statements=method_min_statements, cli_frameworks=cli_frameworks
+        )

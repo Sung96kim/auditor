@@ -2,7 +2,7 @@
 
 import pytest
 from _detector_cases import GROUPS
-from _support import rule_ids, run_audit
+from _support import FileRole, rule_ids, run_audit
 
 _CASES = GROUPS["oop"]
 
@@ -14,6 +14,15 @@ def test_flags_bad_ignores_good(rule_id, bad, good):
     )
     assert rule_id not in rule_ids(run_audit(good)), (
         f"{rule_id} false-positived on clean code"
+    )
+
+
+def test_closure_capture_skipped_in_test_role():
+    # recorder closures (`cap`/`which`) are standard pytest scaffolding (iccli tests/test_git.py)
+    src = "def outer(deps):\n    def inner(event):\n        return serialize(event, deps)\n    return inner"
+    assert "PY-OOP-CLOSURE-CAPTURE" in rule_ids(run_audit(src))
+    assert "PY-OOP-CLOSURE-CAPTURE" not in rule_ids(
+        run_audit(src, role=FileRole.TEST_SUPPORT)
     )
 
 

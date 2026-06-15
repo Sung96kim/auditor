@@ -55,6 +55,16 @@ def test_standalone_overrides_pyproject(tmp_path):
     assert settings.rules["PY-TYPING-MISSING-HINTS"].severity == Severity.HIGH
 
 
+def test_cli_frameworks_defaults_and_override(tmp_path):
+    assert AuditorSettings().cli_frameworks == ["typer", "click"]
+    (tmp_path / ".auditor").mkdir(parents=True)
+    (tmp_path / ".auditor" / "config.toml").write_text(
+        'cli_frameworks = ["typer", "click", "mycli"]\n'
+    )
+    settings = load_config(tmp_path)
+    assert "mycli" in settings.cli_frameworks
+
+
 def test_extends_chain_enables_oop(tmp_path):
     (tmp_path / ".auditor").mkdir(parents=True)
     (tmp_path / ".auditor" / "config.toml").write_text('extends = "strict"\n')

@@ -285,9 +285,36 @@ class NaiveDatetimeDefault(SqlAlchemyRule):
 _RAW_FUNCS = {"text", "execute"}
 
 
+#: calls whose result is always numeric (never str), so interpolating one into raw SQL can't carry
+#: an injection payload. `hex`/`oct`/`bin` are excluded — they return str.
+_NUMERIC_CALLS = {"len", "int", "float", "round", "abs", "ord", "hash", "id"}
+
+
+def _is_non_str(expr: ast.expr) -> bool:
+    """The value is provably not a ``str`` — a numeric literal, a numeric-returning call
+    (``len``/``int``/…), or arithmetic over such. Such a value can't inject SQL."""
+    if isinstance(expr, ast.Constant):
+        return isinstance(expr.value, (int, float, complex))  # bool is an int subclass
+    if isinstance(expr, ast.Call):
+        f = expr.func
+        name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+        return name in _NUMERIC_CALLS
+    if isinstance(expr, ast.UnaryOp):
+        return _is_non_str(expr.operand)
+    if isinstance(expr, ast.BinOp):
+        return _is_non_str(expr.left) and _is_non_str(expr.right)
+    return False
+
+
 def _is_interpolated(arg: ast.expr | None) -> bool:
     if isinstance(arg, ast.JoinedStr):
-        return any(isinstance(v, ast.FormattedValue) for v in arg.values)
+        # injectable only if some interpolated value isn't provably numeric:
+        # `text(f"… {len(rows)}")` is safe, `text(f"… {name}")` is not.
+        return any(
+            not _is_non_str(v.value)
+            for v in arg.values
+            if isinstance(v, ast.FormattedValue)
+        )
     if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
         return not (
             isinstance(arg.left, ast.Constant) and isinstance(arg.right, ast.Constant)

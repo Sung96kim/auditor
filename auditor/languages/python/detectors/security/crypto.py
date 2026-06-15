@@ -9,6 +9,7 @@ from auditor.languages.python.detectors._util import (
     dotted_name,
     from_import_map,
     import_alias_map,
+    is_const_false,
     resolve_dotted,
 )
 from auditor.languages.python.detectors.security._base import SecurityDetector
@@ -16,6 +17,38 @@ from auditor.models import Finding, Severity, VerdictKind
 
 _WEAK_HASHES = {"hashlib.md5", "hashlib.sha1"}
 _WEAK_HASH_NAMES = {"md5", "sha1"}
+
+
+def _used_for_security_false(node: ast.Call) -> bool:
+    """``usedforsecurity=False`` passed — explicit non-security intent (dedup/cache key)."""
+    return any(
+        kw.arg == "usedforsecurity" and is_const_false(kw.value) for kw in node.keywords
+    )
+
+
+def _weak_hash_name(
+    node: ast.AST, aliases: dict[str, str], hashlib_imports: dict[str, str]
+) -> str | None:
+    """The weak-hash name (md5/sha1) this call uses for integrity, or None if it isn't a weak hash
+    or declares ``usedforsecurity=False``. Handles ``hashlib.md5``, ``from hashlib import md5``,
+    aliased imports, and ``hashlib.new("md5")``."""
+    if not isinstance(node, ast.Call):
+        return None
+    raw = dotted_name(node.func)
+    name = resolve_dotted(raw, aliases)
+    weak = (
+        name in _WEAK_HASHES
+        or hashlib_imports.get(raw) in _WEAK_HASH_NAMES  # from hashlib import md5
+        or (
+            name == "hashlib.new"
+            and bool(node.args)
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value in _WEAK_HASH_NAMES
+        )
+    )
+    if not weak or _used_for_security_false(node):
+        return None
+    return name
 
 
 class WeakHash(SecurityDetector):
@@ -33,22 +66,8 @@ class WeakHash(SecurityDetector):
         # local names bound by `from hashlib import md5 [as ...]` -> the original hashlib name
         hashlib_imports = from_import_map(ctx.tree, "hashlib")
         for node in ast.walk(ctx.tree):
-            if not isinstance(node, ast.Call):
-                continue
-            raw = dotted_name(node.func)
-            name = resolve_dotted(raw, aliases)
-            weak = (
-                name in _WEAK_HASHES
-                or hashlib_imports.get(raw)
-                in _WEAK_HASH_NAMES  # from hashlib import md5
-                or (
-                    name == "hashlib.new"
-                    and node.args
-                    and isinstance(node.args[0], ast.Constant)
-                    and node.args[0].value in _WEAK_HASH_NAMES
-                )
-            )
-            if weak:
+            name = _weak_hash_name(node, aliases, hashlib_imports)
+            if name is not None:
                 out.append(
                     self.make_finding(
                         ctx,

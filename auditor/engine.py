@@ -293,6 +293,7 @@ class ScanEngine:
         rows = auditor.shapes(
             source,
             method_min_statements=self.settings.threshold.dry.xfile_method_min_statements,
+            cli_frameworks=self.settings.cli_frameworks,
         )
         if rows:
             await index.add_shapes(
@@ -343,7 +344,11 @@ class ScanEngine:
                 )
             except OSError:
                 continue
-            for s in lang_cls().shapes(source, method_min_statements=min_stmts):
+            for s in lang_cls().shapes(
+                source,
+                method_min_statements=min_stmts,
+                cli_frameworks=self.settings.cli_frameworks,
+            ):
                 shape_rows.append(
                     {
                         "shape_hash": s.shape_hash,
