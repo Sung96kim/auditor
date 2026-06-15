@@ -70,9 +70,10 @@ def is_cli_command_module(
         elif isinstance(node, ast.ImportFrom):
             if node.module and node.module.split(".")[0] in fw:
                 return True
-        elif isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef)
-        ) and decorator_names(node) & _CLI_COMMAND_DECORATORS:
+        elif (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and decorator_names(node) & _CLI_COMMAND_DECORATORS
+        ):
             return True
     return False
 
