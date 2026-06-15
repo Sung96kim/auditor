@@ -321,6 +321,38 @@ async def test_report_bad_detail_errors(sample_repo):
         )
 
 
+async def test_finding_detail_recovers_evidence(sample_repo):
+    src = str(sample_repo / "src")
+    scan = _structured(
+        await mcp.call_tool("scan", {"path": src})
+    )  # compact, no evidence
+    fl, f = next(
+        (fl, f)
+        for fl in scan["files"]
+        for f in fl["findings"]
+        if f["rule_id"] == "PY-SEC-DANGEROUS-EVAL"
+    )
+    file_abs = str(sample_repo / "src" / fl["file"].split("/")[-1])
+    detail = _structured(
+        await mcp.call_tool(
+            "finding_detail",
+            {"file": file_abs, "rule_id": f["rule_id"], "line": f["line"]},
+        )
+    )
+    assert detail["rule_id"] == f["rule_id"] and detail["line"] == f["line"]
+    assert detail["evidence"]  # the source line compact dropped, recovered
+    assert "suggestion" in detail
+
+
+async def test_finding_detail_missing_raises(sample_repo):
+    f = str(sample_repo / "src" / "clean.py")
+    with pytest.raises(ToolError, match="no .* finding at"):
+        await mcp.call_tool(
+            "finding_detail",
+            {"file": f, "rule_id": "PY-SEC-DANGEROUS-EVAL", "line": 999},
+        )
+
+
 async def test_scan_since_head(tmp_path):
     """scan with since='HEAD' on a committed git repo succeeds (smoke)."""
     import subprocess

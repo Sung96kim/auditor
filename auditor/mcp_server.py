@@ -32,7 +32,9 @@ mcp: FastMCP = FastMCP(
         "Token-efficient repo auditor. `scan` a directory or `report` a single file to get "
         "structured findings (mechanical issues are pre-decided; semantic ones are flagged as "
         "'candidate' for you to judge). `manifest` returns a file's class/function structure. "
-        "`rules_list` enumerates the detectors."
+        "`rules_list` enumerates the detectors. "
+        "`scan`/`report` default to a compact payload (rule metadata hoisted, `evidence` omitted); "
+        "call `finding_detail` to recover a specific finding's full record."
     ),
 )
 
@@ -113,6 +115,29 @@ async def report(
     _validate_detail(detail)
     results = await audit_target(_require_file(file), profile=profile)
     return json_payload(results, detail=detail)
+
+
+@mcp.tool
+async def finding_detail(file: str, rule_id: str, line: int) -> dict:
+    """Full record for one finding — `evidence`, `suggestion`, `standard_refs`, etc. — that the
+    compact `scan`/`report` output omits. Reads the persisted index first; falls back to a fresh
+    single-file re-scan so it works whether or not the scan was incremental."""
+    path = _require_file(file)
+    root = find_root(path)
+    try:
+        rel = str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        rel = str(path)
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        for f in await index.cached_findings(rel, rule_id):
+            if f.line == line:
+                return f.model_dump(mode="json")
+    results = await audit_target(path, root=root, apply_ignores=False)
+    for r in results:
+        for f in r.findings:
+            if f.rule_id == rule_id and f.line == line:
+                return f.model_dump(mode="json")
+    raise ToolError(f"no {rule_id} finding at {file}:{line}")
 
 
 @mcp.tool
