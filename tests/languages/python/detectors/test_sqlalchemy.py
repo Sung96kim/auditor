@@ -135,6 +135,11 @@ def test_expire_on_commit_clean(body):
 # --- SA-GREENLET-ATTR-AFTER-COMMIT (config-gated) ---
 _ON = AuditorSettings(sqlalchemy=SqlAlchemyConfig(expire_on_commit=True))
 
+
+def _ids_on(src: str) -> set[str]:
+    return rule_ids(run_audit(src, settings=_ON, rel_path="m.py"))
+
+
 _FN = (
     "from sqlalchemy.ext.asyncio import AsyncSession\n"
     "async def f(session):\n"
@@ -189,6 +194,73 @@ def test_greenlet_clean_in_test_role():
             rel_path="test_m.py",
         )
     )
+
+
+def test_greenlet_clean_when_refreshed_after_commit():
+    # regression (orion): the canonical `commit(); refresh(obj); use obj` un-expires obj → safe
+    src = (
+        "import sqlalchemy\nasync def f(session):\n"
+        "    user = User()\n"
+        "    session.add(user)\n"
+        "    await session.commit()\n"
+        "    await session.refresh(user)\n"
+        "    return user.email\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+
+
+def test_greenlet_clean_when_requeried_after_commit():
+    # obj reassigned from a query after the commit → fresh, not expired
+    src = (
+        "import sqlalchemy\nasync def f(session):\n"
+        "    user = User()\n"
+        "    session.add(user)\n"
+        "    await session.commit()\n"
+        "    user = session.scalar_one(q)\n"
+        "    return user.email\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+
+
+def test_greenlet_fires_when_recommitted_after_refresh():
+    # refresh un-expires, but a SECOND commit re-expires → the later access is risky again
+    src = (
+        "import sqlalchemy\nasync def f(session):\n"
+        "    user = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    await session.refresh(user)\n"
+        "    await session.commit()\n"
+        "    return user.email\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in _ids_on(src)
+
+
+def test_greenlet_clean_object_created_after_prior_commit():
+    # regression (orion field_links): obj is constructed AFTER the earlier commit (so that commit
+    # can't have expired it) and read BEFORE the next commit → safe
+    src = (
+        "import sqlalchemy\nasync def f(session):\n"
+        "    await session.commit()\n"
+        "    child = Child()\n"
+        "    session.add(child)\n"
+        "    cid = child.id\n"
+        "    await session.commit()\n"
+        "    return cid\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+
+
+def test_greenlet_clean_list_append_after_commit():
+    # regression (orion copy_workflow): a list passed to add_all is a collection, not an ORM
+    # object — building it with .append after a commit must not flag
+    src = (
+        "import sqlalchemy\nasync def f(session):\n"
+        "    await session.commit()\n"
+        "    links = []\n"
+        "    links.append(make())\n"
+        "    session.add_all(links)\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
 
 
 # --- SA-GREENLET via query source (scalar_one / scalar_one_or_none / session.get) ---------

@@ -358,7 +358,10 @@ class AsyncExpireOnCommit(SqlAlchemyRule):
 
 # --- SA-GREENLET-ATTR-AFTER-COMMIT -------------------------------------------------------
 
-_ORM_SINKS = {"add", "add_all", "merge", "delete", "refresh"}
+#: session methods that take a SINGLE ORM object → the Name arg is provably an ORM instance.
+#: `add_all` is excluded: its arg is a *collection* (a list), not an ORM object — flagging
+#: `links.append(...)` after a commit would be a false positive.
+_ORM_SINKS = {"add", "merge", "delete", "refresh"}
 _ORM_SOURCES = {"scalar", "scalar_one", "scalar_one_or_none"}
 
 
@@ -382,15 +385,44 @@ def _orm_names(fn: ast.AST) -> set[str]:
     return names
 
 
-def _commit_line(fn: ast.AST) -> int | None:
-    lines = [
+def _commit_lines(fn: ast.AST) -> list[int]:
+    return sorted(
         n.lineno
         for n in ast.walk(fn)
         if isinstance(n, ast.Call)
         and isinstance(n.func, ast.Attribute)
         and n.func.attr == "commit"
-    ]
-    return min(lines) if lines else None
+    )
+
+
+def _freshen_lines(fn: ast.AST) -> dict[str, list[int]]:
+    """Per-name lines where a name is (re)bound or reloaded — an assignment (construction or
+    query), a for-loop target, or ``session.refresh(obj)``. A commit only expires an object's
+    attributes if it happens AFTER the object was last freshened; an earlier commit is irrelevant
+    (the object didn't exist / was reloaded since), and ``commit(); refresh(obj); use obj`` is safe."""
+    out: dict[str, list[int]] = {}
+
+    def add(name: str, line: int) -> None:
+        out.setdefault(name, []).append(line)
+
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    add(t.id, node.lineno)
+        elif isinstance(node, (ast.AnnAssign, ast.For, ast.AsyncFor)) and isinstance(
+            node.target, ast.Name
+        ):
+            add(node.target.id, node.lineno)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "refresh"
+        ):
+            for a in node.args:
+                if isinstance(a, ast.Name):
+                    add(a.id, node.lineno)
+    return out
 
 
 class GreenletAttrAfterCommit(SqlAlchemyRule):
@@ -405,24 +437,34 @@ class GreenletAttrAfterCommit(SqlAlchemyRule):
             return []  # the running-app risk, not test setup (tests configure their own sessions)
         out: list[Finding] = []
         for fn in async_function_bodies(ctx.tree):
-            commit = _commit_line(fn)
-            if commit is None:
+            commits = _commit_lines(fn)
+            if not commits:
                 continue
             orm = _orm_names(fn)
+            freshen = _freshen_lines(fn)
             for node in ast.walk(fn):
-                if (
+                if not (
                     isinstance(node, ast.Attribute)
                     and isinstance(node.ctx, ast.Load)
                     and isinstance(node.value, ast.Name)
                     and node.value.id in orm
-                    and node.lineno > commit
                 ):
-                    out.append(
-                        self.make_finding(
-                            ctx,
-                            line=node.lineno,
-                            message=f"`{node.value.id}.{node.attr}` accessed after commit — expired attribute reload → MissingGreenlet",
-                            suggestion="capture needed values before commit, or set expire_on_commit=False",
-                        )
+                    continue
+                # the object is "fresh" as of its last bind/reload before the access (params have
+                # none → fresh from the function start); a commit strictly between then and the
+                # access is what expires it.
+                fresh = max(
+                    (f for f in freshen.get(node.value.id, ()) if f < node.lineno),
+                    default=fn.lineno,
+                )
+                if not any(fresh < c < node.lineno for c in commits):
+                    continue
+                out.append(
+                    self.make_finding(
+                        ctx,
+                        line=node.lineno,
+                        message=f"`{node.value.id}.{node.attr}` accessed after commit — expired attribute reload → MissingGreenlet",
+                        suggestion="capture needed values before commit, or refresh(obj) / set expire_on_commit=False",
                     )
+                )
         return out
