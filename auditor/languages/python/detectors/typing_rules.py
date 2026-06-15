@@ -6,22 +6,8 @@ from typing import ClassVar
 
 from auditor import ast_util
 from auditor.languages.base import AuditContext, Detector
+from auditor.languages.python.detectors._util import is_route_handler
 from auditor.models import Category, Finding, Severity
-
-_ROUTE_DECORATORS = ("get", "post", "put", "patch", "delete", "route", "websocket")
-
-
-def _is_route_handler(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    for dec in fn.decorator_list:
-        target = dec.func if isinstance(dec, ast.Call) else dec
-        attr = (
-            target.attr
-            if isinstance(target, ast.Attribute)
-            else getattr(target, "id", "")
-        )
-        if attr in _ROUTE_DECORATORS:
-            return True
-    return False
 
 
 def _functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -90,7 +76,7 @@ class UntypedDict(Detector):
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
         for fn in _functions(ctx.tree):
-            if _is_route_handler(fn):
+            if is_route_handler(fn):
                 continue
             if _untyped_dict(fn.returns):
                 out.append(

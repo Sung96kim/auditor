@@ -83,3 +83,33 @@ def test_no_await_body_ordinary_method_fires():
 def test_no_await_body_stub_body_does_not_fire(body: str) -> None:
     src = f"async def stub():\n    {body}\n"
     assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# NoAwaitBody — framework-managed signatures (route handlers / abstract methods)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "deco",
+    ['@app.get("/ping")', '@router.post("/x")', "@app.websocket"],
+    ids=["get", "post", "websocket"],
+)
+def test_no_await_body_route_handler_exempt(deco: str) -> None:
+    # a route handler's async-vs-sync choice is framework-managed (event-loop vs threadpool) —
+    # regression: orion app.py `async def pong() -> bool: return True` was wrongly flagged
+    src = f"{deco}\nasync def handler():\n    return True\n"
+    assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))
+
+
+def test_no_await_body_abstractmethod_exempt() -> None:
+    # an abstract coroutine must keep its async signature for subclass overrides, even with a
+    # non-stub body
+    src = (
+        "from abc import abstractmethod\n\n\n"
+        "class Base:\n"
+        "    @abstractmethod\n"
+        "    async def fetch(self) -> int:\n"
+        "        return 0\n"
+    )
+    assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src))

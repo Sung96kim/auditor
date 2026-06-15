@@ -23,6 +23,31 @@ def kwarg(node: ast.Call, name: str) -> ast.expr | None:
     return None
 
 
+#: HTTP-method / websocket route decorators (FastAPI, Flask, Starlette, APIRouter, …)
+ROUTE_DECORATORS = ("get", "post", "put", "patch", "delete", "route", "websocket")
+
+
+def decorator_names(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> set[str]:
+    """Last-segment names of a def's decorators, unwrapping ``@deco(...)`` calls
+    (``post`` for ``@router.post(...)``, ``abstractmethod`` for ``@abstractmethod``)."""
+    names: set[str] = set()
+    for dec in fn.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if isinstance(target, ast.Attribute):
+            names.add(target.attr)
+        elif isinstance(target, ast.Name):
+            names.add(target.id)
+    return names
+
+
+def is_route_handler(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if ``fn`` is decorated with an HTTP-method/websocket route decorator — its signature
+    (and the async-vs-sync handler choice) is framework-managed, not a local style decision."""
+    return bool(decorator_names(fn).intersection(ROUTE_DECORATORS))
+
+
 def import_alias_map(tree: ast.AST) -> dict[str, str]:
     """Map each locally-bound name to the canonical module it refers to, for ``import x as y``
     / ``import a.b as c`` — so a detector can resolve ``y.foo()`` back to ``x.foo`` even when

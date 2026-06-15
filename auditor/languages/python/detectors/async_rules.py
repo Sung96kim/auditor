@@ -6,7 +6,11 @@ from collections.abc import Iterator
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext, Detector
-from auditor.languages.python.detectors._util import dotted_name
+from auditor.languages.python.detectors._util import (
+    decorator_names,
+    dotted_name,
+    is_route_handler,
+)
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _SYNC_IO_NAMES = {
@@ -224,6 +228,10 @@ class NoAwaitBody(Detector):
         for fn in _own_async_funcs(ctx.tree):
             if fn.name in self._ASYNC_PROTOCOL or _is_abstract_or_stub(fn):
                 continue  # protocol coroutines / abstract stubs are legitimately await-free
+            if decorator_names(fn) & {"abstractmethod", "abstractproperty"}:
+                continue  # abstract: a subclass override needs the async signature
+            if is_route_handler(fn):
+                continue  # framework-managed signature; async-vs-sync handler is deliberate
             if _is_async_generator(fn):
                 continue  # `async def` + yield is an async generator; must stay async
             if not _has_async_construct(fn):
