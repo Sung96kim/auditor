@@ -17,6 +17,17 @@ from auditor.languages.python.detectors._util import (
 _FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
 
 
+def find_site_packages(root: Path) -> Path | None:
+    """The scanned project's installed-package dir, discovered from its root: the first
+    ``<root>/(.venv|venv)/lib/python*/site-packages`` that exists. None if there's no local env.
+    Never returns the auditor's own environment — discovery is rooted at the scanned repo."""
+    for venv in (root / ".venv", root / "venv"):
+        for sp in sorted(venv.glob("lib/python*/site-packages")):
+            if sp.is_dir():
+                return sp
+    return None
+
+
 def _callee_origin(call: ast.Call, tree: ast.Module) -> tuple[str, str] | None:
     """(module_dotted, func_name) the call targets, or None if it can't be determined from
     static imports. Handles ``from m import f; f(...)`` and ``import m[.n] [as a]; a.f(...)``."""

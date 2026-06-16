@@ -1,6 +1,6 @@
 import ast
 
-from auditor.languages.python.resolve import CalleeResolver
+from auditor.languages.python.resolve import CalleeResolver, find_site_packages
 
 
 def _repo(tmp_path, files: dict[str, str]):
@@ -62,3 +62,13 @@ def test_def_not_found_returns_none(tmp_path):
     r = _repo(tmp_path, {"app/helpers.py": "def other():\n    return 1\n"})
     call, tree = _call("from app.helpers import reload\nreload(s, o)\n")
     assert r.resolve_func(call, tree) is None
+
+
+def test_find_site_packages_locates_venv(tmp_path):
+    sp = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages"
+    sp.mkdir(parents=True)
+    assert find_site_packages(tmp_path) == sp
+
+
+def test_find_site_packages_none_when_absent(tmp_path):
+    assert find_site_packages(tmp_path) is None
