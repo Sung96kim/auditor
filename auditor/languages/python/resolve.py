@@ -1,8 +1,11 @@
 """Cross-module callee resolution (Layer 1, rule-agnostic).
 
-Given a call and the AST of the file it appears in, resolve the call to the callee's `ast` def
-in a sibling repo module. Phase 1 is repo-local only: a callee whose module file does not exist
-under the repo root resolves to ``None`` (honest unknown). Parsed modules are cached per scan.
+Given a call and the AST of the file it appears in, resolve the call to the callee's ``ast`` def
+in either a sibling repo module OR a configured first-party dependency package found in the
+scanned project's virtualenv. Phase 1 is repo-local only (no ``resolve_packages``); Phase 2
+extends resolution into dependency packages gated by ``resolve_packages`` name prefixes.
+A callee whose module cannot be reached in either location resolves to ``None`` (honest unknown).
+Parsed modules are cached per scan.
 """
 
 import ast
@@ -50,10 +53,23 @@ def _callee_origin(call: ast.Call, tree: ast.Module) -> tuple[str, str] | None:
 
 
 class CalleeResolver:
-    """Resolves calls to sibling-module defs under one repo root, caching parsed modules."""
+    """Resolves calls to repo-local AND configured dependency module defs, caching parsed modules.
 
-    def __init__(self, root: Path) -> None:
+    ``resolve_packages`` lists dotted-name prefixes of first-party dependency packages whose
+    source should be resolved from ``site_packages``. Modules not matching any prefix, or where
+    ``site_packages`` is ``None``, resolve repo-locally only (honest unknown → ``None``).
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        resolve_packages: tuple[str, ...] = (),
+        site_packages: Path | None = None,
+    ) -> None:
         self._root = root
+        self._resolve_packages = resolve_packages
+        self._site_packages = site_packages
         self._cache: dict[str, ast.Module | None] = {}
 
     def resolve_func(self, call: ast.Call, file_tree: ast.Module) -> _FuncDef | None:
@@ -75,16 +91,26 @@ class CalleeResolver:
     def _module(self, dotted: str) -> ast.Module | None:
         if dotted in self._cache:
             return self._cache[dotted]
+        mod = self._parse_under(self._root, dotted)
+        if mod is None and self._in_reach(dotted) and self._site_packages is not None:
+            mod = self._parse_under(self._site_packages, dotted)
+        self._cache[dotted] = mod
+        return mod
+
+    def _in_reach(self, dotted: str) -> bool:
+        return any(
+            dotted == p or dotted.startswith(f"{p}.") for p in self._resolve_packages
+        )
+
+    @staticmethod
+    def _parse_under(base: Path, dotted: str) -> ast.Module | None:
         rel = dotted.replace(".", "/")
-        for cand in (self._root / f"{rel}.py", self._root / rel / "__init__.py"):
-            if not cand.resolve().is_relative_to(self._root.resolve()):
+        for cand in (base / f"{rel}.py", base / rel / "__init__.py"):
+            if not cand.resolve().is_relative_to(base.resolve()):
                 continue
             if cand.is_file():
                 try:
-                    mod = ast.parse(cand.read_text(encoding="utf-8", errors="replace"))
+                    return ast.parse(cand.read_text(encoding="utf-8", errors="replace"))
                 except (SyntaxError, OSError):
-                    mod = None
-                self._cache[dotted] = mod
-                return mod
-        self._cache[dotted] = None
+                    return None
         return None

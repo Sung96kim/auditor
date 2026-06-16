@@ -72,3 +72,49 @@ def test_find_site_packages_locates_venv(tmp_path):
 
 def test_find_site_packages_none_when_absent(tmp_path):
     assert find_site_packages(tmp_path) is None
+
+
+def _dep_repo(tmp_path, *, resolve_packages, dep_pkg, dep_src):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    sp = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / dep_pkg
+    sp.mkdir(parents=True)
+    (sp / "__init__.py").write_text(dep_src)
+    return CalleeResolver(
+        tmp_path,
+        resolve_packages=tuple(resolve_packages),
+        site_packages=find_site_packages(tmp_path),
+    )
+
+
+_RO_SRC = "def refresh_orms(s, objs):\n    for o in objs:\n        s.refresh(o)\n"
+
+
+def test_resolves_in_reach_dependency(tmp_path):
+    r = _dep_repo(tmp_path, resolve_packages=["atmo"], dep_pkg="atmo", dep_src=_RO_SRC)
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "refresh_orms"
+
+
+def test_dependency_out_of_reach_returns_none(tmp_path):
+    r = _dep_repo(tmp_path, resolve_packages=[], dep_pkg="atmo", dep_src=_RO_SRC)
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is None
+
+
+def test_in_reach_but_no_env_returns_none(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    r = CalleeResolver(tmp_path, resolve_packages=("atmo",), site_packages=None)
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is None
+
+
+def test_phase1_constructor_still_works(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "helpers.py").write_text(
+        "def reload(s, o):\n    s.refresh(o)\n"
+    )
+    r = CalleeResolver(tmp_path)
+    call, tree = _call("from app.helpers import reload\nreload(s, o)\n")
+    assert r.resolve_func(call, tree) is not None
