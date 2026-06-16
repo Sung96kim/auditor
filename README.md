@@ -265,6 +265,20 @@ async_session = true      # activates SA-IMPLICIT-LAZY-ASYNC (relationship() wit
 default `"select"` emits a synchronous SELECT on attribute access, which raises `MissingGreenlet`
 under `AsyncSession`. List them all with `auditor rules list --framework sqlalchemy`.
 
+`SA-GREENLET-ATTR-AFTER-COMMIT` won't fire if the object is refreshed before the access — including
+through a helper. By default the auditor resolves helpers defined **in the repo**; to also follow
+helpers from a first-party dependency (e.g. a shared `refresh_orms(session, objs)`), list its
+package prefix so the resolver may read its installed source from the project's `.venv`:
+
+```toml
+[tool.auditor]
+resolve_packages = ["atmosphere"]   # follow callees into these installed packages (default: none)
+```
+
+Resolution is repo-local by default; `resolve_packages` is opt-in and read from the *scanned
+project's* environment. If it's set but no env is found, the scan warns (dependency resolution is
+then off — `commit(); refresh_orms(...); use obj` may surface as a false positive).
+
 ### Pydantic (`framework="pydantic"`)
 
 Per-file rules gated to files that import `pydantic`: `PY-PYDANTIC-V1-CONFIG-CLASS` (`candidate`) —
