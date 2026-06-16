@@ -648,3 +648,205 @@ def test_aliased_dep_import_end_to_end_clears(tmp_path):
     results = asyncio.run(audit_target(tmp_path, no_index=True))
     rules = {f.rule_id for r in results for f in r.findings}
     assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in rules
+
+
+# ---------------------------------------------------------------------------
+# Complex E2E characterisation tests: greenlet rule × callee resolver
+# ---------------------------------------------------------------------------
+
+_GREENLET_TOML = (
+    '[project]\nname="x"\nversion="0"\n'
+    "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+)
+_GREENLET_TOML_WITH_ATMO = (
+    _GREENLET_TOML + '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+)
+
+
+def _dep_dir(tmp_path: Path) -> Path:
+    """Create and return the atmo dep directory under the tmp repo's venv."""
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    return dep
+
+
+def _greenlet_findings(tmp_path: Path) -> list:
+    """Return all SA-GREENLET-ATTR-AFTER-COMMIT findings across all scanned files."""
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    return [
+        f
+        for r in results
+        for f in r.findings
+        if f.rule_id == "SA-GREENLET-ATTR-AFTER-COMMIT"
+    ]
+
+
+def test_transitive_helper_boundary_still_flags(tmp_path: Path) -> None:
+    """C1 — transitive helper boundary (documented non-transitive effect extraction).
+
+    ``reload(s, o)`` delegates to ``_do(s, o)`` which does ``s.refresh(o)``.
+    ``_refresh_effects(reload)`` only inspects reload's OWN body — the unconditional
+    statement ``_do(s, o)`` is not a refresh call — so no refresh effects are found.
+    Effect extraction is NOT transitive even though module resolution is; the finding
+    is STILL FLAGGED.  This is a known, documented boundary of the resolver.
+    """
+    (tmp_path / "pyproject.toml").write_text(_GREENLET_TOML)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "helpers.py").write_text(
+        "def _do(s, o):\n    s.refresh(o)\n\n\ndef reload(s, o):\n    _do(s, o)\n"
+    )
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from app.helpers import reload\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj)\n"
+        "    return obj.email\n"
+    )
+    findings = _greenlet_findings(tmp_path)
+    # _refresh_effects(reload) sees no direct s.refresh call — effect extraction is non-transitive
+    # even though the resolver can follow module calls; this is a known boundary, not a bug.
+    assert findings, (
+        "SA-GREENLET-ATTR-AFTER-COMMIT must fire: reload delegates to _do which refreshes, "
+        "but _refresh_effects is non-transitive — only direct refresh calls in the helper body count"
+    )
+
+
+def test_repo_local_direct_helper_clears(tmp_path: Path) -> None:
+    """C2 — repo-local helper with a direct s.refresh(o) call unconditionally clears the object."""
+    (tmp_path / "pyproject.toml").write_text(_GREENLET_TOML)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "helpers.py").write_text(
+        "def reload(s, o):\n    s.refresh(o)\n"
+    )
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from app.helpers import reload\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj)\n"
+        "    return obj.email\n"
+    )
+    findings = _greenlet_findings(tmp_path)
+    assert not findings, (
+        "SA-GREENLET-ATTR-AFTER-COMMIT must NOT fire: reload(s, o) directly calls s.refresh(o) "
+        "— resolver resolves it repo-locally and marks obj freshened"
+    )
+
+
+def test_dep_bulk_helper_clears_refreshed_obj_only(tmp_path: Path) -> None:
+    """C3 — dep bulk helper refreshes [a] but not b; a.x must be cleared, b.y must be flagged."""
+    (tmp_path / "pyproject.toml").write_text(_GREENLET_TOML_WITH_ATMO)
+    dep = _dep_dir(tmp_path)
+    # refresh_orms(s, objs): for o in objs: s.refresh(o) — elements index 1
+    (dep / "__init__.py").write_text(
+        "async def refresh_orms(s, objs):\n    for o in objs:\n        await s.refresh(o)\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import refresh_orms\n\n\n"
+        "async def f(session, q1, q2):\n"
+        "    a = session.scalar_one(q1)\n"
+        "    b = session.scalar_one(q2)\n"
+        "    await session.commit()\n"
+        "    await refresh_orms(session, [a])\n"  # only a is in the list
+        "    return a.x + b.y\n"
+    )
+    findings = _greenlet_findings(tmp_path)
+    assert findings, "SA-GREENLET-ATTR-AFTER-COMMIT must fire for b.y"
+    messages = {f.message for f in findings}
+    assert any("b.y" in m for m in messages), "b.y must be flagged (un-refreshed)"
+    assert not any("a.x" in m for m in messages), (
+        "a.x must NOT be flagged (a was in the refreshed list)"
+    )
+
+
+def test_non_first_param_positional_mapping(tmp_path: Path) -> None:
+    """C4 — helper refreshes its THIRD param (index 2); call maps dataset to that slot → cleared."""
+    (tmp_path / "pyproject.toml").write_text(_GREENLET_TOML)
+    (tmp_path / "app").mkdir()
+    # save(s, x, obj): params=[s,x,obj]; index(obj)=2; s.refresh(obj) → direct={2}
+    (tmp_path / "app" / "helpers.py").write_text(
+        "def save(s, x, obj):\n    s.refresh(obj)\n"
+    )
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from app.helpers import save\n\n\n"
+        "async def f(session, q, cfg):\n"
+        "    dataset = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    save(session, cfg, dataset)\n"  # dataset is at call arg index 2 → refreshed
+        "    return dataset.name\n"
+    )
+    findings = _greenlet_findings(tmp_path)
+    assert not findings, (
+        "SA-GREENLET-ATTR-AFTER-COMMIT must NOT fire: save(s, x, obj) refreshes param at index 2, "
+        "and save(session, cfg, dataset) passes dataset at index 2 — positional mapping clears dataset"
+    )
+
+
+def test_two_helpers_one_refreshes_other_does_not(tmp_path: Path) -> None:
+    """C5 — two helpers in one function: reload refreshes obj_a (cleared), touch leaves obj_b dirty."""
+    (tmp_path / "pyproject.toml").write_text(_GREENLET_TOML)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "helpers.py").write_text(
+        "def reload(s, o):\n    s.refresh(o)\n\n\ndef touch(s, o):\n    o.seen = True\n"
+    )
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from app.helpers import reload, touch\n\n\n"
+        "async def f(session, q1, q2):\n"
+        "    obj_a = session.scalar_one(q1)\n"
+        "    obj_b = session.scalar_one(q2)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj_a)\n"  # refreshes obj_a
+        "    touch(session, obj_b)\n"  # does NOT refresh obj_b
+        "    return obj_a.value + obj_b.name\n"  # obj_a.value cleared; obj_b.name flagged
+    )
+    findings = _greenlet_findings(tmp_path)
+    assert findings, "SA-GREENLET-ATTR-AFTER-COMMIT must fire for obj_b.name"
+    messages = {f.message for f in findings}
+    assert any("obj_b.name" in m for m in messages), "obj_b.name must be flagged"
+    assert not any("obj_a.value" in m for m in messages), (
+        "obj_a.value must NOT be flagged (obj_a was refreshed via reload)"
+    )
+
+
+def test_two_hop_reexport_chain_resolves_and_clears(tmp_path: Path) -> None:
+    """C6 — two-hop re-export chain stays within depth budget and resolves correctly.
+
+    atmo/__init__.py: ``from .a import *``       (hop 1: star re-export)
+    atmo/a.py:        ``from .b import refresh_orms``  (hop 2: explicit re-export)
+    atmo/b.py:        ``def refresh_orms(s, objs): for o in objs: s.refresh(o)``
+
+    svc: ``from atmo import refresh_orms; await refresh_orms(session, [dataset])``
+    The resolver follows __init__ → a → b (3 _find_def calls, depth budget 4), finds
+    the real def, extracts elements={1}, and clears dataset.  Confirms bounded recursion
+    still reaches a legitimate 2-hop chain.
+    """
+    (tmp_path / "pyproject.toml").write_text(_GREENLET_TOML_WITH_ATMO)
+    dep = _dep_dir(tmp_path)
+    (dep / "__init__.py").write_text("from .a import *\n")
+    (dep / "a.py").write_text("from .b import refresh_orms\n")
+    (dep / "b.py").write_text(
+        "async def refresh_orms(s, objs):\n    for o in objs:\n        await s.refresh(o)\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import refresh_orms\n\n\n"
+        "async def f(session, q, datafiles):\n"
+        "    dataset = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    await refresh_orms(session, [dataset, *datafiles])\n"
+        "    return dataset.name\n"
+    )
+    findings = _greenlet_findings(tmp_path)
+    assert not findings, (
+        "SA-GREENLET-ATTR-AFTER-COMMIT must NOT fire: resolver follows the 2-hop chain "
+        "(atmo/__init__ → atmo/a → atmo/b) and finds refresh_orms, which refreshes elements "
+        "of param index 1, clearing dataset passed in [dataset, *datafiles]"
+    )

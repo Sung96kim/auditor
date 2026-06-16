@@ -54,3 +54,56 @@ def test_joblib_dump_clean():
     # dump writes (serializes), not a deserialization sink
     src = "import joblib\njoblib.dump(obj, path)\n"
     assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# PY-SEC-UNSAFE-DESERIALIZE — complex edge-case parametrized tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "import joblib\nm = joblib.load(p)\n",
+        "import joblib as jl\nm = jl.load(p)\n",
+        "import pickle\npickle.loads(b)\n",
+        "import dill\ndill.load(f)\n",
+        "import cloudpickle\ncloudpickle.load(f)\n",
+        "import yaml\nyaml.load(s)\n",
+    ],
+    ids=[
+        "joblib-load",
+        "joblib-aliased",
+        "pickle-loads",
+        "dill-load",
+        "cloudpickle-load",
+        "yaml-load-no-loader",
+    ],
+)
+def test_unsafe_deserialize_flagged_variants(src: str) -> None:
+    # All of these call an unsafe deserialization function; each must fire.
+    assert "PY-SEC-UNSAFE-DESERIALIZE" in rule_ids(run_audit(src)), (
+        f"expected PY-SEC-UNSAFE-DESERIALIZE for:\n{src}"
+    )
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "import joblib\njoblib.dump(o, p)\n",
+        "import yaml\nyaml.safe_load(s)\n",
+        "import yaml\nyaml.load(s, Loader=yaml.SafeLoader)\n",
+        "import json\njson.loads(s)\n",
+    ],
+    ids=[
+        "joblib-dump",
+        "yaml-safe-load",
+        "yaml-load-safe-loader-kwarg",
+        "json-loads",
+    ],
+)
+def test_unsafe_deserialize_clean_variants(src: str) -> None:
+    # None of these are unsafe deserialization sinks; none must fire.
+    assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
+        f"PY-SEC-UNSAFE-DESERIALIZE must NOT fire for:\n{src}"
+    )

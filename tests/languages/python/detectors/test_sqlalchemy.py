@@ -491,3 +491,290 @@ def test_refresh_effects_nested_loop_elements_does_not_count():
         "def reload_all(s, a, objs):\n    for x in a:\n        for o in objs:\n            s.refresh(o)\n"
     )
     assert _refresh_effects(fn) == (frozenset(), frozenset())
+
+
+# =============================================================================
+# Adversarial edge-case tests — characterise CURRENT behaviour (all must PASS)
+# =============================================================================
+
+# --- SA-GREENLET-ATTR-AFTER-COMMIT advanced edge cases --------------------------------
+
+
+def test_greenlet_two_commits_refresh_only_first_still_fires():
+    """Refresh after the 1st commit un-expires; the 2nd commit re-expires.
+    The attribute access after the 2nd commit is still risky → must fire."""
+    src = (
+        "import sqlalchemy\n"
+        "async def f(session):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    await session.refresh(obj)\n"
+        "    await session.commit()\n"
+        "    return obj.x\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in _ids_on(src)
+
+
+def test_greenlet_two_orm_objects_refresh_only_one_fires_on_unrefreshed():
+    """After a single commit, a.x is refreshed but b.y is not.
+    The finding must be on b.y's line (line 9), NOT on a.x's line (line 9 as well,
+    but only b.y appears in the same return — verify exactly one finding, on b.y)."""
+    src = (
+        "import sqlalchemy\n"
+        "async def f(session):\n"
+        "    a = session.scalar_one(q1)\n"
+        "    b = session.scalar_one(q2)\n"
+        "    session.add(a)\n"
+        "    session.add(b)\n"
+        "    await session.commit()\n"
+        "    await session.refresh(a)\n"
+        "    return a.x + b.y\n"
+    )
+    result = run_audit(src, settings=_ON, rel_path="m.py")
+    greenlet = [
+        f for f in result.findings if f.rule_id == "SA-GREENLET-ATTR-AFTER-COMMIT"
+    ]
+    # exactly one finding — on b.y, not a.x (a was refreshed)
+    assert len(greenlet) == 1
+    assert "b.y" in greenlet[0].message
+
+
+def test_greenlet_attribute_chain_fires_on_first_segment():
+    """obj.rel.id after commit: only the first Attribute node (obj.rel) has a
+    Name as its value, so the rule fires once at the obj.rel access line.
+    The chained .id is an Attribute-of-Attribute and is NOT flagged separately."""
+    src = (
+        "import sqlalchemy\n"
+        "async def f(session):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    return obj.rel.id\n"
+    )
+    result = run_audit(src, settings=_ON, rel_path="m.py")
+    greenlet = [
+        f for f in result.findings if f.rule_id == "SA-GREENLET-ATTR-AFTER-COMMIT"
+    ]
+    # fires once, specifically on `obj.rel` (line 5)
+    assert len(greenlet) == 1
+    assert "obj.rel" in greenlet[0].message
+
+
+def test_greenlet_flush_not_commit_does_not_expire():
+    """session.flush() is NOT a commit — attributes are not expired.
+    Accessing obj.x after flush must NOT fire."""
+    src = (
+        "import sqlalchemy\n"
+        "from sqlalchemy.ext.asyncio import AsyncSession\n"
+        "async def f(session):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.flush()\n"
+        "    return obj.x\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+
+
+def test_greenlet_begin_context_manager_not_detected():
+    """async with session.begin(): ... auto-commits on exit but the rule only detects
+    literal .commit() calls — this is a known limitation / scope boundary.
+    Accessing obj.x after the begin() block must NOT fire."""
+    # Known limitation: session.begin() creates an implicit commit boundary that
+    # this rule cannot statically detect. The rule only flags explicit .commit() calls.
+    src = (
+        "import sqlalchemy\n"
+        "async def f(session):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    async with session.begin():\n"
+        "        session.add(obj)\n"
+        "    return obj.x\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+
+
+def test_greenlet_nested_async_fn_analyzed_in_own_scope():
+    """Outer async def has commit+access → fires on outer's obj.email.
+    Inner async def has no commit → does NOT fire for inner's obj2.name.
+    Each function is analyzed independently; the outer finding is on obj.email only."""
+    src = (
+        "import sqlalchemy\n"
+        "async def outer(session):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    email = obj.email\n"
+        "\n"
+        "    async def inner(session2):\n"
+        "        obj2 = session2.scalar_one(q2)\n"
+        "        return obj2.name\n"
+    )
+    result = run_audit(src, settings=_ON, rel_path="m.py")
+    greenlet = [
+        f for f in result.findings if f.rule_id == "SA-GREENLET-ATTR-AFTER-COMMIT"
+    ]
+    # Outer fires once (obj.email). Inner has no commit so it does NOT fire.
+    assert len(greenlet) == 1
+    assert "obj.email" in greenlet[0].message
+
+
+def test_greenlet_commit_in_if_branch_access_in_same_branch_fires():
+    """commit() inside an if-branch followed by attribute access in the same branch.
+    ast.walk visits all nodes unconditionally, so the commit is found and the access
+    after it fires (the rule does not track branch reachability)."""
+    src = (
+        "import sqlalchemy\n"
+        "async def f(session, c):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    if c:\n"
+        "        await session.commit()\n"
+        "        return obj.x\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in _ids_on(src)
+
+
+# --- SA-IMPLICIT-LAZY-ASYNC edge cases -----------------------------------------------
+
+_ASYNC = AuditorSettings(sqlalchemy=SqlAlchemyConfig(async_session=True))
+
+
+def test_implicit_lazy_async_non_constant_lazy_not_flagged():
+    """lazy=SOME_VAR: kwarg() returns a Name node (not None), but the check requires
+    kwarg == None to trigger. Non-constant lazy values are NOT flagged."""
+    body = "SOME_VAR = 'selectin'\nclass M:\n    x = relationship('X', lazy=SOME_VAR)\n"
+    assert "SA-IMPLICIT-LAZY-ASYNC" not in _ids(body, settings=_ASYNC)
+
+
+def test_implicit_lazy_async_fires_inside_class_with_mapped_annotation():
+    """relationship() with no explicit lazy= inside a class body (Mapped[...] annotation)
+    with async_session=True → fired."""
+    body = "class User:\n    items: Mapped[list['Tag']] = relationship('Tag')\n"
+    assert "SA-IMPLICIT-LAZY-ASYNC" in _ids(body, settings=_ASYNC)
+
+
+def test_implicit_lazy_async_aliased_import_fires():
+    """from sqlalchemy.orm import relationship as rel; then rel('X') with no lazy=
+    and async_session=True → fired (alias resolves to 'relationship')."""
+    src = (
+        "import sqlalchemy\n"
+        "from sqlalchemy.orm import relationship as rel\n"
+        "class M:\n"
+        "    x = rel('X')\n"
+    )
+    assert "SA-IMPLICIT-LAZY-ASYNC" in rule_ids(
+        run_audit(src, settings=_ASYNC, rel_path="m.py")
+    )
+
+
+# --- SA-JOINED-COLLECTION edge cases -------------------------------------------------
+
+
+@pytest.mark.parametrize("ctype", ["set", "Sequence", "frozenset"])
+def test_joined_collection_fires_for_non_list_collection_types(ctype):
+    """Mapped[set[X]], Mapped[Sequence[X]], Mapped[frozenset[X]] with lazy="joined"
+    are all collection types and must fire — cartesian-product risk applies to any
+    to-many relationship regardless of container type."""
+    body = (
+        f"class M:\n    items: Mapped[{ctype}[X]] = relationship('X', lazy='joined')\n"
+    )
+    assert "SA-JOINED-COLLECTION" in _ids(body)
+
+
+def test_joined_collection_scalar_mapped_not_flagged():
+    """Mapped[X] (no subscripted container) is a many-to-one scalar relationship.
+    lazy="joined" on a scalar is efficient (single JOIN, no multiplication) — NOT flagged."""
+    body = "class M:\n    parent: Mapped[X] = relationship('X', lazy='joined')\n"
+    assert "SA-JOINED-COLLECTION" not in _ids(body)
+
+
+def test_joined_collection_non_relationship_value_not_flagged():
+    """An annotated assignment ``x: Mapped[list[Y]] = compute()`` has a collection
+    annotation but the VALUE is not a relationship() call — NOT flagged."""
+    body = "class M:\n    x: Mapped[list[Y]] = compute()\n"
+    assert "SA-JOINED-COLLECTION" not in _ids(body)
+
+
+# --- SA-MUTABLE-DEFAULT edge cases ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "expr",
+    ["dict()", "set()", "list()"],
+)
+def test_mutable_default_empty_ctor_fires(expr):
+    """Empty-constructor calls dict()/set()/list() as column defaults are mutable
+    and shared — the rule must fire for all three."""
+    assert "SA-MUTABLE-DEFAULT" in _ids(f"x = mapped_column(default={expr})\n")
+
+
+@pytest.mark.parametrize(
+    "expr",
+    ["dict", "list", "lambda: {}"],
+)
+def test_mutable_default_callable_form_clean(expr):
+    """Bare callables dict/list and lambda expressions are safe (called fresh each time)
+    and must NOT fire."""
+    assert "SA-MUTABLE-DEFAULT" not in _ids(f"x = mapped_column(default={expr})\n")
+
+
+# --- SA-RAW-SQL edge cases -----------------------------------------------------------
+
+
+def test_raw_sql_interpolated_execute_fires():
+    """conn.execute(f'... {x}') with a variable in the f-string → SQL injection risk → fired."""
+    body = "x = 1\nconn = None\nconn.execute(f'SELECT * FROM t WHERE id = {x}')\n"
+    assert "SA-RAW-SQL" in _ids(body)
+
+
+def test_raw_sql_const_plus_const_clean():
+    """text('a' + 'b') — BinOp where BOTH sides are string constants → no injection → NOT fired."""
+    body = "q = text('SELECT ' + '1')\n"
+    assert "SA-RAW-SQL" not in _ids(body)
+
+
+def test_raw_sql_const_plus_var_fires():
+    """text('SELECT ' + name) — BinOp where right side is a Name → injection risk → fired."""
+    body = "name = 'users'\nq = text('SELECT * FROM ' + name)\n"
+    assert "SA-RAW-SQL" in _ids(body)
+
+
+def test_raw_sql_fstring_no_placeholder_clean():
+    """text(f'static') — an f-string with NO FormattedValue nodes has no interpolated values,
+    so _is_interpolated returns False. Characterised behaviour: NOT fired."""
+    body = "q = text(f'SELECT 1')\n"
+    # f-string with no {} placeholders has no FormattedValue nodes → treated as constant → clean
+    assert "SA-RAW-SQL" not in _ids(body)
+
+
+# --- SA-ASYNC-EXPIRE-ON-COMMIT edge cases -------------------------------------------
+
+
+def test_expire_on_commit_sessionmaker_with_async_session_fires():
+    """sessionmaker(engine, class_=AsyncSession) without expire_on_commit=False
+    creates an async session that expires on commit → fired."""
+    body = (
+        "from sqlalchemy.orm import sessionmaker\n"
+        "from sqlalchemy.ext.asyncio import AsyncSession\n"
+        "engine = None\n"
+        "s = sessionmaker(engine, class_=AsyncSession)\n"
+    )
+    assert "SA-ASYNC-EXPIRE-ON-COMMIT" in _ids(body)
+
+
+def test_expire_on_commit_sessionmaker_with_async_session_expire_false_clean():
+    """sessionmaker(engine, class_=AsyncSession, expire_on_commit=False) → explicitly
+    opts out of expiry → NOT fired."""
+    body = (
+        "from sqlalchemy.orm import sessionmaker\n"
+        "from sqlalchemy.ext.asyncio import AsyncSession\n"
+        "engine = None\n"
+        "s = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)\n"
+    )
+    assert "SA-ASYNC-EXPIRE-ON-COMMIT" not in _ids(body)
+
+
+def test_expire_on_commit_plain_sync_sessionmaker_clean():
+    """Plain sync sessionmaker(engine) without class_=AsyncSession is a sync session
+    factory — greenlet expiry is not a concern → NOT fired."""
+    body = (
+        "from sqlalchemy.orm import sessionmaker\n"
+        "engine = None\n"
+        "s = sessionmaker(engine)\n"
+    )
+    assert "SA-ASYNC-EXPIRE-ON-COMMIT" not in _ids(body)

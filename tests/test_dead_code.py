@@ -1,8 +1,10 @@
+import ast
 import asyncio
 
 from auditor import dead_code
 from auditor.engine import audit_target
 from auditor.fixture_usage import find_unused
+from auditor.languages.python.shapes import _symbol_defs
 
 
 def _def(name, kind, path, line=1):
@@ -212,3 +214,137 @@ def test_find_unused_test_support_ref_marks_used():
     roles = {"tests/conftest.py": "test_support", "tests/helpers.py": "test_support"}
     result = find_unused(def_rows, ref_rows, roles)
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# PY-DEAD-SYMBOL — complex edge-case tests
+# ---------------------------------------------------------------------------
+
+
+def test_dead_metaclass_class_not_flagged():
+    # Characterize the layer contract: find_dead would flag a class row if given one,
+    # but shapes._def_may_register ensures no row is emitted for metaclass-using classes.
+    # Verify shapes.py upstream filter using ast directly.
+    src = "class Meta(type): pass\n\nclass _X(metaclass=Meta): pass\n"
+    tree = ast.parse(src)
+    defs = _symbol_defs(tree)
+    # _X has keywords (metaclass=) → _def_may_register → excluded from defs
+    names = [name for name, _kind, _line in defs]
+    assert "_X" not in names, (
+        "_X with metaclass= must not be emitted as a dead-symbol candidate"
+    )
+
+
+def test_scan_metaclass_class_not_flagged(tmp_path):
+    # End-to-end: shapes._def_may_register exempts classes with keywords (e.g. metaclass=)
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        (
+            "class Meta(type): pass\n\n\n"
+            "class _X(metaclass=Meta): pass\n\n\n"
+            "def use(): return 1\n"
+        ),
+    )
+    # _X has keywords (metaclass=Meta) → _def_may_register → not emitted → not flagged
+    assert "PY-DEAD-SYMBOL" not in _scan(tmp_path)
+
+
+def test_scan_decorated_private_function_not_flagged(tmp_path):
+    # A private function with any decorator is conservatively exempt; the decorator
+    # may register or expose the function (e.g. @register, @app.route).
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        (
+            "def some_decorator(fn): return fn\n\n\n"
+            "@some_decorator\n"
+            "def _private_fn():\n"
+            "    return 42\n\n\n"
+            "def use(): return 1\n"
+        ),
+    )
+    assert "PY-DEAD-SYMBOL" not in _scan(tmp_path)
+
+
+def test_scan_private_enum_subclass_not_flagged(tmp_path):
+    # A private class subclassing Enum has a base → _def_may_register → exempt.
+    # Conservative: Enum members are referenced via the class, not by name.
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        (
+            "from enum import Enum\n\n\n"
+            "class _Status(Enum):\n"
+            "    ACTIVE = 'active'\n"
+            "    INACTIVE = 'inactive'\n\n\n"
+            "def use(): return 1\n"
+        ),
+    )
+    assert "PY-DEAD-SYMBOL" not in _scan(tmp_path)
+
+
+def test_scan_plain_private_class_flagged(tmp_path):
+    # A plain private class with no decorator, no base, no keywords IS genuinely dead.
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        ("class _Helper:\n    pass\n\n\ndef use(): return 1\n"),
+    )
+    assert "PY-DEAD-SYMBOL" in _scan(tmp_path)
+
+
+def test_scan_allexported_name_not_dead(tmp_path):
+    # A public name listed in __all__ appears as a ref (string constant in __all__),
+    # so it's treated as used and not flagged dead.
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        "__all__ = ['PUBLIC']\n\nPUBLIC = 1\n",
+    )
+    _write(
+        tmp_path, "pkg/b.py", "from pkg.a import PUBLIC\n\n\ndef use(): return PUBLIC\n"
+    )
+    assert "PY-DEAD-SYMBOL" not in _scan(tmp_path)
+
+
+def test_call_valued_binding_not_emitted_literal_is():
+    # Characterize the shapes layer: X = compute() is NOT emitted as a def row because
+    # _value_may_register returns True for call-valued rhs (side-effect exemption).
+    # X = (1, 2, 3) IS emitted (literal rhs has no side effects).
+    src = "def compute(): return object()\n\nREGISTERED = compute()\nDEAD_TUPLE = (1, 2, 3)\n"
+    tree = ast.parse(src)
+    defs = _symbol_defs(tree)
+    names = [name for name, _kind, _line in defs]
+    assert "REGISTERED" not in names, (
+        "call-valued binding must not be emitted as dead candidate"
+    )
+    assert "DEAD_TUPLE" in names, (
+        "literal-tuple binding must be emitted as dead candidate"
+    )
+
+
+def test_scan_call_valued_binding_not_flagged_end_to_end(tmp_path):
+    # End-to-end: X = some_func() must NOT be flagged (shapes.py never emits a def row).
+    # X = (1, 2, 3) as a module-level unused constant IS flagged.
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        (
+            "def compute(): return object()\n\n\n"
+            "REGISTERED = compute()\n"
+            "DEAD_TUPLE = (1, 2, 3)\n\n\n"
+            "def use(): return 1\n"
+        ),
+    )
+    messages = _dead_symbol_messages(tmp_path)
+    # call-valued binding is never emitted → never flagged
+    assert not any("REGISTERED" in m for m in messages)
+    # literal tuple binding IS emitted and unreferenced → flagged
+    assert any("DEAD_TUPLE" in m for m in messages)

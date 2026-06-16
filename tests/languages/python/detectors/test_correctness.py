@@ -78,3 +78,54 @@ def test_naive_datetime_plain_fromtimestamp_not_flagged(expr):
     # excluded to keep precision high; only utcfromtimestamp (always naive) is flagged
     src = f"import datetime\nfrom datetime import timezone\nx = {expr}\n"
     assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
+# PY-CORRECT-NAIVE-DATETIME — complex edge-case parametrized tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "datetime.datetime.utcnow()",
+        "datetime.utcnow()",
+        "datetime.datetime.utcfromtimestamp(t)",
+        "datetime.now()",
+    ],
+    ids=["full-utcnow", "bare-utcnow", "full-utcfromtimestamp", "now-no-args"],
+)
+def test_naive_datetime_flagged_variants(expr: str) -> None:
+    # All of these produce a naive (tz-unaware) datetime — each must fire.
+    # utcnow/utcfromtimestamp always produce naive; now() without a tz argument is also naive.
+    src = f"import datetime\nt = 0\nx = {expr}\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" in rule_ids(run_audit(src)), (
+        f"{expr!r} must be flagged as naive datetime"
+    )
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "datetime.now(timezone.utc)",
+        "datetime.now(tz=tz)",
+        "datetime.fromtimestamp(t)",
+        "datetime.fromtimestamp(t, tz)",
+    ],
+    ids=[
+        "now-utc-positional",
+        "now-tz-kwarg",
+        "fromtimestamp-no-tz",
+        "fromtimestamp-with-tz",
+    ],
+)
+def test_naive_datetime_clean_variants(expr: str) -> None:
+    # These must NOT fire:
+    # - now(timezone.utc): tz-aware (tz positional arg present)
+    # - now(tz=tz): tz-aware (tz keyword arg present)
+    # - fromtimestamp(t): local-naive but intentionally NOT flagged (benign by design)
+    # - fromtimestamp(t, tz): tz-aware, no issue
+    src = f"import datetime\nfrom datetime import timezone\nt = 0\ntz = timezone.utc\nx = {expr}\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src)), (
+        f"{expr!r} must NOT be flagged as naive datetime"
+    )
