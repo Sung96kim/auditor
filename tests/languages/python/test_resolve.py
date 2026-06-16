@@ -118,3 +118,84 @@ def test_phase1_constructor_still_works(tmp_path):
     r = CalleeResolver(tmp_path)
     call, tree = _call("from app.helpers import reload\nreload(s, o)\n")
     assert r.resolve_func(call, tree) is not None
+
+
+# ---------------------------------------------------------------------------
+# Edge-case A: resolver-level
+# ---------------------------------------------------------------------------
+
+
+def _dep_repo_nested(tmp_path, *, resolve_packages, subpkg, func_src):
+    """Like _dep_repo but places func_src in <site-packages>/<subpkg>/__init__.py
+    where subpkg may contain '/' separators for deeper nesting."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    sp = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages"
+    pkg_dir = sp
+    for part in subpkg.split("/"):
+        pkg_dir = pkg_dir / part
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text(func_src)
+    return CalleeResolver(
+        tmp_path,
+        resolve_packages=tuple(resolve_packages),
+        site_packages=find_site_packages(tmp_path),
+    )
+
+
+def test_aliased_dep_import_resolves(tmp_path):
+    """A1: `from atmo import refresh_orms as ro; ro(s, [o])` resolves to refresh_orms."""
+    r = _dep_repo(tmp_path, resolve_packages=["atmo"], dep_pkg="atmo", dep_src=_RO_SRC)
+    call, tree = _call("from atmo import refresh_orms as ro\nro(s, [o])\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "refresh_orms"
+
+
+def test_dotted_dep_submodule_resolves(tmp_path):
+    """A2: dep in atmo/database/__init__.py; `from atmo.database import refresh_orms` resolves."""
+    r = _dep_repo_nested(
+        tmp_path,
+        resolve_packages=["atmo"],
+        subpkg="atmo/database",
+        func_src=_RO_SRC,
+    )
+    call, tree = _call("from atmo.database import refresh_orms\nrefresh_orms(s, [o])\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "refresh_orms"
+
+
+def test_attribute_dep_call_resolves(tmp_path):
+    """A3: `import atmo.database as db; db.refresh_orms(s, [o])` resolves (nested dep)."""
+    r = _dep_repo_nested(
+        tmp_path,
+        resolve_packages=["atmo"],
+        subpkg="atmo/database",
+        func_src=_RO_SRC,
+    )
+    call, tree = _call("import atmo.database as db\ndb.refresh_orms(s, [o])\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "refresh_orms"
+
+
+def test_prefix_boundary_no_false_match(tmp_path):
+    """A4: `atmosphere` present + resolve_packages=["atmo"] → `from atmosphere.db import …`
+    returns None because "atmosphere.db" does not start with "atmo." and != "atmo"."""
+    r = _dep_repo_nested(
+        tmp_path,
+        resolve_packages=["atmo"],
+        subpkg="atmosphere/db",
+        func_src=_RO_SRC,
+    )
+    call, tree = _call("from atmosphere.db import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is None
+
+
+def test_unparseable_dep_init_returns_none(tmp_path):
+    """A5: dep __init__.py with a syntax error → resolve_func returns None (graceful)."""
+    r = _dep_repo(
+        tmp_path,
+        resolve_packages=["atmo"],
+        dep_pkg="atmo",
+        dep_src="def refresh_orms(:\n",  # intentional syntax error
+    )
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is None

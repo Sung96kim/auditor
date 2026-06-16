@@ -428,3 +428,187 @@ def test_dependency_refresh_orms_flags_when_not_in_reach(tmp_path):
     assert "SA-GREENLET-ATTR-AFTER-COMMIT" in {
         f.rule_id for r in results for f in r.findings
     }
+
+
+# ---------------------------------------------------------------------------
+# Edge-case B: greenlet integration
+# ---------------------------------------------------------------------------
+
+
+def _greenlet_dep_repo(
+    tmp_path: Path,
+    *,
+    dep_src: str,
+    call_line: str,
+    access_expr: str,
+    resolve_packages: list[str] | None = None,
+) -> list:
+    """Build a repo with a dep helper in atmo and an svc that calls it, then scan."""
+    if resolve_packages is None:
+        resolve_packages = ["atmo"]
+    pkgs_str = str(resolve_packages).replace("'", '"')
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        f"[tool.auditor]\nresolve_packages = {pkgs_str}\n"
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(dep_src)
+    (tmp_path / "app").mkdir(exist_ok=True)
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import reload\n\n\n"
+        "async def f(session, q, q2):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    a = session.scalar_one(q)\n"
+        "    b = session.scalar_one(q2)\n"
+        f"    await session.commit()\n"
+        f"    {call_line}\n"
+        f"    return {access_expr}\n"
+    )
+    return asyncio.run(audit_target(tmp_path, no_index=True))
+
+
+def test_direct_dep_refresh_helper_clears(tmp_path):
+    """B6: dep reload(session, obj) does session.refresh(obj) → NOT flagged."""
+    dep_src = "def reload(session, obj):\n    session.refresh(obj)\n"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(dep_src)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import reload\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj)\n"
+        "    return obj.email\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    rules = {f.rule_id for r in results for f in r.findings}
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in rules
+
+
+def test_partial_arg_refresh_flags_only_unrefreshed(tmp_path):
+    """B7: dep refreshes only param a; accessing a.x is safe, b.y is still flagged."""
+    dep_src = "def save(session, a, b):\n    session.refresh(a)\n"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(dep_src)
+    (tmp_path / "app").mkdir()
+    svc_lines = (
+        "import sqlalchemy\n"
+        "from atmo import save\n\n\n"
+        "async def f(session, q, q2):\n"
+        "    a = session.scalar_one(q)\n"  # line 6
+        "    b = session.scalar_one(q2)\n"  # line 7
+        "    await session.commit()\n"  # line 8
+        "    save(session, a, b)\n"  # line 9
+        "    return (a.x, b.y)\n"  # line 10
+    )
+    (tmp_path / "app" / "svc.py").write_text(svc_lines)
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    findings = [
+        f
+        for r in results
+        for f in r.findings
+        if f.rule_id == "SA-GREENLET-ATTR-AFTER-COMMIT"
+    ]
+    assert findings, "expected SA-GREENLET-ATTR-AFTER-COMMIT to fire for b.y"
+    # line 10 has both a.x and b.y — only b.y should be flagged
+    flagged_attrs = {f.message for f in findings}
+    assert any("b.y" in m for m in flagged_attrs), "b.y must be flagged"
+    assert not any("a.x" in m for m in flagged_attrs), (
+        "a.x must NOT be flagged (a was refreshed)"
+    )
+
+
+def test_refresh_before_commit_still_flags(tmp_path):
+    """B8: reload called BEFORE commit → commit re-expires obj → still flagged."""
+    dep_src = "def reload(session, obj):\n    session.refresh(obj)\n"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(dep_src)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import reload\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    reload(session, obj)\n"  # refresh BEFORE commit
+        "    await session.commit()\n"  # commit re-expires obj
+        "    return obj.email\n"  # still flagged
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    rules = {f.rule_id for r in results for f in r.findings}
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in rules
+
+
+def test_non_refreshing_dep_helper_still_flags(tmp_path):
+    """B9: dep helper doesn't call refresh → finding is NOT cleared."""
+    dep_src = "def touch(session, obj):\n    obj.touched = True\n"
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(dep_src)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import touch\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    touch(session, obj)\n"
+        "    return obj.email\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    rules = {f.rule_id for r in results for f in r.findings}
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in rules
+
+
+def test_aliased_dep_import_end_to_end_clears(tmp_path):
+    """B10: `from atmo import refresh_orms as ro; await ro(session, [dataset])` → cleared."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(
+        "async def refresh_orms(session, objs):\n    for o in objs:\n        await session.refresh(o)\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import refresh_orms as ro\n\n\n"
+        "async def f(session, q, datafiles):\n"
+        "    dataset = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    await ro(session, [dataset, *datafiles])\n"
+        "    return [ls.name for ls in dataset.labelsets]\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    rules = {f.rule_id for r in results for f in r.findings}
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in rules
