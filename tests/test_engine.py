@@ -587,6 +587,42 @@ def test_non_refreshing_dep_helper_still_flags(tmp_path):
     assert "SA-GREENLET-ATTR-AFTER-COMMIT" in rules
 
 
+def test_star_reexported_dep_refresh_orms_clears(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    pkg = (
+        tmp_path
+        / ".venv"
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "atmo"
+        / "database"
+    )
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("from .utils import *\n")
+    (pkg / "utils.py").write_text(
+        "async def refresh_orms(session, objs):\n    for o in objs:\n        await session.refresh(o)\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo.database import refresh_orms\n\n\n"
+        "async def f(session, q, files):\n"
+        "    dataset = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    await refresh_orms(session, [dataset, *files])\n"
+        "    return [ls.name for ls in dataset.labelsets]\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in {
+        f.rule_id for r in results for f in r.findings
+    }
+
+
 def test_aliased_dep_import_end_to_end_clears(tmp_path):
     """B10: `from atmo import refresh_orms as ro; await ro(session, [dataset])` → cleared."""
     (tmp_path / "pyproject.toml").write_text(
