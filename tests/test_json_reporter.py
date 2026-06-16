@@ -63,7 +63,7 @@ def test_full_is_unchanged_shape():
 
 def test_compact_hoists_rules_and_slims_findings():
     p = payload(_results(), detail="compact")
-    assert set(p) == {"rules", "files", "totals"}
+    assert set(p) == {"rules", "files", "totals", "scanned"}
     assert set(p["rules"]) == {"PY-SEC-EVAL", "PY-ASYNC-IO"}
     assert set(p["rules"]["PY-SEC-EVAL"]) == {
         "category",
@@ -75,6 +75,28 @@ def test_compact_hoists_rules_and_slims_findings():
     f0 = p["files"][0]["findings"][0]
     assert set(f0) == {"rule_id", "severity", "line", "message"}
     assert "evidence" not in f0
+    # per-file `counts` is dropped in compact — derivable from each finding's severity
+    assert "counts" not in p["files"][0]
+
+
+def test_compact_omits_clean_files_but_counts_them():
+    results = [
+        ScanResult(
+            file="dirty.py",
+            language="python",
+            role=FileRole.PRODUCTION,
+            findings=[_finding("R", Severity.HIGH, line=1)],
+        ),
+        ScanResult(
+            file="clean1.py", language="python", role=FileRole.PRODUCTION, findings=[]
+        ),
+        ScanResult(
+            file="clean2.py", language="python", role=FileRole.PRODUCTION, findings=[]
+        ),
+    ]
+    p = payload(results, detail="compact")
+    assert [f["file"] for f in p["files"]] == ["dirty.py"]  # clean files omitted
+    assert p["scanned"] == 3  # but the total scope is preserved
 
 
 def test_compact_inlines_suggestion_only_when_it_differs():

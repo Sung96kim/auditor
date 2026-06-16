@@ -10,8 +10,9 @@ from auditor.reporters.base import Reporter
 def payload(results: list[ScanResult], *, detail: str = "full") -> dict:
     """Structured result payload. ``detail``: 'full' (default; the CLI/back-compat shape),
     'compact' (rule metadata hoisted into a one-time `rules` map, findings slimmed, evidence
-    dropped), or 'summary' (totals + per-rule/per-file counts, no findings). Files are ordered
-    worst-severity-first so an agent reads the critical ones first."""
+    dropped, clean files omitted — `scanned` carries the total count), or 'summary' (totals +
+    per-rule/per-file counts, no findings). Files are ordered worst-severity-first so an agent
+    reads the critical ones first."""
     ordered = sorted(results, key=lambda r: (not r.findings, r.severity_key))
     if detail == "summary":
         return _summary_payload(ordered)
@@ -19,8 +20,9 @@ def payload(results: list[ScanResult], *, detail: str = "full") -> dict:
         rules = _rules_map(ordered)
         return {
             "rules": rules,
-            "files": [_compact_file_payload(r, rules) for r in ordered],
+            "files": [_compact_file_payload(r, rules) for r in ordered if r.findings],
             "totals": _totals(ordered),
+            "scanned": len(ordered),
         }
     return {"files": [_file_payload(r) for r in ordered], "totals": _totals(ordered)}
 
@@ -43,10 +45,10 @@ def _rules_map(results: list[ScanResult]) -> dict:
 
 
 def _compact_file_payload(r: ScanResult, rules: dict) -> dict:
+    # no `counts`: each finding carries its severity, so a per-file rollup is derivable
     return {
         "file": r.file,
         "role": r.role.value,
-        "counts": {s.value: n for s, n in r.counts.items()},
         "findings": [_compact_finding(f, rules) for f in r.findings],
     }
 

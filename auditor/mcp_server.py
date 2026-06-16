@@ -64,8 +64,9 @@ async def scan(
     ``show_ignored`` includes them. ``config`` is an optional dict of config overrides
     deep-merged as the highest layer and validated by ``AuditorSettings``.
     ``detail`` (summary|compact|full, default compact) controls payload size: compact hoists rule
-    metadata into a `rules` map, slims findings, and drops `evidence` (recover it with
-    finding_detail); full restores every field inline."""
+    metadata into a `rules` map, slims findings, drops `evidence` (recover it with finding_detail),
+    and omits clean files (`scanned` carries the total file count); full restores every field
+    inline and lists every file."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
     _validate_detail(detail)
