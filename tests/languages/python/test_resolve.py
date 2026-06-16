@@ -361,16 +361,12 @@ def test_multi_name_import_resolves_first_name(tmp_path):
     assert fn is not None and fn.name == "reload"
 
 
-def test_from_pkg_import_submodule_attr_call_returns_none(tmp_path):
-    """Case 3: `from app import helpers; helpers.reload(s, o)` — returns None.
+def test_from_pkg_import_submodule_attr_call_resolves(tmp_path):
+    """Case 3: `from app import helpers; helpers.reload(s, o)` — now resolves.
 
-    `import_alias_map` only registers `import x as y` style imports (ast.Import with
-    an asname); `from app import helpers` is an ast.ImportFrom and is NOT entered into
-    the alias map. So `resolve_dotted('helpers.reload', {})` → 'helpers.reload', whose
-    module part 'helpers' cannot be found on disk → _find_def returns None.
-
-    This is an acceptable conservative gap: the call is unresolved (honest unknown)
-    rather than mis-resolved. No false-negative greenlet clearance results.
+    `_callee_origin` uses `name_origin_map`, which records `from app import helpers`
+    as `helpers -> app.helpers`.  `resolve_dotted('helpers.reload', {'helpers': 'app.helpers'})`
+    → 'app.helpers.reload' → module 'app.helpers', name 'reload' → resolved on disk.
     """
     r = _repo(
         tmp_path,
@@ -381,8 +377,8 @@ def test_from_pkg_import_submodule_attr_call_returns_none(tmp_path):
     )
     src = "from app import helpers\nhelpers.reload(s, o)\n"
     call, tree = _call(src)
-    # import_alias_map skips from-imports; module resolves to 'helpers' (not 'app.helpers')
-    assert r.resolve_func(call, tree) is None
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "reload"
 
 
 def test_aliased_module_import_resolves(tmp_path):
@@ -399,27 +395,41 @@ def test_aliased_module_import_resolves(tmp_path):
     assert fn is not None and fn.name == "reload"
 
 
-def test_star_reexport_ignores_all_dunder(tmp_path):
-    """Case 4: `__all__` restriction on star-reexport is NOT honoured.
+def test_star_reexport_honors_all_dunder_excluded(tmp_path):
+    """Case 4: `__all__` on the star-imported module gates what `*` re-exports.
 
-    dep `atmo/__init__.py` sets `__all__ = ['other']` then `from .utils import *`.
-    `utils.py` defines `refresh_orms` (absent from `__all__`) and `other`.
-    At runtime `from atmo import refresh_orms` would raise ImportError because
-    `refresh_orms` is not in `__all__`.  The resolver searches utils regardless
-    and FINDS `refresh_orms`.
-
-    Classification: acceptable conservative behaviour — over-resolution (resolver
-    finds more than runtime exposes) means a real refresh call is correctly detected;
-    it cannot produce a false negative greenlet clearance.
+    `atmo/__init__.py` does `from .utils import *`; `utils.py` defines `refresh_orms` but its
+    `__all__` lists only `other`.  At runtime `from atmo import refresh_orms` would fail, and the
+    resolver now honors that — `_star_exports` sees `refresh_orms` is not in utils' `__all__` →
+    the star branch is skipped → returns None.
     """
     r = _dep_pkg(
         tmp_path,
-        "__all__ = ['other']\nfrom .utils import *\n",
-        _RO_DEF + "\ndef other(): pass\n",
+        "from .utils import *\n",
+        "__all__ = ['other']\n" + _RO_DEF + "\ndef other(): pass\n",
+    )
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is None
+
+
+def test_star_reexport_honors_all_dunder_included(tmp_path):
+    """When the star-imported module's `__all__` DOES list the name, it resolves through the star."""
+    r = _dep_pkg(
+        tmp_path,
+        "from .utils import *\n",
+        "__all__ = ['refresh_orms']\n" + _RO_DEF,
     )
     call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
     fn = r.resolve_func(call, tree)
-    # Resolver finds the def even though __all__ would exclude it at runtime.
+    assert fn is not None and fn.name == "refresh_orms"
+
+
+def test_star_reexport_no_all_dunder_uses_public_default(tmp_path):
+    """No `__all__` → `*` exposes public (non-underscore) names, so `refresh_orms` still resolves
+    (the real cyclone shape)."""
+    r = _dep_pkg(tmp_path, "from .utils import *\n", _RO_DEF)
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    fn = r.resolve_func(call, tree)
     assert fn is not None and fn.name == "refresh_orms"
 
 

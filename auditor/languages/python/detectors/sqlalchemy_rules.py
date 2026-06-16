@@ -306,6 +306,20 @@ def _is_non_str(expr: ast.expr) -> bool:
     return False
 
 
+def _is_safe_interp_operand(expr: ast.expr) -> bool:
+    """An interpolation operand that can't carry an injection payload: any constant (incl. a
+    str literal), a provably-numeric value, or a tuple/list of such (for ``"%s %s" % (a, b)``)."""
+    if isinstance(expr, ast.Constant):
+        return True
+    if isinstance(expr, (ast.Tuple, ast.List)):
+        return all(_is_safe_interp_operand(e) for e in expr.elts)
+    return _is_non_str(expr)
+
+
+def _is_str_literal(expr: ast.expr) -> bool:
+    return isinstance(expr, ast.Constant) and isinstance(expr.value, str)
+
+
 def _is_interpolated(arg: ast.expr | None) -> bool:
     if isinstance(arg, ast.JoinedStr):
         # injectable only if some interpolated value isn't provably numeric:
@@ -319,6 +333,22 @@ def _is_interpolated(arg: ast.expr | None) -> bool:
         return not (
             isinstance(arg.left, ast.Constant) and isinstance(arg.right, ast.Constant)
         )
+    # `"… %s" % value` / `"… %s" % (a, b)` — %-formatted SQL with a non-constant operand
+    if (
+        isinstance(arg, ast.BinOp)
+        and isinstance(arg.op, ast.Mod)
+        and _is_str_literal(arg.left)
+    ):
+        return not _is_safe_interp_operand(arg.right)
+    # `"… {}".format(value)` — str.format with a non-constant argument
+    if (
+        isinstance(arg, ast.Call)
+        and isinstance(arg.func, ast.Attribute)
+        and arg.func.attr == "format"
+        and _is_str_literal(arg.func.value)
+    ):
+        operands = [*arg.args, *(k.value for k in arg.keywords)]
+        return not all(_is_safe_interp_operand(o) for o in operands)
     return False
 
 
@@ -392,23 +422,31 @@ _ORM_SINKS = {"add", "merge", "delete", "refresh"}
 _ORM_SOURCES = {"scalar", "scalar_one", "scalar_one_or_none"}
 
 
+def _is_orm_source_call(value: ast.expr) -> bool:
+    """A session query that returns an ORM object: ``scalar*`` or ``get(Model, pk)`` (>=2 args)."""
+    if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)):
+        return False
+    tail = value.func.attr
+    return tail in _ORM_SOURCES or (tail == "get" and len(value.args) >= 2)
+
+
 def _orm_names(fn: ast.AST) -> set[str]:
-    """Names that are provably ORM objects in this function: passed to session.add/merge/…,
-    or assigned from a session query (scalar*, or get(Model, pk) with >=2 args — avoids dict.get)."""
+    """Names that are provably ORM objects in this function: passed to session.add/merge/…, or
+    bound from a session query (``x = s.scalar_one(q)``, the walrus ``(x := s.scalar_one(q))``,
+    or a tuple-unpack ``a, b = …``)."""
     names: set[str] = set()
     for node in ast.walk(fn):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            tail = node.func.attr
-            if tail in _ORM_SINKS:
+            if node.func.attr in _ORM_SINKS:
                 names.update(a.id for a in node.args if isinstance(a, ast.Name))
-        if (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Attribute)
+        elif isinstance(node, ast.Assign) and _is_orm_source_call(node.value):
+            names.update(n for t in node.targets for n in _name_elements(t))
+        elif (
+            isinstance(node, ast.NamedExpr)
+            and isinstance(node.target, ast.Name)
+            and _is_orm_source_call(node.value)
         ):
-            tail = node.value.func.attr
-            if tail in _ORM_SOURCES or (tail == "get" and len(node.value.args) >= 2):
-                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+            names.add(node.target.id)
     return names
 
 
@@ -431,8 +469,8 @@ def _unconditional_stmts(body: list[ast.stmt]):
             yield stmt
 
 
-def _refresh_call_arg(stmt: ast.stmt) -> str | None:
-    """If ``stmt`` is (await) <x>.refresh(<Name>), return that Name's id."""
+def _refresh_of(stmt: ast.stmt) -> ast.Call | None:
+    """The ``<x>.refresh(...)`` call in an expression statement (incl. ``await <x>.refresh(...)``)."""
     value = stmt.value if isinstance(stmt, ast.Expr) else None
     if isinstance(value, ast.Await):
         value = value.value
@@ -440,11 +478,33 @@ def _refresh_call_arg(stmt: ast.stmt) -> str | None:
         isinstance(value, ast.Call)
         and isinstance(value.func, ast.Attribute)
         and value.func.attr == "refresh"
-        and value.args
-        and isinstance(value.args[0], ast.Name)
     ):
-        return value.args[0].id
+        return value
     return None
+
+
+def _str_set(arg: ast.expr | None) -> frozenset[str] | None:
+    """The set of string-constant elements of a list/tuple/set literal, else ``None`` (unanalyzable)."""
+    if isinstance(arg, (ast.List, ast.Tuple, ast.Set)) and all(
+        isinstance(e, ast.Constant) and isinstance(e.value, str) for e in arg.elts
+    ):
+        return frozenset(e.value for e in arg.elts)  # type: ignore[attr-defined]
+    return None
+
+
+def _refresh_target(call: ast.Call) -> tuple[str, frozenset[str] | None] | None:
+    """For ``<x>.refresh(<Name>[, attribute_names])`` — positional or ``instance=``/``attribute_names=``
+    kwargs — return ``(name, attrs)``: ``attrs`` is the partial attribute set for a partial refresh,
+    or ``None`` for a full refresh (every attribute reloaded)."""
+    inst = call.args[0] if call.args else kwarg(call, "instance")
+    if not isinstance(inst, ast.Name):
+        return None
+    attr_arg = call.args[1] if len(call.args) >= 2 else kwarg(call, "attribute_names")
+    if attr_arg is None:
+        return inst.id, None  # full refresh — every attribute reloaded
+    # partial refresh: only the named attrs are fresh; unanalyzable list → proves nothing
+    attrs = _str_set(attr_arg)
+    return inst.id, attrs if attrs is not None else frozenset()
 
 
 def _refresh_effects(
@@ -459,21 +519,33 @@ def _refresh_effects(
     direct: set[int] = set()
     elements: set[int] = set()
     for stmt in _unconditional_stmts(fn.body):
-        name = _refresh_call_arg(stmt)
-        if name in index:
-            direct.add(index[name])
+        full = _full_refresh_name(stmt)
+        if full in index:
+            direct.add(index[full])
         elif (
             isinstance(stmt, (ast.For, ast.AsyncFor))
             and isinstance(stmt.iter, ast.Name)
             and stmt.iter.id in index
             and isinstance(stmt.target, ast.Name)
             and any(
-                _refresh_call_arg(s) == stmt.target.id
+                _full_refresh_name(s) == stmt.target.id
                 for s in _unconditional_stmts(stmt.body)
             )
         ):
             elements.add(index[stmt.iter.id])
     return frozenset(direct), frozenset(elements)
+
+
+def _full_refresh_name(stmt: ast.stmt) -> str | None:
+    """The name fully refreshed by ``stmt`` (a full ``<x>.refresh(<Name>)`` with no
+    ``attribute_names``), else ``None`` — a partial refresh proves nothing for a helper effect."""
+    call = _refresh_of(stmt)
+    if call is None:
+        return None
+    target = _refresh_target(call)
+    if target is None or target[1] is not None:
+        return None
+    return target[0]
 
 
 def _name_elements(arg: ast.expr) -> list[str]:
@@ -487,11 +559,16 @@ def _name_elements(arg: ast.expr) -> list[str]:
     return []
 
 
+#: a freshen event: (line, attrs). ``attrs is None`` → the whole object is fresh (rebind / full
+#: refresh); a frozenset → only those attributes are fresh (partial ``refresh(obj, [...])``).
+_FreshenEvents = dict[str, list[tuple[int, frozenset[str] | None]]]
+
+
 def _add_resolved_freshen(
-    fn: ast.AST, ctx: AuditContext, freshen: dict[str, list[int]]
+    fn: ast.AST, ctx: AuditContext, freshen: _FreshenEvents
 ) -> None:
     """For each call whose resolved def unconditionally refreshes a parameter, mark the object(s)
-    passed at that position as freshened at the call line. No resolver / unresolved → no-op."""
+    passed at that position as fully freshened at the call line. No resolver / unresolved → no-op."""
     resolver = getattr(ctx, "resolver", None)
     if resolver is None:
         return
@@ -510,26 +587,29 @@ def _add_resolved_freshen(
             if i < len(node.args):
                 names.extend(_name_elements(node.args[i]))
         for name in names:
-            freshen.setdefault(name, []).append(node.lineno)
+            freshen.setdefault(name, []).append((node.lineno, None))
 
 
-def _freshen_lines(fn: ast.AST) -> dict[str, list[int]]:
-    """Per-name lines where a name is (re)bound or reloaded — an assignment (construction or
-    query), a for-loop target, or ``session.refresh(obj)``. A commit only expires an object's
-    attributes if it happens AFTER the object was last freshened; an earlier commit is irrelevant
-    (the object didn't exist / was reloaded since), and ``commit(); refresh(obj); use obj`` is safe."""
-    out: dict[str, list[int]] = {}
+def _freshen_lines(fn: ast.AST) -> _FreshenEvents:
+    """Per-name freshen events — where a name is (re)bound or reloaded: an assignment (construction
+    or query), a walrus bind, a for-loop target (all full), or ``session.refresh(obj[, attrs])`` (full
+    when no ``attribute_names``, else only the named attrs). A commit expires an object's attributes
+    only if it happens AFTER the object was last freshened *for the attribute being accessed*."""
+    out: _FreshenEvents = {}
 
-    def add(name: str, line: int) -> None:
-        out.setdefault(name, []).append(line)
+    def add(name: str, line: int, attrs: frozenset[str] | None = None) -> None:
+        out.setdefault(name, []).append((line, attrs))
 
     for node in ast.walk(fn):
         if isinstance(node, ast.Assign):
             for t in node.targets:
-                if isinstance(t, ast.Name):
-                    add(t.id, node.lineno)
-        elif isinstance(node, (ast.AnnAssign, ast.For, ast.AsyncFor)) and isinstance(
-            node.target, ast.Name
+                for n in _name_elements(t):
+                    add(n, node.lineno)
+        elif (
+            isinstance(node, ast.NamedExpr)
+            and isinstance(node.target, ast.Name)
+            or isinstance(node, (ast.AnnAssign, ast.For, ast.AsyncFor))
+            and isinstance(node.target, ast.Name)
         ):
             add(node.target.id, node.lineno)
         elif (
@@ -537,9 +617,9 @@ def _freshen_lines(fn: ast.AST) -> dict[str, list[int]]:
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "refresh"
         ):
-            for a in node.args:
-                if isinstance(a, ast.Name):
-                    add(a.id, node.lineno)
+            target = _refresh_target(node)
+            if target is not None:
+                add(target[0], node.lineno, target[1])
     return out
 
 
@@ -569,11 +649,16 @@ class GreenletAttrAfterCommit(SqlAlchemyRule):
                     and node.value.id in orm
                 ):
                     continue
-                # the object is "fresh" as of its last bind/reload before the access (params have
-                # none → fresh from the function start); a commit strictly between then and the
-                # access is what expires it.
+                # the object is "fresh" as of its last bind/reload covering THIS attribute before
+                # the access (params have none → fresh from the function start); a commit strictly
+                # between then and the access is what expires it. A partial refresh(obj, ["x"])
+                # only freshens "x", so accessing "y" still sees the pre-refresh freshness.
                 fresh = max(
-                    (f for f in freshen.get(node.value.id, ()) if f < node.lineno),
+                    (
+                        line
+                        for (line, attrs) in freshen.get(node.value.id, ())
+                        if line < node.lineno and (attrs is None or node.attr in attrs)
+                    ),
                     default=fn.lineno,
                 )
                 if not any(fresh < c < node.lineno for c in commits):

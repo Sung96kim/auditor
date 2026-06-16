@@ -136,15 +136,27 @@ def test_naive_datetime_clean_variants(expr: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_naive_datetime_aliased_class_not_flagged() -> None:
-    # FN-GAP: `from datetime import datetime as dt; dt.utcnow()` — the rule checks
-    # _owner_is_datetime(node.func.value), which accepts an ast.Name whose .id == "datetime"
-    # OR an ast.Attribute whose .attr == "datetime". When aliased to `dt`, the owner's .id
-    # is "dt", not "datetime" → _owner_is_datetime returns False → NOT flagged.
-    src = "from datetime import datetime as dt\nx = dt.utcnow()\n"
-    assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src)), (
-        "datetime aliased as 'dt' is not recognized by _owner_is_datetime — FN-gap, NOT flagged"
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from datetime import datetime as dt\nx = dt.utcnow()\n",  # aliased class
+        "from datetime import datetime\nx = datetime.utcnow()\n",  # unaliased from-import
+        "import datetime\nx = datetime.datetime.utcnow()\n",  # module form
+    ],
+    ids=["aliased", "from-import", "module"],
+)
+def test_naive_datetime_owner_forms_flagged(src: str) -> None:
+    # `_datetime_class_names` resolves `from datetime import datetime as dt`, so the aliased
+    # owner `dt` is recognised as the datetime class alongside the plain forms.
+    assert "PY-CORRECT-NAIVE-DATETIME" in rule_ids(run_audit(src)), (
+        f"naive datetime factory should be flagged regardless of owner binding:\n{src}"
     )
+
+
+def test_naive_datetime_unrelated_owner_not_flagged() -> None:
+    # an unrelated class aliased to a non-datetime name must not be confused with datetime
+    src = "from other import thing as dt\nx = dt.utcnow()\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src))
 
 
 def test_naive_datetime_indirection_via_variable_not_flagged() -> None:

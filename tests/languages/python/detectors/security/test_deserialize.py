@@ -114,25 +114,29 @@ def test_unsafe_deserialize_clean_variants(src: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_from_pickle_import_loads_bare_not_flagged() -> None:
-    # FN-GAP: `from pickle import loads; loads(b)` — the rule resolves aliases only
-    # via `import_alias_map` which tracks `import x as y` style; `from`-imports create
-    # a bare name `loads` with no module prefix, so `dotted_name(node.func)` == "loads"
-    # and `resolve_dotted("loads", aliases)` returns "loads" (no alias entry) → not in
-    # _UNSAFE_LOADERS (which requires "pickle.loads") → NOT flagged.
-    # Acceptable FN-gap: from-import deserialization sinks are a known detection scope limit.
-    src = "from pickle import loads\nloads(b)\n"
-    assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
-        "from-import bare 'loads' is NOT resolved to pickle.loads — FN-gap, expected NOT flagged"
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from pickle import loads\nloads(b)\n",
+        "from pickle import loads as l\nl(b)\n",  # aliased from-import
+        "from joblib import load\nload(p)\n",
+        "from yaml import unsafe_load\nunsafe_load(s)\n",
+    ],
+    ids=["pickle-loads", "pickle-loads-aliased", "joblib-load", "yaml-unsafe-load"],
+)
+def test_from_import_sink_flagged(src: str) -> None:
+    # `name_origin_map` resolves a from-import bound name back to its origin
+    # (`loads` -> `pickle.loads`), so from-import deserialization sinks are now flagged.
+    assert "PY-SEC-UNSAFE-DESERIALIZE" in rule_ids(run_audit(src)), (
+        f"from-import sink should resolve to its origin and flag:\n{src}"
     )
 
 
-def test_from_joblib_import_load_bare_not_flagged() -> None:
-    # FN-GAP: same from-import resolution gap as above, for joblib.
-    # `from joblib import load; load(p)` → bare `load` → not in _UNSAFE_LOADERS → NOT flagged.
-    src = "from joblib import load\nload(p)\n"
+def test_from_import_safe_name_not_flagged() -> None:
+    # a same-named function from an unrelated module must NOT resolve to a known sink
+    src = "from mymod import loads\nloads(b)\n"
     assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
-        "from-import bare 'load' is NOT resolved to joblib.load — FN-gap, expected NOT flagged"
+        "from-import of an unrelated 'loads' must not be confused with pickle.loads"
     )
 
 

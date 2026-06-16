@@ -790,11 +790,10 @@ def test_expire_on_commit_plain_sync_sessionmaker_clean():
 # ---------------------------------------------------------------------------
 
 
-def test_greenlet_walrus_operator_not_tracked():
-    """Case 1 — [FN-GAP]: walrus/assignment-expr ``(obj := s.scalar_one(q))`` binds via
-    ``ast.NamedExpr``, NOT ``ast.Assign``.  ``_orm_names`` only walks ``ast.Assign`` targets,
-    so ``obj`` is never registered as an ORM object → rule does NOT fire.
-    FN-gap: the risk is real but NamedExpr sources are untracked."""
+def test_greenlet_walrus_operator_tracked():
+    """Case 1 — walrus/assignment-expr ``(obj := s.scalar_one(q))`` binds via ``ast.NamedExpr``.
+    ``_orm_names`` now recognises NamedExpr ORM-source binds, so ``obj`` is tracked and the
+    post-commit ``obj.x`` access fires."""
     src = (
         "import sqlalchemy\n"
         "async def f(s):\n"
@@ -802,8 +801,7 @@ def test_greenlet_walrus_operator_not_tracked():
         "        await s.commit()\n"
         "        return obj.x\n"
     )
-    # obj bound via := is NOT recognised as ORM → no finding (false negative)
-    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in _ids_on(src)
 
 
 def test_greenlet_fstring_attribute_after_commit_fires():
@@ -843,39 +841,44 @@ def test_greenlet_comprehension_attribute_after_commit_fires():
     assert "obj.x" in greenlet[0].message
 
 
-def test_greenlet_refresh_keyword_arg_not_recognised_still_fires():
-    """Case 4 — [FN-GAP]: ``session.refresh(instance=obj)`` passes the object as a keyword
-    argument. ``_refresh_call_arg`` only checks ``args[0]`` (positional), so it returns
-    ``None`` and ``obj`` is NOT freshened → the rule still fires after the commit.
-    FN-gap: the refresh is real but keyword-form is not recognised as a freshen."""
+def test_greenlet_refresh_keyword_arg_recognised_clears():
+    """Case 4 — ``session.refresh(instance=obj)`` passes the object as a keyword argument.
+    ``_refresh_target`` now reads the ``instance=`` kwarg, so ``obj`` is freshened after the
+    commit and the access is NOT flagged."""
     src = (
         "import sqlalchemy\n"
         "async def f(s):\n"
         "    obj = s.scalar_one(q)\n"
         "    await s.commit()\n"
-        "    await s.refresh(instance=obj)\n"  # kwarg form — not recognised
+        "    await s.refresh(instance=obj)\n"  # kwarg form — now recognised as a full refresh
         "    return obj.x\n"
     )
-    # kwarg refresh does NOT clear the expired state → still fires (FN-gap on the refresh side)
-    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in _ids_on(src)
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
 
 
-def test_greenlet_partial_refresh_clears_obj_entirely():
-    """Case 5 — [FN-GAP]: ``session.refresh(obj, ['email'])`` only reloads the 'email'
-    attribute, yet ``_freshen_lines`` records ``obj`` as fully freshened at that line
-    (it only checks whether ``args[0]`` is a ``Name``).  Accessing ``obj.other`` (not
-    refreshed) is therefore NOT flagged — a conservative false-negative: only 'email' was
-    reloaded but the rule treats the whole object as fresh."""
-    src = (
+def test_greenlet_partial_refresh_only_freshens_named_attr():
+    """Case 5 — ``session.refresh(obj, ['email'])`` is a partial refresh: only 'email' is
+    reloaded. Accessing the refreshed attribute is safe, but accessing a non-refreshed
+    attribute after the commit still fires (attribute-scoped freshening)."""
+    refreshed = (
         "import sqlalchemy\n"
         "async def f(s):\n"
         "    obj = s.scalar_one(q)\n"
         "    await s.commit()\n"
-        "    await s.refresh(obj, ['email'])\n"  # partial — only email reloaded
-        "    return obj.other\n"  # other is still expired in reality
+        "    await s.refresh(obj, ['email'])\n"
+        "    return obj.email\n"  # the refreshed attr → safe
     )
-    # partial refresh erroneously silences the finding → CLEAN (false negative gap)
-    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(refreshed)
+
+    not_refreshed = (
+        "import sqlalchemy\n"
+        "async def f(s):\n"
+        "    obj = s.scalar_one(q)\n"
+        "    await s.commit()\n"
+        "    await s.refresh(obj, ['email'])\n"
+        "    return obj.other\n"  # NOT refreshed → still expired → fires
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in _ids_on(not_refreshed)
 
 
 def test_greenlet_expire_without_commit_not_flagged():
@@ -911,10 +914,9 @@ def test_greenlet_refresh_attribute_arg_does_not_freshen_obj():
 
 
 def test_greenlet_tuple_unpack_execute_not_tracked():
-    """Case 8 — [FN-GAP]: ``a, b = await session.execute(q)`` assigns via a ``Tuple``
-    target in ``ast.Assign``.  ``_orm_names`` only collects ``Name`` targets, so ``a`` and
-    ``b`` are never registered as ORM objects → accessing ``a.x`` after commit is NOT flagged.
-    FN-gap: tuple-unpack ORM sources are untracked."""
+    """Case 8 — [CORRECT]: ``a, b = await session.execute(q)`` — ``execute`` returns a
+    ``Result``, NOT ORM objects, so it is deliberately not an ORM source. The names are
+    correctly not tracked (no false positive on a Result tuple)."""
     src = (
         "import sqlalchemy\n"
         "async def f(s):\n"
@@ -922,8 +924,24 @@ def test_greenlet_tuple_unpack_execute_not_tracked():
         "    await s.commit()\n"
         "    return a.x\n"
     )
-    # Tuple target → a is not in _orm_names → no finding (false negative gap)
     assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in _ids_on(src)
+
+
+def test_greenlet_tuple_unpack_from_orm_source_tracked():
+    """``_orm_names`` extracts the element names of a tuple target when the value IS an ORM
+    source, so each unpacked name is tracked and fires after a commit."""
+    src = (
+        "import sqlalchemy\n"
+        "async def f(s):\n"
+        "    a, b = s.scalar_one(q)\n"  # syntactic: an ORM source bound to a tuple target
+        "    await s.commit()\n"
+        "    return a.x + b.y\n"
+    )
+    result = run_audit(src, settings=_ON, rel_path="m.py")
+    greenlet = [
+        f for f in result.findings if f.rule_id == "SA-GREENLET-ATTR-AFTER-COMMIT"
+    ]
+    assert len(greenlet) == 2
 
 
 def test_greenlet_chained_assign_both_names_tracked():
@@ -954,12 +972,17 @@ def test_greenlet_chained_assign_both_names_tracked():
 # ---------------------------------------------------------------------------
 
 
-def test_refresh_effects_extra_positional_arg_still_direct():
-    """Case 10 — [CORRECT]: ``s.refresh(o, ['x'])`` — the second arg is attribute_names
-    but ``_refresh_call_arg`` only requires ``args[0]`` to be a ``Name``.  Extra positional
-    args are ignored and the function is correctly identified as directly refreshing param 1."""
+def test_refresh_effects_partial_refresh_is_not_a_full_effect():
+    """Case 10 — ``s.refresh(o, ['x'])`` is a *partial* refresh (attribute_names given), so it
+    does NOT prove the helper fully freshens ``o``.  ``_refresh_effects`` reports no direct effect:
+    a caller can't treat passing an object to this helper as a full reload."""
     fn = _fn("def r(s, o):\n    s.refresh(o, ['x'])\n")
-    # direct={1}, elements={} — extra arg does not break the index mapping
+    assert _refresh_effects(fn) == (frozenset(), frozenset())
+
+
+def test_refresh_effects_full_refresh_is_direct():
+    """A full refresh (no attribute_names) IS a direct effect on its parameter."""
+    fn = _fn("def r(s, o):\n    s.refresh(o)\n")
     assert _refresh_effects(fn) == (frozenset({1}), frozenset())
 
 
@@ -989,22 +1012,21 @@ def test_refresh_effects_keyword_only_param_not_indexed():
 # ---------------------------------------------------------------------------
 
 
-def test_raw_sql_percent_format_not_caught():
-    """Case 13 — [FN-GAP]: ``text('select * from %s' % x)`` — the argument is a
-    ``ast.BinOp`` with ``op=ast.Mod`` (not ``ast.Add``).  ``_is_interpolated`` only handles
-    ``JoinedStr`` (f-strings) and ``BinOp(Add)`` (``+`` concat), so ``%``-style formatting
-    is NOT detected → rule does NOT fire.
-    FN-gap: %-interpolation in raw SQL strings is a real injection vector."""
-    body = "x = 'users'\nq = text('select * from %s' % x)\n"
-    # Mod BinOp is not handled — false negative gap
-    assert "SA-RAW-SQL" not in _ids(body)
+def test_raw_sql_percent_format_caught():
+    """Case 13 — ``text('select * from %s' % x)`` — a ``%``-formatted string literal with a
+    non-constant operand. ``_is_interpolated`` now handles ``BinOp(Mod)`` over a str literal, so
+    the injection vector fires; a numeric operand (``% len(rows)``) stays safe."""
+    assert "SA-RAW-SQL" in _ids("x = 'users'\nq = text('select * from %s' % x)\n")
+    # provably-numeric operand → not injectable
+    assert "SA-RAW-SQL" not in _ids("q = text('limit %d' % len(rows))\n")
+    # all-constant → not injectable
+    assert "SA-RAW-SQL" not in _ids("q = text('select %s' % 'literal')\n")
 
 
-def test_raw_sql_dot_format_not_caught():
-    """Case 14 — [FN-GAP]: ``text('select * from {}'.format(x))`` — the argument is a
-    ``ast.Call`` (a ``.format()`` call on a string constant).  ``_is_interpolated`` does not
-    inspect ``Call`` nodes → rule does NOT fire.
-    FN-gap: ``.format()`` interpolation in raw SQL strings is a real injection vector."""
-    body = "x = 'users'\nq = text('select * from {}'.format(x))\n"
-    # .format() Call is not handled — false negative gap
-    assert "SA-RAW-SQL" not in _ids(body)
+def test_raw_sql_dot_format_caught():
+    """Case 14 — ``text('select * from {}'.format(x))`` — a ``str.format()`` call on a literal
+    with a non-constant argument. ``_is_interpolated`` now inspects ``.format()`` calls, so it
+    fires; a constant argument stays safe."""
+    assert "SA-RAW-SQL" in _ids("x = 'users'\nq = text('select * from {}'.format(x))\n")
+    # constant argument → not injectable
+    assert "SA-RAW-SQL" not in _ids("q = text('select {}'.format('literal'))\n")

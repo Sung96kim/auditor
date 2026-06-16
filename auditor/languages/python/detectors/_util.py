@@ -91,6 +91,24 @@ def import_alias_map(tree: ast.AST) -> dict[str, str]:
     return out
 
 
+def name_origin_map(tree: ast.AST) -> dict[str, str]:
+    """Map each locally-bound name to the canonical dotted path it refers to, covering both
+    ``import a.b as c`` (``c`` -> ``a.b``) and ``from a.b import f [as g]`` (``g`` -> ``a.b.f``).
+    Lets a detector resolve a bare or aliased call back to its origin — ``loads`` -> ``pickle.loads``,
+    ``helpers.fn`` -> ``app.helpers.fn`` — beyond what ``import_alias_map`` (import-as only) covers."""
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    out[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            for a in node.names:
+                if a.name != "*":
+                    out.setdefault(a.asname or a.name, f"{node.module}.{a.name}")
+    return out
+
+
 def resolve_dotted(name: str, aliases: dict[str, str]) -> str:
     """Rewrite the head segment of a dotted name through ``aliases``:
     ``p.loads`` with ``{p: pickle}`` -> ``pickle.loads``; an unaliased name is returned as-is."""

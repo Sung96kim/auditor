@@ -6,8 +6,8 @@ from typing import ClassVar
 from auditor.languages.base import AuditContext
 from auditor.languages.python.detectors._util import (
     dotted_name,
-    import_alias_map,
     kwarg,
+    name_origin_map,
     resolve_dotted,
 )
 from auditor.languages.python.detectors.security._base import SecurityDetector
@@ -41,7 +41,7 @@ class UnsafeDeserialize(SecurityDetector):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
-        aliases = import_alias_map(ctx.tree)
+        aliases = name_origin_map(ctx.tree)
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.Call):
                 continue

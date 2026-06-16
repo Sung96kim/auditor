@@ -14,7 +14,7 @@ from pathlib import Path
 
 from auditor.languages.python.detectors._util import (
     dotted_name,
-    import_alias_map,
+    name_origin_map,
     resolve_dotted,
 )
 
@@ -32,6 +32,23 @@ def find_site_packages(root: Path) -> Path | None:
     return None
 
 
+def _dunder_all(mod: ast.Module) -> frozenset[str] | None:
+    """The string members of a module-level ``__all__ = [...]``/``(...)`` literal, or ``None`` when
+    there is none (or it's built dynamically and can't be read statically)."""
+    for node in mod.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
+        ):
+            value = node.value
+            if isinstance(value, (ast.List, ast.Tuple)) and all(
+                isinstance(e, ast.Constant) and isinstance(e.value, str)
+                for e in value.elts
+            ):
+                return frozenset(e.value for e in value.elts)  # type: ignore[attr-defined]
+            return None
+    return None
+
+
 def _callee_origin(call: ast.Call, tree: ast.Module) -> tuple[str, str] | None:
     """(module_dotted, func_name) the call targets, or None if it can't be determined from
     static imports. Handles ``from m import f; f(...)`` and ``import m[.n] [as a]; a.f(...)``."""
@@ -45,7 +62,9 @@ def _callee_origin(call: ast.Call, tree: ast.Module) -> tuple[str, str] | None:
                         return node.module, a.name
         return None
     if isinstance(func, ast.Attribute):
-        resolved = resolve_dotted(dotted_name(func), import_alias_map(tree))
+        # name_origin_map (not import_alias_map) so `from pkg import sub; sub.fn()` resolves the
+        # head `sub` to `pkg.sub`, giving module `pkg.sub`, name `fn`.
+        resolved = resolve_dotted(dotted_name(func), name_origin_map(tree))
         module, _, name = resolved.rpartition(".")
         if module and name:
             return module, name
@@ -108,6 +127,8 @@ class CalleeResolver:
                 continue
             for alias in node.names:
                 if alias.name == "*":
+                    if not self._star_exports(target, name):
+                        continue  # honor __all__ / underscore convention — not re-exported
                     hit = self._find_def(target, name, depth=depth - 1, seen=seen)
                     if hit is not None:
                         return hit
@@ -116,6 +137,18 @@ class CalleeResolver:
                     if hit is not None:
                         return hit
         return None
+
+    def _star_exports(self, dotted: str, name: str) -> bool:
+        """Whether ``from <dotted> import *`` would expose ``name``: ``name in __all__`` if the
+        target defines one, else the default (public names — not ``_``-prefixed). Unreadable target
+        → ``True`` (don't over-restrict; resolution still attempts and fails honestly if absent)."""
+        resolved = self._resolve(dotted)
+        if resolved is None:
+            return True
+        exported = _dunder_all(resolved[0])
+        if exported is None:
+            return not name.startswith("_")
+        return name in exported
 
     @staticmethod
     def _reexport_target(

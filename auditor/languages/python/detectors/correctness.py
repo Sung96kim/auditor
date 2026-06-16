@@ -5,7 +5,7 @@ import ast
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext, Detector
-from auditor.languages.python.detectors._util import dotted_name
+from auditor.languages.python.detectors._util import dotted_name, from_import_map
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _BROAD = {"Exception", "BaseException"}
@@ -144,13 +144,16 @@ class NaiveDatetime(Detector):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
+        class_names = _datetime_class_names(ctx.tree)
         for node in ast.walk(ctx.tree):
             if not (
                 isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
             ):
                 continue
             attr = node.func.attr
-            if attr not in _NAIVE_FACTORIES or not _owner_is_datetime(node.func.value):
+            if attr not in _NAIVE_FACTORIES or not _owner_is_datetime(
+                node.func.value, class_names
+            ):
                 continue
             if not _is_naive(attr, node):
                 continue  # tz-aware form, e.g. datetime.now(timezone.utc)
@@ -171,9 +174,21 @@ class NaiveDatetime(Detector):
 _NAIVE_FACTORIES = {"now", "utcnow", "utcfromtimestamp"}
 
 
-def _owner_is_datetime(owner: ast.expr) -> bool:
+def _datetime_class_names(tree: ast.AST) -> set[str]:
+    """Local names that refer to the ``datetime`` class: ``datetime`` itself (``import datetime``
+    / ``from datetime import datetime``) plus any alias from ``from datetime import datetime as dt``."""
+    names = {"datetime"}
+    names.update(
+        bound
+        for bound, orig in from_import_map(tree, "datetime").items()
+        if orig == "datetime"
+    )
+    return names
+
+
+def _owner_is_datetime(owner: ast.expr, class_names: set[str]) -> bool:
     if isinstance(owner, ast.Name):
-        return owner.id == "datetime"
+        return owner.id in class_names
     return isinstance(owner, ast.Attribute) and owner.attr == "datetime"
 
 
