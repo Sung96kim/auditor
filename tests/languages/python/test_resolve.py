@@ -199,3 +199,74 @@ def test_unparseable_dep_init_returns_none(tmp_path):
     )
     call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
     assert r.resolve_func(call, tree) is None
+
+
+# ---------------------------------------------------------------------------
+# Re-export following tests
+# ---------------------------------------------------------------------------
+
+
+def _dep_pkg(tmp_path, init_src, utils_src, *, resolve_packages=("atmo",)):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    pkg = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text(init_src)
+    (pkg / "utils.py").write_text(utils_src)
+    return CalleeResolver(
+        tmp_path,
+        resolve_packages=tuple(resolve_packages),
+        site_packages=find_site_packages(tmp_path),
+    )
+
+
+_RO_DEF = "def refresh_orms(s, objs):\n    for o in objs:\n        s.refresh(o)\n"
+
+
+def test_follows_star_reexport(tmp_path):
+    r = _dep_pkg(tmp_path, "from .utils import *\n", _RO_DEF)
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "refresh_orms"
+
+
+def test_follows_explicit_relative_reexport(tmp_path):
+    r = _dep_pkg(tmp_path, "from .utils import refresh_orms\n", _RO_DEF)
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is not None
+
+
+def test_follows_aliased_reexport(tmp_path):
+    r = _dep_pkg(
+        tmp_path,
+        "from .utils import _ro as refresh_orms\n",
+        "def _ro(s, objs):\n    for o in objs:\n        s.refresh(o)\n",
+    )
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "_ro"
+
+
+def test_follows_absolute_reexport(tmp_path):
+    r = _dep_pkg(tmp_path, "from atmo.utils import refresh_orms\n", _RO_DEF)
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is not None
+
+
+def test_reexport_not_found_returns_none(tmp_path):
+    r = _dep_pkg(
+        tmp_path,
+        "from .utils import something_else\n",
+        "def something_else():\n    return 1\n",
+    )
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is None
+
+
+def test_reexport_cycle_terminates(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "a.py").write_text("from p.b import refresh_orms\n")
+    (tmp_path / "p" / "b.py").write_text("from p.a import refresh_orms\n")
+    r = CalleeResolver(tmp_path)
+    call, tree = _call("from p.a import refresh_orms\nrefresh_orms(s, [o])\n")
+    assert r.resolve_func(call, tree) is None

@@ -5,7 +5,8 @@ in either a sibling repo module OR a configured first-party dependency package f
 scanned project's virtualenv. Phase 1 is repo-local only (no ``resolve_packages``); Phase 2
 extends resolution into dependency packages gated by ``resolve_packages`` name prefixes.
 A callee whose module cannot be reached in either location resolves to ``None`` (honest unknown).
-Parsed modules are cached per scan.
+Parsed modules are cached per scan. Re-exports (star, explicit, aliased, relative, absolute) are
+followed recursively up to a bounded depth to locate the real definition.
 """
 
 import ast
@@ -58,6 +59,10 @@ class CalleeResolver:
     ``resolve_packages`` lists dotted-name prefixes of first-party dependency packages whose
     source should be resolved from ``site_packages``. Modules not matching any prefix, or where
     ``site_packages`` is ``None``, resolve repo-locally only (honest unknown → ``None``).
+
+    Re-exports (``from .sub import *``, ``from .sub import name``, ``from .sub import x as y``,
+    ``from pkg.sub import name``) are followed recursively up to depth 4, with a ``seen`` guard
+    to break cycles.
     """
 
     def __init__(
@@ -70,32 +75,70 @@ class CalleeResolver:
         self._root = root
         self._resolve_packages = resolve_packages
         self._site_packages = site_packages
-        self._cache: dict[str, ast.Module | None] = {}
+        self._cache: dict[str, tuple[ast.Module, bool] | None] = {}
 
     def resolve_func(self, call: ast.Call, file_tree: ast.Module) -> _FuncDef | None:
         origin = _callee_origin(call, file_tree)
         if origin is None:
             return None
         module, name = origin
-        mod = self._module(module)
-        if mod is None:
+        return self._find_def(module, name, depth=4, seen=set())
+
+    def _find_def(
+        self, dotted: str, name: str, *, depth: int, seen: set[tuple[str, str]]
+    ) -> _FuncDef | None:
+        if depth <= 0 or (dotted, name) in seen:
             return None
+        seen.add((dotted, name))
+        resolved = self._resolve(dotted)
+        if resolved is None:
+            return None
+        mod, is_pkg = resolved
         for node in mod.body:
             if (
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and node.name == name
             ):
                 return node
+        for node in mod.body:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            target = self._reexport_target(dotted, is_pkg, node)
+            if target is None:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    hit = self._find_def(target, name, depth=depth - 1, seen=seen)
+                    if hit is not None:
+                        return hit
+                elif (alias.asname or alias.name) == name:
+                    hit = self._find_def(target, alias.name, depth=depth - 1, seen=seen)
+                    if hit is not None:
+                        return hit
         return None
 
-    def _module(self, dotted: str) -> ast.Module | None:
+    @staticmethod
+    def _reexport_target(
+        current: str, is_pkg: bool, node: ast.ImportFrom
+    ) -> str | None:
+        if node.level == 0:
+            return node.module
+        parts = current.split(".")
+        if not is_pkg:
+            parts = parts[:-1]
+        if node.level - 1 > len(parts):
+            return None
+        base = parts[: len(parts) - (node.level - 1)]
+        return ".".join([*base, node.module]) if node.module else ".".join(base)
+
+    def _resolve(self, dotted: str) -> tuple[ast.Module, bool] | None:
         if dotted in self._cache:
             return self._cache[dotted]
-        mod = self._parse_under(self._root, dotted)
-        if mod is None and self._in_reach(dotted) and self._site_packages is not None:
-            mod = self._parse_under(self._site_packages, dotted)
-        self._cache[dotted] = mod
-        return mod
+        res = self._parse_under(self._root, dotted)
+        if res is None and self._in_reach(dotted) and self._site_packages is not None:
+            res = self._parse_under(self._site_packages, dotted)
+        self._cache[dotted] = res
+        return res
 
     def _in_reach(self, dotted: str) -> bool:
         return any(
@@ -103,14 +146,20 @@ class CalleeResolver:
         )
 
     @staticmethod
-    def _parse_under(base: Path, dotted: str) -> ast.Module | None:
+    def _parse_under(base: Path, dotted: str) -> tuple[ast.Module, bool] | None:
         rel = dotted.replace(".", "/")
-        for cand in (base / f"{rel}.py", base / rel / "__init__.py"):
+        for cand, is_pkg in (
+            (base / f"{rel}.py", False),
+            (base / rel / "__init__.py", True),
+        ):
             if not cand.resolve().is_relative_to(base.resolve()):
                 continue
             if cand.is_file():
                 try:
-                    return ast.parse(cand.read_text(encoding="utf-8", errors="replace"))
+                    return (
+                        ast.parse(cand.read_text(encoding="utf-8", errors="replace")),
+                        is_pkg,
+                    )
                 except (SyntaxError, OSError):
                     return None
         return None
