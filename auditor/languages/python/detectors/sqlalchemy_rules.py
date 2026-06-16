@@ -476,6 +476,43 @@ def _refresh_effects(
     return frozenset(direct), frozenset(elements)
 
 
+def _name_elements(arg: ast.expr) -> list[str]:
+    """Name ids inside a list/tuple/set literal (incl. ``*starred``); a bare Name → [name]; else []."""
+    if isinstance(arg, ast.Starred):
+        return _name_elements(arg.value)
+    if isinstance(arg, ast.Name):
+        return [arg.id]
+    if isinstance(arg, (ast.List, ast.Tuple, ast.Set)):
+        return [n for e in arg.elts for n in _name_elements(e)]
+    return []
+
+
+def _add_resolved_freshen(
+    fn: ast.AST, ctx: AuditContext, freshen: dict[str, list[int]]
+) -> None:
+    """For each call whose resolved def unconditionally refreshes a parameter, mark the object(s)
+    passed at that position as freshened at the call line. No resolver / unresolved → no-op."""
+    resolver = getattr(ctx, "resolver", None)
+    if resolver is None:
+        return
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = resolver.resolve_func(node, ctx.tree)
+        if callee is None:
+            continue
+        direct, elements = _refresh_effects(callee)
+        names: list[str] = []
+        for i in direct:
+            if i < len(node.args) and isinstance(node.args[i], ast.Name):
+                names.append(node.args[i].id)
+        for i in elements:
+            if i < len(node.args):
+                names.extend(_name_elements(node.args[i]))
+        for name in names:
+            freshen.setdefault(name, []).append(node.lineno)
+
+
 def _freshen_lines(fn: ast.AST) -> dict[str, list[int]]:
     """Per-name lines where a name is (re)bound or reloaded — an assignment (construction or
     query), a for-loop target, or ``session.refresh(obj)``. A commit only expires an object's
@@ -523,6 +560,7 @@ class GreenletAttrAfterCommit(SqlAlchemyRule):
                 continue
             orm = _orm_names(fn)
             freshen = _freshen_lines(fn)
+            _add_resolved_freshen(fn, ctx, freshen)
             for node in ast.walk(fn):
                 if not (
                     isinstance(node, ast.Attribute)

@@ -282,3 +282,59 @@ def test_scan_threads_resolver_without_error(tmp_path):
     (tmp_path / "m.py").write_text("def f():\n    return 1\n")
     results = asyncio.run(audit_target(tmp_path, no_index=True))
     assert isinstance(results, list)
+
+
+def _greenlet_repo(
+    tmp_path: Path, helper_src: str, *, helper_module: str = "app.helpers"
+) -> set[str]:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor.sqlalchemy]\nexpire_on_commit=true\n'
+    )
+    (tmp_path / "app").mkdir(exist_ok=True)
+    (tmp_path / "app" / "helpers.py").write_text(helper_src)
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        f"from {helper_module} import reload\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj)\n"
+        "    return obj.email\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    return {f.rule_id for r in results for f in r.findings}
+
+
+def test_resolver_clears_cross_file_refresh(tmp_path):
+    rules = _greenlet_repo(
+        tmp_path, "def reload(session, obj):\n    session.refresh(obj)\n"
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in rules
+
+
+def test_resolver_conditional_refresh_still_flags(tmp_path):
+    rules = _greenlet_repo(
+        tmp_path,
+        "def reload(session, obj, c=True):\n    if c:\n        session.refresh(obj)\n",
+    )
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in rules
+
+
+def test_resolver_out_of_repo_helper_still_flags(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor.sqlalchemy]\nexpire_on_commit=true\n'
+    )
+    (tmp_path / "app").mkdir(exist_ok=True)
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from third_party.db import reload\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj)\n"
+        "    return obj.email\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in {
+        f.rule_id for r in results for f in r.findings
+    }
