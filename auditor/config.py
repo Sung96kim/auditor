@@ -267,6 +267,9 @@ class AuditorSettings(BaseSettings):
 
     extends: str = "base"
     exclude: list[str] = Field(default_factory=list)
+    resolve_packages: list[str] = Field(
+        default_factory=list
+    )  # package-name prefixes whose installed source the callee resolver may read (default: none)
     respect_gitignore: bool = (
         True  # skip git-ignored files (CLI: --include-gitignored to override)
     )

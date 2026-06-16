@@ -313,3 +313,16 @@ def test_relaxed_role_disabled_reason_contains_role_name():
     assert eff.skipped_reason is not None
     assert "relaxed" in eff.skipped_reason
     assert "test" in eff.skipped_reason
+
+
+def test_resolve_packages_defaults_empty(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    assert load_config(tmp_path).resolve_packages == []
+
+
+def test_resolve_packages_from_pyproject(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        '[tool.auditor]\nresolve_packages = ["atmosphere", "shared_lib"]\n'
+    )
+    assert load_config(tmp_path).resolve_packages == ["atmosphere", "shared_lib"]
