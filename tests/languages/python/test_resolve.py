@@ -270,3 +270,48 @@ def test_reexport_cycle_terminates(tmp_path):
     r = CalleeResolver(tmp_path)
     call, tree = _call("from p.a import refresh_orms\nrefresh_orms(s, [o])\n")
     assert r.resolve_func(call, tree) is None
+
+
+# ---------------------------------------------------------------------------
+# _reexport_target unit tests
+# ---------------------------------------------------------------------------
+
+
+def _importfrom(src: str) -> ast.ImportFrom:
+    node = ast.parse(src).body[0]
+    assert isinstance(node, ast.ImportFrom)
+    return node
+
+
+def test_reexport_target_absolute():
+    n = _importfrom("from atmo.utils import x\n")
+    assert CalleeResolver._reexport_target("atmo.database", True, n) == "atmo.utils"
+
+
+def test_reexport_target_relative_level1_package():
+    n = _importfrom("from .utils import x\n")  # level 1
+    # a package __init__ anchors at the package itself
+    assert (
+        CalleeResolver._reexport_target("atmo.database", True, n)
+        == "atmo.database.utils"
+    )
+
+
+def test_reexport_target_relative_level1_module():
+    n = _importfrom("from .utils import x\n")
+    # a regular module anchors at its parent package
+    assert (
+        CalleeResolver._reexport_target("atmo.database.svc", False, n)
+        == "atmo.database.utils"
+    )
+
+
+def test_reexport_target_relative_level2():
+    n = _importfrom("from ..common import x\n")  # level 2
+    # package "a.b.c": level 2 strips one more -> "a.b", + "common"
+    assert CalleeResolver._reexport_target("a.b.c", True, n) == "a.b.common"
+
+
+def test_reexport_target_out_of_bounds_returns_none():
+    n = _importfrom("from ....deep import x\n")  # level 4, too deep for "a.b"
+    assert CalleeResolver._reexport_target("a.b", True, n) is None
