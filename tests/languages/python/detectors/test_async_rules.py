@@ -49,6 +49,70 @@ def test_sequential_awaits_ignores_await_in_the_iterable():
 
 
 # ---------------------------------------------------------------------------
+# SequentialAwaits — ordered-sink exclusion (await writes to a with-bound resource)
+# ---------------------------------------------------------------------------
+
+
+def test_sequential_awaits_streaming_write_to_context_resource_not_flagged():
+    # the canonical false positive: streaming chunks to a file handle bound by `async with`.
+    # The writes MUST be ordered — gathering would corrupt the file — so don't suggest gather.
+    src = (
+        "async def download(client, obj, path):\n"
+        "    async with aiofile.async_open(path, mode='wb') as f:\n"
+        "        async for chunk in client.read_chunks(obj):\n"
+        "            await f.write(chunk)\n"
+    )
+    assert "PY-ASYNC-SEQUENTIAL-AWAITS" not in rule_ids(run_audit(src))
+
+
+def test_sequential_awaits_sync_for_write_to_context_resource_not_flagged():
+    # same exclusion for a plain `for` writing to a `with`-bound resource
+    src = (
+        "async def dump(chunks, path):\n"
+        "    with open(path, 'wb') as f:\n"
+        "        for chunk in chunks:\n"
+        "            await f.write(chunk)\n"
+    )
+    assert "PY-ASYNC-SEQUENTIAL-AWAITS" not in rule_ids(run_audit(src))
+
+
+def test_sequential_awaits_tuple_bound_context_resource_not_flagged():
+    # `async with x() as (reader, writer)` — both names are ordered resources
+    src = (
+        "async def pipe(src):\n"
+        "    async with open_pair() as (reader, writer):\n"
+        "        async for item in src:\n"
+        "            await writer.send(item)\n"
+    )
+    assert "PY-ASYNC-SEQUENTIAL-AWAITS" not in rule_ids(run_audit(src))
+
+
+def test_sequential_awaits_mixed_independent_await_still_flagged():
+    # one await writes to the with-bound file (ordered), but another is an independent fetch —
+    # since NOT every await is an ordered-sink write, the gather opportunity stands → still flags
+    src = (
+        "async def f(client, obj, path, xs):\n"
+        "    async with aiofile.async_open(path) as out:\n"
+        "        for x in xs:\n"
+        "            data = await fetch(x)\n"
+        "            await out.write(data)\n"
+    )
+    assert "PY-ASYNC-SEQUENTIAL-AWAITS" in rule_ids(run_audit(src))
+
+
+def test_sequential_awaits_free_call_in_with_block_still_flagged():
+    # being inside a `with` doesn't grant immunity: a free `await fetch(x)` (no with-bound
+    # receiver) is still a genuine gather candidate
+    src = (
+        "async def f(xs):\n"
+        "    async with session() as s:\n"
+        "        for x in xs:\n"
+        "            await fetch(x)\n"
+    )
+    assert "PY-ASYNC-SEQUENTIAL-AWAITS" in rule_ids(run_audit(src))
+
+
+# ---------------------------------------------------------------------------
 # NoAwaitBody — protocol dunder exemption
 # ---------------------------------------------------------------------------
 

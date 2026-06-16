@@ -191,9 +191,7 @@ class SequentialAwaits(Detector):
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         out: list[Finding] = []
-        for loop in ast.walk(ctx.tree):
-            if not isinstance(loop, (ast.For, ast.AsyncFor)):
-                continue
+        for loop, cm_names in _loops_with_cm_scope(ctx.tree):
             # only awaits in the loop *body* run per-iteration; an await in the iterable
             # (`for x in (await f()).values():`) is evaluated once — not a gather opportunity
             awaits = [
@@ -202,16 +200,65 @@ class SequentialAwaits(Detector):
                 for n in ast.walk(stmt)
                 if isinstance(n, ast.Await)
             ]
-            if awaits:
-                out.append(
-                    self.make_finding(
-                        ctx,
-                        line=loop.lineno,
-                        message="await inside a loop; if independent, gather them concurrently",
-                        suggestion="collect coroutines and await asyncio.gather(*...)",
-                    )
+            if not awaits:
+                continue
+            # ordered-sink exclusion: if every awaited call writes to a resource bound by an
+            # enclosing `with`/`async with` (a file/stream/connection/transaction), the loop is
+            # sequential *by necessity* — gathering would corrupt the shared handle, not speed it
+            # up. `async for chunk in stream: await f.write(chunk)` is the canonical case.
+            if all(_await_receiver(a) in cm_names for a in awaits):
+                continue
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=loop.lineno,
+                    message="await inside a loop; if independent, gather them concurrently",
+                    suggestion="collect coroutines and await asyncio.gather(*...)",
                 )
+            )
         return out
+
+
+def _loops_with_cm_scope(
+    node: ast.AST, cm_names: frozenset[str] = frozenset()
+) -> Iterator[tuple[ast.For | ast.AsyncFor, frozenset[str]]]:
+    """Yield every ``(for/async-for loop, names bound by enclosing with/async-with)``. The
+    context-managed name set accumulates as we descend into ``with`` bodies, so each loop knows
+    which receivers are ordered resources (a file/connection) at its position."""
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        yield node, cm_names
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        bound = {
+            n
+            for item in node.items
+            if item.optional_vars is not None
+            for n in _bound_names(item.optional_vars)
+        }
+        cm_names = cm_names | bound
+    for child in ast.iter_child_nodes(node):
+        yield from _loops_with_cm_scope(child, cm_names)
+
+
+def _bound_names(target: ast.expr) -> list[str]:
+    """Names bound by a ``with ... as <target>`` clause — a Name, or a tuple/list of them."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [n for e in target.elts for n in _bound_names(e)]
+    return []
+
+
+def _await_receiver(await_node: ast.Await) -> str | None:
+    """For ``await <recv>.method(...)`` where ``<recv>`` is a bare Name, that name; else None
+    (a free call like ``await fetch(x)`` has no receiver → a genuine gather candidate)."""
+    value = await_node.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and isinstance(value.func.value, ast.Name)
+    ):
+        return value.func.value.id
+    return None
 
 
 class NoAwaitBody(Detector):
