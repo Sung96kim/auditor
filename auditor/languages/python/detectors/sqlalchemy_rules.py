@@ -451,7 +451,9 @@ def _refresh_effects(
     fn: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[frozenset[int], frozenset[int]]:
     """(params refreshed directly, params whose elements are refreshed) — unconditional only.
-    Direct: ``s.refresh(p)``. Elements: ``for o in p: s.refresh(o)`` (covers every element)."""
+    Direct: ``s.refresh(p)``. Elements: ``for o in p: s.refresh(o)`` (covers every element).
+    Parameter indices are positional over ``posonlyargs + args``, so for a method ``self``/``cls``
+    occupies index 0 (Phase-1 callers only pass module-level functions, so this is not currently hit)."""
     params = [a.arg for a in fn.args.posonlyargs + fn.args.args]
     index = {name: i for i, name in enumerate(params)}
     direct: set[int] = set()

@@ -453,3 +453,41 @@ def test_refresh_effects_await_form():
         frozenset({1}),
         frozenset(),
     )
+
+
+def test_refresh_effects_with_body_counts():
+    fn = _fn("def reload(s, o):\n    with lock():\n        s.refresh(o)\n")
+    assert _refresh_effects(fn) == (frozenset({1}), frozenset())
+
+
+def test_refresh_effects_try_body_counts():
+    fn = _fn(
+        "def reload(s, o):\n    try:\n        s.refresh(o)\n    except Exception:\n        pass\n"
+    )
+    assert _refresh_effects(fn) == (frozenset({1}), frozenset())
+
+
+def test_refresh_effects_except_body_does_not_count():
+    fn = _fn(
+        "def reload(s, o):\n    try:\n        x()\n    except Exception:\n        s.refresh(o)\n"
+    )
+    assert _refresh_effects(fn) == (frozenset(), frozenset())
+
+
+def test_refresh_effects_while_body_does_not_count():
+    fn = _fn("def reload(s, o):\n    while True:\n        s.refresh(o)\n")
+    assert _refresh_effects(fn) == (frozenset(), frozenset())
+
+
+def test_refresh_effects_conditional_inside_bulk_loop_does_not_count():
+    fn = _fn(
+        "def reload_all(s, objs, c):\n    for o in objs:\n        if c:\n            s.refresh(o)\n"
+    )
+    assert _refresh_effects(fn) == (frozenset(), frozenset())
+
+
+def test_refresh_effects_nested_loop_elements_does_not_count():
+    fn = _fn(
+        "def reload_all(s, a, objs):\n    for x in a:\n        for o in objs:\n            s.refresh(o)\n"
+    )
+    assert _refresh_effects(fn) == (frozenset(), frozenset())
