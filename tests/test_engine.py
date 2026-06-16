@@ -3,7 +3,9 @@
 import asyncio
 from pathlib import Path
 
-from auditor.config import load_config
+from loguru import logger
+
+from auditor.config import AuditorSettings, load_config
 from auditor.engine import ScanEngine, audit_target
 from auditor.index import IndexStore
 from auditor.languages.python.resolve import CalleeResolver
@@ -338,3 +340,38 @@ def test_resolver_out_of_repo_helper_still_flags(tmp_path):
     assert "SA-GREENLET-ATTR-AFTER-COMMIT" in {
         f.rule_id for r in results for f in r.findings
     }
+
+
+def test_engine_passes_resolve_packages_and_env(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    sp = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages"
+    sp.mkdir(parents=True)
+    engine = ScanEngine(tmp_path, AuditorSettings(resolve_packages=["atmo"]))
+    assert engine.resolver._resolve_packages == ("atmo",)
+    assert engine.resolver._site_packages == sp
+
+
+def test_engine_warns_when_reach_set_but_no_env(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    msgs: list[str] = []
+    sink_id = logger.add(msgs.append, level="WARNING", format="{message}")
+    logger.enable("auditor")
+    try:
+        ScanEngine(tmp_path, AuditorSettings(resolve_packages=["atmo"]))
+    finally:
+        logger.disable("auditor")
+        logger.remove(sink_id)
+    assert any("resolve_packages" in m for m in msgs)
+
+
+def test_engine_no_warning_when_reach_empty(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    msgs: list[str] = []
+    sink_id = logger.add(msgs.append, level="WARNING", format="{message}")
+    logger.enable("auditor")
+    try:
+        ScanEngine(tmp_path, AuditorSettings())
+    finally:
+        logger.disable("auditor")
+        logger.remove(sink_id)
+    assert not any("resolve_packages" in m for m in msgs)

@@ -20,7 +20,7 @@ from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.ignores import IgnoreList
 from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
-from auditor.languages.python.resolve import CalleeResolver
+from auditor.languages.python.resolve import CalleeResolver, find_site_packages
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
@@ -80,7 +80,17 @@ class ScanEngine:
         self.deps = project_deps(root)
         self.entry_points = entry_point_names(root)
         self.roles = RoleClassifier(settings.role_globs)
-        self.resolver = CalleeResolver(root)
+        site_packages = find_site_packages(root)
+        reach = tuple(settings.resolve_packages)
+        if reach and site_packages is None:
+            logger.warning(
+                f"auditor: resolve_packages={list(reach)} is set but no environment was found "
+                f"under {root} (looked for .venv/venv) — dependency resolution is off; configure "
+                f"the project's venv or findings may include resolvable false positives"
+            )
+        self.resolver = CalleeResolver(
+            root, resolve_packages=reach, site_packages=site_packages
+        )
 
     @classmethod
     def for_target(
