@@ -429,3 +429,14 @@ def test_scan_verbose_smoke(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\n")
     result = invoke("scan", str(tmp_path), "--no-index", "-v")
     assert result.exit_code == 0
+
+
+def test_scan_warns_when_resolve_packages_set_but_no_env(tmp_path):
+    """resolve_packages misconfiguration warning surfaces without -v (verbosity 0 = WARNING)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    (tmp_path / "m.py").write_text("x = 1\n")
+    result = invoke("scan", str(tmp_path), "--no-index")  # no -v
+    assert result.exit_code == 0, result.output
+    assert "resolve_packages" in result.stderr  # warning surfaced on stderr without -v

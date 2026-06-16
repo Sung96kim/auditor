@@ -188,8 +188,7 @@ def scan(
     _require_exists(target)
     if fmt is not None:
         _check_format(fmt)  # fail fast on a bad --format, before the scan
-    if verbose:
-        configure_logging(verbose)
+    configure_logging(verbose)
 
     report_only = _diff_report_only(target, since, changed, vs_base, root)
     if report_only is not None and not no_index:
