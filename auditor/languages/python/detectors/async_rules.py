@@ -248,6 +248,8 @@ class NoAwaitBody(Detector):
 
 def _has_async_construct(fn: ast.AsyncFunctionDef) -> bool:
     for stmt in fn.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
         for node in _nodes_excluding_nested_funcs(stmt):
             if isinstance(node, (ast.Await, ast.AsyncWith, ast.AsyncFor)):
                 return True
@@ -256,6 +258,8 @@ def _has_async_construct(fn: ast.AsyncFunctionDef) -> bool:
 
 def _is_async_generator(fn: ast.AsyncFunctionDef) -> bool:
     for stmt in fn.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
         for node in _nodes_excluding_nested_funcs(stmt):
             if isinstance(node, (ast.Yield, ast.YieldFrom)):
                 return True

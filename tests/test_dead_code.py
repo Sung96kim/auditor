@@ -348,3 +348,62 @@ def test_scan_call_valued_binding_not_flagged_end_to_end(tmp_path):
     assert not any("REGISTERED" in m for m in messages)
     # literal tuple binding IS emitted and unreferenced → flagged
     assert any("DEAD_TUPLE" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# Obscure edge-case tests — discovered+pinned (run to characterize, then asserted)
+# ---------------------------------------------------------------------------
+
+
+def test_scan_private_class_string_annotation_ref_not_dead(tmp_path) -> None:
+    # CORRECT: `class _Impl: pass` with `x: "_Impl" = None` — the string annotation
+    # "_Impl" is a Constant(str) node; _symbol_refs walks all ast.Constant(str) nodes and
+    # calls _string_ref_names("_Impl") which returns ["_Impl"] → added to the refs set.
+    # So _Impl IS referenced (via string annotation) and is NOT flagged dead.
+    # The unused `x` binding itself IS flagged (it's a const with no refs).
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(tmp_path, "pkg/a.py", 'class _Impl: pass\n\nx: "_Impl" = None\n')
+    messages = _dead_symbol_messages(tmp_path)
+    assert not any("_Impl" in m for m in messages), (
+        "_Impl referenced via string annotation must NOT be flagged dead"
+    )
+    # the `x` annotated-assign binding is emitted and unused → still flagged
+    assert any("`x`" in m for m in messages), (
+        "the unused annotated binding `x` must still be flagged dead"
+    )
+
+
+def test_scan_all_augmented_assign_name_not_dead(tmp_path) -> None:
+    # CORRECT (via generic string-literal path, not the __all__ special path):
+    # `__all__ = []; __all__ += ["_x"]` — the AugAssign is NOT an ast.Assign so the
+    # dedicated `__all__`-list block in _symbol_refs does NOT apply. However, the generic
+    # path `isinstance(node, ast.Constant) and isinstance(node.value, str)` walks every
+    # string literal in the tree, including the "_x" inside the AugAssign List →
+    # _string_ref_names("_x") == ["_x"] → added to refs → _x is NOT flagged dead.
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        '__all__ = []\n__all__ += ["_x"]\n\n\ndef _x():\n    return 1\n\n\ndef use(): return 1\n',
+    )
+    messages = _dead_symbol_messages(tmp_path)
+    assert not any("_x" in m for m in messages), (
+        "_x named in __all__ += [...] string must NOT be flagged dead "
+        "(rescued via generic string-literal ref path)"
+    )
+
+
+def test_scan_getattr_string_literal_ref_not_dead(tmp_path) -> None:
+    # CORRECT: `def _h(): ...; getattr(self, "_h")()` — the string literal "_h" inside
+    # getattr is a Constant(str); _symbol_refs picks it up via the generic string-constant
+    # path and _string_ref_names("_h") == ["_h"] → added to refs → _h is NOT flagged dead.
+    _write(tmp_path, "pyproject.toml", '[project]\nname="x"\nversion="0"\n')
+    _write(
+        tmp_path,
+        "pkg/a.py",
+        'def _h():\n    return 1\n\n\ngetattr(self, "_h")()\n',
+    )
+    messages = _dead_symbol_messages(tmp_path)
+    assert not any("_h" in m for m in messages), (
+        "_h referenced via getattr string literal must NOT be flagged dead"
+    )

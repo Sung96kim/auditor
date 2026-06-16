@@ -850,3 +850,89 @@ def test_two_hop_reexport_chain_resolves_and_clears(tmp_path: Path) -> None:
         "(atmo/__init__ → atmo/a → atmo/b) and finds refresh_orms, which refreshes elements "
         "of param index 1, clearing dataset passed in [dataset, *datafiles]"
     )
+
+
+# ---------------------------------------------------------------------------
+# Obscure edge-case tests — callee resolver × greenlet integration
+# ---------------------------------------------------------------------------
+
+
+def test_type_checking_import_clears_greenlet(tmp_path: Path) -> None:
+    """Case 7: reload imported inside `if TYPE_CHECKING:` — greenlet finding IS cleared.
+
+    ast.walk visits every node in the tree including nested If bodies, so _callee_origin
+    locates the ImportFrom and resolves `reload` to the real def in app/helpers.py.
+    _refresh_effects sees the unconditional `s.refresh(o)` → clears obj.email.
+
+    Classification: CORRECT — the resolver transparently handles TYPE_CHECKING guards
+    because ast.walk is scope-unaware.  No false negative is produced here; the edge
+    case that *would* be a false negative (import guarded at runtime but not by
+    TYPE_CHECKING) is indistinguishable statically and is conservatively flagged.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "helpers.py").write_text(
+        "def reload(s, o):\n    s.refresh(o)\n"
+    )
+    (tmp_path / "app" / "svc.py").write_text(
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.helpers import reload\n"
+        "import sqlalchemy\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj)\n"
+        "    return obj.email\n"
+    )
+    findings = _greenlet_findings(tmp_path)
+    # Resolver walks into the TYPE_CHECKING block and resolves reload — obj is freshened.
+    assert not findings, (
+        "SA-GREENLET-ATTR-AFTER-COMMIT must NOT fire: ast.walk finds the ImportFrom "
+        "inside the TYPE_CHECKING guard, resolves reload to its real def, and marks obj freshened"
+    )
+
+
+def test_dep_conditional_refresh_still_flags_greenlet(tmp_path: Path) -> None:
+    """Case 8: dep helper `reload(s, o): if o: s.refresh(o)` — finding is NOT cleared.
+
+    The resolver successfully resolves `reload` to the dep def.  However
+    `_refresh_effects` only counts *unconditional* refresh calls (via
+    `_unconditional_stmts`, which yields top-level statements but NOT if-body
+    statements).  The `s.refresh(o)` is inside an `if` branch, so `_refresh_effects`
+    returns `(frozenset(), frozenset())` — no params are marked freshened.
+    The greenlet rule therefore still fires even though the call was resolved.
+
+    Classification: correct conservative gap — proof-of-refresh requires the refresh
+    to be unconditional; a guarded refresh is not a proof.  No false negative results.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    # refresh is inside an `if` guard — _unconditional_stmts skips it
+    (dep / "__init__.py").write_text(
+        "def reload(s, o):\n    if o:\n        s.refresh(o)\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import reload\n\n\n"
+        "async def f(session, q):\n"
+        "    obj = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    reload(session, obj)\n"
+        "    return obj.email\n"
+    )
+    findings = _greenlet_findings(tmp_path)
+    # _refresh_effects finds no unconditional refresh → obj not freshened → still flagged.
+    assert findings, (
+        "SA-GREENLET-ATTR-AFTER-COMMIT must fire: reload is resolved but its refresh is "
+        "inside an `if` branch — _refresh_effects requires unconditional refresh proof"
+    )

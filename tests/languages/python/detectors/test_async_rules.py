@@ -189,3 +189,50 @@ def test_no_await_body_nested_inner_flagged_outer_not() -> None:
     assert findings[0].line == 3, (
         f"finding should point at inner function (line 3), got line {findings[0].line}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Obscure edge-case tests — discovered+pinned (run to characterize, then asserted)
+# ---------------------------------------------------------------------------
+
+
+def test_no_await_body_await_in_listcomp_not_flagged() -> None:
+    # CORRECT: `async def f(xs): return [await g(x) for x in xs]`
+    # `_nodes_excluding_nested_funcs` walks into the ListComp and finds the Await node
+    # (a list comprehension is NOT an (Async)FunctionDef, so it is not excluded) →
+    # `_has_async_construct` returns True → rule does NOT fire.
+    src = "async def f(xs):\n    return [await g(x) for x in xs]\n"
+    assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src)), (
+        "await inside a list comprehension is visible to _has_async_construct — must NOT flag"
+    )
+
+
+def test_no_await_body_await_only_in_nested_async_def_outer_flagged() -> None:
+    # Regression: `async def a(): async def b(): await g(); return 1`
+    # Outer `a` has no await in its OWN body; the only await belongs to inner `b`.
+    # _has_async_construct / _is_async_generator now skip top-level statements that are
+    # themselves (Async)FunctionDef before recursing, so the inner `b`'s await no longer
+    # leaks through to the outer. Outer `a` is correctly flagged (it could be made sync —
+    # it only defines a nested coroutine and returns a constant). The inner `b` awaits, so
+    # only `a` fires.
+    src = "async def a():\n    async def b():\n        await g()\n    return 1\n"
+    findings = [
+        f for f in run_audit(src).findings if f.rule_id == "PY-ASYNC-NO-AWAIT-BODY"
+    ]
+    assert len(findings) == 1, (
+        f"expected exactly one PY-ASYNC-NO-AWAIT-BODY (outer 'a'), got {findings}"
+    )
+    assert findings[0].line == 1, (
+        f"finding should point at outer 'a' (line 1), got line {findings[0].line}"
+    )
+
+
+def test_no_await_body_overload_stub_not_flagged() -> None:
+    # CORRECT: `@overload\nasync def f(x: int) -> int: ...`
+    # The body is a single Expr(Constant(...)) statement — `_is_abstract_or_stub` returns
+    # True (the `...` form) → rule is skipped. The @overload decorator is not checked by
+    # name; it is the `...` body that grants the exemption.
+    src = "from typing import overload\n@overload\nasync def f(x: int) -> int: ...\n"
+    assert "PY-ASYNC-NO-AWAIT-BODY" not in rule_ids(run_audit(src)), (
+        "@overload stub with '...' body is exempted via _is_abstract_or_stub — must NOT flag"
+    )

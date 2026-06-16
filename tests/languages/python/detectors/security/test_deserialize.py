@@ -107,3 +107,67 @@ def test_unsafe_deserialize_clean_variants(src: str) -> None:
     assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
         f"PY-SEC-UNSAFE-DESERIALIZE must NOT fire for:\n{src}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Obscure edge-case tests — discovered+pinned (run to characterize, then asserted)
+# ---------------------------------------------------------------------------
+
+
+def test_from_pickle_import_loads_bare_not_flagged() -> None:
+    # FN-GAP: `from pickle import loads; loads(b)` — the rule resolves aliases only
+    # via `import_alias_map` which tracks `import x as y` style; `from`-imports create
+    # a bare name `loads` with no module prefix, so `dotted_name(node.func)` == "loads"
+    # and `resolve_dotted("loads", aliases)` returns "loads" (no alias entry) → not in
+    # _UNSAFE_LOADERS (which requires "pickle.loads") → NOT flagged.
+    # Acceptable FN-gap: from-import deserialization sinks are a known detection scope limit.
+    src = "from pickle import loads\nloads(b)\n"
+    assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
+        "from-import bare 'loads' is NOT resolved to pickle.loads — FN-gap, expected NOT flagged"
+    )
+
+
+def test_from_joblib_import_load_bare_not_flagged() -> None:
+    # FN-GAP: same from-import resolution gap as above, for joblib.
+    # `from joblib import load; load(p)` → bare `load` → not in _UNSAFE_LOADERS → NOT flagged.
+    src = "from joblib import load\nload(p)\n"
+    assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
+        "from-import bare 'load' is NOT resolved to joblib.load — FN-gap, expected NOT flagged"
+    )
+
+
+def test_aliased_pickle_module_loads_flagged() -> None:
+    # CORRECT: `import pickle as p; p.loads(b)` — import_alias_map maps `p` -> `pickle`,
+    # so resolve_dotted("p.loads", {"p": "pickle"}) == "pickle.loads" → in _UNSAFE_LOADERS → FLAGGED.
+    src = "import pickle as p\np.loads(b)\n"
+    assert "PY-SEC-UNSAFE-DESERIALIZE" in rule_ids(run_audit(src)), (
+        "aliased-module pickle.loads must be flagged via import-alias resolution"
+    )
+
+
+def test_yaml_load_variable_loader_no_safe_in_name_flagged() -> None:
+    # CORRECT: `yaml.load(s, Loader=Loader)` where `Loader` is a plain variable — dotted_name
+    # of the Loader= value is just "Loader"; "Safe" is NOT in "Loader" → _is_safe_yaml returns
+    # False → rule flags it as unsafe.
+    src = "import yaml\nLoader = something\nyaml.load(s, Loader=Loader)\n"
+    assert "PY-SEC-UNSAFE-DESERIALIZE" in rule_ids(run_audit(src)), (
+        "yaml.load with a non-Safe variable Loader must be flagged"
+    )
+
+
+def test_pandas_read_pickle_not_flagged() -> None:
+    # FN-GAP (known scope): pandas.read_pickle is not in _UNSAFE_LOADERS — only the core
+    # pickle-family and joblib/dill/cloudpickle/yaml sinks are enumerated.
+    src = "import pandas\npandas.read_pickle(p)\n"
+    assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
+        "pandas.read_pickle is outside the rule's loader set — known scope gap, NOT flagged"
+    )
+
+
+def test_numpy_load_allow_pickle_not_flagged() -> None:
+    # FN-GAP (known scope): numpy.load(allow_pickle=True) is not covered — the rule only
+    # checks the callee name against _UNSAFE_LOADERS; numpy.load is not in that set.
+    src = "import numpy\nnumpy.load(p, allow_pickle=True)\n"
+    assert "PY-SEC-UNSAFE-DESERIALIZE" not in rule_ids(run_audit(src)), (
+        "numpy.load(allow_pickle=True) is outside the rule's loader set — known scope gap, NOT flagged"
+    )

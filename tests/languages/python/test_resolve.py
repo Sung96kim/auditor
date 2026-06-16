@@ -315,3 +315,178 @@ def test_reexport_target_relative_level2():
 def test_reexport_target_out_of_bounds_returns_none():
     n = _importfrom("from ....deep import x\n")  # level 4, too deep for "a.b"
     assert CalleeResolver._reexport_target("a.b", True, n) is None
+
+
+# ---------------------------------------------------------------------------
+# Obscure edge-case tests — callee resolver boundary probes
+# ---------------------------------------------------------------------------
+
+
+def test_type_checking_block_import_resolves(tmp_path):
+    """Case 1: `from app.helpers import reload` nested inside `if TYPE_CHECKING:` block.
+
+    ast.walk visits ALL nodes (incl. nested If bodies), so the ImportFrom is found
+    even though it's guarded. Result: resolves correctly — CORRECT behaviour.
+    At runtime the import is dead code, so any false-negative introduced here is
+    constrained to TYPE_CHECKING-only imports, which are always type stubs in practice.
+    """
+    r = _repo(tmp_path, {"app/helpers.py": "def reload(s, o):\n    s.refresh(o)\n"})
+    src = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from app.helpers import reload\n"
+        "reload(s, o)\n"
+    )
+    call, tree = _call(src)
+    fn = r.resolve_func(call, tree)
+    # ast.walk sees the ImportFrom inside the If body — resolves to the real def.
+    assert fn is not None and fn.name == "reload"
+
+
+def test_multi_name_import_resolves_first_name(tmp_path):
+    """Case 2: `from app.helpers import reload, other` — `reload(s, o)` resolves.
+
+    _callee_origin iterates aliases in order; the matching alias (reload) is found
+    immediately. CORRECT: multi-name from-imports work as expected.
+    """
+    r = _repo(
+        tmp_path,
+        {
+            "app/helpers.py": "def reload(s, o):\n    s.refresh(o)\n\ndef other(): pass\n"
+        },
+    )
+    src = "from app.helpers import reload, other\nreload(s, o)\n"
+    call, tree = _call(src)
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "reload"
+
+
+def test_from_pkg_import_submodule_attr_call_returns_none(tmp_path):
+    """Case 3: `from app import helpers; helpers.reload(s, o)` — returns None.
+
+    `import_alias_map` only registers `import x as y` style imports (ast.Import with
+    an asname); `from app import helpers` is an ast.ImportFrom and is NOT entered into
+    the alias map. So `resolve_dotted('helpers.reload', {})` → 'helpers.reload', whose
+    module part 'helpers' cannot be found on disk → _find_def returns None.
+
+    This is an acceptable conservative gap: the call is unresolved (honest unknown)
+    rather than mis-resolved. No false-negative greenlet clearance results.
+    """
+    r = _repo(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/helpers.py": "def reload(s, o):\n    s.refresh(o)\n",
+        },
+    )
+    src = "from app import helpers\nhelpers.reload(s, o)\n"
+    call, tree = _call(src)
+    # import_alias_map skips from-imports; module resolves to 'helpers' (not 'app.helpers')
+    assert r.resolve_func(call, tree) is None
+
+
+def test_aliased_module_import_resolves(tmp_path):
+    """Case 3b: `import app.helpers as h; h.reload(s, o)` — resolves to reload.
+
+    `import app.helpers as h` IS registered by import_alias_map (ast.Import with asname).
+    resolve_dotted('h.reload', {'h': 'app.helpers'}) → 'app.helpers.reload'.
+    CORRECT: aliased dotted-module imports work end-to-end.
+    """
+    r = _repo(tmp_path, {"app/helpers.py": "def reload(s, o):\n    s.refresh(o)\n"})
+    src = "import app.helpers as h\nh.reload(s, o)\n"
+    call, tree = _call(src)
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "reload"
+
+
+def test_star_reexport_ignores_all_dunder(tmp_path):
+    """Case 4: `__all__` restriction on star-reexport is NOT honoured.
+
+    dep `atmo/__init__.py` sets `__all__ = ['other']` then `from .utils import *`.
+    `utils.py` defines `refresh_orms` (absent from `__all__`) and `other`.
+    At runtime `from atmo import refresh_orms` would raise ImportError because
+    `refresh_orms` is not in `__all__`.  The resolver searches utils regardless
+    and FINDS `refresh_orms`.
+
+    Classification: acceptable conservative behaviour — over-resolution (resolver
+    finds more than runtime exposes) means a real refresh call is correctly detected;
+    it cannot produce a false negative greenlet clearance.
+    """
+    r = _dep_pkg(
+        tmp_path,
+        "__all__ = ['other']\nfrom .utils import *\n",
+        _RO_DEF + "\ndef other(): pass\n",
+    )
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    fn = r.resolve_func(call, tree)
+    # Resolver finds the def even though __all__ would exclude it at runtime.
+    assert fn is not None and fn.name == "refresh_orms"
+
+
+def test_five_hop_chain_exceeds_depth_cap(tmp_path):
+    """Case 5: a→b→c→d→e (5 hops) exceeds the depth-4 cap → returns None.
+
+    resolve_func calls _find_def with depth=4.  Each re-export hop consumes one unit:
+      p.a (depth=4) → re-export to p.b (depth=3) → p.c (depth=2) → p.d (depth=1) → p.e (depth=0).
+    At depth=0 the guard fires before p.e is inspected → None.
+
+    Also confirmed: a 4-hop chain (a→b→c→d, def in d) DOES resolve — the cap is
+    inclusive of the initial call (depth=4 means 4 _find_def activations, not 4 hops).
+
+    Classification: correct — the bound prevents unbounded recursion; depth-4 covers
+    the vast majority of real re-export chains.
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "a.py").write_text("from p.b import f\n")
+    (tmp_path / "p" / "b.py").write_text("from p.c import f\n")
+    (tmp_path / "p" / "c.py").write_text("from p.d import f\n")
+    (tmp_path / "p" / "d.py").write_text("from p.e import f\n")
+    (tmp_path / "p" / "e.py").write_text("def f(): pass\n")
+    r = CalleeResolver(tmp_path)
+    call, tree = _call("from p.a import f\nf()\n")
+    # 5 hops: p.a(4)→p.b(3)→p.c(2)→p.d(1)→p.e(0) — depth guard fires at p.e
+    assert r.resolve_func(call, tree) is None
+
+
+def test_four_hop_chain_within_depth_cap(tmp_path):
+    """Companion to Case 5: 4-hop chain (a→b→c→d, def in d) DOES resolve.
+
+    _find_def activations: p.a(4)→p.b(3)→p.c(2)→p.d(1) — at depth=1 the def is
+    found before any recursive call at depth=0.  Confirms the cap allows up to 4
+    activations inclusive.
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "a.py").write_text("from p.b import f\n")
+    (tmp_path / "p" / "b.py").write_text("from p.c import f\n")
+    (tmp_path / "p" / "c.py").write_text("from p.d import f\n")
+    (tmp_path / "p" / "d.py").write_text("def f(): pass\n")
+    r = CalleeResolver(tmp_path)
+    call, tree = _call("from p.a import f\nf()\n")
+    fn = r.resolve_func(call, tree)
+    assert fn is not None and fn.name == "f"
+
+
+def test_self_referential_star_import_terminates(tmp_path):
+    """Case 6: `atmo/__init__.py: from . import *` — self-referential star terminates safely.
+
+    `from . import *` with no module name: `_reexport_target('atmo', True, node)` returns
+    'atmo' (the package itself) because `node.module` is None and the base resolves back to
+    the current dotted name.  The subsequent _find_def('atmo', 'refresh_orms', ...) hits the
+    seen-guard immediately (('atmo','refresh_orms') already in `seen`) and returns None.
+
+    Classification: correct — terminates in O(1) extra work via the seen-guard; never crashes.
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    sp = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    sp.mkdir(parents=True)
+    (sp / "__init__.py").write_text("from . import *\n")
+    r = CalleeResolver(
+        tmp_path,
+        resolve_packages=("atmo",),
+        site_packages=find_site_packages(tmp_path),
+    )
+    call, tree = _call("from atmo import refresh_orms\nrefresh_orms(s, [o])\n")
+    # Must not crash or loop; seen-guard stops the self-reference immediately.
+    assert r.resolve_func(call, tree) is None

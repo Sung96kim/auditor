@@ -129,3 +129,39 @@ def test_naive_datetime_clean_variants(expr: str) -> None:
     assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src)), (
         f"{expr!r} must NOT be flagged as naive datetime"
     )
+
+
+# ---------------------------------------------------------------------------
+# Obscure edge-case tests — discovered+pinned (run to characterize, then asserted)
+# ---------------------------------------------------------------------------
+
+
+def test_naive_datetime_aliased_class_not_flagged() -> None:
+    # FN-GAP: `from datetime import datetime as dt; dt.utcnow()` — the rule checks
+    # _owner_is_datetime(node.func.value), which accepts an ast.Name whose .id == "datetime"
+    # OR an ast.Attribute whose .attr == "datetime". When aliased to `dt`, the owner's .id
+    # is "dt", not "datetime" → _owner_is_datetime returns False → NOT flagged.
+    src = "from datetime import datetime as dt\nx = dt.utcnow()\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src)), (
+        "datetime aliased as 'dt' is not recognized by _owner_is_datetime — FN-gap, NOT flagged"
+    )
+
+
+def test_naive_datetime_indirection_via_variable_not_flagged() -> None:
+    # FN-GAP: `f = datetime.datetime.utcnow; x = f()` — the call `f()` has func=Name("f"),
+    # which is NOT an ast.Attribute node, so the rule's top-level guard
+    # `isinstance(node.func, ast.Attribute)` is False → skipped entirely → NOT flagged.
+    # Indirection through any variable breaks static name resolution by design.
+    src = "import datetime\nf = datetime.datetime.utcnow\nx = f()\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src)), (
+        "utcnow stored in a variable and called via that variable is NOT flagged — FN-gap by design"
+    )
+
+
+def test_naive_datetime_now_with_positional_tz_not_flagged() -> None:
+    # CORRECT: `datetime.datetime.now(datetime.timezone.utc)` — positional arg present;
+    # _has_tz_arg(call) returns True (call.args is non-empty) → _is_naive returns False → clean.
+    src = "import datetime\nx = datetime.datetime.now(datetime.timezone.utc)\n"
+    assert "PY-CORRECT-NAIVE-DATETIME" not in rule_ids(run_audit(src)), (
+        "datetime.now() with a positional tz argument is tz-aware and must NOT be flagged"
+    )
