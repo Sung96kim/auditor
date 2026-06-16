@@ -422,6 +422,58 @@ def _commit_lines(fn: ast.AST) -> list[int]:
     )
 
 
+def _unconditional_stmts(body: list[ast.stmt]):
+    """Statements that always execute: top level + with/try bodies. NOT if/loop bodies."""
+    for stmt in body:
+        if isinstance(stmt, (ast.With, ast.AsyncWith, ast.Try)):
+            yield from _unconditional_stmts(stmt.body)
+        else:
+            yield stmt
+
+
+def _refresh_call_arg(stmt: ast.stmt) -> str | None:
+    """If ``stmt`` is (await) <x>.refresh(<Name>), return that Name's id."""
+    value = stmt.value if isinstance(stmt, ast.Expr) else None
+    if isinstance(value, ast.Await):
+        value = value.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "refresh"
+        and value.args
+        and isinstance(value.args[0], ast.Name)
+    ):
+        return value.args[0].id
+    return None
+
+
+def _refresh_effects(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[frozenset[int], frozenset[int]]:
+    """(params refreshed directly, params whose elements are refreshed) — unconditional only.
+    Direct: ``s.refresh(p)``. Elements: ``for o in p: s.refresh(o)`` (covers every element)."""
+    params = [a.arg for a in fn.args.posonlyargs + fn.args.args]
+    index = {name: i for i, name in enumerate(params)}
+    direct: set[int] = set()
+    elements: set[int] = set()
+    for stmt in _unconditional_stmts(fn.body):
+        name = _refresh_call_arg(stmt)
+        if name in index:
+            direct.add(index[name])
+        elif (
+            isinstance(stmt, (ast.For, ast.AsyncFor))
+            and isinstance(stmt.iter, ast.Name)
+            and stmt.iter.id in index
+            and isinstance(stmt.target, ast.Name)
+            and any(
+                _refresh_call_arg(s) == stmt.target.id
+                for s in _unconditional_stmts(stmt.body)
+            )
+        ):
+            elements.add(index[stmt.iter.id])
+    return frozenset(direct), frozenset(elements)
+
+
 def _freshen_lines(fn: ast.AST) -> dict[str, list[int]]:
     """Per-name lines where a name is (re)bound or reloaded — an assignment (construction or
     query), a for-loop target, or ``session.refresh(obj)``. A commit only expires an object's

@@ -1,9 +1,12 @@
 """SQLAlchemy framework rules (framework=sqlalchemy)."""
 
+import ast as _ast
+
 import pytest
 from _support import rule_ids, run_audit
 
 from auditor.config import AuditorSettings, SqlAlchemyConfig
+from auditor.languages.python.detectors.sqlalchemy_rules import _refresh_effects
 from auditor.models import FileRole
 
 _IMP = "import sqlalchemy as sa\nfrom sqlalchemy.orm import mapped_column, relationship\nfrom sqlalchemy import Column, text\n"
@@ -413,3 +416,40 @@ def test_joined_collection_fires(ann):
 )
 def test_joined_collection_clean(case):
     assert "SA-JOINED-COLLECTION" not in _ids(f"class M:\n    {case}\n")
+
+
+# --- _refresh_effects (callee-resolution helper) -------------------------------------------
+
+
+def _fn(src: str) -> _ast.FunctionDef | _ast.AsyncFunctionDef:
+    return next(
+        n
+        for n in _ast.walk(_ast.parse(src))
+        if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+    )
+
+
+def test_refresh_effects_direct():
+    assert _refresh_effects(_fn("def reload(s, o):\n    s.refresh(o)\n")) == (
+        frozenset({1}),
+        frozenset(),
+    )
+
+
+def test_refresh_effects_elements():
+    fn = _fn("def reload_all(s, objs):\n    for o in objs:\n        s.refresh(o)\n")
+    assert _refresh_effects(fn) == (frozenset(), frozenset({1}))
+
+
+def test_refresh_effects_conditional_is_empty():
+    fn = _fn("def maybe(s, o, c):\n    if c:\n        s.refresh(o)\n")
+    assert _refresh_effects(fn) == (frozenset(), frozenset())
+
+
+def test_refresh_effects_await_form():
+    assert _refresh_effects(
+        _fn("async def reload(s, o):\n    await s.refresh(o)\n")
+    ) == (
+        frozenset({1}),
+        frozenset(),
+    )
