@@ -375,3 +375,56 @@ def test_engine_no_warning_when_reach_empty(tmp_path: Path) -> None:
         logger.disable("auditor")
         logger.remove(sink_id)
     assert not any("resolve_packages" in m for m in msgs)
+
+
+def test_dependency_refresh_orms_clears_greenlet(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+        '[tool.auditor]\nresolve_packages = ["atmo"]\n'
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(
+        "async def refresh_orms(session, objs):\n    for o in objs:\n        await session.refresh(o)\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import refresh_orms\n\n\n"
+        "async def f(session, q, datafiles):\n"
+        "    dataset = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    await refresh_orms(session, [dataset, *datafiles])\n"
+        "    return [ls.name for ls in dataset.labelsets]\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    rules = {f.rule_id for r in results for f in r.findings}
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" not in rules
+
+
+def test_dependency_refresh_orms_flags_when_not_in_reach(tmp_path):
+    # identical, but resolve_packages omits "atmo" -> dep unreadable -> still flagged
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n'
+        "[tool.auditor.sqlalchemy]\nexpire_on_commit=true\nasync_session=true\n"
+    )
+    dep = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages" / "atmo"
+    dep.mkdir(parents=True)
+    (dep / "__init__.py").write_text(
+        "async def refresh_orms(session, objs):\n    for o in objs:\n        await session.refresh(o)\n"
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "svc.py").write_text(
+        "import sqlalchemy\n"
+        "from atmo import refresh_orms\n\n\n"
+        "async def f(session, q):\n"
+        "    dataset = session.scalar_one(q)\n"
+        "    await session.commit()\n"
+        "    await refresh_orms(session, [dataset])\n"
+        "    return dataset.labelsets\n"
+    )
+    results = asyncio.run(audit_target(tmp_path, no_index=True))
+    assert "SA-GREENLET-ATTR-AFTER-COMMIT" in {
+        f.rule_id for r in results for f in r.findings
+    }
