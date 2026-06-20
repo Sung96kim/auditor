@@ -46,15 +46,15 @@ async def run(
     entry_point_names: frozenset[str] = frozenset(),
 ) -> dict[str, list[Finding]]:
     """Recompute cross-file findings, persist them in the index, and return them per file."""
-    await index.clear_findings_for_rules(
+    await index.findings.clear_findings_for_rules(
         [*_RULES, settings_cohesion.RULE_ID, fixture_usage.RULE_ID, *dead_code.RULE_IDS]
     )
-    roles = await index.roles_by_path()
-    per_file = _group(await index.duplicate_shapes(), roles)
+    roles = await index.files.roles_by_path()
+    per_file = _group(await index.shapes.duplicate_shapes(), roles)
     _merge(
         per_file,
         settings_cohesion.find_scattered(
-            await index.shapes_by_kind(_CLASS_BASE_KIND),
+            await index.shapes.shapes_by_kind(_CLASS_BASE_KIND),
             roles,
             settings_modules=settings_modules,
             cohesion=settings_cohesion_on,
@@ -63,21 +63,21 @@ async def run(
     _merge(
         per_file,
         fixture_usage.find_unused(
-            await index.shapes_by_kind(_FIXTURE_DEF_KIND),
-            await index.shapes_by_kind(_FIXTURE_REF_KIND),
+            await index.shapes.shapes_by_kind(_FIXTURE_DEF_KIND),
+            await index.shapes.shapes_by_kind(_FIXTURE_REF_KIND),
             roles,
         ),
     )
     _merge(
         per_file,
         dead_code.find_dead(
-            {k: await index.shapes_by_kind(k) for k in dead_code.KINDS},
+            {k: await index.shapes.shapes_by_kind(k) for k in dead_code.KINDS},
             roles,
             entry_points=entry_point_names,
         ),
     )
     for path, findings in per_file.items():
-        await index.add_findings(path, findings)
+        await index.findings.add_findings(path, findings)
     return per_file
 
 

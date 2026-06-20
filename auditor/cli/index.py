@@ -27,7 +27,7 @@ def index_add(paths: ScopePaths, target: RootArg = Path(".")) -> None:
 
 async def _index_add(root: Path, rels: list[str]) -> None:
     async with await _open_index(root) as index:
-        await index.add_scope(rels)
+        await index.files.add_scope(rels)
 
 
 @index_app.command("list")
@@ -63,4 +63,4 @@ def index_forget(target: RootArg = Path(".")) -> None:
 
 async def _index_forget(root: Path) -> bool:
     async with await _open_shared_index() as index:
-        return await index.forget(repo_key(root))
+        return await index.repos.forget(repo_key(root))

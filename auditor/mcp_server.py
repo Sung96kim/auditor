@@ -131,7 +131,7 @@ async def finding_detail(file: str, rule_id: str, line: int) -> dict:
     except ValueError:
         rel = str(path)
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        for f in await index.cached_findings(rel, rule_id):
+        for f in await index.findings.cached_findings(rel, rule_id):
             if f.line == line:
                 return f.model_dump(mode="json")
     results = await audit_target(path, root=root, apply_ignores=False)
@@ -225,7 +225,7 @@ async def ignore_add(
         evidence = await finding_evidence_at(root, file, rule_id, line)
         ev_hash = evidence_hash(evidence) if evidence is not None else None
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        ignore_id = await index.add_ignore(
+        ignore_id = await index.ignores.add_ignore(
             rule_id, file, line, ev_hash, reason, time.time()
         )
     return {"id": ignore_id, "rule_id": rule_id, "file": file, "line": line}
@@ -244,7 +244,7 @@ async def ignore_remove(id: int, path: str = ".") -> dict:
     """Remove (unignore) a persistent ignore by its id (from ignore_list)."""
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        removed = await index.remove_ignore_by_id(id)
+        removed = await index.ignores.remove_ignore_by_id(id)
     return {"removed": removed, "id": id}
 
 

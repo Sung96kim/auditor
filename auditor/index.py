@@ -241,8 +241,10 @@ class BaseDB:
 
     def _ensure_repo(self, conn: sqlite3.Connection) -> None:
         name = Path(self.repo).name or self.repo
-        conn.execute("INSERT OR IGNORE INTO repos (repo, name, last_scanned) VALUES (?, ?, 0)",
-                     (self.repo, name))
+        conn.execute(
+            "INSERT OR IGNORE INTO repos (repo, name, last_scanned) VALUES (?, ?, 0)",
+            (self.repo, name),
+        )
 
 
 class ReposDB(BaseDB):
@@ -868,130 +870,6 @@ class IndexStore(BaseDB):
             return stale
 
         return await self._worker.run(op)
-
-    # --- thin delegators (kept for backward-compatibility; to be removed in Phase 2) ----------
-
-    async def register(self, when: float) -> None:
-        return await self.repos.register(when)
-
-    async def forget(self, repo: str | None = None) -> bool:
-        return await self.repos.forget(repo)
-
-    async def add_ignore(
-        self,
-        rule_id: str,
-        file: str | None,
-        line: int | None,
-        evidence_hash: str | None,
-        reason: str | None,
-        when: float,
-    ) -> int:
-        return await self.ignores.add_ignore(rule_id, file, line, evidence_hash, reason, when)
-
-    async def remove_ignore_by_id(self, ignore_id: int) -> bool:
-        return await self.ignores.remove_ignore_by_id(ignore_id)
-
-    async def remove_ignore_by_selector(
-        self, rule_id: str, file: str | None, line: int | None
-    ) -> bool:
-        return await self.ignores.remove_ignore_by_selector(rule_id, file, line)
-
-    async def clear_ignores(self) -> int:
-        return await self.ignores.clear_ignores()
-
-    async def add_scope(self, rel_paths: list[str]) -> None:
-        return await self.files.add_scope(rel_paths)
-
-    async def scope(self) -> list[str]:
-        return await self.files.scope()
-
-    async def file_sha(self, path: str) -> str | None:
-        return await self.files.file_sha(path)
-
-    async def upsert_file(self, entry: IndexEntry) -> None:
-        return await self.files.upsert_file(entry)
-
-    async def roles_by_path(self) -> dict[str, str]:
-        return await self.files.roles_by_path()
-
-    async def set_doc_path(self, path: str, doc_path: str) -> None:
-        return await self.files.set_doc_path(path, doc_path)
-
-    async def rule_fingerprint(self, path: str, rule_id: str) -> str | None:
-        return await self.findings.rule_fingerprint(path, rule_id)
-
-    async def cached_findings(self, path: str, rule_id: str) -> list[Finding]:
-        return await self.findings.cached_findings(path, rule_id)
-
-    async def record_rule(
-        self,
-        path: str,
-        rule_id: str,
-        fingerprint: str,
-        findings: list[Finding],
-        when: float,
-    ) -> None:
-        return await self.findings.record_rule(path, rule_id, fingerprint, findings, when)
-
-    async def all_findings(self) -> list[Finding]:
-        return await self.findings.all_findings()
-
-    async def findings_grouped(self) -> dict[str, list[Finding]]:
-        return await self.findings.findings_grouped()
-
-    async def add_findings(self, path: str, findings: list[Finding]) -> None:
-        return await self.findings.add_findings(path, findings)
-
-    async def clear_findings_for_rules(self, rule_ids: list[str]) -> None:
-        return await self.findings.clear_findings_for_rules(rule_ids)
-
-    async def clear_shapes(self, path: str) -> None:
-        return await self.shapes.clear_shapes(path)
-
-    async def add_shapes(self, rows: list[tuple[str, str, str, str, int]]) -> None:
-        return await self.shapes.add_shapes(rows)
-
-    async def shapes_by_kind(self, kind: str) -> list[dict]:
-        return await self.shapes.shapes_by_kind(kind)
-
-    async def duplicate_shapes(self) -> dict:
-        return await self.shapes.duplicate_shapes()
-
-    async def set_graph_facts(
-        self, path: str, facts_json: str, content_hash: str
-    ) -> None:
-        return await self.graph.set_facts(path, facts_json, content_hash)
-
-    async def graph_facts_hash(self, path: str) -> str | None:
-        return await self.graph.facts_hash(path)
-
-    async def all_graph_facts(self) -> list[str]:
-        return await self.graph.all_facts()
-
-    async def replace_graph(
-        self,
-        nodes: list[GraphNode],
-        edges: list[GraphEdge],
-        clusters: list[GraphCluster],
-    ) -> None:
-        return await self.graph.replace(nodes, edges, clusters)
-
-    async def graph_node(self, node_id: str) -> dict | None:
-        return await self.graph.node(node_id)
-
-    async def graph_nodes(self) -> list[dict]:
-        return await self.graph.nodes()
-
-    async def graph_edges_of(
-        self, node_id: str, kinds: list[str] | None
-    ) -> list[dict]:
-        return await self.graph.edges_of(node_id, kinds)
-
-    async def graph_cluster_members(self, cluster_id: int) -> list[dict]:
-        return await self.graph.cluster_members(cluster_id)
-
-    async def graph_clusters(self) -> list[dict]:
-        return await self.graph.clusters()
 
 
 def _finding_to_row(repo: str, path: str, f: Finding) -> tuple:

@@ -69,7 +69,7 @@ async def _ignore_add(
         else:
             ev_hash = evidence_hash(evidence)
     async with await _open_index(root) as index:
-        ignore_id = await index.add_ignore(
+        ignore_id = await index.ignores.add_ignore(
             rule_id, file, line, ev_hash, reason, time.time()
         )
     return {
@@ -114,8 +114,8 @@ async def _ignore_rm(
 ) -> bool:
     async with await _open_index(root) as index:
         if selector.isdigit():
-            return await index.remove_ignore_by_id(int(selector))
-        return await index.remove_ignore_by_selector(selector, file, line)
+            return await index.ignores.remove_ignore_by_id(int(selector))
+        return await index.ignores.remove_ignore_by_selector(selector, file, line)
 
 
 @ignore_app.command("clear")
@@ -127,4 +127,4 @@ def ignore_clear(target: RootArg = Path(".")) -> None:
 
 async def _ignore_clear(root: Path) -> int:
     async with await _open_index(root) as index:
-        return await index.clear_ignores()
+        return await index.ignores.clear_ignores()

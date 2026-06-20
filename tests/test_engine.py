@@ -185,7 +185,7 @@ async def test_deleting_one_of_a_dup_pair_clears_the_crossfile_finding(tmp_path)
             f.rule_id for f in second["pkg/b.py"].findings
         }
         # and no stale finding lingers in the table for aggregate to pick up
-        assert all("a.py" not in str(f) for f in await index.all_findings())
+        assert all("a.py" not in str(f) for f in await index.findings.all_findings())
 
 
 def test_audit_target_config_overrides(tmp_path):

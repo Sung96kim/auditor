@@ -44,9 +44,9 @@ def _entry(path: str = "x.py") -> IndexEntry:
 
 async def _populate(index: IndexStore) -> None:
     """Write one row into each working table for the index's bound repo."""
-    await index.upsert_file(_entry("x.py"))
-    await index.record_rule("x.py", "PY-X", "fp", [_finding("PY-X")], 1.0)
-    await index.add_shapes([("hash1", "func", "x.py", "f", 1)])
+    await index.files.upsert_file(_entry("x.py"))
+    await index.findings.record_rule("x.py", "PY-X", "fp", [_finding("PY-X")], 1.0)
+    await index.shapes.add_shapes([("hash1", "func", "x.py", "f", 1)])
 
 
 def _raw(db) -> sqlite3.Connection:
@@ -68,7 +68,9 @@ async def test_bare_connect_does_not_register(tmp_path):
 async def test_write_registers_repo(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/repos/alpha") as a:
-        await a.add_findings("x.py", [_finding()])  # any write registers the repo
+        await a.findings.add_findings(
+            "x.py", [_finding()]
+        )  # any write registers the repo
         regs = await a.repos.list()
     assert [r["repo"] for r in regs] == ["/repos/alpha"]
     assert regs[0]["name"] == "alpha"  # path basename
@@ -78,7 +80,7 @@ async def test_write_registers_repo(tmp_path):
 async def test_register_refreshes_name_and_time(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/x/proj") as s:
-        await s.register(
+        await s.repos.register(
             123.5
         )  # name is derived from the repo key's basename, not passed in
         regs = await s.repos.list()
@@ -151,7 +153,9 @@ async def test_forget_cascades_to_every_table(tmp_path):
         await _populate(a)
     async with await IndexStore.connect(db, "/repos/b") as b:
         await _populate(b)
-        assert await b.forget("/repos/a") is True  # delete the parent row → cascade
+        assert (
+            await b.repos.forget("/repos/a") is True
+        )  # delete the parent row → cascade
 
     conn = _raw(db)
     assert {r["repo"] for r in conn.execute("SELECT repo FROM repos")} == {"/repos/b"}
@@ -168,16 +172,16 @@ async def test_forget_cascades_to_every_table(tmp_path):
 async def test_forget_unknown_repo_returns_false(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/r") as s:
-        assert await s.forget("/nope") is False
+        assert await s.repos.forget("/nope") is False
 
 
 async def test_forget_defaults_to_own_repo(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/repos/solo") as s:
         await _populate(s)
-        assert await s.forget() is True  # no arg → forgets this handle's own repo
+        assert await s.repos.forget() is True  # no arg → forgets this handle's own repo
         assert await s.repos.list() == []
-        assert await s.all_findings() == []  # cascade cleared its data
+        assert await s.findings.all_findings() == []  # cascade cleared its data
 
 
 async def test_schema_version_recorded(tmp_path):
@@ -199,18 +203,20 @@ async def test_findings_grouped_by_path(tmp_path):
     """findings_grouped returns a dict keyed by path, each value being that file's findings."""
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/r") as store:
-        await store.upsert_file(_entry("a.py"))
-        await store.record_rule(
+        await store.files.upsert_file(_entry("a.py"))
+        await store.findings.record_rule(
             "a.py",
             "PY-X",
             "fp1",
             [_finding("PY-X", line=1), _finding("PY-X", line=2)],
             1.0,
         )
-        await store.upsert_file(_entry("b.py"))
-        await store.record_rule("b.py", "PY-Y", "fp2", [_finding("PY-Y", line=5)], 1.0)
+        await store.files.upsert_file(_entry("b.py"))
+        await store.findings.record_rule(
+            "b.py", "PY-Y", "fp2", [_finding("PY-Y", line=5)], 1.0
+        )
 
-        grouped = await store.findings_grouped()
+        grouped = await store.findings.findings_grouped()
 
     assert set(grouped.keys()) == {"a.py", "b.py"}
     assert len(grouped["a.py"]) == 2
@@ -223,5 +229,5 @@ async def test_findings_grouped_empty(tmp_path):
     """findings_grouped returns an empty dict when the store has no findings."""
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/r") as store:
-        grouped = await store.findings_grouped()
+        grouped = await store.findings.findings_grouped()
     assert grouped == {}
