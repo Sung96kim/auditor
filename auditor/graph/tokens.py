@@ -5,18 +5,6 @@ from collections.abc import Iterable
 
 TEXT_FLOOR = 4  # min unique concept tokens before a symbol is `text_sparse`
 
-_VERB = {}
-for _canon, _syns in {
-    "read": "get fetch load read retrieve lookup find query select list",
-    "write": "save store write persist update put set insert",
-    "create": "make create build new construct init",
-    "delete": "delete remove drop clear discard",
-    "check": "check validate verify ensure assert",
-    "convert": "convert parse render serialize format dump",
-}.items():
-    for _w in _syns.split():
-        _VERB[_w] = _canon
-
 _STOP = set(
     [
         "self",
@@ -89,7 +77,10 @@ def split_ident(s: str) -> list[str]:
 
 
 def normalize_tokens(tokens: Iterable[str]) -> list[str]:
-    return [_VERB.get(t, t) for t in tokens if len(t) >= 2 and t not in _STOP]
+    """Drop stopwords + very short tokens. NO verb-synonym rewriting — a POC measured a
+    hand-curated map at zero benefit (LSI discovers verb synonymy from co-occurrence); stemming
+    (in naming.py) handles morphological variants."""
+    return [t for t in tokens if len(t) >= 2 and t not in _STOP]
 
 
 def _toks(text: str) -> list[str]:
@@ -115,10 +106,6 @@ def symbol_document(
     ctx = [t for t in path_tokens if not t.isdigit() and not _is_hashlike(t)]
     if class_name:
         ctx += _toks(class_name)
-    # when the declaration collapses entirely to stopwords, surface raw name tokens so the
-    # symbol is still retrievable (e.g. name="id" with rich path/class context)
-    if not head:
-        ctx = [t.lower() for t in split_ident(name) if len(t) >= 2] + ctx
     return head * 3 + body + types + ctx
 
 

@@ -22,11 +22,11 @@ def test_split_ident(raw, expected):
     assert split_ident(raw) == expected
 
 
-def test_normalize_drops_stopwords_and_collapses_verbs():
-    # get/fetch/load all collapse to the READ canonical; stopwords ('the','id') dropped
+def test_normalize_drops_stopwords_keeps_verbs_verbatim():
+    # NO verb-synonym rewriting — get/fetch/load are kept as-is (LSI handles synonymy);
+    # stopwords ('the','id') and short tokens dropped
     out = normalize_tokens(["get", "fetch", "load", "the", "user", "id"])
-    assert out.count("read") == 3  # get, fetch, load -> read
-    assert "the" not in out and "id" not in out and "user" in out
+    assert out == ["get", "fetch", "load", "user"]
 
 
 def test_symbol_document_weights_declaration_3x():
@@ -51,8 +51,10 @@ def test_text_sparse_floor_uses_full_cascade():
         docstring="",
         body_idents=[],
         param_types=[],
-        path_tokens=["broker", "base"],
+        path_tokens=["broker", "base", "queue"],
         class_name="Execution",
     )
-    assert not is_text_sparse(doc)  # broker, base, execution rescue it
+    assert not is_text_sparse(
+        doc
+    )  # broker, base, queue, execution = 4 unique -> rescued
     assert is_text_sparse(["only", "x"]) and TEXT_FLOOR == 4
