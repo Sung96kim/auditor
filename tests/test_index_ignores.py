@@ -4,7 +4,8 @@ repo-partitioning, FK cascade on forget, and survival across a schema-version re
 import sqlite3
 
 from auditor.database import IndexStore
-from auditor.database.base import _CACHE_TABLES, _SCHEMA_VERSION
+from auditor.database.base import _SCHEMA_VERSION
+from auditor.database.store import _CACHE_TABLES
 
 
 async def test_add_list_roundtrip(tmp_path):

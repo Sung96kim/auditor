@@ -4,9 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from auditor.database.base import (
-    _CACHE_TABLES,
     _DEFAULT_REPO,
-    _SCHEMA,
     _SCHEMA_VERSION,
     BaseDB,
     _retry_locked,
@@ -18,6 +16,10 @@ from auditor.database.graph import GraphDB
 from auditor.database.ignores import IgnoresDB
 from auditor.database.repos import ReposDB
 from auditor.database.shapes import ShapesDB
+
+_STORES = (ReposDB, IgnoresDB, FilesDB, FindingsDB, ShapesDB, GraphDB)
+_SCHEMA = "\n".join(s.SCHEMA for s in _STORES)
+_CACHE_TABLES = tuple(t for s in _STORES for t in s.CACHE_TABLES)
 
 
 class IndexStore(BaseDB):

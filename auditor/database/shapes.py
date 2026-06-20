@@ -1,13 +1,25 @@
 """ShapesDB: table store for the ``shapes`` table."""
 
 import sqlite3
-from typing import Any
+from typing import Any, ClassVar
 
 from auditor.database.base import BaseDB
 
 
 class ShapesDB(BaseDB):
     """Table store for the ``shapes`` table."""
+
+    SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS shapes (
+    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
+    shape_hash TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    line INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shapes_hash ON shapes (repo, shape_hash);
+CREATE INDEX IF NOT EXISTS shapes_path ON shapes (repo, path);"""
+    CACHE_TABLES: ClassVar[tuple[str, ...]] = ("shapes",)
 
     async def clear(self, path: str) -> None:
         def op(conn: sqlite3.Connection) -> None:
