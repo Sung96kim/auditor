@@ -45,7 +45,7 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
 class FindingsDB(BaseDB):
     """Table store for the ``findings`` and ``file_rules`` tables."""
 
-    async def rule_fingerprint(self, path: str, rule_id: str) -> str | None:
+    async def fingerprint(self, path: str, rule_id: str) -> str | None:
         row = await self._worker.run(
             lambda c: c.execute(
                 "SELECT fingerprint FROM file_rules WHERE repo = ? AND path = ? AND rule_id = ?",
@@ -54,7 +54,7 @@ class FindingsDB(BaseDB):
         )
         return row["fingerprint"] if row else None
 
-    async def cached_findings(self, path: str, rule_id: str) -> list[Finding]:
+    async def cached(self, path: str, rule_id: str) -> list[Finding]:
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT * FROM findings WHERE repo = ? AND path = ? AND rule_id = ?",
@@ -63,7 +63,7 @@ class FindingsDB(BaseDB):
         )
         return [_row_to_finding(r) for r in rows]
 
-    async def record_rule(
+    async def record(
         self,
         path: str,
         rule_id: str,
@@ -94,7 +94,7 @@ class FindingsDB(BaseDB):
 
         await self._worker.run(op)
 
-    async def all_findings(self) -> list[Finding]:
+    async def all(self) -> list[Finding]:
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT * FROM findings WHERE repo = ? ORDER BY path, line, rule_id",
@@ -103,7 +103,7 @@ class FindingsDB(BaseDB):
         )
         return [_row_to_finding(r) for r in rows]
 
-    async def findings_grouped(self) -> dict[str, list[Finding]]:
+    async def grouped(self) -> dict[str, list[Finding]]:
         """path -> its findings (for callers that need the file association, e.g. applying
         ignores during aggregation)."""
 
@@ -119,7 +119,7 @@ class FindingsDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def add_findings(self, path: str, findings: list[Finding]) -> None:
+    async def add(self, path: str, findings: list[Finding]) -> None:
         rows = [_finding_to_row(self.repo, path, f) for f in findings]
 
         def op(conn: sqlite3.Connection) -> None:
@@ -132,7 +132,7 @@ class FindingsDB(BaseDB):
 
         await self._worker.run(op)
 
-    async def clear_findings_for_rules(self, rule_ids: list[str]) -> None:
+    async def clear_for_rules(self, rule_ids: list[str]) -> None:
         if not rule_ids:
             return
         placeholders = ",".join("?" for _ in rule_ids)

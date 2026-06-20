@@ -23,16 +23,14 @@ def _finding(rule_id: str = "PY-X", line: int = 1) -> Finding:
 async def test_two_repos_one_db_no_collision(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/repos/a") as a:
-        await a.findings.add_findings("x.py", [_finding("A-RULE")])
+        await a.findings.add("x.py", [_finding("A-RULE")])
     async with await IndexStore.connect(db, "/repos/b") as b:
-        await b.findings.add_findings(
-            "x.py", [_finding("B-RULE")]
-        )  # same path, different repo
+        await b.findings.add("x.py", [_finding("B-RULE")])  # same path, different repo
 
     async with await IndexStore.connect(db, "/repos/a") as a:
-        a_rules = {f.rule_id for f in await a.findings.all_findings()}
+        a_rules = {f.rule_id for f in await a.findings.all()}
     async with await IndexStore.connect(db, "/repos/b") as b:
-        b_rules = {f.rule_id for f in await b.findings.all_findings()}
+        b_rules = {f.rule_id for f in await b.findings.all()}
 
     assert a_rules == {"A-RULE"}
     assert b_rules == {"B-RULE"}
@@ -43,21 +41,19 @@ async def test_two_repos_one_db_no_collision(tmp_path):
 async def test_prune_only_touches_its_own_repo(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/repos/a") as a:
-        await a.findings.add_findings("gone.py", [_finding("A")])
+        await a.findings.add("gone.py", [_finding("A")])
     async with await IndexStore.connect(db, "/repos/b") as b:
-        await b.findings.add_findings("gone.py", [_finding("B")])
+        await b.findings.add("gone.py", [_finding("B")])
         await b.prune(keep_paths=set())  # drop everything in repo b
 
     async with await IndexStore.connect(db, "/repos/a") as a:
-        assert {f.rule_id for f in await a.findings.all_findings()} == {
-            "A"
-        }  # repo a untouched
+        assert {f.rule_id for f in await a.findings.all()} == {"A"}  # repo a untouched
 
 
 async def test_schema_version_change_rebuilds_cache(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "r") as s:
-        await s.findings.add_findings("x.py", [_finding()])
+        await s.findings.add("x.py", [_finding()])
 
     # simulate a db left at a different schema version
     raw = sqlite3.connect(db)
@@ -66,7 +62,7 @@ async def test_schema_version_change_rebuilds_cache(tmp_path):
     raw.close()
 
     async with await IndexStore.connect(db, "r") as s:
-        assert await s.findings.all_findings() == []  # stale cache dropped + rebuilt
+        assert await s.findings.all() == []  # stale cache dropped + rebuilt
 
     raw = sqlite3.connect(db)
     version = raw.execute("PRAGMA user_version").fetchone()[0]

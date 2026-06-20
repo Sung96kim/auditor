@@ -44,7 +44,7 @@ class FilesDB(BaseDB):
         )
         return [r["path"] for r in rows]
 
-    async def file_sha(self, path: str) -> str | None:
+    async def sha(self, path: str) -> str | None:
         row = await self._worker.run(
             lambda c: c.execute(
                 "SELECT sha256 FROM files WHERE repo = ? AND path = ?",
@@ -53,7 +53,7 @@ class FilesDB(BaseDB):
         )
         return row["sha256"] if row and row["sha256"] else None
 
-    async def upsert_file(self, entry: IndexEntry) -> None:
+    async def upsert(self, entry: IndexEntry) -> None:
         params = (
             self.repo,
             entry.path,
@@ -100,7 +100,7 @@ class FilesDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def roles_by_path(self) -> dict[str, str]:
+    async def roles(self) -> dict[str, str]:
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT path, role FROM files WHERE repo = ?", (self.repo,)

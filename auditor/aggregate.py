@@ -21,7 +21,7 @@ class AuditAggregator:
     async def _results(self) -> list[ScanResult]:
         """Reconstruct per-file results from the index and drop ignored findings."""
         entries = await self.index.files.list()
-        grouped = await self.index.findings.findings_grouped()
+        grouped = await self.index.findings.grouped()
         results = [
             ScanResult(
                 file=e.path,

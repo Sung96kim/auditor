@@ -49,7 +49,7 @@ async def test_scope_registry(tmp_path):
 async def test_record_and_read_back(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db") as index:
         now = time.time()
-        await index.files.upsert_file(
+        await index.files.upsert(
             IndexEntry(
                 path="a.py",
                 sha256="h1",
@@ -59,15 +59,14 @@ async def test_record_and_read_back(tmp_path):
                 last_scanned=now,
             )
         )
-        await index.findings.record_rule(
+        await index.findings.record(
             "a.py", "PY-SEC-DANGEROUS-EVAL", "fp1", [_finding()], now
         )
-        assert await index.files.file_sha("a.py") == "h1"
+        assert await index.files.sha("a.py") == "h1"
         assert (
-            await index.findings.rule_fingerprint("a.py", "PY-SEC-DANGEROUS-EVAL")
-            == "fp1"
+            await index.findings.fingerprint("a.py", "PY-SEC-DANGEROUS-EVAL") == "fp1"
         )
-        cached = await index.findings.cached_findings("a.py", "PY-SEC-DANGEROUS-EVAL")
+        cached = await index.findings.cached("a.py", "PY-SEC-DANGEROUS-EVAL")
         assert len(cached) == 1 and cached[0].rule_id == "PY-SEC-DANGEROUS-EVAL"
         files = await index.files.list()
         assert files[0].counts.get("blocking") == 1
@@ -76,7 +75,7 @@ async def test_record_and_read_back(tmp_path):
 async def test_record_rule_replaces(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db") as index:
         now = time.time()
-        await index.files.upsert_file(
+        await index.files.upsert(
             IndexEntry(
                 path="a.py",
                 sha256="h",
@@ -86,35 +85,33 @@ async def test_record_rule_replaces(tmp_path):
                 last_scanned=now,
             )
         )
-        await index.findings.record_rule(
+        await index.findings.record(
             "a.py", "R", "fp", [_finding("R"), _finding("R")], now
         )
-        await index.findings.record_rule(
-            "a.py", "R", "fp", [], now
-        )  # re-run, no findings
-        assert await index.findings.cached_findings("a.py", "R") == []
+        await index.findings.record("a.py", "R", "fp", [], now)  # re-run, no findings
+        assert await index.findings.cached("a.py", "R") == []
         assert (
-            await index.findings.rule_fingerprint("a.py", "R") == "fp"
+            await index.findings.fingerprint("a.py", "R") == "fp"
         )  # ran-clean, not absent
 
 
 async def test_shapes_and_duplicates(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db") as index:
-        await index.shapes.add_shapes([("hh", "model", "a.py", "A", 1)])
-        await index.shapes.add_shapes([("hh", "model", "b.py", "B", 1)])
-        await index.shapes.add_shapes([("other", "model", "a.py", "C", 5)])
-        dups = await index.shapes.duplicate_shapes()
+        await index.shapes.add([("hh", "model", "a.py", "A", 1)])
+        await index.shapes.add([("hh", "model", "b.py", "B", 1)])
+        await index.shapes.add([("other", "model", "a.py", "C", 5)])
+        dups = await index.shapes.duplicates()
         assert "hh" in dups and "other" not in dups
         assert {r["path"] for r in dups["hh"]} == {"a.py", "b.py"}
-        await index.shapes.clear_shapes("a.py")
-        assert await index.shapes.duplicate_shapes() == {}
+        await index.shapes.clear("a.py")
+        assert await index.shapes.duplicates() == {}
 
 
 async def test_clear_findings_for_rules(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db") as index:
-        await index.findings.add_findings("a.py", [_finding("PY-XFILE-DUP-MODEL")])
-        await index.findings.clear_findings_for_rules(["PY-XFILE-DUP-MODEL"])
-        assert await index.findings.all_findings() == []
+        await index.findings.add("a.py", [_finding("PY-XFILE-DUP-MODEL")])
+        await index.findings.clear_for_rules(["PY-XFILE-DUP-MODEL"])
+        assert await index.findings.all() == []
 
 
 # --- concurrency + high load on the async SQLite worker -----------------------
@@ -128,47 +125,47 @@ async def test_single_store_many_concurrent_writers(tmp_path):
 
         async def task(i: int) -> int:
             path = f"f{i}.py"
-            await index.files.upsert_file(_entry(path, sha=f"h{i}"))
-            await index.findings.record_rule(path, "R", f"fp{i}", [_finding("R")], now)
-            return len(await index.findings.cached_findings(path, "R"))
+            await index.files.upsert(_entry(path, sha=f"h{i}"))
+            await index.findings.record(path, "R", f"fp{i}", [_finding("R")], now)
+            return len(await index.findings.cached(path, "R"))
 
         results = await asyncio.gather(*[task(i) for i in range(300)])
         assert all(n == 1 for n in results)
         assert len(await index.files.list()) == 300
         # results were not cross-wired between concurrent callers
-        assert await index.findings.rule_fingerprint("f137.py", "R") == "fp137"
+        assert await index.findings.fingerprint("f137.py", "R") == "fp137"
 
 
 async def test_interleaved_readers_and_writers(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db") as index:
         now = time.time()
-        await index.files.upsert_file(_entry("a.py"))
-        await index.findings.record_rule("a.py", "R", "fp", [_finding("R")], now)
+        await index.files.upsert(_entry("a.py"))
+        await index.findings.record("a.py", "R", "fp", [_finding("R")], now)
 
         async def reader() -> int:
-            return len(await index.findings.cached_findings("a.py", "R"))
+            return len(await index.findings.cached("a.py", "R"))
 
         async def writer() -> None:
-            await index.findings.add_findings("a.py", [_finding("X")])
+            await index.findings.add("a.py", [_finding("X")])
 
         ops = [reader() for _ in range(80)] + [writer() for _ in range(80)]
         await asyncio.gather(*ops)  # no deadlock / no "database is locked"
-        assert len(await index.findings.all_findings()) == 1 + 80  # seeded R + 80 X
+        assert len(await index.findings.all()) == 1 + 80  # seeded R + 80 X
 
 
 async def test_high_load_volume(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db") as index:
         now = time.time()
-        await index.files.upsert_file(_entry("big.py"))
+        await index.files.upsert(_entry("big.py"))
         await asyncio.gather(
             *[
-                index.findings.record_rule(
+                index.findings.record(
                     "big.py", f"R{i}", f"fp{i}", [_finding(f"R{i}")], now
                 )
                 for i in range(800)
             ]
         )
-        assert len(await index.findings.all_findings()) == 800
+        assert len(await index.findings.all()) == 800
 
 
 async def test_many_stores_heavy_contention(tmp_path):
@@ -183,8 +180,8 @@ async def test_many_stores_heavy_contention(tmp_path):
         async with await IndexStore.connect(db) as index:
             for j in range(10):
                 path = f"f{i}_{j}.py"
-                await index.files.upsert_file(_entry(path, sha=f"h{i}{j}"))
-                await index.findings.record_rule(path, "R", "fp", [_finding("R")], now)
+                await index.files.upsert(_entry(path, sha=f"h{i}{j}"))
+                await index.findings.record(path, "R", "fp", [_finding("R")], now)
 
     await asyncio.gather(*[worker(i) for i in range(24)])
     async with await IndexStore.connect(db) as index:
@@ -203,11 +200,11 @@ async def test_worker_error_isolation_under_load(tmp_path):
                 )
 
         async def good(i: int) -> None:
-            await index.shapes.add_shapes([(f"h{i}", "model", f"f{i}.py", "C", 1)])
+            await index.shapes.add([(f"h{i}", "model", f"f{i}.py", "C", 1)])
 
         await asyncio.gather(bad(), *[good(i) for i in range(20)])
         # worker still alive and every good op landed
-        await index.shapes.add_shapes(
+        await index.shapes.add(
             [("h0", "model", "other.py", "D", 1)]
         )  # collide with f0's hash
-        assert "h0" in await index.shapes.duplicate_shapes()
+        assert "h0" in await index.shapes.duplicates()

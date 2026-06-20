@@ -260,19 +260,16 @@ class ScanEngine:
         skipped: list[SkippedRule],
     ) -> ScanResult:
         index = self.index
-        cached_sha = await index.files.file_sha(rel)
+        cached_sha = await index.files.sha(rel)
         missed = [
             rid
             for rid, fp in enabled.items()
-            if cached_sha != sha
-            or await index.findings.rule_fingerprint(rel, rid) != fp
+            if cached_sha != sha or await index.findings.fingerprint(rel, rid) != fp
         ]
 
         if not missed:  # nothing to re-run
             findings = [
-                f
-                for rid in enabled
-                for f in await index.findings.cached_findings(rel, rid)
+                f for rid in enabled for f in await index.findings.cached(rel, rid)
             ]
             findings.sort(key=lambda f: (f.line, f.rule_id))
             # genuinely cached only if a prior scan recorded this file; a file with no
@@ -289,7 +286,7 @@ class ScanEngine:
 
         res = self._audit(auditor, rel, source, role, rc, missed)
         now = time.time()
-        await index.files.upsert_file(
+        await index.files.upsert(
             IndexEntry(
                 path=rel,
                 sha256=sha,
@@ -303,24 +300,24 @@ class ScanEngine:
         for f in res.findings:
             by_rule.setdefault(f.rule_id, []).append(f)
         for rid in missed:
-            await index.findings.record_rule(
+            await index.findings.record(
                 rel, rid, enabled[rid], by_rule.get(rid, []), now
             )
 
-        await index.shapes.clear_shapes(rel)
+        await index.shapes.clear(rel)
         rows = auditor.shapes(
             source,
             method_min_statements=self.settings.threshold.dry.xfile_method_min_statements,
             cli_frameworks=self.settings.cli_frameworks,
         )
         if rows:
-            await index.shapes.add_shapes(
+            await index.shapes.add(
                 [(s.shape_hash, s.kind, rel, s.symbol, s.line) for s in rows]
             )
 
         hit = [rid for rid in enabled if rid not in missed]
         findings = list(res.findings) + [
-            f for rid in hit for f in await index.findings.cached_findings(rel, rid)
+            f for rid in hit for f in await index.findings.cached(rel, rid)
         ]
         findings.sort(key=lambda f: (f.line, f.rule_id))
         return ScanResult(

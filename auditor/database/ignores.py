@@ -9,7 +9,7 @@ from auditor.database.base import BaseDB
 class IgnoresDB(BaseDB):
     """Table store for the ``ignores`` table."""
 
-    async def add_ignore(
+    async def add(
         self,
         rule_id: str,
         file: str | None,
@@ -51,7 +51,7 @@ class IgnoresDB(BaseDB):
         )
         return [dict(r) for r in rows]
 
-    async def remove_ignore_by_id(self, ignore_id: int) -> bool:
+    async def remove_by_id(self, ignore_id: int) -> bool:
         def op(conn: sqlite3.Connection) -> bool:
             cur = conn.execute(
                 "DELETE FROM ignores WHERE repo=? AND id=?", (self.repo, ignore_id)
@@ -61,7 +61,7 @@ class IgnoresDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def remove_ignore_by_selector(
+    async def remove_by_selector(
         self, rule_id: str, file: str | None, line: int | None
     ) -> bool:
         def op(conn: sqlite3.Connection) -> bool:
@@ -75,7 +75,7 @@ class IgnoresDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def clear_ignores(self) -> int:
+    async def clear(self) -> int:
         def op(conn: sqlite3.Connection) -> int:
             cur = conn.execute("DELETE FROM ignores WHERE repo=?", (self.repo,))
             conn.commit()

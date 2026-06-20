@@ -9,7 +9,7 @@ from auditor.database.base import BaseDB
 class ShapesDB(BaseDB):
     """Table store for the ``shapes`` table."""
 
-    async def clear_shapes(self, path: str) -> None:
+    async def clear(self, path: str) -> None:
         def op(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "DELETE FROM shapes WHERE repo = ? AND path = ?", (self.repo, path)
@@ -18,7 +18,7 @@ class ShapesDB(BaseDB):
 
         await self._worker.run(op)
 
-    async def add_shapes(self, rows: list[tuple[str, str, str, str, int]]) -> None:
+    async def add(self, rows: list[tuple[str, str, str, str, int]]) -> None:
         tagged = [(self.repo, *row) for row in rows]
 
         def op(conn: sqlite3.Connection) -> None:
@@ -32,7 +32,7 @@ class ShapesDB(BaseDB):
 
         await self._worker.run(op)
 
-    async def shapes_by_kind(self, kind: str) -> list[dict[str, Any]]:
+    async def by_kind(self, kind: str) -> list[dict[str, Any]]:
         """All shape rows of one ``kind`` for this repo — for repo-level passes that consume a
         specific shape kind directly (e.g. ``py-class-base`` for scattered-settings) rather than
         the duplicate grouping."""
@@ -45,7 +45,7 @@ class ShapesDB(BaseDB):
         )
         return [dict(r) for r in rows]
 
-    async def duplicate_shapes(self) -> dict[str, list[sqlite3.Row]]:
+    async def duplicates(self) -> dict[str, list[sqlite3.Row]]:
         """shape_hash -> rows, for hashes spanning 2+ distinct files within this repo."""
 
         def op(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
