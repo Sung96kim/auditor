@@ -23,6 +23,7 @@ def _row_to_index_entry(row: sqlite3.Row, counts: dict) -> IndexEntry:
 class FilesDB(BaseDB):
     """Table store for the ``files`` and ``file_rules`` tables."""
 
+    attr: ClassVar[str] = "files"
     SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS files (
     repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
     path TEXT NOT NULL,

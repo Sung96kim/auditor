@@ -101,6 +101,16 @@ class BaseDB:
 
     SCHEMA: ClassVar[str] = ""
     CACHE_TABLES: ClassVar[tuple[str, ...]] = ()
+    attr: ClassVar[str] = (
+        ""  # facade attribute name; each concrete store overrides this
+    )
+    facade: ClassVar[bool] = False  # set True on IndexStore to opt out of registration
+    _registry: ClassVar[list[type["BaseDB"]]] = []
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        if not cls.__dict__.get("facade"):
+            BaseDB._registry.append(cls)
 
     def __init__(self, worker: "_SqliteWorker", repo: str) -> None:
         self._worker = worker

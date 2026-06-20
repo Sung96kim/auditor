@@ -9,6 +9,7 @@ from auditor.database.base import BaseDB
 class ShapesDB(BaseDB):
     """Table store for the ``shapes`` table."""
 
+    attr: ClassVar[str] = "shapes"
     SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS shapes (
     repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
     shape_hash TEXT NOT NULL,

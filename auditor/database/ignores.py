@@ -9,6 +9,7 @@ from auditor.database.base import BaseDB
 class IgnoresDB(BaseDB):
     """Table store for the ``ignores`` table."""
 
+    attr: ClassVar[str] = "ignores"
     SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS ignores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,

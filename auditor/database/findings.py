@@ -46,6 +46,7 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
 class FindingsDB(BaseDB):
     """Table store for the ``findings`` and ``file_rules`` tables."""
 
+    attr: ClassVar[str] = "findings"
     SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS file_rules (
     repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
     path TEXT NOT NULL,

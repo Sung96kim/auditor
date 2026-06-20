@@ -10,6 +10,7 @@ from auditor.database.base import BaseDB
 class ReposDB(BaseDB):
     """Table store for the ``repos`` registry."""
 
+    attr: ClassVar[str] = "repos"
     SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS repos (
     repo TEXT PRIMARY KEY,
     name TEXT NOT NULL,

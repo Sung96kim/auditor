@@ -1,6 +1,6 @@
 """IndexStore: the facade over all per-table DB stores."""
 
-import sqlite3
+import sqlite3  # noqa: I001
 from pathlib import Path
 
 from auditor.database.base import (
@@ -10,16 +10,19 @@ from auditor.database.base import (
     _retry_locked,
     _SqliteWorker,
 )
+
+# Registration order = import order: each import triggers __init_subclass__ on BaseDB.
+from auditor.database.repos import ReposDB
+from auditor.database.ignores import IgnoresDB
 from auditor.database.files import FilesDB
 from auditor.database.findings import FindingsDB
-from auditor.database.graph import GraphDB
-from auditor.database.ignores import IgnoresDB
-from auditor.database.repos import ReposDB
 from auditor.database.shapes import ShapesDB
+from auditor.database.graph import GraphDB
 
-_STORES = (ReposDB, IgnoresDB, FilesDB, FindingsDB, ShapesDB, GraphDB)
-_SCHEMA = "\n".join(s.SCHEMA for s in _STORES)
-_CACHE_TABLES = tuple(t for s in _STORES for t in s.CACHE_TABLES)
+# Derived from the registry; re-exported for tests that inspect the cache-table set.
+_CACHE_TABLES: tuple[str, ...] = tuple(
+    t for s in BaseDB._registry for t in s.CACHE_TABLES
+)
 
 
 class IndexStore(BaseDB):
@@ -34,15 +37,18 @@ class IndexStore(BaseDB):
       - ``graph``    — GraphDB
     """
 
+    facade = True
+
+    repos: ReposDB
+    ignores: IgnoresDB
+    files: FilesDB
+    findings: FindingsDB
+    shapes: ShapesDB
+    graph: GraphDB
+
     def __init__(self, worker: "_SqliteWorker", repo: str) -> None:
         super().__init__(worker, repo)
         self.db_path: Path  # set by connect()
-        self.repos: ReposDB
-        self.ignores: IgnoresDB
-        self.files: FilesDB
-        self.findings: FindingsDB
-        self.shapes: ShapesDB
-        self.graph: GraphDB
 
     @classmethod
     async def connect(cls, db_path: Path, repo: str = _DEFAULT_REPO) -> "IndexStore":
@@ -54,12 +60,8 @@ class IndexStore(BaseDB):
         store = cls(worker, repo)
         store.db_path = db_path
         await worker.run(store._init_schema)
-        store.repos = ReposDB(worker, repo)
-        store.ignores = IgnoresDB(worker, repo)
-        store.files = FilesDB(worker, repo)
-        store.findings = FindingsDB(worker, repo)
-        store.shapes = ShapesDB(worker, repo)
-        store.graph = GraphDB(worker, repo)
+        for sub in BaseDB._registry:
+            setattr(store, sub.attr, sub(worker, repo))
         return store
 
     @staticmethod
@@ -77,10 +79,12 @@ class IndexStore(BaseDB):
         if existing and existing != _SCHEMA_VERSION:
             # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
             # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
-            for table in _CACHE_TABLES:
+            cache_tables = tuple(t for s in BaseDB._registry for t in s.CACHE_TABLES)
+            for table in cache_tables:
                 _retry_locked(lambda t=table: conn.execute(f"DROP TABLE IF EXISTS {t}"))  # noqa: S608  (fixed literal)
         conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-        _retry_locked(lambda: conn.executescript(_SCHEMA))
+        schema = "\n".join(s.SCHEMA for s in BaseDB._registry)
+        _retry_locked(lambda: conn.executescript(schema))
         conn.commit()
 
     async def __aenter__(self) -> "IndexStore":
