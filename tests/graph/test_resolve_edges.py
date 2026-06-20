@@ -1,4 +1,5 @@
 from auditor.graph.extract import extract_file_facts
+from auditor.graph.model import GraphEdge
 from auditor.graph.resolve_edges import resolve_structural
 
 SRC_A = """
@@ -14,14 +15,14 @@ def helper():
 """
 
 
-def _edges(*sources):
+def _edges(*sources: str) -> list[GraphEdge]:
     nodes = []
     for i, s in enumerate(sources):
         nodes += extract_file_facts(f"m{i}.py", s, "production").nodes
     return resolve_structural(nodes)
 
 
-def _pairs(edges, kind):
+def _pairs(edges: list[GraphEdge], kind: str) -> set[tuple[str, str]]:
     return {(e.src, e.dst) for e in edges if e.kind == kind}
 
 
@@ -50,3 +51,14 @@ def test_references_type_edge():
 
 def test_contains_edges():
     assert ("m0.py::Impl", "m0.py::Impl.run") in _pairs(_edges(SRC_A), "contains")
+
+
+def test_callback_arg_edge():
+    # `caller` passes the bare name `run` as a positional arg to `helper(run)` ->
+    # resolve_structural emits a callback_arg edge: caller -> run
+    src = (
+        "def helper(cb):\n    return cb()\n\n"
+        "def run():\n    return 1\n\n"
+        "def caller():\n    return helper(run)\n"
+    )
+    assert ("m0.py::caller", "m0.py::run") in _pairs(_edges(src), "callback_arg")
