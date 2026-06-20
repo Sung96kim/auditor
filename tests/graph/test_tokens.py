@@ -22,11 +22,12 @@ def test_split_ident(raw, expected):
     assert split_ident(raw) == expected
 
 
-def test_normalize_drops_stopwords_keeps_verbs_verbatim():
-    # NO verb-synonym rewriting — get/fetch/load are kept as-is (LSI handles synonymy);
-    # stopwords ('the','id') and short tokens dropped
-    out = normalize_tokens(["get", "fetch", "load", "the", "user", "id"])
-    assert out == ["get", "fetch", "load", "user"]
+def test_normalize_drops_structural_stopwords_keeps_verbs_and_domain_nouns():
+    # NO verb-synonym rewriting — get/fetch/load kept verbatim (LSI handles synonymy).
+    # structural stopwords ('the','self') dropped; domain noun 'id' is NOT hardcoded as a stopword
+    # anymore (config + tf-idf IDF handle those), so it stays.
+    out = normalize_tokens(["get", "fetch", "load", "the", "self", "user", "id"])
+    assert out == ["get", "fetch", "load", "user", "id"]
 
 
 def test_symbol_document_weights_declaration_3x():

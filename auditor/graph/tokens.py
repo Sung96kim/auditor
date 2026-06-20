@@ -5,12 +5,16 @@ from collections.abc import Iterable
 
 TEXT_FLOOR = 4  # min unique concept tokens before a symbol is `text_sparse`
 
+# Structural stopwords only — language keywords, builtins, universal call/arg noise. Domain-ambiguous
+# nouns (id/data/name/result/value/obj/...) are deliberately NOT hardcoded: a POC showed they don't
+# affect the text-sparse floor (0% either way on real code) and overlap with tf-idf's IDF.
+# Repo-specific stopwords come from config and are applied with sklearn's english list in the tf-idf
+# layer (naming.py), not here.
 _STOP = set(
     [
         "self",
         "cls",
         "the",
-        "a",
         "an",
         "of",
         "to",
@@ -35,23 +39,6 @@ _STOP = set(
         "none",
         "true",
         "false",
-        "value",
-        "val",
-        "obj",
-        "item",
-        "items",
-        "data",
-        "result",
-        "results",
-        "out",
-        "res",
-        "tmp",
-        "i",
-        "j",
-        "k",
-        "n",
-        "x",
-        "y",
         "str",
         "int",
         "bool",
@@ -60,9 +47,6 @@ _STOP = set(
         "set",
         "tuple",
         "type",
-        "name",
-        "names",
-        "id",
     ]
 )
 
