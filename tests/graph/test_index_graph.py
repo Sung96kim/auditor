@@ -1,7 +1,7 @@
 import pytest
 
+from auditor.database import IndexStore
 from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
-from auditor.index import IndexStore
 
 
 @pytest.fixture

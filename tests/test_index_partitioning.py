@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from auditor.index import IndexStore
+from auditor.database import IndexStore
 from auditor.models import (
     Category,
     FileRole,

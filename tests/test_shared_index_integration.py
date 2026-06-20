@@ -3,8 +3,8 @@
 
 from pathlib import Path
 
+from auditor.database import IndexStore
 from auditor.engine import audit_target
-from auditor.index import IndexStore
 from auditor.paths import index_db_path, repo_key
 
 

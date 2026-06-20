@@ -16,10 +16,10 @@ from pydantic import ValidationError
 
 from auditor.aggregate import AuditAggregator
 from auditor.config import load_config
+from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target, finding_evidence_at
 from auditor.ignores import evidence_hash
-from auditor.index import IndexStore
 from auditor.models import ManifestEntry
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY

@@ -4,7 +4,8 @@ cache-rebuild-on-schema-change path."""
 
 import sqlite3
 
-from auditor.index import _SCHEMA_VERSION, IndexStore
+from auditor.database import IndexStore
+from auditor.database.base import _SCHEMA_VERSION
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 

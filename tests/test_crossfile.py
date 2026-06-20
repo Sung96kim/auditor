@@ -4,8 +4,8 @@ shape stays clean; editing one file re-runs the GROUP BY without re-parsing the 
 from pathlib import Path
 
 from auditor.config import load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine
-from auditor.index import IndexStore
 
 _MODEL = (
     "from pydantic import BaseModel\n"

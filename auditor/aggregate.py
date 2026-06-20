@@ -7,8 +7,8 @@ consolidated report matches what `scan` shows.
 
 from pathlib import Path
 
+from auditor.database import IndexStore
 from auditor.ignores import IgnoreList
-from auditor.index import IndexStore
 from auditor.models import FileRole, ScanResult, Severity, severity_rank
 
 

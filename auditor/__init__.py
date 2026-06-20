@@ -7,8 +7,8 @@ Public API:
 from loguru import logger
 
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine, audit_target
-from auditor.index import IndexStore
 from auditor.models import (
     Category,
     FileRole,

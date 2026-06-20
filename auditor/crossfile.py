@@ -5,7 +5,7 @@ Cheap by design — a GROUP BY over the shapes table, recomputed each scan; no r
 """
 
 from auditor import dead_code, fixture_usage, settings_cohesion
-from auditor.index import IndexStore
+from auditor.database import IndexStore
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 _CLASS_BASE_KIND = "py-class-base"

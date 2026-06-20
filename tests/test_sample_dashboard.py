@@ -7,8 +7,8 @@ from collections import defaultdict
 from pathlib import Path
 
 from auditor.config import load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine
-from auditor.index import IndexStore
 
 _DASHBOARD = Path(__file__).parent / "fixtures" / "sample_projects" / "dashboard"
 

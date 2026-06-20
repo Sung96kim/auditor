@@ -15,10 +15,10 @@ from loguru import logger
 
 from auditor import crossfile
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
+from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.ignores import IgnoreList
-from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
 from auditor.languages.python.resolve import CalleeResolver, find_site_packages
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule

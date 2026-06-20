@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from auditor.config import load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine
-from auditor.index import IndexStore
 
 
 async def _scan(repo: Path) -> dict[str, dict]:

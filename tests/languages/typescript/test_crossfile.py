@@ -5,8 +5,8 @@ both sites; a structurally-unique definition stays clean. Exercises the shared s
 from pathlib import Path
 
 from auditor.config import load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine
-from auditor.index import IndexStore
 
 _CARD = """
 export function Card() {

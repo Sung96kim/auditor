@@ -7,7 +7,8 @@ import sqlite3
 
 import pytest
 
-from auditor.index import _SCHEMA_VERSION, IndexStore
+from auditor.database import IndexStore
+from auditor.database.base import _SCHEMA_VERSION
 from auditor.models import (
     Category,
     FileRole,

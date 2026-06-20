@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from auditor.database import IndexStore
 from auditor.engine import audit_target
-from auditor.index import IndexStore
 
 _RULE = "PY-CONFIG-SCATTERED-SETTINGS"
 _SETTINGS_PY = "from pydantic_settings import BaseSettings\n"

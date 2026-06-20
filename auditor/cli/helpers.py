@@ -14,7 +14,7 @@ import typer
 from pydantic import ValidationError
 
 from auditor.cli.apps import _status
-from auditor.index import IndexStore
+from auditor.database import IndexStore
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 

@@ -6,8 +6,8 @@ from pathlib import Path
 from loguru import logger
 
 from auditor.config import AuditorSettings, load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine, audit_target
-from auditor.index import IndexStore
 from auditor.languages.python.resolve import CalleeResolver
 from auditor.paths import index_db_path
 
