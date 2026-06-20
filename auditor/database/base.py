@@ -5,6 +5,7 @@ IndexStore.connect and shared across all stores.
 """
 
 import asyncio
+import functools
 import queue
 import sqlite3
 import threading
@@ -91,21 +92,25 @@ class Table(BaseModel):
         return "\n".join(stmts)
 
 
-def _retry_locked(action: Callable[[], Any]) -> Any:
-    """Run ``action``, retrying on transient lock/busy errors. ``PRAGMA journal_mode=WAL``
-    ignores ``busy_timeout`` and returns SQLITE_BUSY immediately when fresh connections
-    contend on the journal-mode switch, so the one-time init path needs an explicit retry.
-    """
-    for attempt in range(_LOCK_RETRIES):
-        try:
-            return action()
-        except sqlite3.OperationalError as exc:
-            msg = str(exc).lower()
-            if (
-                "locked" not in msg and "busy" not in msg
-            ) or attempt == _LOCK_RETRIES - 1:
-                raise
-            time.sleep(_LOCK_BACKOFF)
+def _retry_on_locked(fn: Any) -> Any:
+    """Retry ``fn`` on transient SQLite lock/busy errors. ``PRAGMA journal_mode=WAL`` ignores
+    ``busy_timeout`` and returns SQLITE_BUSY immediately when fresh connections contend on the
+    journal-mode switch, so the one-time init path needs an explicit retry."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        for attempt in range(_LOCK_RETRIES):
+            try:
+                return fn(*args, **kwargs)
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                if (
+                    "locked" not in msg and "busy" not in msg
+                ) or attempt == _LOCK_RETRIES - 1:
+                    raise
+                time.sleep(_LOCK_BACKOFF)
+
+    return wrapper
 
 
 _SCHEMA_VERSION = 5

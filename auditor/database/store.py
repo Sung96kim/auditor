@@ -7,7 +7,7 @@ from auditor.database.base import (
     _DEFAULT_REPO,
     _SCHEMA_VERSION,
     BaseDB,
-    _retry_locked,
+    _retry_on_locked,
     _SqliteWorker,
 )
 
@@ -60,13 +60,14 @@ class IndexStore(BaseDB):
         return store
 
     @staticmethod
+    @_retry_on_locked
     def _init_schema(conn: sqlite3.Connection) -> None:
         # busy_timeout FIRST so plain writes wait under concurrency (parallel audit agents)
-        # instead of erroring; the WAL switch + schema creation additionally need _retry_locked
+        # instead of erroring; the WAL switch + schema creation additionally need _retry_on_locked
         # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
         conn.execute("PRAGMA busy_timeout=30000")
         if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-            _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
+            conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         # the index is a pure cache: on a schema-version change, drop and rebuild rather than
         # migrate — a re-scan repopulates it and old/new layouts never have to coexist.
@@ -81,9 +82,9 @@ class IndexStore(BaseDB):
             # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
             # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
             for table in cache_tables:
-                _retry_locked(lambda t=table: conn.execute(f"DROP TABLE IF EXISTS {t}"))  # noqa: S608  (fixed literal)
+                conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
         conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-        _retry_locked(lambda: conn.executescript(schema))
+        conn.executescript(schema)
         conn.commit()
 
     async def __aenter__(self) -> "IndexStore":
