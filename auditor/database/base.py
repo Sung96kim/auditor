@@ -92,7 +92,7 @@ class Table(BaseModel):
         return "\n".join(stmts)
 
 
-def _retry_on_locked(fn: Any) -> Any:
+def retry_on_locked(fn: Any) -> Any:
     """Retry ``fn`` on transient SQLite lock/busy errors. ``PRAGMA journal_mode=WAL`` ignores
     ``busy_timeout`` and returns SQLITE_BUSY immediately when fresh connections contend on the
     journal-mode switch, so the one-time init path needs an explicit retry."""

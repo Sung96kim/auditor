@@ -7,8 +7,8 @@ from auditor.database.base import (
     _DEFAULT_REPO,
     _SCHEMA_VERSION,
     BaseDB,
-    _retry_on_locked,
     _SqliteWorker,
+    retry_on_locked,
 )
 
 # Registration order = import order: each import triggers __init_subclass__ on BaseDB.
@@ -60,10 +60,10 @@ class IndexStore(BaseDB):
         return store
 
     @staticmethod
-    @_retry_on_locked
+    @retry_on_locked
     def _init_schema(conn: sqlite3.Connection) -> None:
         # busy_timeout FIRST so plain writes wait under concurrency (parallel audit agents)
-        # instead of erroring; the WAL switch + schema creation additionally need _retry_on_locked
+        # instead of erroring; the WAL switch + schema creation additionally need retry_on_locked
         # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
         conn.execute("PRAGMA busy_timeout=30000")
         if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
