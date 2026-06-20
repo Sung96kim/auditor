@@ -18,6 +18,7 @@ from auditor.config import AuditorSettings, ResolvedConfig, load_config
 from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
+from auditor.graph.extract import extract_file_facts
 from auditor.ignores import IgnoreList
 from auditor.languages.base import LanguageAuditor
 from auditor.languages.python.resolve import CalleeResolver, find_site_packages
@@ -314,6 +315,10 @@ class ScanEngine:
             await index.shapes.add(
                 [(s.shape_hash, s.kind, rel, s.symbol, s.line) for s in rows]
             )
+
+        if self.settings.graph.enabled:
+            facts = extract_file_facts(rel, source, role.value)
+            await index.graph.set_facts(rel, facts.model_dump_json(), sha)
 
         hit = [rid for rid in enabled if rid not in missed]
         findings = list(res.findings) + [
