@@ -30,4 +30,11 @@ app.add_typer(plugins_app, name="plugins")
 # ensure all built-in languages register for discovery's suffix list
 _ = PythonAuditor
 
+try:  # the graph commands need the optional [graph] extra (numpy + scikit-learn)
+    from auditor.cli.graph import graph_app
+
+    app.add_typer(graph_app, name="graph")
+except ImportError:
+    pass
+
 __all__ = ["app"]

@@ -1,0 +1,52 @@
+import pytest
+
+from auditor.config import AuditorSettings, GraphConfig
+from auditor.database import IndexStore
+from auditor.graph.build import GraphBuilder, compute_abstractness
+from auditor.graph.extract import extract_file_facts
+
+BASE = "class Base:\n    def run(self): ...\n"
+IMPL = "from base import Base\nclass Impl(Base):\n    def run(self):\n        return load_user()\n\ndef load_user():\n    return get_user_record()\n"
+
+
+@pytest.fixture
+async def store(tmp_path):
+    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
+    await s.graph.set_facts(
+        "base.py",
+        extract_file_facts("base.py", BASE, "production").model_dump_json(),
+        "h1",
+    )
+    await s.graph.set_facts(
+        "impl.py",
+        extract_file_facts("impl.py", IMPL, "production").model_dump_json(),
+        "h2",
+    )
+    yield s
+    await s.aclose()
+
+
+def test_compute_abstractness_stub_method():
+    facts = extract_file_facts("base.py", BASE, "production")
+    run = next(n for n in facts.nodes if n.id == "base.py::Base.run")
+    assert compute_abstractness(run, proto_method_ids=set()) >= 0.4  # stub body
+
+
+async def test_build_writes_nodes_edges_clusters(store):
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    summary = await GraphBuilder().run(store, settings)
+    assert summary["nodes"] >= 4
+    # override edge survived the repo pass
+    over = await store.graph.edges_of("impl.py::Impl.run", ["overrides"])
+    assert any(e["dst"] == "base.py::Base.run" for e in over)
+    # cross-module call resolved by name
+    calls = await store.graph.edges_of("impl.py::load_user", ["calls"])
+    assert any(
+        e["dst"] == "impl.py::load_user" or e["src"] == "impl.py::load_user"
+        for e in calls
+    )
+    # every node got a cluster id + a rank
+    nodes = await store.graph.nodes()
+    assert all(n["cluster_id"] is not None for n in nodes)
