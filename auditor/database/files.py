@@ -3,7 +3,7 @@
 import sqlite3
 from typing import ClassVar
 
-from auditor.database.base import BaseDB
+from auditor.database.base import BaseDB, Table
 from auditor.models import IndexEntry
 
 
@@ -24,18 +24,20 @@ class FilesDB(BaseDB):
     """Table store for the ``files`` and ``file_rules`` tables."""
 
     attr: ClassVar[str] = "files"
-    SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS files (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    lines INTEGER NOT NULL,
-    language TEXT NOT NULL,
-    role TEXT NOT NULL,
-    last_scanned REAL NOT NULL,
-    doc_path TEXT,
-    PRIMARY KEY (repo, path)
-);"""
-    CACHE_TABLES: ClassVar[tuple[str, ...]] = ("files",)
+    TABLES: ClassVar[dict[str, Table]] = {
+        "files": Table(
+            cols=(
+                "path TEXT NOT NULL",
+                "sha256 TEXT NOT NULL",
+                "lines INTEGER NOT NULL",
+                "language TEXT NOT NULL",
+                "role TEXT NOT NULL",
+                "last_scanned REAL NOT NULL",
+                "doc_path TEXT",
+            ),
+            pk="repo, path",
+        )
+    }
 
     async def add_scope(self, rel_paths: list[str]) -> None:
         """Register the files the user wants audited (placeholder rows until scanned)."""

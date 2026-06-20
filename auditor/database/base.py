@@ -14,8 +14,44 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, ClassVar
 
+from pydantic import BaseModel, ConfigDict, Field
+
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05
+
+_REPO_FK = "repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE"
+
+
+class Table(BaseModel):
+    """Declarative definition of one table. `repo_fk` auto-prepends the standard repo FK column
+    (the common case); set False for tables whose repo column isn't first (ignores) or that ARE the
+    repos table. `cache` False = preserved on a schema-version bump (user/registry state)."""
+
+    model_config = ConfigDict(frozen=True)
+    cols: tuple[str, ...]
+    pk: str | None = None
+    indexes: dict[str, str] = Field(default_factory=dict)  # name -> column expr
+    unique_indexes: dict[str, str] = Field(
+        default_factory=dict
+    )  # name -> column expr (UNIQUE)
+    repo_fk: bool = True
+    cache: bool = True
+
+
+def render_table(name: str, t: Table) -> str:
+    cols = [_REPO_FK, *t.cols] if t.repo_fk else list(t.cols)
+    body = ",\n    ".join(cols)
+    if t.pk:
+        body += f",\n    PRIMARY KEY ({t.pk})"
+    stmts = [f"CREATE TABLE IF NOT EXISTS {name} (\n    {body}\n);"]
+    stmts += [
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {i} ON {name} ({e});"
+        for i, e in t.unique_indexes.items()
+    ]
+    stmts += [
+        f"CREATE INDEX IF NOT EXISTS {i} ON {name} ({e});" for i, e in t.indexes.items()
+    ]
+    return "\n".join(stmts)
 
 
 def _retry_locked(action: Callable[[], Any]) -> Any:
@@ -99,8 +135,7 @@ class BaseDB:
     _ensure_repo helper. Table-specific store classes subclass this to inherit the plumbing; the
     worker itself is created once by IndexStore.connect and shared across all stores."""
 
-    SCHEMA: ClassVar[str] = ""
-    CACHE_TABLES: ClassVar[tuple[str, ...]] = ()
+    TABLES: ClassVar[dict[str, "Table"]] = {}
     attr: ClassVar[str] = (
         ""  # facade attribute name; each concrete store overrides this
     )

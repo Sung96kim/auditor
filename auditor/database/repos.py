@@ -4,19 +4,24 @@ import sqlite3
 from pathlib import Path
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB
+from auditor.database.base import BaseDB, Table
 
 
 class ReposDB(BaseDB):
     """Table store for the ``repos`` registry."""
 
     attr: ClassVar[str] = "repos"
-    SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS repos (
-    repo TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    last_scanned REAL NOT NULL
-);"""
-    CACHE_TABLES: ClassVar[tuple[str, ...]] = ()
+    TABLES: ClassVar[dict[str, Table]] = {
+        "repos": Table(
+            cols=(
+                "repo TEXT PRIMARY KEY",
+                "name TEXT NOT NULL",
+                "last_scanned REAL NOT NULL",
+            ),
+            repo_fk=False,
+            cache=False,
+        )
+    }
 
     async def register(self, when: float) -> None:
         """Record this repo in the registry (refresh name + last-scanned). The name is the repo

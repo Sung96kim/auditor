@@ -3,27 +3,33 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB
+from auditor.database.base import _REPO_FK, BaseDB, Table
 
 
 class IgnoresDB(BaseDB):
     """Table store for the ``ignores`` table."""
 
     attr: ClassVar[str] = "ignores"
-    SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS ignores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    rule_id TEXT NOT NULL,
-    file TEXT,
-    line INTEGER,
-    evidence_hash TEXT,
-    reason TEXT,
-    created_at REAL NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS ignores_unique
-    ON ignores (repo, rule_id, IFNULL(file, ''), IFNULL(line, -1));
-CREATE INDEX IF NOT EXISTS ignores_repo ON ignores (repo);"""
-    CACHE_TABLES: ClassVar[tuple[str, ...]] = ()
+    TABLES: ClassVar[dict[str, Table]] = {
+        "ignores": Table(
+            cols=(
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                _REPO_FK,
+                "rule_id TEXT NOT NULL",
+                "file TEXT",
+                "line INTEGER",
+                "evidence_hash TEXT",
+                "reason TEXT",
+                "created_at REAL NOT NULL",
+            ),
+            repo_fk=False,
+            cache=False,
+            unique_indexes={
+                "ignores_unique": "repo, rule_id, IFNULL(file, ''), IFNULL(line, -1)"
+            },
+            indexes={"ignores_repo": "repo"},
+        )
+    }
 
     async def add(
         self,

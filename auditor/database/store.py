@@ -9,6 +9,7 @@ from auditor.database.base import (
     BaseDB,
     _retry_locked,
     _SqliteWorker,
+    render_table,
 )
 
 # Registration order = import order: each import triggers __init_subclass__ on BaseDB.
@@ -18,11 +19,6 @@ from auditor.database.files import FilesDB
 from auditor.database.findings import FindingsDB
 from auditor.database.shapes import ShapesDB
 from auditor.database.graph import GraphDB
-
-# Derived from the registry; re-exported for tests that inspect the cache-table set.
-_CACHE_TABLES: tuple[str, ...] = tuple(
-    t for s in BaseDB._registry for t in s.CACHE_TABLES
-)
 
 
 class IndexStore(BaseDB):
@@ -76,14 +72,18 @@ class IndexStore(BaseDB):
         # the index is a pure cache: on a schema-version change, drop and rebuild rather than
         # migrate — a re-scan repopulates it and old/new layouts never have to coexist.
         existing = conn.execute("PRAGMA user_version").fetchone()[0]
+        schema = "\n".join(
+            render_table(n, t) for s in BaseDB._registry for n, t in s.TABLES.items()
+        )
+        cache_tables = tuple(
+            n for s in BaseDB._registry for n, t in s.TABLES.items() if t.cache
+        )
         if existing and existing != _SCHEMA_VERSION:
             # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
             # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
-            cache_tables = tuple(t for s in BaseDB._registry for t in s.CACHE_TABLES)
             for table in cache_tables:
                 _retry_locked(lambda t=table: conn.execute(f"DROP TABLE IF EXISTS {t}"))  # noqa: S608  (fixed literal)
         conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-        schema = "\n".join(s.SCHEMA for s in BaseDB._registry)
         _retry_locked(lambda: conn.executescript(schema))
         conn.commit()
 

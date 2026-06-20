@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB
+from auditor.database.base import BaseDB, Table
 from auditor.graph.model import GraphCluster, GraphEdge, GraphNode
 
 
@@ -12,50 +12,49 @@ class GraphDB(BaseDB):
     ``graph_clusters`` tables."""
 
     attr: ClassVar[str] = "graph"
-    SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS graph_facts (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    facts_json TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    PRIMARY KEY (repo, path)
-);
-CREATE TABLE IF NOT EXISTS graph_nodes (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    node_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    module TEXT NOT NULL,
-    role TEXT NOT NULL,
-    line INTEGER NOT NULL,
-    rank REAL NOT NULL DEFAULT 0,
-    cluster_id INTEGER,
-    abstractness REAL NOT NULL DEFAULT 0,
-    text_sparse INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (repo, node_id)
-);
-CREATE TABLE IF NOT EXISTS graph_edges (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    src TEXT NOT NULL,
-    dst TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    weight REAL NOT NULL DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS graph_clusters (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    cluster_id INTEGER NOT NULL,
-    label TEXT NOT NULL,
-    member_count INTEGER NOT NULL,
-    PRIMARY KEY (repo, cluster_id)
-);
-CREATE INDEX IF NOT EXISTS graph_nodes_cluster ON graph_nodes (repo, cluster_id);
-CREATE INDEX IF NOT EXISTS graph_edges_src ON graph_edges (repo, src);
-CREATE INDEX IF NOT EXISTS graph_edges_dst ON graph_edges (repo, dst);"""
-    CACHE_TABLES: ClassVar[tuple[str, ...]] = (
-        "graph_facts",
-        "graph_edges",
-        "graph_clusters",
-        "graph_nodes",
-    )
+    TABLES: ClassVar[dict[str, Table]] = {
+        "graph_facts": Table(
+            cols=(
+                "path TEXT NOT NULL",
+                "facts_json TEXT NOT NULL",
+                "content_hash TEXT NOT NULL",
+            ),
+            pk="repo, path",
+        ),
+        "graph_nodes": Table(
+            cols=(
+                "node_id TEXT NOT NULL",
+                "kind TEXT NOT NULL",
+                "name TEXT NOT NULL",
+                "module TEXT NOT NULL",
+                "role TEXT NOT NULL",
+                "line INTEGER NOT NULL",
+                "rank REAL NOT NULL DEFAULT 0",
+                "cluster_id INTEGER",
+                "abstractness REAL NOT NULL DEFAULT 0",
+                "text_sparse INTEGER NOT NULL DEFAULT 0",
+            ),
+            pk="repo, node_id",
+            indexes={"graph_nodes_cluster": "repo, cluster_id"},
+        ),
+        "graph_edges": Table(
+            cols=(
+                "src TEXT NOT NULL",
+                "dst TEXT NOT NULL",
+                "kind TEXT NOT NULL",
+                "weight REAL NOT NULL DEFAULT 1",
+            ),
+            indexes={"graph_edges_src": "repo, src", "graph_edges_dst": "repo, dst"},
+        ),
+        "graph_clusters": Table(
+            cols=(
+                "cluster_id INTEGER NOT NULL",
+                "label TEXT NOT NULL",
+                "member_count INTEGER NOT NULL",
+            ),
+            pk="repo, cluster_id",
+        ),
+    }
 
     async def set_facts(self, path: str, facts_json: str, content_hash: str) -> None:
         def op(conn: sqlite3.Connection) -> None:

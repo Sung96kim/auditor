@@ -3,7 +3,7 @@
 import sqlite3
 from typing import ClassVar
 
-from auditor.database.base import _FINDING_COLS, _FINDING_PLACEHOLDERS, BaseDB
+from auditor.database.base import _FINDING_COLS, _FINDING_PLACEHOLDERS, BaseDB, Table
 from auditor.models import Finding
 
 
@@ -47,33 +47,38 @@ class FindingsDB(BaseDB):
     """Table store for the ``findings`` and ``file_rules`` tables."""
 
     attr: ClassVar[str] = "findings"
-    SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS file_rules (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    rule_id TEXT NOT NULL,
-    fingerprint TEXT NOT NULL,
-    last_scanned REAL NOT NULL,
-    PRIMARY KEY (repo, path, rule_id)
-);
-CREATE TABLE IF NOT EXISTS findings (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    rule_id TEXT NOT NULL,
-    category TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    verdict_kind TEXT NOT NULL,
-    line INTEGER NOT NULL,
-    message TEXT NOT NULL,
-    evidence TEXT NOT NULL DEFAULT '',
-    suggestion TEXT,
-    detector TEXT,
-    checklist_item INTEGER,
-    standard_refs TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS findings_path ON findings (repo, path);
-CREATE INDEX IF NOT EXISTS findings_severity ON findings (repo, severity);
-CREATE INDEX IF NOT EXISTS file_rules_path ON file_rules (repo, path);"""
-    CACHE_TABLES: ClassVar[tuple[str, ...]] = ("file_rules", "findings")
+    TABLES: ClassVar[dict[str, Table]] = {
+        "file_rules": Table(
+            cols=(
+                "path TEXT NOT NULL",
+                "rule_id TEXT NOT NULL",
+                "fingerprint TEXT NOT NULL",
+                "last_scanned REAL NOT NULL",
+            ),
+            pk="repo, path, rule_id",
+            indexes={"file_rules_path": "repo, path"},
+        ),
+        "findings": Table(
+            cols=(
+                "path TEXT NOT NULL",
+                "rule_id TEXT NOT NULL",
+                "category TEXT NOT NULL",
+                "severity TEXT NOT NULL",
+                "verdict_kind TEXT NOT NULL",
+                "line INTEGER NOT NULL",
+                "message TEXT NOT NULL",
+                "evidence TEXT NOT NULL DEFAULT ''",
+                "suggestion TEXT",
+                "detector TEXT",
+                "checklist_item INTEGER",
+                "standard_refs TEXT NOT NULL DEFAULT ''",
+            ),
+            indexes={
+                "findings_path": "repo, path",
+                "findings_severity": "repo, severity",
+            },
+        ),
+    }
 
     async def fingerprint(self, path: str, rule_id: str) -> str | None:
         row = await self._worker.run(

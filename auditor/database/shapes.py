@@ -3,24 +3,25 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB
+from auditor.database.base import BaseDB, Table
 
 
 class ShapesDB(BaseDB):
     """Table store for the ``shapes`` table."""
 
     attr: ClassVar[str] = "shapes"
-    SCHEMA: ClassVar[str] = """CREATE TABLE IF NOT EXISTS shapes (
-    repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE,
-    shape_hash TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    path TEXT NOT NULL,
-    symbol TEXT NOT NULL,
-    line INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS shapes_hash ON shapes (repo, shape_hash);
-CREATE INDEX IF NOT EXISTS shapes_path ON shapes (repo, path);"""
-    CACHE_TABLES: ClassVar[tuple[str, ...]] = ("shapes",)
+    TABLES: ClassVar[dict[str, Table]] = {
+        "shapes": Table(
+            cols=(
+                "shape_hash TEXT NOT NULL",
+                "kind TEXT NOT NULL",
+                "path TEXT NOT NULL",
+                "symbol TEXT NOT NULL",
+                "line INTEGER NOT NULL",
+            ),
+            indexes={"shapes_hash": "repo, shape_hash", "shapes_path": "repo, path"},
+        )
+    }
 
     async def clear(self, path: str) -> None:
         def op(conn: sqlite3.Connection) -> None:
