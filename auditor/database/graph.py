@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB, Table
+from auditor.database.base import BaseDB, Column, Table
 from auditor.graph.model import GraphCluster, GraphEdge, GraphNode
 
 
@@ -15,34 +15,34 @@ class GraphDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "graph_facts": Table(
             cols=(
-                "path TEXT NOT NULL",
-                "facts_json TEXT NOT NULL",
-                "content_hash TEXT NOT NULL",
+                Column(name="path", type="TEXT", not_null=True),
+                Column(name="facts_json", type="TEXT", not_null=True),
+                Column(name="content_hash", type="TEXT", not_null=True),
             ),
             pk=("repo", "path"),
         ),
         "graph_nodes": Table(
             cols=(
-                "node_id TEXT NOT NULL",
-                "kind TEXT NOT NULL",
-                "name TEXT NOT NULL",
-                "module TEXT NOT NULL",
-                "role TEXT NOT NULL",
-                "line INTEGER NOT NULL",
-                "rank REAL NOT NULL DEFAULT 0",
-                "cluster_id INTEGER",
-                "abstractness REAL NOT NULL DEFAULT 0",
-                "text_sparse INTEGER NOT NULL DEFAULT 0",
+                Column(name="node_id", type="TEXT", not_null=True),
+                Column(name="kind", type="TEXT", not_null=True),
+                Column(name="name", type="TEXT", not_null=True),
+                Column(name="module", type="TEXT", not_null=True),
+                Column(name="role", type="TEXT", not_null=True),
+                Column(name="line", type="INTEGER", not_null=True),
+                Column(name="rank", type="REAL", not_null=True, default="0"),
+                Column(name="cluster_id", type="INTEGER"),
+                Column(name="abstractness", type="REAL", not_null=True, default="0"),
+                Column(name="text_sparse", type="INTEGER", not_null=True, default="0"),
             ),
             pk=("repo", "node_id"),
             indexes={"graph_nodes_cluster": ("repo", "cluster_id")},
         ),
         "graph_edges": Table(
             cols=(
-                "src TEXT NOT NULL",
-                "dst TEXT NOT NULL",
-                "kind TEXT NOT NULL",
-                "weight REAL NOT NULL DEFAULT 1",
+                Column(name="src", type="TEXT", not_null=True),
+                Column(name="dst", type="TEXT", not_null=True),
+                Column(name="kind", type="TEXT", not_null=True),
+                Column(name="weight", type="REAL", not_null=True, default="1"),
             ),
             indexes={
                 "graph_edges_src": ("repo", "src"),
@@ -51,9 +51,9 @@ class GraphDB(BaseDB):
         ),
         "graph_clusters": Table(
             cols=(
-                "cluster_id INTEGER NOT NULL",
-                "label TEXT NOT NULL",
-                "member_count INTEGER NOT NULL",
+                Column(name="cluster_id", type="INTEGER", not_null=True),
+                Column(name="label", type="TEXT", not_null=True),
+                Column(name="member_count", type="INTEGER", not_null=True),
             ),
             pk=("repo", "cluster_id"),
         ),

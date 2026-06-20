@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB, Table
+from auditor.database.base import BaseDB, Column, Table
 
 
 class ShapesDB(BaseDB):
@@ -13,11 +13,11 @@ class ShapesDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "shapes": Table(
             cols=(
-                "shape_hash TEXT NOT NULL",
-                "kind TEXT NOT NULL",
-                "path TEXT NOT NULL",
-                "symbol TEXT NOT NULL",
-                "line INTEGER NOT NULL",
+                Column(name="shape_hash", type="TEXT", not_null=True),
+                Column(name="kind", type="TEXT", not_null=True),
+                Column(name="path", type="TEXT", not_null=True),
+                Column(name="symbol", type="TEXT", not_null=True),
+                Column(name="line", type="INTEGER", not_null=True),
             ),
             indexes={
                 "shapes_hash": ("repo", "shape_hash"),

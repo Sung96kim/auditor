@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import _REPO_FK, BaseDB, Table
+from auditor.database.base import REPO_FK, BaseDB, Column, Table
 
 
 class IgnoresDB(BaseDB):
@@ -13,14 +13,14 @@ class IgnoresDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "ignores": Table(
             cols=(
-                "id INTEGER PRIMARY KEY AUTOINCREMENT",
-                _REPO_FK,
-                "rule_id TEXT NOT NULL",
-                "file TEXT",
-                "line INTEGER",
-                "evidence_hash TEXT",
-                "reason TEXT",
-                "created_at REAL NOT NULL",
+                Column(name="id", type="INTEGER", primary_key=True, autoincrement=True),
+                REPO_FK,
+                Column(name="rule_id", type="TEXT", not_null=True),
+                Column(name="file", type="TEXT"),
+                Column(name="line", type="INTEGER"),
+                Column(name="evidence_hash", type="TEXT"),
+                Column(name="reason", type="TEXT"),
+                Column(name="created_at", type="REAL", not_null=True),
             ),
             repo_fk=False,
             cache=False,

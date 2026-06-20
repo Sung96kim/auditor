@@ -19,7 +19,37 @@ from pydantic import BaseModel, ConfigDict, Field
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05
 
-_REPO_FK = "repo TEXT NOT NULL REFERENCES repos (repo) ON DELETE CASCADE"
+
+class Column(BaseModel):
+    """One table column. Renders to a SQLite column definition."""
+
+    model_config = ConfigDict(frozen=True)
+    name: str
+    type: str  # "TEXT" | "INTEGER" | "REAL"
+    primary_key: bool = False
+    autoincrement: bool = False
+    not_null: bool = False
+    default: str | None = None  # raw SQL literal, e.g. "''", "0", "1"
+    references: str | None = None  # e.g. "repos (repo) ON DELETE CASCADE"
+
+    def render(self) -> str:
+        parts = [self.name, self.type]
+        if self.primary_key:
+            parts.append("PRIMARY KEY")
+        if self.autoincrement:
+            parts.append("AUTOINCREMENT")
+        if self.not_null:
+            parts.append("NOT NULL")
+        if self.default is not None:
+            parts.append(f"DEFAULT {self.default}")
+        if self.references is not None:
+            parts.append(f"REFERENCES {self.references}")
+        return " ".join(parts)
+
+
+REPO_FK = Column(
+    name="repo", type="TEXT", not_null=True, references="repos (repo) ON DELETE CASCADE"
+)
 
 
 class Table(BaseModel):
@@ -28,7 +58,7 @@ class Table(BaseModel):
     repos table. `cache` False = preserved on a schema-version bump (user/registry state)."""
 
     model_config = ConfigDict(frozen=True)
-    cols: tuple[str, ...]
+    cols: tuple[Column, ...]
     pk: tuple[str, ...] | None = None
     indexes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     unique_indexes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
@@ -37,8 +67,8 @@ class Table(BaseModel):
 
     def render(self, name: str) -> str:
         """The CREATE TABLE/INDEX statements for this table under ``name``."""
-        cols = [_REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
-        body = ",\n    ".join(cols)
+        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
+        body = ",\n    ".join(c.render() for c in cols)
         if self.pk:
             body += f",\n    PRIMARY KEY ({', '.join(self.pk)})"
         stmts = [f"CREATE TABLE IF NOT EXISTS {name} (\n    {body}\n);"]

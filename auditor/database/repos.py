@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB, Table
+from auditor.database.base import BaseDB, Column, Table
 
 
 class ReposDB(BaseDB):
@@ -14,9 +14,9 @@ class ReposDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "repos": Table(
             cols=(
-                "repo TEXT PRIMARY KEY",
-                "name TEXT NOT NULL",
-                "last_scanned REAL NOT NULL",
+                Column(name="repo", type="TEXT", primary_key=True),
+                Column(name="name", type="TEXT", not_null=True),
+                Column(name="last_scanned", type="REAL", not_null=True),
             ),
             repo_fk=False,
             cache=False,

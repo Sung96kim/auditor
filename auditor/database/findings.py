@@ -3,7 +3,13 @@
 import sqlite3
 from typing import ClassVar
 
-from auditor.database.base import _FINDING_COLS, _FINDING_PLACEHOLDERS, BaseDB, Table
+from auditor.database.base import (
+    _FINDING_COLS,
+    _FINDING_PLACEHOLDERS,
+    BaseDB,
+    Column,
+    Table,
+)
 from auditor.models import Finding
 
 
@@ -50,28 +56,28 @@ class FindingsDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "file_rules": Table(
             cols=(
-                "path TEXT NOT NULL",
-                "rule_id TEXT NOT NULL",
-                "fingerprint TEXT NOT NULL",
-                "last_scanned REAL NOT NULL",
+                Column(name="path", type="TEXT", not_null=True),
+                Column(name="rule_id", type="TEXT", not_null=True),
+                Column(name="fingerprint", type="TEXT", not_null=True),
+                Column(name="last_scanned", type="REAL", not_null=True),
             ),
             pk=("repo", "path", "rule_id"),
             indexes={"file_rules_path": ("repo", "path")},
         ),
         "findings": Table(
             cols=(
-                "path TEXT NOT NULL",
-                "rule_id TEXT NOT NULL",
-                "category TEXT NOT NULL",
-                "severity TEXT NOT NULL",
-                "verdict_kind TEXT NOT NULL",
-                "line INTEGER NOT NULL",
-                "message TEXT NOT NULL",
-                "evidence TEXT NOT NULL DEFAULT ''",
-                "suggestion TEXT",
-                "detector TEXT",
-                "checklist_item INTEGER",
-                "standard_refs TEXT NOT NULL DEFAULT ''",
+                Column(name="path", type="TEXT", not_null=True),
+                Column(name="rule_id", type="TEXT", not_null=True),
+                Column(name="category", type="TEXT", not_null=True),
+                Column(name="severity", type="TEXT", not_null=True),
+                Column(name="verdict_kind", type="TEXT", not_null=True),
+                Column(name="line", type="INTEGER", not_null=True),
+                Column(name="message", type="TEXT", not_null=True),
+                Column(name="evidence", type="TEXT", not_null=True, default="''"),
+                Column(name="suggestion", type="TEXT"),
+                Column(name="detector", type="TEXT"),
+                Column(name="checklist_item", type="INTEGER"),
+                Column(name="standard_refs", type="TEXT", not_null=True, default="''"),
             ),
             indexes={
                 "findings_path": ("repo", "path"),

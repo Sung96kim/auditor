@@ -3,7 +3,7 @@
 import sqlite3
 from typing import ClassVar
 
-from auditor.database.base import BaseDB, Table
+from auditor.database.base import BaseDB, Column, Table
 from auditor.models import IndexEntry
 
 
@@ -27,13 +27,13 @@ class FilesDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "files": Table(
             cols=(
-                "path TEXT NOT NULL",
-                "sha256 TEXT NOT NULL",
-                "lines INTEGER NOT NULL",
-                "language TEXT NOT NULL",
-                "role TEXT NOT NULL",
-                "last_scanned REAL NOT NULL",
-                "doc_path TEXT",
+                Column(name="path", type="TEXT", not_null=True),
+                Column(name="sha256", type="TEXT", not_null=True),
+                Column(name="lines", type="INTEGER", not_null=True),
+                Column(name="language", type="TEXT", not_null=True),
+                Column(name="role", type="TEXT", not_null=True),
+                Column(name="last_scanned", type="REAL", not_null=True),
+                Column(name="doc_path", type="TEXT"),
             ),
             pk=("repo", "path"),
         )
