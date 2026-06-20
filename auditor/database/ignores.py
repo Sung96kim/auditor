@@ -25,9 +25,14 @@ class IgnoresDB(BaseDB):
             repo_fk=False,
             cache=False,
             unique_indexes={
-                "ignores_unique": "repo, rule_id, IFNULL(file, ''), IFNULL(line, -1)"
+                "ignores_unique": (
+                    "repo",
+                    "rule_id",
+                    "IFNULL(file, '')",
+                    "IFNULL(line, -1)",
+                )
             },
-            indexes={"ignores_repo": "repo"},
+            indexes={"ignores_repo": ("repo",)},
         )
     }
 

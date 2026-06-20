@@ -19,7 +19,10 @@ class ShapesDB(BaseDB):
                 "symbol TEXT NOT NULL",
                 "line INTEGER NOT NULL",
             ),
-            indexes={"shapes_hash": "repo, shape_hash", "shapes_path": "repo, path"},
+            indexes={
+                "shapes_hash": ("repo", "shape_hash"),
+                "shapes_path": ("repo", "path"),
+            },
         )
     }
 

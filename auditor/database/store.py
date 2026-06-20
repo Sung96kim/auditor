@@ -9,7 +9,6 @@ from auditor.database.base import (
     BaseDB,
     _retry_locked,
     _SqliteWorker,
-    render_table,
 )
 
 # Registration order = import order: each import triggers __init_subclass__ on BaseDB.
@@ -73,7 +72,7 @@ class IndexStore(BaseDB):
         # migrate — a re-scan repopulates it and old/new layouts never have to coexist.
         existing = conn.execute("PRAGMA user_version").fetchone()[0]
         schema = "\n".join(
-            render_table(n, t) for s in BaseDB._registry for n, t in s.TABLES.items()
+            t.render(n) for s in BaseDB._registry for n, t in s.TABLES.items()
         )
         cache_tables = tuple(
             n for s in BaseDB._registry for n, t in s.TABLES.items() if t.cache

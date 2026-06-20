@@ -55,8 +55,8 @@ class FindingsDB(BaseDB):
                 "fingerprint TEXT NOT NULL",
                 "last_scanned REAL NOT NULL",
             ),
-            pk="repo, path, rule_id",
-            indexes={"file_rules_path": "repo, path"},
+            pk=("repo", "path", "rule_id"),
+            indexes={"file_rules_path": ("repo", "path")},
         ),
         "findings": Table(
             cols=(
@@ -74,8 +74,8 @@ class FindingsDB(BaseDB):
                 "standard_refs TEXT NOT NULL DEFAULT ''",
             ),
             indexes={
-                "findings_path": "repo, path",
-                "findings_severity": "repo, severity",
+                "findings_path": ("repo", "path"),
+                "findings_severity": ("repo", "severity"),
             },
         ),
     }

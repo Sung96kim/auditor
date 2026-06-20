@@ -35,7 +35,7 @@ class FilesDB(BaseDB):
                 "last_scanned REAL NOT NULL",
                 "doc_path TEXT",
             ),
-            pk="repo, path",
+            pk=("repo", "path"),
         )
     }
 

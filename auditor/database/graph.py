@@ -19,7 +19,7 @@ class GraphDB(BaseDB):
                 "facts_json TEXT NOT NULL",
                 "content_hash TEXT NOT NULL",
             ),
-            pk="repo, path",
+            pk=("repo", "path"),
         ),
         "graph_nodes": Table(
             cols=(
@@ -34,8 +34,8 @@ class GraphDB(BaseDB):
                 "abstractness REAL NOT NULL DEFAULT 0",
                 "text_sparse INTEGER NOT NULL DEFAULT 0",
             ),
-            pk="repo, node_id",
-            indexes={"graph_nodes_cluster": "repo, cluster_id"},
+            pk=("repo", "node_id"),
+            indexes={"graph_nodes_cluster": ("repo", "cluster_id")},
         ),
         "graph_edges": Table(
             cols=(
@@ -44,7 +44,10 @@ class GraphDB(BaseDB):
                 "kind TEXT NOT NULL",
                 "weight REAL NOT NULL DEFAULT 1",
             ),
-            indexes={"graph_edges_src": "repo, src", "graph_edges_dst": "repo, dst"},
+            indexes={
+                "graph_edges_src": ("repo", "src"),
+                "graph_edges_dst": ("repo", "dst"),
+            },
         ),
         "graph_clusters": Table(
             cols=(
@@ -52,7 +55,7 @@ class GraphDB(BaseDB):
                 "label TEXT NOT NULL",
                 "member_count INTEGER NOT NULL",
             ),
-            pk="repo, cluster_id",
+            pk=("repo", "cluster_id"),
         ),
     }
 
