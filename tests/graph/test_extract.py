@@ -45,6 +45,9 @@ def test_stub_and_hof_and_callback_flags():
     assert ids["m.py::Base.run"].is_stub is True  # `...` body
     assert ids["m.py::helper"].is_hof is True  # calls its param `cb`
     assert "run" in ids["m.py::caller"].callback_names  # passes `run` as an arg
+    assert (
+        ids["m.py::caller"].is_hof is False
+    )  # passes a free name, but has no params → not a HOF
 
 
 def test_syntax_error_returns_empty():

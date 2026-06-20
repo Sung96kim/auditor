@@ -6,6 +6,7 @@ from auditor.graph.model import FileGraphFacts, GraphNode, NodeKind
 from auditor.graph.tokens import normalize_tokens, split_ident, symbol_document
 
 _FuncDef = (ast.FunctionDef, ast.AsyncFunctionDef)
+_FuncDefT = ast.FunctionDef | ast.AsyncFunctionDef
 
 
 def _ann_type_names(node: ast.expr | None) -> list[str]:
@@ -16,7 +17,7 @@ def _ann_type_names(node: ast.expr | None) -> list[str]:
     return names
 
 
-def _is_stub(fn: ast.AST) -> bool:
+def _is_stub(fn: _FuncDefT) -> bool:
     body = [
         s
         for s in fn.body
@@ -38,7 +39,7 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
     )
     nodes: list[GraphNode] = []
 
-    def fn_node(fn: ast.AST, cls: str | None) -> GraphNode:
+    def fn_node(fn: _FuncDefT, cls: str | None) -> GraphNode:
         params = [a.arg for a in fn.args.posonlyargs + fn.args.args]
         callees: list[str] = []
         callback_names: list[str] = []
@@ -64,7 +65,9 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
             ptypes += _ann_type_names(a.annotation)
         ptypes += _ann_type_names(fn.returns)
         # HOF only on a bare-Name call of a parameter (spec §9c: avoid the 53% over-fire)
-        is_hof = any(c in params for c in callees) or bool(callback_names)
+        is_hof = any(c in params for c in callees) or any(
+            n in params for n in callback_names
+        )
         decorators = tuple(
             d.id if isinstance(d, ast.Name) else getattr(d, "attr", "")
             for d in fn.decorator_list
