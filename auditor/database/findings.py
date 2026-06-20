@@ -4,8 +4,6 @@ import sqlite3
 from typing import ClassVar
 
 from auditor.database.base import (
-    _FINDING_COLS,
-    _FINDING_PLACEHOLDERS,
     BaseDB,
     Column,
     Table,
@@ -127,8 +125,10 @@ class FindingsDB(BaseDB):
                 "DELETE FROM findings WHERE repo = ? AND path = ? AND rule_id = ?",
                 (self.repo, path, rule_id),
             )
+            t = self.TABLES["findings"]
+            cols = ", ".join(t.insert_columns())
             conn.executemany(
-                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})",
+                f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
                 rows,
             )
             conn.commit()
@@ -165,8 +165,10 @@ class FindingsDB(BaseDB):
 
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
+            t = self.TABLES["findings"]
+            cols = ", ".join(t.insert_columns())
             conn.executemany(
-                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})",
+                f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
                 rows,
             )
             conn.commit()

@@ -65,6 +65,14 @@ class Table(BaseModel):
     repo_fk: bool = True
     cache: bool = True
 
+    def insert_columns(self) -> tuple[str, ...]:
+        """Column names for an INSERT — repo prepended when repo_fk; autoincrement cols excluded."""
+        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
+        return tuple(c.name for c in cols if not c.autoincrement)
+
+    def placeholders(self) -> str:
+        return ", ".join("?" * len(self.insert_columns()))
+
     def render(self, name: str) -> str:
         """The CREATE TABLE/INDEX statements for this table under ``name``."""
         cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
@@ -104,12 +112,6 @@ _SCHEMA_VERSION = 5
 _DEFAULT_REPO = (
     "."  # single-partition fallback when no repo is given (unit tests, ad-hoc dbs)
 )
-
-_FINDING_COLS = (
-    "repo, path, rule_id, category, severity, verdict_kind, line, "
-    "message, evidence, suggestion, detector, checklist_item, standard_refs"
-)
-_FINDING_PLACEHOLDERS = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
 
 
 class _SqliteWorker:
