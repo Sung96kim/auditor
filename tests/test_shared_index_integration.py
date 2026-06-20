@@ -33,8 +33,8 @@ async def test_two_scanned_repos_partitioned_in_global_db(tmp_path):
         assert (repo / ".auditor" / "config.toml").exists()
 
     async with await IndexStore.connect(index_db_path(), repo_key(repo_a)) as a:
-        a_files = {e.path for e in await a.files()}
-        repos = {r["repo"] for r in await a.repos()}
+        a_files = {e.path for e in await a.files.list()}
+        repos = {r["repo"] for r in await a.repos.list()}
 
     assert a_files == {"mod.py"}  # only alpha's file in alpha's partition
     assert {repo_key(repo_a), repo_key(repo_b)} <= repos

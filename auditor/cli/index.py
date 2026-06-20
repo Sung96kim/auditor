@@ -39,7 +39,7 @@ def index_list(target: RootArg = Path(".")) -> None:
 
 async def _index_list(root: Path) -> list[dict]:
     async with await _open_index(root) as index:
-        return [e.model_dump(mode="json") for e in await index.files()]
+        return [e.model_dump(mode="json") for e in await index.files.list()]
 
 
 @index_app.command("repos")
@@ -50,7 +50,7 @@ def index_repos() -> None:
 
 async def _index_repos() -> list[dict]:
     async with await _open_shared_index() as index:
-        return await index.repos()
+        return await index.repos.list()
 
 
 @index_app.command("forget")

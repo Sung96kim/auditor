@@ -110,12 +110,12 @@ async def test_files_and_severity_counts_are_per_repo(tmp_path):
         await b.upsert_file(_entry("shared.py"))
         await b.upsert_file(_entry("only_b.py"))
         await b.record_rule("shared.py", "R", "fp", [_finding(sev=Severity.LOW)], now)
-        b_files = {e.path: e for e in await b.files()}
+        b_files = {e.path: e for e in await b.files.list()}
         assert set(b_files) == {"shared.py", "only_b.py"}
         assert b_files["shared.py"].counts.get("low") == 1
         assert b_files["shared.py"].counts.get("blocking") is None  # A's count not seen
     async with await _store(db, _A) as a:
-        a_files = {e.path: e for e in await a.files()}
+        a_files = {e.path: e for e in await a.files.list()}
         assert set(a_files) == {"shared.py"}  # B's only_b.py not visible
         assert a_files["shared.py"].counts.get("blocking") == 1
 
@@ -131,9 +131,9 @@ async def test_set_doc_path_is_per_repo(tmp_path):
     async with await _store(db, _B) as b:
         await b.upsert_file(_entry("shared.py"))
         await b.set_doc_path("shared.py", "docs/b.md")
-        assert {e.doc_path for e in await b.files()} == {"docs/b.md"}
+        assert {e.doc_path for e in await b.files.list()} == {"docs/b.md"}
     async with await _store(db, _A) as a:
-        assert {e.doc_path for e in await a.files()} == {"docs/a.md"}
+        assert {e.doc_path for e in await a.files.list()} == {"docs/a.md"}
 
 
 async def test_roles_by_path_is_per_repo(tmp_path):
@@ -209,13 +209,13 @@ async def test_prune_respects_repo_and_prefix(tmp_path):
         async with await _store(db, _A) as a:
             pruned = await a.prune({"src/keep.py", "other/x.py"}, prefix="src/")
             assert pruned == ["src/gone.py"]  # only the stale file under the prefix
-            remaining = {e.path for e in await a.files()}
+            remaining = {e.path for e in await a.files.list()}
             assert remaining == {
                 "src/keep.py",
                 "other/x.py",
             }  # other/ untouched by prefix
 
-        assert {e.path for e in await b.files()} == {"src/gone.py"}  # B never pruned
+        assert {e.path for e in await b.files.list()} == {"src/gone.py"}  # B never pruned
 
 
 @pytest.mark.parametrize("repo", [_A, _B, "."])
@@ -224,7 +224,7 @@ async def test_register_and_forget_roundtrip(tmp_path, repo):
     async with await _store(db, repo) as s:
         await s.register(5.0)
         await s.upsert_file(_entry("x.py"))
-        assert any(r["repo"] == repo for r in await s.repos())
+        assert any(r["repo"] == repo for r in await s.repos.list())
         assert await s.forget() is True
-        assert not any(r["repo"] == repo for r in await s.repos())
-        assert {e.path for e in await s.files()} == set()  # cascade removed file rows
+        assert not any(r["repo"] == repo for r in await s.repos.list())
+        assert {e.path for e in await s.files.list()} == set()  # cascade removed file rows

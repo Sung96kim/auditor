@@ -471,7 +471,7 @@ async def audit_target(
 async def _apply_ignores(
     index: IndexStore, results: list[ScanResult], *, show_ignored: bool
 ) -> None:
-    rows = await index.ignores()
+    rows = await index.ignores.list()
     if rows:
         IgnoreList.from_rows(rows).filter(results, show_ignored=show_ignored)
 

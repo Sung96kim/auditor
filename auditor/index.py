@@ -230,55 +230,23 @@ class _SqliteWorker:
         self._queue.put(None)
 
 
-class IndexStore:
-    """Async wrapper over a worker-owned sqlite3 connection; callers never touch SQL."""
+class BaseDB:
+    """Owns connection management for one repo partition: the shared _SqliteWorker reference and the
+    _ensure_repo helper. Table-specific store classes subclass this to inherit the plumbing; the
+    worker itself is created once by IndexStore.connect and shared across all stores."""
 
-    def __init__(self, worker: "_SqliteWorker", db_path: Path, repo: str) -> None:
+    def __init__(self, worker: "_SqliteWorker", repo: str) -> None:
         self._worker = worker
-        self.db_path = db_path
         self.repo = repo
 
-    @classmethod
-    async def connect(cls, db_path: Path, repo: str = _DEFAULT_REPO) -> "IndexStore":
-        """Open (creating if needed) the shared index and bind this handle to ``repo``'s
-        partition — every read/write through it is scoped to that repo."""
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        worker = _SqliteWorker(db_path)
-        await worker.start()
-        store = cls(worker, db_path, repo)
-        await worker.run(store._init_schema)
-        return store
-
     def _ensure_repo(self, conn: sqlite3.Connection) -> None:
-        """Make this repo's parent registry row exist (idempotent), so a working-table write can
-        satisfy the foreign key. Called by every write op rather than at connect time, so a
-        read-only/cross-repo connection never registers a placeholder repo."""
         name = Path(self.repo).name or self.repo
-        conn.execute(
-            "INSERT OR IGNORE INTO repos (repo, name, last_scanned) VALUES (?, ?, 0)",
-            (self.repo, name),
-        )
+        conn.execute("INSERT OR IGNORE INTO repos (repo, name, last_scanned) VALUES (?, ?, 0)",
+                     (self.repo, name))
 
-    @staticmethod
-    def _init_schema(conn: sqlite3.Connection) -> None:
-        # busy_timeout FIRST so plain writes wait under concurrency (parallel audit agents)
-        # instead of erroring; the WAL switch + schema creation additionally need _retry_locked
-        # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
-        conn.execute("PRAGMA busy_timeout=30000")
-        if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-            _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
-        conn.execute("PRAGMA synchronous=NORMAL")
-        # the index is a pure cache: on a schema-version change, drop and rebuild rather than
-        # migrate — a re-scan repopulates it and old/new layouts never have to coexist.
-        existing = conn.execute("PRAGMA user_version").fetchone()[0]
-        if existing and existing != _SCHEMA_VERSION:
-            # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
-            # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
-            for table in _CACHE_TABLES:
-                _retry_locked(lambda t=table: conn.execute(f"DROP TABLE IF EXISTS {t}"))  # noqa: S608  (fixed literal)
-        conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-        _retry_locked(lambda: conn.executescript(_SCHEMA))
-        conn.commit()
+
+class ReposDB(BaseDB):
+    """Table store for the ``repos`` registry."""
 
     async def register(self, when: float) -> None:
         """Record this repo in the registry (refresh name + last-scanned). The name is the repo
@@ -296,7 +264,7 @@ class IndexStore:
 
         await self._worker.run(op)
 
-    async def repos(self) -> list[dict[str, Any]]:
+    async def list(self) -> list[dict[str, Any]]:
         """Every repo registered in the shared index — for cross-repo management/listing."""
         rows = await self._worker.run(
             lambda c: c.execute(
@@ -319,7 +287,9 @@ class IndexStore:
 
         return await self._worker.run(op)
 
-    # --- ignores (persistent, user-authored suppression) ------------------
+
+class IgnoresDB(BaseDB):
+    """Table store for the ``ignores`` table."""
 
     async def add_ignore(
         self,
@@ -352,7 +322,7 @@ class IndexStore:
 
         return await self._worker.run(op)
 
-    async def ignores(self) -> list[dict[str, Any]]:
+    async def list(self) -> list[dict[str, Any]]:
         """Every ignore row for this repo (id, rule_id, file, line, evidence_hash, reason)."""
         rows = await self._worker.run(
             lambda c: c.execute(
@@ -395,16 +365,9 @@ class IndexStore:
 
         return await self._worker.run(op)
 
-    async def __aenter__(self) -> "IndexStore":
-        return self
 
-    async def __aexit__(self, *exc: object) -> None:
-        await self.aclose()
-
-    async def aclose(self) -> None:
-        await self._worker.stop()
-
-    # --- scope ------------------------------------------------------------
+class FilesDB(BaseDB):
+    """Table store for the ``files`` and ``file_rules`` tables."""
 
     async def add_scope(self, rel_paths: list[str]) -> None:
         """Register the files the user wants audited (placeholder rows until scanned)."""
@@ -428,8 +391,6 @@ class IndexStore:
         )
         return [r["path"] for r in rows]
 
-    # --- file/rule cache --------------------------------------------------
-
     async def file_sha(self, path: str) -> str | None:
         row = await self._worker.run(
             lambda c: c.execute(
@@ -438,24 +399,6 @@ class IndexStore:
             ).fetchone()
         )
         return row["sha256"] if row and row["sha256"] else None
-
-    async def rule_fingerprint(self, path: str, rule_id: str) -> str | None:
-        row = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT fingerprint FROM file_rules WHERE repo = ? AND path = ? AND rule_id = ?",
-                (self.repo, path, rule_id),
-            ).fetchone()
-        )
-        return row["fingerprint"] if row else None
-
-    async def cached_findings(self, path: str, rule_id: str) -> list[Finding]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT * FROM findings WHERE repo = ? AND path = ? AND rule_id = ?",
-                (self.repo, path, rule_id),
-            ).fetchall()
-        )
-        return [_row_to_finding(r) for r in rows]
 
     async def upsert_file(self, entry: IndexEntry) -> None:
         params = (
@@ -482,6 +425,67 @@ class IndexStore:
             conn.commit()
 
         await self._worker.run(op)
+
+    async def list(self) -> list[IndexEntry]:
+        def op(conn: sqlite3.Connection) -> list[IndexEntry]:
+            rows = conn.execute(
+                "SELECT * FROM files WHERE repo = ? AND sha256 != '' ORDER BY path",
+                (self.repo,),
+            ).fetchall()
+            out = []
+            for r in rows:
+                counts = {
+                    cr["severity"]: cr["n"]
+                    for cr in conn.execute(
+                        "SELECT severity, COUNT(*) n FROM findings "
+                        "WHERE repo = ? AND path = ? GROUP BY severity",
+                        (self.repo, r["path"]),
+                    ).fetchall()
+                }
+                out.append(_row_to_index_entry(r, counts))
+            return out
+
+        return await self._worker.run(op)
+
+    async def roles_by_path(self) -> dict[str, str]:
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT path, role FROM files WHERE repo = ?", (self.repo,)
+            ).fetchall()
+        )
+        return {r["path"]: r["role"] for r in rows}
+
+    async def set_doc_path(self, path: str, doc_path: str) -> None:
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE files SET doc_path = ? WHERE repo = ? AND path = ?",
+                (doc_path, self.repo, path),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+
+class FindingsDB(BaseDB):
+    """Table store for the ``findings`` and ``file_rules`` tables."""
+
+    async def rule_fingerprint(self, path: str, rule_id: str) -> str | None:
+        row = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT fingerprint FROM file_rules WHERE repo = ? AND path = ? AND rule_id = ?",
+                (self.repo, path, rule_id),
+            ).fetchone()
+        )
+        return row["fingerprint"] if row else None
+
+    async def cached_findings(self, path: str, rule_id: str) -> list[Finding]:
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT * FROM findings WHERE repo = ? AND path = ? AND rule_id = ?",
+                (self.repo, path, rule_id),
+            ).fetchall()
+        )
+        return [_row_to_finding(r) for r in rows]
 
     async def record_rule(
         self,
@@ -514,18 +518,6 @@ class IndexStore:
 
         await self._worker.run(op)
 
-    async def set_doc_path(self, path: str, doc_path: str) -> None:
-        def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "UPDATE files SET doc_path = ? WHERE repo = ? AND path = ?",
-                (doc_path, self.repo, path),
-            )
-            conn.commit()
-
-        await self._worker.run(op)
-
-    # --- queries ----------------------------------------------------------
-
     async def all_findings(self) -> list[Finding]:
         rows = await self._worker.run(
             lambda c: c.execute(
@@ -551,28 +543,36 @@ class IndexStore:
 
         return await self._worker.run(op)
 
-    async def files(self) -> list[IndexEntry]:
-        def op(conn: sqlite3.Connection) -> list[IndexEntry]:
-            rows = conn.execute(
-                "SELECT * FROM files WHERE repo = ? AND sha256 != '' ORDER BY path",
-                (self.repo,),
-            ).fetchall()
-            out = []
-            for r in rows:
-                counts = {
-                    cr["severity"]: cr["n"]
-                    for cr in conn.execute(
-                        "SELECT severity, COUNT(*) n FROM findings "
-                        "WHERE repo = ? AND path = ? GROUP BY severity",
-                        (self.repo, r["path"]),
-                    ).fetchall()
-                }
-                out.append(_row_to_index_entry(r, counts))
-            return out
+    async def add_findings(self, path: str, findings: list[Finding]) -> None:
+        rows = [_finding_to_row(self.repo, path, f) for f in findings]
 
-        return await self._worker.run(op)
+        def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
+            conn.executemany(
+                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})",
+                rows,
+            )
+            conn.commit()
 
-    # --- shapes (cross-file) ---------------------------------------------
+        await self._worker.run(op)
+
+    async def clear_findings_for_rules(self, rule_ids: list[str]) -> None:
+        if not rule_ids:
+            return
+        placeholders = ",".join("?" for _ in rule_ids)
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",
+                (self.repo, *rule_ids),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+
+class ShapesDB(BaseDB):
+    """Table store for the ``shapes`` table."""
 
     async def clear_shapes(self, path: str) -> None:
         def op(conn: sqlite3.Connection) -> None:
@@ -610,72 +610,6 @@ class IndexStore:
         )
         return [dict(r) for r in rows]
 
-    async def roles_by_path(self) -> dict[str, str]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT path, role FROM files WHERE repo = ?", (self.repo,)
-            ).fetchall()
-        )
-        return {r["path"]: r["role"] for r in rows}
-
-    async def clear_findings_for_rules(self, rule_ids: list[str]) -> None:
-        if not rule_ids:
-            return
-        placeholders = ",".join("?" for _ in rule_ids)
-
-        def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",
-                (self.repo, *rule_ids),
-            )
-            conn.commit()
-
-        await self._worker.run(op)
-
-    async def add_findings(self, path: str, findings: list[Finding]) -> None:
-        rows = [_finding_to_row(self.repo, path, f) for f in findings]
-
-        def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            conn.executemany(
-                f"INSERT INTO findings ({_FINDING_COLS}) VALUES ({_FINDING_PLACEHOLDERS})",
-                rows,
-            )
-            conn.commit()
-
-        await self._worker.run(op)
-
-    async def prune(self, keep_paths: set[str], *, prefix: str = "") -> list[str]:
-        """Drop every row (files/file_rules/findings/shapes) for an indexed file under ``prefix``
-        that is no longer in ``keep_paths`` — i.e. deleted or newly excluded. Scoped to this repo
-        and ``prefix`` so a subdirectory scan never evicts files outside it. Returns pruned paths."""
-
-        def op(conn: sqlite3.Connection) -> list[str]:
-            indexed = [
-                r["path"]
-                for r in conn.execute(
-                    "SELECT path FROM files WHERE repo = ?", (self.repo,)
-                ).fetchall()
-            ]
-            stale = [p for p in indexed if p.startswith(prefix) and p not in keep_paths]
-            for p in stale:
-                for table in (
-                    "files",
-                    "file_rules",
-                    "findings",
-                    "shapes",
-                    "graph_facts",
-                ):
-                    conn.execute(
-                        f"DELETE FROM {table} WHERE repo = ? AND path = ?",
-                        (self.repo, p),
-                    )  # noqa: S608  (table name is a fixed literal)
-            if stale:
-                conn.commit()
-            return stale
-
-        return await self._worker.run(op)
-
     async def duplicate_shapes(self) -> dict[str, list[sqlite3.Row]]:
         """shape_hash -> rows, for hashes spanning 2+ distinct files within this repo."""
 
@@ -696,11 +630,12 @@ class IndexStore:
 
         return await self._worker.run(op)
 
-    # --- graph ------------------------------------------------------------
 
-    async def set_graph_facts(
-        self, path: str, facts_json: str, content_hash: str
-    ) -> None:
+class GraphDB(BaseDB):
+    """Table store for the ``graph_facts``, ``graph_nodes``, ``graph_edges``, and
+    ``graph_clusters`` tables."""
+
+    async def set_facts(self, path: str, facts_json: str, content_hash: str) -> None:
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
             conn.execute(
@@ -713,7 +648,7 @@ class IndexStore:
 
         await self._worker.run(op)
 
-    async def graph_facts_hash(self, path: str) -> str | None:
+    async def facts_hash(self, path: str) -> str | None:
         row = await self._worker.run(
             lambda c: c.execute(
                 "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?",
@@ -722,7 +657,7 @@ class IndexStore:
         )
         return row["content_hash"] if row else None
 
-    async def all_graph_facts(self) -> list[str]:
+    async def all_facts(self) -> list[str]:
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT facts_json FROM graph_facts WHERE repo = ? ORDER BY path",
@@ -731,7 +666,7 @@ class IndexStore:
         )
         return [r["facts_json"] for r in rows]
 
-    async def replace_graph(
+    async def replace(
         self,
         nodes: list[GraphNode],
         edges: list[GraphEdge],
@@ -781,7 +716,7 @@ class IndexStore:
 
         await self._worker.run(op)
 
-    async def graph_node(self, node_id: str) -> dict[str, Any] | None:
+    async def node(self, node_id: str) -> dict[str, Any] | None:
         row = await self._worker.run(
             lambda c: c.execute(
                 "SELECT * FROM graph_nodes WHERE repo = ? AND node_id = ?",
@@ -790,7 +725,7 @@ class IndexStore:
         )
         return dict(row) if row else None
 
-    async def graph_nodes(self) -> list[dict[str, Any]]:
+    async def nodes(self) -> list[dict[str, Any]]:
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT * FROM graph_nodes WHERE repo = ? ORDER BY rank DESC, node_id",
@@ -799,7 +734,7 @@ class IndexStore:
         )
         return [dict(r) for r in rows]
 
-    async def graph_edges_of(
+    async def edges_of(
         self, node_id: str, kinds: list[str] | None
     ) -> list[dict[str, Any]]:
         def op(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -812,7 +747,7 @@ class IndexStore:
 
         return await self._worker.run(op)
 
-    async def graph_cluster_members(self, cluster_id: int) -> list[dict[str, Any]]:
+    async def cluster_members(self, cluster_id: int) -> list[dict[str, Any]]:
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT node_id AS id, name, module, rank FROM graph_nodes "
@@ -822,7 +757,7 @@ class IndexStore:
         )
         return [dict(r) for r in rows]
 
-    async def graph_clusters(self) -> list[dict[str, Any]]:
+    async def clusters(self) -> list[dict[str, Any]]:
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT cluster_id, label, member_count FROM graph_clusters "
@@ -831,6 +766,232 @@ class IndexStore:
             ).fetchall()
         )
         return [dict(r) for r in rows]
+
+
+class IndexStore(BaseDB):
+    """Async wrapper over a worker-owned sqlite3 connection; callers never touch SQL.
+
+    The six per-table stores are available as attributes:
+      - ``repos``    — ReposDB
+      - ``ignores``  — IgnoresDB
+      - ``files``    — FilesDB
+      - ``findings`` — FindingsDB
+      - ``shapes``   — ShapesDB
+      - ``graph``    — GraphDB
+    """
+
+    def __init__(self, worker: "_SqliteWorker", repo: str) -> None:
+        super().__init__(worker, repo)
+        self.db_path: Path  # set by connect()
+        self.repos: ReposDB
+        self.ignores: IgnoresDB
+        self.files: FilesDB
+        self.findings: FindingsDB
+        self.shapes: ShapesDB
+        self.graph: GraphDB
+
+    @classmethod
+    async def connect(cls, db_path: Path, repo: str = _DEFAULT_REPO) -> "IndexStore":
+        """Open (creating if needed) the shared index and bind this handle to ``repo``'s
+        partition — every read/write through it is scoped to that repo."""
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        worker = _SqliteWorker(db_path)
+        await worker.start()
+        store = cls(worker, repo)
+        store.db_path = db_path
+        await worker.run(store._init_schema)
+        store.repos = ReposDB(worker, repo)
+        store.ignores = IgnoresDB(worker, repo)
+        store.files = FilesDB(worker, repo)
+        store.findings = FindingsDB(worker, repo)
+        store.shapes = ShapesDB(worker, repo)
+        store.graph = GraphDB(worker, repo)
+        return store
+
+    @staticmethod
+    def _init_schema(conn: sqlite3.Connection) -> None:
+        # busy_timeout FIRST so plain writes wait under concurrency (parallel audit agents)
+        # instead of erroring; the WAL switch + schema creation additionally need _retry_locked
+        # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
+        conn.execute("PRAGMA busy_timeout=30000")
+        if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+            _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
+        conn.execute("PRAGMA synchronous=NORMAL")
+        # the index is a pure cache: on a schema-version change, drop and rebuild rather than
+        # migrate — a re-scan repopulates it and old/new layouts never have to coexist.
+        existing = conn.execute("PRAGMA user_version").fetchone()[0]
+        if existing and existing != _SCHEMA_VERSION:
+            # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
+            # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
+            for table in _CACHE_TABLES:
+                _retry_locked(lambda t=table: conn.execute(f"DROP TABLE IF EXISTS {t}"))  # noqa: S608  (fixed literal)
+        conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        _retry_locked(lambda: conn.executescript(_SCHEMA))
+        conn.commit()
+
+    async def __aenter__(self) -> "IndexStore":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._worker.stop()
+
+    async def prune(self, keep_paths: set[str], *, prefix: str = "") -> list[str]:
+        """Drop every row (files/file_rules/findings/shapes) for an indexed file under ``prefix``
+        that is no longer in ``keep_paths`` — i.e. deleted or newly excluded. Scoped to this repo
+        and ``prefix`` so a subdirectory scan never evicts files outside it. Returns pruned paths."""
+
+        def op(conn: sqlite3.Connection) -> list[str]:
+            indexed = [
+                r["path"]
+                for r in conn.execute(
+                    "SELECT path FROM files WHERE repo = ?", (self.repo,)
+                ).fetchall()
+            ]
+            stale = [p for p in indexed if p.startswith(prefix) and p not in keep_paths]
+            for p in stale:
+                for table in (
+                    "files",
+                    "file_rules",
+                    "findings",
+                    "shapes",
+                    "graph_facts",
+                ):
+                    conn.execute(
+                        f"DELETE FROM {table} WHERE repo = ? AND path = ?",
+                        (self.repo, p),
+                    )  # noqa: S608  (table name is a fixed literal)
+            if stale:
+                conn.commit()
+            return stale
+
+        return await self._worker.run(op)
+
+    # --- thin delegators (kept for backward-compatibility; to be removed in Phase 2) ----------
+
+    async def register(self, when: float) -> None:
+        return await self.repos.register(when)
+
+    async def forget(self, repo: str | None = None) -> bool:
+        return await self.repos.forget(repo)
+
+    async def add_ignore(
+        self,
+        rule_id: str,
+        file: str | None,
+        line: int | None,
+        evidence_hash: str | None,
+        reason: str | None,
+        when: float,
+    ) -> int:
+        return await self.ignores.add_ignore(rule_id, file, line, evidence_hash, reason, when)
+
+    async def remove_ignore_by_id(self, ignore_id: int) -> bool:
+        return await self.ignores.remove_ignore_by_id(ignore_id)
+
+    async def remove_ignore_by_selector(
+        self, rule_id: str, file: str | None, line: int | None
+    ) -> bool:
+        return await self.ignores.remove_ignore_by_selector(rule_id, file, line)
+
+    async def clear_ignores(self) -> int:
+        return await self.ignores.clear_ignores()
+
+    async def add_scope(self, rel_paths: list[str]) -> None:
+        return await self.files.add_scope(rel_paths)
+
+    async def scope(self) -> list[str]:
+        return await self.files.scope()
+
+    async def file_sha(self, path: str) -> str | None:
+        return await self.files.file_sha(path)
+
+    async def upsert_file(self, entry: IndexEntry) -> None:
+        return await self.files.upsert_file(entry)
+
+    async def roles_by_path(self) -> dict[str, str]:
+        return await self.files.roles_by_path()
+
+    async def set_doc_path(self, path: str, doc_path: str) -> None:
+        return await self.files.set_doc_path(path, doc_path)
+
+    async def rule_fingerprint(self, path: str, rule_id: str) -> str | None:
+        return await self.findings.rule_fingerprint(path, rule_id)
+
+    async def cached_findings(self, path: str, rule_id: str) -> list[Finding]:
+        return await self.findings.cached_findings(path, rule_id)
+
+    async def record_rule(
+        self,
+        path: str,
+        rule_id: str,
+        fingerprint: str,
+        findings: list[Finding],
+        when: float,
+    ) -> None:
+        return await self.findings.record_rule(path, rule_id, fingerprint, findings, when)
+
+    async def all_findings(self) -> list[Finding]:
+        return await self.findings.all_findings()
+
+    async def findings_grouped(self) -> dict[str, list[Finding]]:
+        return await self.findings.findings_grouped()
+
+    async def add_findings(self, path: str, findings: list[Finding]) -> None:
+        return await self.findings.add_findings(path, findings)
+
+    async def clear_findings_for_rules(self, rule_ids: list[str]) -> None:
+        return await self.findings.clear_findings_for_rules(rule_ids)
+
+    async def clear_shapes(self, path: str) -> None:
+        return await self.shapes.clear_shapes(path)
+
+    async def add_shapes(self, rows: list[tuple[str, str, str, str, int]]) -> None:
+        return await self.shapes.add_shapes(rows)
+
+    async def shapes_by_kind(self, kind: str) -> list[dict]:
+        return await self.shapes.shapes_by_kind(kind)
+
+    async def duplicate_shapes(self) -> dict:
+        return await self.shapes.duplicate_shapes()
+
+    async def set_graph_facts(
+        self, path: str, facts_json: str, content_hash: str
+    ) -> None:
+        return await self.graph.set_facts(path, facts_json, content_hash)
+
+    async def graph_facts_hash(self, path: str) -> str | None:
+        return await self.graph.facts_hash(path)
+
+    async def all_graph_facts(self) -> list[str]:
+        return await self.graph.all_facts()
+
+    async def replace_graph(
+        self,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+        clusters: list[GraphCluster],
+    ) -> None:
+        return await self.graph.replace(nodes, edges, clusters)
+
+    async def graph_node(self, node_id: str) -> dict | None:
+        return await self.graph.node(node_id)
+
+    async def graph_nodes(self) -> list[dict]:
+        return await self.graph.nodes()
+
+    async def graph_edges_of(
+        self, node_id: str, kinds: list[str] | None
+    ) -> list[dict]:
+        return await self.graph.edges_of(node_id, kinds)
+
+    async def graph_cluster_members(self, cluster_id: int) -> list[dict]:
+        return await self.graph.cluster_members(cluster_id)
+
+    async def graph_clusters(self) -> list[dict]:
+        return await self.graph.clusters()
 
 
 def _finding_to_row(repo: str, path: str, f: Finding) -> tuple:

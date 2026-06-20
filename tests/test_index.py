@@ -66,7 +66,7 @@ async def test_record_and_read_back(tmp_path):
         assert await index.rule_fingerprint("a.py", "PY-SEC-DANGEROUS-EVAL") == "fp1"
         cached = await index.cached_findings("a.py", "PY-SEC-DANGEROUS-EVAL")
         assert len(cached) == 1 and cached[0].rule_id == "PY-SEC-DANGEROUS-EVAL"
-        files = await index.files()
+        files = await index.files.list()
         assert files[0].counts.get("blocking") == 1
 
 
@@ -127,7 +127,7 @@ async def test_single_store_many_concurrent_writers(tmp_path):
 
         results = await asyncio.gather(*[task(i) for i in range(300)])
         assert all(n == 1 for n in results)
-        assert len(await index.files()) == 300
+        assert len(await index.files.list()) == 300
         # results were not cross-wired between concurrent callers
         assert await index.rule_fingerprint("f137.py", "R") == "fp137"
 
@@ -179,7 +179,7 @@ async def test_many_stores_heavy_contention(tmp_path):
 
     await asyncio.gather(*[worker(i) for i in range(24)])
     async with await IndexStore.connect(db) as index:
-        assert len(await index.files()) == 24 * 10
+        assert len(await index.files.list()) == 24 * 10
 
 
 async def test_worker_error_isolation_under_load(tmp_path):

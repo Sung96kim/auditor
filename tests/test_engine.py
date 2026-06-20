@@ -101,7 +101,7 @@ async def test_parallel_writers(tmp_path):
     results = await asyncio.gather(*[worker(p) for p in files * 4])
     assert all(isinstance(n, int) for n in results)
     async with await IndexStore.connect(db) as index:
-        assert len(await index.files()) == 2
+        assert len(await index.files.list()) == 2
 
 
 async def test_scan_dispatches_each_language(tmp_path):
@@ -142,14 +142,14 @@ async def test_deleted_file_is_pruned_from_index(tmp_path):
     settings = load_config(root)
     async with await IndexStore.connect(db) as index:
         await _scan_dir(root, root / "pkg", settings, index)
-        assert {e.path for e in await index.files()} == {"pkg/a.py", "pkg/b.py"}
+        assert {e.path for e in await index.files.list()} == {"pkg/a.py", "pkg/b.py"}
 
     (root / "pkg" / "a.py").unlink()  # delete a file, then rescan
     async with await IndexStore.connect(db) as index:
         results = await _scan_dir(root, root / "pkg", settings, index)
         assert "pkg/a.py" not in results
         # reconciled out of every table, so `index list` / aggregate don't show a ghost file
-        assert {e.path for e in await index.files()} == {"pkg/b.py"}
+        assert {e.path for e in await index.files.list()} == {"pkg/b.py"}
 
 
 async def test_deleting_one_of_a_dup_pair_clears_the_crossfile_finding(tmp_path):

@@ -91,7 +91,7 @@ def ignore_list(target: RootArg = Path(".")) -> None:
 
 async def _ignore_list(root: Path) -> list[dict]:
     async with await _open_index(root) as index:
-        return await index.ignores()
+        return await index.ignores.list()
 
 
 @ignore_app.command("rm")

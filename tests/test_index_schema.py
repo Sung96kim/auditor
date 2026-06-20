@@ -62,14 +62,14 @@ async def test_bare_connect_does_not_register(tmp_path):
     # a read-only / cross-repo connection must not leave a placeholder repo behind
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/repos/alpha") as a:
-        assert await a.repos() == []
+        assert await a.repos.list() == []
 
 
 async def test_write_registers_repo(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/repos/alpha") as a:
         await a.add_findings("x.py", [_finding()])  # any write registers the repo
-        regs = await a.repos()
+        regs = await a.repos.list()
     assert [r["repo"] for r in regs] == ["/repos/alpha"]
     assert regs[0]["name"] == "alpha"  # path basename
     assert regs[0]["last_scanned"] == 0  # not stamped until a scan calls register()
@@ -81,7 +81,7 @@ async def test_register_refreshes_name_and_time(tmp_path):
         await s.register(
             123.5
         )  # name is derived from the repo key's basename, not passed in
-        regs = await s.repos()
+        regs = await s.repos.list()
     assert regs == [{"repo": "/x/proj", "name": "proj", "last_scanned": 123.5}]
 
 
@@ -176,7 +176,7 @@ async def test_forget_defaults_to_own_repo(tmp_path):
     async with await IndexStore.connect(db, "/repos/solo") as s:
         await _populate(s)
         assert await s.forget() is True  # no arg → forgets this handle's own repo
-        assert await s.repos() == []
+        assert await s.repos.list() == []
         assert await s.all_findings() == []  # cascade cleared its data
 
 

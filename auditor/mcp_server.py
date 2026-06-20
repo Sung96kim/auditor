@@ -236,7 +236,7 @@ async def ignore_list(path: str = ".") -> list[dict]:
     """List the persistent ignores recorded for this repo (with their ids)."""
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        return await index.ignores()
+        return await index.ignores.list()
 
 
 @mcp.tool

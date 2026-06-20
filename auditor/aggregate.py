@@ -20,7 +20,7 @@ class AuditAggregator:
 
     async def _results(self) -> list[ScanResult]:
         """Reconstruct per-file results from the index and drop ignored findings."""
-        entries = await self.index.files()
+        entries = await self.index.files.list()
         grouped = await self.index.findings_grouped()
         results = [
             ScanResult(
@@ -31,7 +31,7 @@ class AuditAggregator:
             )
             for e in entries
         ]
-        IgnoreList.from_rows(await self.index.ignores()).filter(results)
+        IgnoreList.from_rows(await self.index.ignores.list()).filter(results)
         return results
 
     async def markdown(self) -> str:
