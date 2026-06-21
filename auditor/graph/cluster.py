@@ -1,5 +1,6 @@
 """Concept clustering: greedy modularity communities (networkx) for anti-hairball property."""
 
+import math
 from collections import Counter
 
 import networkx as nx
@@ -37,13 +38,30 @@ def cluster_concepts(
         for nid in comm:
             labels[nid] = cid
     toks_by_id = {n.id: n.doc_tokens for n in nodes}
-    label_names: dict[int, str] = {}
     members: dict[int, list[str]] = {}
     for nid, cid in labels.items():
         members.setdefault(cid, []).append(nid)
+    num_clusters = len(members)
+    # token -> number of clusters containing it (document frequency)
+    doc_freq: Counter[str] = Counter()
+    cluster_counts: dict[int, Counter[str]] = {}
     for cid, mem in members.items():
-        counter: Counter[str] = Counter()
+        counts: Counter[str] = Counter()
         for m in mem:
-            counter.update(set(toks_by_id.get(m, ())))
-        label_names[cid] = counter.most_common(1)[0][0] if counter else f"cluster-{cid}"
+            counts.update(set(toks_by_id.get(m, ())))
+        cluster_counts[cid] = counts
+        doc_freq.update(counts.keys())
+    label_names: dict[int, str] = {}
+    for cid, counts in cluster_counts.items():
+        if not counts:
+            label_names[cid] = f"cluster-{cid}"
+            continue
+        # smoothed idf so it is always positive; ubiquitous tokens -> near 0
+        best = max(
+            sorted(counts),  # sorted() => deterministic tie-break by token
+            key=lambda t: (
+                counts[t] * math.log((1 + num_clusters) / (1 + doc_freq[t])) + 1e-9
+            ),
+        )
+        label_names[cid] = best
     return labels, label_names

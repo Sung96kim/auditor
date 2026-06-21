@@ -1,5 +1,5 @@
 from auditor.graph.cluster import cluster_concepts
-from auditor.graph.model import EdgeKind, GraphEdge, GraphNode
+from auditor.graph.model import EdgeKind, GraphEdge, GraphNode, NodeKind
 
 
 def _n(i, toks=()):
@@ -35,3 +35,39 @@ def test_deterministic():
     nodes = [_n(str(i), ["t"]) for i in range(10)]
     edges = [_edge(str(i), str(i + 1)) for i in range(9)]
     assert cluster_concepts(nodes, edges)[0] == cluster_concepts(nodes, edges)[0]
+
+
+def test_distinctive_labels_downweight_ubiquitous_tokens():
+    # Two cliques. "orion" appears in EVERY node (ubiquitous); each clique has a distinctive token.
+    pay = [
+        GraphNode(
+            id=f"a{i}",
+            kind=NodeKind.FUNCTION,
+            name=f"a{i}",
+            module="m",
+            qualname=f"a{i}",
+            doc_tokens=("orion", "payment"),
+        )
+        for i in range(3)
+    ]
+    cur = [
+        GraphNode(
+            id=f"b{i}",
+            kind=NodeKind.FUNCTION,
+            name=f"b{i}",
+            module="m",
+            qualname=f"b{i}",
+            doc_tokens=("orion", "cursor"),
+        )
+        for i in range(3)
+    ]
+    edges = [
+        GraphEdge(src="a0", dst="a1", kind=EdgeKind.NAME_SIMILAR, weight=0.9),
+        GraphEdge(src="a1", dst="a2", kind=EdgeKind.NAME_SIMILAR, weight=0.9),
+        GraphEdge(src="b0", dst="b1", kind=EdgeKind.NAME_SIMILAR, weight=0.9),
+        GraphEdge(src="b1", dst="b2", kind=EdgeKind.NAME_SIMILAR, weight=0.9),
+    ]
+    labels, names = cluster_concepts([*pay, *cur], edges, floor=0.45)
+    chosen = set(names.values())
+    assert "orion" not in chosen  # ubiquitous token never wins
+    assert chosen == {"payment", "cursor"}
