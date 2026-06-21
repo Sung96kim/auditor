@@ -3,7 +3,7 @@
 Complements in-file ``noqa`` and the snapshot ``baseline.json``. An ignore is always keyed by
 ``rule_id``; its scope widens as ``file``/``line`` are left unset. Line-level ignores match by a
 hash of the offending text first (so they follow the code when lines shift) and fall back to the
-literal line. The rows live in the shared index db (``auditor.index``); this module is the pure,
+literal line. The rows live in the shared index db (``auditor.database``); this module is the pure,
 db-free matching logic over them."""
 
 import hashlib
