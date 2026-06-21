@@ -13,6 +13,7 @@ from auditor.graph.model import (
     GraphCluster,
     GraphEdge,
     GraphNode,
+    NodeKind,
 )
 from auditor.graph.semantic_profile import ATTRS
 from auditor.languages.python.detectors.graph_rules import (
@@ -109,7 +110,9 @@ class GodConcept(GraphDetector):
     def __init__(self, ctx: GraphContext) -> None:
         super().__init__(ctx)
         self.prod = ctx.prod_funcs + [
-            n for n in ctx.nodes if n.kind == "class" and n.role not in TEST_ROLES
+            n
+            for n in ctx.nodes
+            if n.kind == NodeKind.CLASS and n.role not in TEST_ROLES
         ]
         ranks = [n.rank for n in self.prod]
         degs = [ctx.degree.get(n.id, 0) for n in self.prod]
@@ -141,10 +144,48 @@ class GodConcept(GraphDetector):
         return out
 
 
-GRAPH_DETECTORS: list[type[GraphDetector]] = [GodConcept]
+class ScatteredConcept(GraphDetector):
+    rule_id: ClassVar[str] = SCATTERED_CONCEPT_RULE
+    category: ClassVar[Category] = Category.OOP_COMPOSITION
+
+    def __init__(self, ctx: GraphContext) -> None:
+        super().__init__(ctx)
+        self.labels = {c.cluster_id: c.label for c in ctx.clusters}
+
+    def detect(self) -> list[tuple[str, Finding]]:
+        out: list[tuple[str, Finding]] = []
+        for cid in sorted(self.ctx.by_cluster):
+            members = self.ctx.by_cluster[cid]
+            mods = {m.module for m in members}
+            if (
+                len(mods) >= self.ctx.cfg.scattered_min_modules
+                and len(mods) / len(members) >= self.ctx.cfg.scattered_min_ratio
+            ):
+                anchor = max(members, key=lambda m: (m.rank, m.id))
+                shown = sorted(mods)
+                listed = ", ".join(shown[:5]) + (
+                    f" +{len(shown) - 5} more" if len(shown) > 5 else ""
+                )
+                label = self.labels.get(cid, f"cluster-{cid}")
+                out.append(
+                    (
+                        anchor.module,
+                        self._finding(
+                            line=anchor.line,
+                            message=f"concept '{label}' is scattered across {len(mods)} "
+                            f"modules ({len(members)} symbols) — consider consolidating.",
+                            evidence=listed,
+                            suggestion="gather this concept into one module/package.",
+                        ),
+                    )
+                )
+        return out
+
+
+GRAPH_DETECTORS: list[type[GraphDetector]] = [GodConcept, ScatteredConcept]
 
 # Re-export unused imports to satisfy linters (these are imported for their side effects
-# or for use by downstream tasks 7-8 that extend this module)
+# or for use by downstream tasks that extend this module)
 __all__ = [
     "ATTRS",
     "GRAPH_DETECTORS",
@@ -152,7 +193,7 @@ __all__ = [
     "GraphContext",
     "GraphDetector",
     "NAMING_INCONSISTENCY_RULE",
-    "SCATTERED_CONCEPT_RULE",
+    "ScatteredConcept",
     "run_graph_detectors",
 ]
 
