@@ -126,7 +126,8 @@ export default function App() {
   return (
     <div
       style={{
-        height: "100vh",
+        height: "100%",
+        width: "100%",
         backgroundColor: THEME.bgApp,
         color: "#e2e8f0",
         fontFamily: "monospace",
