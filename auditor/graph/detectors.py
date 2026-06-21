@@ -1,6 +1,7 @@
 """Graph-aware detectors (GRAPH-*): advisory findings computed over the built graph.
 Stdlib only — pure counting/grouping/distance. Run during `graph build`."""
 
+import math
 import statistics
 from collections import Counter, defaultdict
 from typing import ClassVar
@@ -118,21 +119,27 @@ class GodConcept(GraphDetector):
         degs = [ctx.degree.get(n.id, 0) for n in self.prod]
         sigma = ctx.cfg.god_concept_sigma
 
-        def _floor(values: list[float]) -> float:
+        def _log_floor(values: list[float]) -> float:
+            # Log-space threshold: centrality distributions are heavy-tailed, so a single
+            # extreme outlier inflates σ in raw space and suppresses genuine hubs.
+            # log1p compresses the tail, making the outlier-σ effect negligible.
             if not values:
-                return 0.0
-            sd = statistics.pstdev(values)
-            return (statistics.mean(values) + sigma * sd) if sd > 0.0 else float("inf")
+                return float("inf")
+            logged = [math.log1p(v) for v in values]
+            sd = statistics.pstdev(logged)
+            if sd == 0.0:
+                return float("inf")
+            return statistics.mean(logged) + sigma * sd
 
-        self.rank_floor = _floor(ranks)
-        self.deg_floor = _floor(degs)
+        self.rank_floor = _log_floor(ranks)
+        self.deg_floor = _log_floor(degs)
 
     def detect(self) -> list[tuple[str, Finding]]:
         out: list[tuple[str, Finding]] = []
         for n in sorted(self.prod, key=lambda x: x.id):
             deg = self.ctx.degree.get(n.id, 0)
-            deg_out = deg >= self.deg_floor
-            rank_out = n.rank >= self.rank_floor
+            deg_out = math.log1p(deg) >= self.deg_floor
+            rank_out = math.log1p(n.rank) >= self.rank_floor
             if not (deg_out or rank_out):
                 continue
             if deg_out:

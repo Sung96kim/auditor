@@ -23,9 +23,10 @@ def _fn(nid, name, module="m.py", role="production", rank=0.0):
 
 
 def test_god_concept_flags_rank_outlier():
-    # one hub with huge rank, nine ordinary nodes
+    # one hub with huge rank, nineteen ordinary nodes (20 total so the outlier is
+    # comfortably above mean+3σ in log space)
     nodes = [_fn("m.py::hub", "hub", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(9)
+        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
     ]
     results = GodConcept(GraphContext(nodes, [], [], AuditorSettings())).detect()
     assert len(results) == 1
@@ -38,7 +39,7 @@ def test_god_concept_flags_rank_outlier():
 
 def test_god_concept_ignores_tests():
     nodes = [_fn("t.py::big", "big", role="test", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(9)
+        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
     ]
     # a test-role hub must not be flagged
     assert GodConcept(GraphContext(nodes, [], [], AuditorSettings())).detect() == []
@@ -80,7 +81,7 @@ def test_scattered_concept_ignores_concentrated_cluster():
 
 def test_run_graph_detectors_groups_by_path():
     nodes = [_fn("m.py::hub", "hub", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(9)
+        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
     ]
     per_file = run_graph_detectors(nodes, [], [], AuditorSettings())
     assert "m.py" in per_file and len(per_file["m.py"]) == 1
@@ -132,6 +133,25 @@ def test_naming_inconsistency_ignores_antonym_verbs():
     )
 
 
+def test_god_concept_log_space_not_suppressed_by_mega_outlier():
+    # one degree-100 mega-hub + one moderate degree-~20 hub + many degree-1 leaves.
+    # Under raw mean+3σ, the mega-hub inflates σ so much that the moderate hub falls
+    # below the floor (false negative). Log-space floors catch both.
+    mega = _fn("m.py::mega", "mega")
+    mod = _fn("m.py::mod", "mod")
+    leaves = [_fn(f"m.py::l{i}", f"l{i}") for i in range(60)]
+    edges = []
+    for i in range(50):  # mega: 50 incoming
+        edges.append(GraphEdge(src=leaves[i % 60].id, dst=mega.id, kind=EdgeKind.CALLS))
+    for i in range(20):  # mod: 20 incoming
+        edges.append(GraphEdge(src=leaves[(i + 5) % 60].id, dst=mod.id, kind=EdgeKind.CALLS))
+    nodes = [mega, mod, *leaves]
+    res = GodConcept(GraphContext(nodes, edges, [], AuditorSettings())).detect()
+    flagged = {f.evidence for _, f in res}
+    assert "m.py::mega" in flagged  # the mega hub
+    assert "m.py::mod" in flagged  # the moderate hub must NOT be suppressed by mega's σ
+
+
 def test_god_concept_message_splits_by_signal():
     # degree hub: many callers -> "hub"/"decompos" wording
     hub = _fn("m.py::hub", "hub")
@@ -142,8 +162,9 @@ def test_god_concept_message_splits_by_signal():
     assert "hub" in hub_msg and "decompos" in hub_msg
 
     # rank-central, low degree (no edges) -> "central"/"blast-radius" wording
+    # (19 peers so the outlier clears mean+3σ in log space)
     nodes = [_fn("m.py::central", "central", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(9)
+        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
     ]
     res2 = GodConcept(GraphContext(nodes, [], [], AuditorSettings())).detect()
     msg = next(f.message for _, f in res2 if f.evidence == "m.py::central")
