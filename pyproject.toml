@@ -31,6 +31,7 @@ graph = [
     "numpy>=2.1",
     "scikit-learn>=1.6",
     "snowballstemmer>=2.2",
+    "networkx>=3",
 ]
 
 [project.scripts]
