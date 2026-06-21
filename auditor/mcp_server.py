@@ -10,6 +10,14 @@ import difflib
 import time
 from pathlib import Path
 
+try:
+    from auditor.graph.build import GraphBuilder
+    from auditor.graph.query import GraphQuery
+
+    _GRAPH_OK = True
+except ImportError:  # the [graph] extra (numpy + scikit-learn) isn't installed
+    _GRAPH_OK = False
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
@@ -277,6 +285,50 @@ def rules_list(
             }
         )
     return rows
+
+
+if _GRAPH_OK:
+
+    @mcp.tool
+    async def graph_build(path: str = ".") -> dict:
+        """Build the semantic graph from cached facts (run scan with graph enabled first)."""
+        root = find_root(Path(path))
+        settings = load_config(root)
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            await index.repos.register(time.time())
+            return await GraphBuilder().run(index, settings)
+
+    @mcp.tool
+    async def graph_related(
+        symbol: str, path: str = ".", limit: int = 10
+    ) -> list[dict]:
+        """Top semantic neighbors (name + usage) of a symbol, ranked."""
+        root = find_root(Path(path))
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            return await GraphQuery(index).related(symbol, limit=limit)
+
+    @mcp.tool
+    async def graph_neighbors(
+        symbol: str, path: str = ".", depth: int = 1
+    ) -> list[dict]:
+        """Structural neighbors (calls/overrides/inherits/...) up to a depth."""
+        root = find_root(Path(path))
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            return await GraphQuery(index).neighbors(symbol, depth=depth)
+
+    @mcp.tool
+    async def graph_concept(term: str, path: str = ".") -> dict:
+        """The concept cluster best matching a term, with its members (rank-ordered)."""
+        root = find_root(Path(path))
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            return await GraphQuery(index).concept(term)
+
+    @mcp.tool
+    async def graph_clusters(path: str = ".") -> list[dict]:
+        """List concept clusters (label + size), largest first."""
+        root = find_root(Path(path))
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            return await GraphQuery(index).clusters()
 
 
 def main() -> None:
