@@ -1,6 +1,8 @@
 import pytest
+from fastmcp import Client
 
 from auditor.engine import audit_target
+from auditor.mcp_server import mcp
 
 
 @pytest.fixture
@@ -22,10 +24,6 @@ def _data(result):
 
 
 async def test_graph_build_then_related(repo):
-    from fastmcp import Client
-
-    from auditor.mcp_server import mcp
-
     await audit_target(repo, incremental=True)  # populate facts
     async with Client(mcp) as c:
         built = _data(await c.call_tool("graph_build", {"path": str(repo)}))
