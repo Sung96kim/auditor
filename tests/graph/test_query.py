@@ -66,7 +66,10 @@ async def test_related_returns_name_similar_neighbor(store):
 
 async def test_neighbors_follows_structural(store):
     out = await GraphQuery(store).neighbors("get_user", depth=1)
-    assert any(n["id"] == "m.py::charge" and n["edge"] == "calls" for n in out)
+    assert any(
+        n["id"] == "m.py::charge" and n["edge"] == "calls" and n["kind"] == "function"
+        for n in out
+    )
 
 
 async def test_concept_matches_by_label(store):

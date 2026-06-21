@@ -57,6 +57,7 @@ class GraphQuery:
         nid = await self._resolve(symbol)
         if nid is None:
             return []
+        kinds = {n["node_id"]: n["kind"] for n in await self.index.graph.nodes()}
         seen = {nid}
         frontier = [nid]
         out: list[dict] = []
@@ -73,6 +74,7 @@ class GraphQuery:
                         out.append(
                             {
                                 "id": other,
+                                "kind": kinds.get(other, "?"),
                                 "edge": e["kind"],
                                 "direction": direction,
                                 "hops": hop,
