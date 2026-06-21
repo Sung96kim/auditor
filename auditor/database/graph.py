@@ -191,3 +191,12 @@ class GraphDB(BaseDB):
             ).fetchall()
         )
         return [dict(r) for r in rows]
+
+    async def all_edges(self) -> list[dict[str, Any]]:
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? ORDER BY src, dst, kind",
+                (self.repo,),
+            ).fetchall()
+        )
+        return [dict(r) for r in rows]

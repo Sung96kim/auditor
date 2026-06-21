@@ -35,3 +35,15 @@ async def test_replace_graph_and_query(store):
     # replace is idempotent (clears prior rows)
     await store.graph.replace([_n("a")], [], [])
     assert await store.graph.node("b") is None
+
+
+async def test_all_edges(store):
+    nodes = [_n("x"), _n("y"), _n("z")]
+    edges = [
+        GraphEdge(src="x", dst="y", kind=EdgeKind.CALLS, weight=1.0),
+        GraphEdge(src="y", dst="z", kind=EdgeKind.IMPORTS, weight=0.5),
+    ]
+    await store.graph.replace(nodes, edges, [])
+    all_e = await store.graph.all_edges()
+    assert len(all_e) == 2
+    assert {(e["src"], e["dst"]) for e in all_e} == {("x", "y"), ("y", "z")}

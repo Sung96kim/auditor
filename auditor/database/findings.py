@@ -170,6 +170,15 @@ class FindingsDB(BaseDB):
 
         await self._worker.run(op)
 
+    async def by_rule_prefix(self, prefix: str) -> list[dict]:
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT rule_id, evidence FROM findings WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
+                (self.repo, f"{prefix}%"),
+            ).fetchall()
+        )
+        return [dict(r) for r in rows]
+
     async def clear_for_rules(self, rule_ids: list[str]) -> None:
         if not rule_ids:
             return

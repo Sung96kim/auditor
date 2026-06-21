@@ -114,6 +114,34 @@ async def test_clear_findings_for_rules(tmp_path):
         assert await index.findings.all() == []
 
 
+async def test_by_rule_prefix(tmp_path):
+    async with await IndexStore.connect(tmp_path / "i.db") as index:
+        graph_finding = Finding(
+            rule_id="GRAPH-COUPLING-HIGH",
+            category=Category.SECURITY,
+            severity=Severity.HIGH,
+            verdict_kind=VerdictKind.AUTO,
+            line=1,
+            message="high coupling",
+            evidence="m.py::Foo",
+        )
+        other_finding = Finding(
+            rule_id="PY-STYLE-X",
+            category=Category.SECURITY,
+            severity=Severity.LOW,
+            verdict_kind=VerdictKind.AUTO,
+            line=1,
+            message="style",
+            evidence="m.py::Bar",
+        )
+        await index.findings.add("m.py", [graph_finding, other_finding])
+        rows = await index.findings.by_rule_prefix("GRAPH-")
+        assert len(rows) == 1
+        assert rows[0]["rule_id"] == "GRAPH-COUPLING-HIGH"
+        assert rows[0]["evidence"] == "m.py::Foo"
+        assert await index.findings.by_rule_prefix("MISSING-") == []
+
+
 # --- concurrency + high load on the async SQLite worker -----------------------
 
 
