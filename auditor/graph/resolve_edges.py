@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from auditor.graph.model import EdgeKind, GraphEdge, GraphNode
+from auditor.graph.model import TEST_ROLES, EdgeKind, GraphEdge, GraphNode
 
 _FN_KINDS = ("function", "method")
 
@@ -17,6 +17,7 @@ def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
     for c in classes.values():
         by_class_name[c.name].append(c.id)
 
+    role_by_id = {n.id: n.role for n in nodes}
     edges: list[GraphEdge] = []
     seen: set[tuple[str, str, str]] = set()
 
@@ -26,10 +27,12 @@ def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
             edges.append(GraphEdge(src=src, dst=dst, kind=kind, weight=weight))
 
     def resolve_name(
-        name: str, src_module: str, index: dict[str, list[str]]
+        name: str, caller: GraphNode, index: dict[str, list[str]]
     ) -> list[str]:
         hits = index.get(name, [])
-        same = [h for h in hits if h.split("::")[0] == src_module]
+        if caller.role not in TEST_ROLES:
+            hits = [h for h in hits if role_by_id.get(h) not in TEST_ROLES]
+        same = [h for h in hits if h.split("::")[0] == caller.module]
         return same or hits
 
     modules = {n.id: n for n in nodes if n.kind == "module"}
@@ -55,13 +58,13 @@ def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
 
     for n in fns.values():
         for callee in n.callees:
-            for dst in resolve_name(callee, n.module, by_fn_name):
+            for dst in resolve_name(callee, n, by_fn_name):
                 add(n.id, dst, EdgeKind.CALLS)
         for cb in n.callback_names:
-            for dst in resolve_name(cb, n.module, by_fn_name):
+            for dst in resolve_name(cb, n, by_fn_name):
                 add(n.id, dst, EdgeKind.CALLBACK_ARG)
         for t in n.param_types:
-            for dst in resolve_name(t, n.module, by_class_name):
+            for dst in resolve_name(t, n, by_class_name):
                 add(n.id, dst, EdgeKind.REFERENCES_TYPE)
 
     bindings_by_module = {
@@ -86,9 +89,7 @@ def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
             if fid.startswith(prefix):
                 add(c.id, fid, EdgeKind.CONTAINS)
         # inherits + overrides
-        base_ids = [
-            b for bn in c.bases for b in resolve_name(bn, c.module, by_class_name)
-        ]
+        base_ids = [b for bn in c.bases for b in resolve_name(bn, c, by_class_name)]
         for bid in base_ids:
             add(c.id, bid, EdgeKind.INHERITS)
         for mname in c.method_names:

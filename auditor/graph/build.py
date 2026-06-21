@@ -1,13 +1,11 @@
 """Repo-level graph build (spec §6). Needs numpy + scikit-learn (via naming/rank/cluster)."""
 
 from auditor.graph.cluster import cluster_concepts
-from auditor.graph.model import FileGraphFacts, GraphCluster, GraphNode
+from auditor.graph.model import TEST_ROLES, FileGraphFacts, GraphCluster, GraphNode
 from auditor.graph.naming import name_similar_edges
 from auditor.graph.rank import pagerank
 from auditor.graph.resolve_edges import resolve_structural
 from auditor.graph.usage import usage_similar_edges
-
-_TEST_ROLES = ("test", "test_support")
 
 
 def compute_abstractness(node: GraphNode, proto_method_ids: set[str]) -> float:
@@ -32,7 +30,7 @@ class GraphBuilder:
 
     @staticmethod
     def _concept_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
-        return [n for n in nodes if n.kind != "module" and n.role not in _TEST_ROLES]
+        return [n for n in nodes if n.kind != "module" and n.role not in TEST_ROLES]
 
     async def run(self, index, settings) -> dict[str, int]:
         cfg = settings.graph
@@ -62,7 +60,7 @@ class GraphBuilder:
         all_edges = structural + name_edges + usage_edges
 
         proto = _protocol_method_ids(nodes)
-        nonrank_test = {n.id for n in nodes if n.role not in _TEST_ROLES}
+        nonrank_test = {n.id for n in nodes if n.role not in TEST_ROLES}
         ranks = pagerank([n.id for n in nodes], all_edges, personalization=nonrank_test)
         labels, label_names = cluster_concepts(
             self._concept_nodes(nodes), all_edges, floor=cfg.cluster_floor

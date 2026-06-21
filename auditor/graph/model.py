@@ -25,6 +25,9 @@ class EdgeKind(StrEnum):
     USAGE_SIMILAR = "usage_similar"
 
 
+TEST_ROLES = ("test", "test_support")  # roles grouped as "test code" across the graph
+
+
 class GraphNode(BaseModel):
     """A symbol node. `id` = ``<repo-rel-path>::<qualname>`` (methods: ``path::Class.method``).
     The unresolved fact fields (``callees``/``param_types``/``bases``/``method_names``) hold short

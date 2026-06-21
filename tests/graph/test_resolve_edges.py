@@ -108,6 +108,44 @@ def test_registered_in_skips_external_registry():
     assert not [e for e in edges if e.kind == "registered_in"]  # flask not in repo
 
 
+def test_production_caller_does_not_resolve_to_test_def():
+    prod = extract_file_facts(
+        "svc.py",
+        "def use():\n    return get()\n\ndef get():\n    return 1\n",
+        "production",
+    )
+    # a test module ALSO defines get(); a production caller must NOT edge to it
+    tst = extract_file_facts(
+        "test_x.py",
+        "def get():\n    return 2\n\ndef test_it():\n    return get()\n",
+        "test",
+    )
+    nodes = [*prod.nodes, *tst.nodes]
+    edges = resolve_structural(nodes)
+    calls = {(e.src, e.dst) for e in edges if e.kind == "calls"}
+    # production use() -> production get() only (svc.py is same module, so this already holds);
+    # the key assertion: NO production -> test edge for the shared name
+    assert ("svc.py::use", "test_x.py::get") not in calls
+    # and the test caller MAY resolve to its own get()
+    assert ("test_x.py::test_it", "test_x.py::get") in calls
+
+
+def test_production_caller_cross_module_skips_test_targets():
+    # production caller with NO same-module definition of the name -> must skip the test target
+    prod = extract_file_facts(
+        "svc.py", "def use():\n    return handle()\n", "production"
+    )
+    helper = extract_file_facts(
+        "helper.py", "def handle():\n    return 1\n", "production"
+    )
+    tst = extract_file_facts("test_x.py", "def handle():\n    return 2\n", "test")
+    nodes = [*prod.nodes, *helper.nodes, *tst.nodes]
+    edges = resolve_structural(nodes)
+    calls = {(e.src, e.dst) for e in edges if e.kind == "calls"}
+    assert ("svc.py::use", "helper.py::handle") in calls  # resolves to production
+    assert ("svc.py::use", "test_x.py::handle") not in calls  # never to the test def
+
+
 def test_module_contains_top_level_symbols():
     facts = extract_file_facts(
         "m.py",
