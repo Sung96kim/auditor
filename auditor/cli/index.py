@@ -4,8 +4,14 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import _echo_json, _open_index, _open_shared_index, _run
+from auditor.cli.helpers import _open_index, _open_shared_index, _present, _run
 from auditor.cli.options import RootArg, ScopePaths
+from auditor.cli.render import (
+    render_index_add,
+    render_index_forget,
+    render_index_list,
+    render_index_repos,
+)
 from auditor.discovery import find_root
 from auditor.paths import repo_key
 
@@ -15,14 +21,18 @@ index_app = typer.Typer(
 
 
 @index_app.command("add")
-def index_add(paths: ScopePaths, target: RootArg = Path(".")) -> None:
+def index_add(
+    paths: ScopePaths,
+    target: RootArg = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """Register files as the audit scope."""
     root = find_root(target)
     rels = [
         str(p.relative_to(root)) if p.is_relative_to(root) else str(p) for p in paths
     ]
     _run(_index_add(root, rels), "registering scope…")
-    _echo_json({"added": rels})
+    _present({"added": rels}, render_index_add, as_json=json_)
 
 
 async def _index_add(root: Path, rels: list[str]) -> None:
@@ -31,10 +41,15 @@ async def _index_add(root: Path, rels: list[str]) -> None:
 
 
 @index_app.command("list")
-def index_list(target: RootArg = Path(".")) -> None:
+def index_list(
+    target: RootArg = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """List the registered scope + per-file counts."""
     root = find_root(target)
-    _echo_json(_run(_index_list(root), "reading index…"))
+    _present(
+        _run(_index_list(root), "reading index…"), render_index_list, as_json=json_
+    )
 
 
 async def _index_list(root: Path) -> list[dict]:
@@ -43,9 +58,11 @@ async def _index_list(root: Path) -> list[dict]:
 
 
 @index_app.command("repos")
-def index_repos() -> None:
+def index_repos(
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """List every repo registered in the shared global index (~/.auditor)."""
-    _echo_json(_run(_index_repos(), "reading index…"))
+    _present(_run(_index_repos(), "reading index…"), render_index_repos, as_json=json_)
 
 
 async def _index_repos() -> list[dict]:
@@ -54,11 +71,18 @@ async def _index_repos() -> list[dict]:
 
 
 @index_app.command("forget")
-def index_forget(target: RootArg = Path(".")) -> None:
+def index_forget(
+    target: RootArg = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """Drop this repo's cached data from the shared global index (registry row + cascade)."""
     root = find_root(target)
     removed = _run(_index_forget(root), "forgetting repo…")
-    _echo_json({"repo": repo_key(root), "removed": removed})
+    _present(
+        {"repo": repo_key(root), "removed": removed},
+        render_index_forget,
+        as_json=json_,
+    )
 
 
 async def _index_forget(root: Path) -> bool:

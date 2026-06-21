@@ -12,7 +12,14 @@ from typing import Annotated
 
 import typer
 
-from auditor.cli.helpers import _echo_json, _run, _run_staged
+from auditor.cli.helpers import _present, _run, _run_staged
+from auditor.cli.render import (
+    render_graph_build,
+    render_graph_clusters,
+    render_graph_concept,
+    render_graph_neighbors,
+    render_graph_related,
+)
 from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
@@ -53,6 +60,7 @@ def graph_build(
         "--no-scan",
         help="Skip auto-scan; build from existing cached facts only.",
     ),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
     root = find_root(target)
@@ -64,7 +72,7 @@ def graph_build(
         report("building graph…")
         return await _build(root, report)
 
-    _echo_json(_run_staged(run, "building graph…"))
+    _present(_run_staged(run, "building graph…"), render_graph_build, as_json=json_)
 
 
 def _query_cmd(fn_name: str):
@@ -76,35 +84,64 @@ def _query_cmd(fn_name: str):
 
 
 @graph_app.command("related")
-def graph_related(symbol: str, target: _Target = Path("."), limit: int = 10) -> None:
+def graph_related(
+    symbol: str,
+    target: _Target = Path("."),
+    limit: int = 10,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """Top semantic neighbors of a symbol (name + usage), ranked."""
     root = find_root(target)
-    _echo_json(
-        _run(_query_cmd("related")(root, symbol=symbol, limit=limit), "querying…")
+    _present(
+        _run(_query_cmd("related")(root, symbol=symbol, limit=limit), "querying…"),
+        render_graph_related,
+        as_json=json_,
     )
 
 
 @graph_app.command("neighbors")
-def graph_neighbors(symbol: str, target: _Target = Path("."), depth: int = 1) -> None:
+def graph_neighbors(
+    symbol: str,
+    target: _Target = Path("."),
+    depth: int = 1,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """Structural neighbors (calls/overrides/...) up to a depth."""
     root = find_root(target)
-    _echo_json(
-        _run(_query_cmd("neighbors")(root, symbol=symbol, depth=depth), "querying…")
+    _present(
+        _run(_query_cmd("neighbors")(root, symbol=symbol, depth=depth), "querying…"),
+        render_graph_neighbors,
+        as_json=json_,
     )
 
 
 @graph_app.command("concept")
-def graph_concept(term: str, target: _Target = Path(".")) -> None:
+def graph_concept(
+    term: str,
+    target: _Target = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """Symbols in the concept cluster matching a term."""
     root = find_root(target)
-    _echo_json(_run(_query_cmd("concept")(root, term=term), "querying…"))
+    _present(
+        _run(_query_cmd("concept")(root, term=term), "querying…"),
+        render_graph_concept,
+        as_json=json_,
+    )
 
 
 @graph_app.command("clusters")
-def graph_clusters(target: _Target = Path(".")) -> None:
+def graph_clusters(
+    target: _Target = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """List concept clusters (label + size)."""
     root = find_root(target)
-    _echo_json(_run(_query_cmd("clusters")(root), "querying…"))
+    _present(
+        _run(_query_cmd("clusters")(root), "querying…"),
+        render_graph_clusters,
+        as_json=json_,
+    )
 
 
 @graph_app.command("serve")

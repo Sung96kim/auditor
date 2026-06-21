@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import _echo_json, _fail, _open_index, _run
+from auditor.cli.helpers import _fail, _open_index, _present, _run
 from auditor.cli.options import (
     AllowLocalPlugins,
     IgnoreFile,
@@ -20,6 +20,12 @@ from auditor.cli.options import (
     IgnoreRuleId,
     IgnoreSelector,
     RootArg,
+)
+from auditor.cli.render import (
+    render_ignore_add,
+    render_ignore_clear,
+    render_ignore_list,
+    render_ignore_rm,
 )
 from auditor.config import load_config
 from auditor.discovery import find_root
@@ -41,20 +47,23 @@ def ignore_add(
     target: RootArg = Path("."),
     allow_local_plugins: AllowLocalPlugins = False,
     force: IgnoreForce = False,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Ignore a rule repo-wide (no scope), in a file (--file), or at one line (--file --line)."""
     if line is not None and file is None:
         _fail("--line requires --file")
     root = find_root(target)
-    # load the repo's config so its plugin-contributed rules register and validate like built-ins
-    # (entry-point + config plugins always; local .auditor/plugins only when trusted / -a).
     load_config(root, allow_local_plugins=allow_local_plugins)
     if not force and rule_id not in REGISTRY.rule_ids():
         _fail(
             f"unknown rule_id {rule_id!r}; run `auditor rules list` to see rules "
             "(use --allow-local-plugins for an untrusted local plugin rule, or --force to skip)"
         )
-    _echo_json(_run(_ignore_add(root, rule_id, file, line, reason), "adding ignore…"))
+    _present(
+        _run(_ignore_add(root, rule_id, file, line, reason), "adding ignore…"),
+        render_ignore_add,
+        as_json=json_,
+    )
 
 
 async def _ignore_add(
@@ -83,10 +92,15 @@ async def _ignore_add(
 
 
 @ignore_app.command("list")
-def ignore_list(target: RootArg = Path(".")) -> None:
+def ignore_list(
+    target: RootArg = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """List the ignores recorded for this repo (with their ids)."""
     root = find_root(target)
-    _echo_json(_run(_ignore_list(root), "reading ignores…"))
+    _present(
+        _run(_ignore_list(root), "reading ignores…"), render_ignore_list, as_json=json_
+    )
 
 
 async def _ignore_list(root: Path) -> list[dict]:
@@ -100,13 +114,14 @@ def ignore_rm(
     file: IgnoreFile = None,
     line: IgnoreLine = None,
     target: RootArg = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Remove an ignore by id (`ignore rm 7`) or by selector (`ignore rm <rule_id> --file …`)."""
     root = find_root(target)
     removed = _run(_ignore_rm(root, selector, file, line), "removing ignore…")
     if not removed:
         _fail(f"no matching ignore for {selector!r}")
-    _echo_json({"removed": True, "selector": selector})
+    _present({"removed": True, "selector": selector}, render_ignore_rm, as_json=json_)
 
 
 async def _ignore_rm(
@@ -119,10 +134,17 @@ async def _ignore_rm(
 
 
 @ignore_app.command("clear")
-def ignore_clear(target: RootArg = Path(".")) -> None:
+def ignore_clear(
+    target: RootArg = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """Remove every ignore for this repo."""
     root = find_root(target)
-    _echo_json({"cleared": _run(_ignore_clear(root), "clearing ignores…")})
+    _present(
+        {"cleared": _run(_ignore_clear(root), "clearing ignores…")},
+        render_ignore_clear,
+        as_json=json_,
+    )
 
 
 async def _ignore_clear(root: Path) -> int:

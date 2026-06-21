@@ -12,6 +12,7 @@ from typing import Any, NoReturn, TypeVar
 
 import typer
 from pydantic import ValidationError
+from rich.console import Console
 
 from auditor.cli.apps import _status
 from auditor.database import IndexStore
@@ -23,9 +24,25 @@ _T = TypeVar("_T")
 _SPINNER = "dots12"
 _SPINNER_STYLE = "#7C7CFF"
 
+_out = Console()
+
 
 def _echo_json(payload: object) -> None:
     typer.echo(json.dumps(payload, indent=2))
+
+
+def _present(
+    payload: object,
+    render: Callable[[Console, Any], None],
+    *,
+    as_json: bool = False,
+) -> None:
+    """Emit a command result: pretty for a human at a TTY, else raw JSON (so piped/
+    captured/agent callers and --json still get the exact machine-readable output)."""
+    if as_json or not _out.is_terminal:
+        _echo_json(payload)
+    else:
+        render(_out, payload)
 
 
 def _fail(message: str) -> NoReturn:
