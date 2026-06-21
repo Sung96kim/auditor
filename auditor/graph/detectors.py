@@ -131,16 +131,27 @@ class GodConcept(GraphDetector):
         out: list[tuple[str, Finding]] = []
         for n in sorted(self.prod, key=lambda x: x.id):
             deg = self.ctx.degree.get(n.id, 0)
-            if n.rank >= self.rank_floor or deg >= self.deg_floor:
-                out.append(
-                    self._located(
-                        n,
-                        message=f"{n.qualname} is a centrality outlier "
-                        f"(rank={n.rank:.5f}, degree={deg}) — consider decomposing this hub.",
-                        evidence=n.id,
-                        suggestion="split responsibilities; reduce inbound coupling.",
-                    )
+            deg_out = deg >= self.deg_floor
+            rank_out = n.rank >= self.rank_floor
+            if not (deg_out or rank_out):
+                continue
+            if deg_out:
+                message = (
+                    f"{n.qualname} is a hub ({deg} direct connections) "
+                    "— consider decomposing it."
                 )
+                suggestion = "split responsibilities; reduce inbound/outbound coupling."
+            else:
+                message = (
+                    f"{n.qualname} is highly central (rank={n.rank:.5f}); many components "
+                    "transitively depend on it — changes here have wide blast-radius."
+                )
+                suggestion = (
+                    "treat as load-bearing: change carefully and keep it well-tested."
+                )
+            out.append(
+                self._located(n, message=message, evidence=n.id, suggestion=suggestion)
+            )
         return out
 
 

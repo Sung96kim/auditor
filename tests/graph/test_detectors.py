@@ -6,7 +6,7 @@ from auditor.graph.detectors import (
     ScatteredConcept,
     run_graph_detectors,
 )
-from auditor.graph.model import GraphCluster, GraphNode, NodeKind
+from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
 
 
 def _fn(nid, name, module="m.py", role="production", rank=0.0):
@@ -130,3 +130,21 @@ def test_naming_inconsistency_ignores_antonym_verbs():
         NamingInconsistency(GraphContext(nodes, [], [], AuditorSettings())).detect()
         == []
     )
+
+
+def test_god_concept_message_splits_by_signal():
+    # degree hub: many callers -> "hub"/"decompos" wording
+    hub = _fn("m.py::hub", "hub")
+    callers = [_fn(f"m.py::c{i}", f"c{i}") for i in range(12)]
+    edges = [GraphEdge(src=c.id, dst=hub.id, kind=EdgeKind.CALLS) for c in callers]
+    res = GodConcept(GraphContext([hub, *callers], edges, [], AuditorSettings())).detect()
+    hub_msg = next(f.message for _, f in res if f.evidence == "m.py::hub")
+    assert "hub" in hub_msg and "decompos" in hub_msg
+
+    # rank-central, low degree (no edges) -> "central"/"blast-radius" wording
+    nodes = [_fn("m.py::central", "central", rank=1.0)] + [
+        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(9)
+    ]
+    res2 = GodConcept(GraphContext(nodes, [], [], AuditorSettings())).detect()
+    msg = next(f.message for _, f in res2 if f.evidence == "m.py::central")
+    assert "central" in msg and "blast-radius" in msg
