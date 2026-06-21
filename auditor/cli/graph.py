@@ -15,6 +15,7 @@ from auditor.cli.helpers import _echo_json, _run
 from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
+from auditor.engine import audit_target
 from auditor.graph.build import GraphBuilder
 from auditor.graph.query import GraphQuery
 from auditor.graph.viz import build_payload, render_app, to_dot
@@ -28,6 +29,14 @@ graph_app = typer.Typer(
 _Target = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
 
 
+_GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
+
+
+async def _autoscan(root: Path) -> None:
+    """Incremental scan with graph extraction forced on."""
+    await audit_target(root, incremental=True, config_overrides=_GRAPH_OVERRIDE)
+
+
 async def _build(root: Path) -> dict:
     settings = load_config(root)
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
@@ -36,10 +45,23 @@ async def _build(root: Path) -> dict:
 
 
 @graph_app.command("build")
-def graph_build(target: _Target = Path(".")) -> None:
-    """Build the semantic graph from cached facts (run `scan -i` with graph enabled first)."""
+def graph_build(
+    target: _Target = Path("."),
+    no_scan: bool = typer.Option(
+        False,
+        "--no-scan",
+        help="Skip auto-scan; build from existing cached facts only.",
+    ),
+) -> None:
+    """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
     root = find_root(target)
-    _echo_json(_run(_build(root), "building graph…"))
+
+    async def run() -> dict:
+        if not no_scan:
+            await _autoscan(root)
+        return await _build(root)
+
+    _echo_json(_run(run(), "building graph…"))
 
 
 def _query_cmd(fn_name: str):
@@ -85,14 +107,22 @@ def graph_clusters(target: _Target = Path(".")) -> None:
 @graph_app.command("serve")
 def graph_serve(
     target: _Target = Path("."),
+    no_scan: bool = typer.Option(
+        False,
+        "--no-scan",
+        help="Skip auto-scan; build from existing cached facts only.",
+    ),
     no_open: bool = typer.Option(
         False, "--no-open", help="Skip opening a browser tab."
     ),
 ) -> None:
-    """Serve the interactive graph UI on an ephemeral local port."""
+    """Serve the interactive graph UI, auto-scanning first (use --no-scan to skip)."""
     root = find_root(target)
 
     async def run() -> str:
+        if not no_scan:
+            await _autoscan(root)
+        await _build(root)
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return render_app(await build_payload(index))
 
