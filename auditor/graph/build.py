@@ -7,6 +7,8 @@ from auditor.graph.rank import pagerank
 from auditor.graph.resolve_edges import resolve_structural
 from auditor.graph.usage import usage_similar_edges
 
+_TEST_ROLES = ("test", "test_support")
+
 
 def compute_abstractness(node: GraphNode, proto_method_ids: set[str]) -> float:
     score = 0.0
@@ -24,6 +26,14 @@ def compute_abstractness(node: GraphNode, proto_method_ids: set[str]) -> float:
 class GraphBuilder:
     """Loads cached per-file facts and materializes the repo graph into the index."""
 
+    @staticmethod
+    def _symbol_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
+        return [n for n in nodes if n.kind != "module"]
+
+    @staticmethod
+    def _concept_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
+        return [n for n in nodes if n.kind != "module" and n.role not in _TEST_ROLES]
+
     async def run(self, index, settings) -> dict[str, int]:
         cfg = settings.graph
         facts = [
@@ -40,20 +50,21 @@ class GraphBuilder:
             await index.graph.replace([], [], [])
             return {"nodes": 0, "edges": 0, "clusters": 0}
 
+        symbols = self._symbol_nodes(nodes)
         structural = resolve_structural(nodes)
         name_edges, sparse = name_similar_edges(
-            nodes,
+            symbols,
             threshold=cfg.name_similarity_threshold,
             knn_k=cfg.knn_k,
             extra_stopwords=tuple(cfg.stopwords),
         )
-        usage_edges = usage_similar_edges(nodes, knn_k=cfg.knn_k)
+        usage_edges = usage_similar_edges(symbols, knn_k=cfg.knn_k)
         all_edges = structural + name_edges + usage_edges
 
         proto = _protocol_method_ids(nodes)
         ranks = pagerank([n.id for n in nodes], all_edges)
         labels, label_names = cluster_concepts(
-            nodes, all_edges, floor=cfg.cluster_floor
+            self._concept_nodes(nodes), all_edges, floor=cfg.cluster_floor
         )
 
         out_nodes = [

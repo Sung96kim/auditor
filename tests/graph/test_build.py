@@ -4,6 +4,7 @@ from auditor.config import AuditorSettings, GraphConfig
 from auditor.database import IndexStore
 from auditor.graph.build import GraphBuilder, compute_abstractness
 from auditor.graph.extract import extract_file_facts
+from auditor.graph.model import GraphNode, NodeKind
 
 BASE = "class Base:\n    def run(self): ...\n"
 IMPL = "from base import Base\nclass Impl(Base):\n    def run(self):\n        return load_user()\n\ndef load_user():\n    return get_user_record()\n"
@@ -49,7 +50,7 @@ async def test_build_writes_nodes_edges_clusters(store):
     )
     # every node got a cluster id + a rank
     nodes = await store.graph.nodes()
-    assert all(n["cluster_id"] is not None for n in nodes)
+    assert all(n["cluster_id"] is not None for n in nodes if n["kind"] != "module")
 
 
 PROP = (
@@ -61,6 +62,48 @@ PROP = (
     "    def config(self, v):\n"
     "        self._c = v\n"
 )
+
+
+def test_test_and_module_nodes_excluded_from_clusters():
+    prod = [
+        GraphNode(
+            id=f"p.py::f{i}",
+            kind=NodeKind.FUNCTION,
+            name=f"f{i}",
+            module="p.py",
+            qualname=f"f{i}",
+            doc_tokens=("user", "fetch"),
+            role="production",
+        )
+        for i in range(3)
+    ]
+    tests = [
+        GraphNode(
+            id=f"t.py::tf{i}",
+            kind=NodeKind.FUNCTION,
+            name=f"tf{i}",
+            module="t.py",
+            qualname=f"tf{i}",
+            doc_tokens=("user", "fetch"),
+            role="test",
+        )
+        for i in range(3)
+    ]
+    mod = GraphNode(
+        id="p.py",
+        kind=NodeKind.MODULE,
+        name="p.py",
+        module="p.py",
+        qualname="p",
+        doc_tokens=("user",),
+        role="production",
+    )
+    nodes = [*prod, *tests, mod]
+    builder = GraphBuilder()
+    concept = builder._concept_nodes(nodes)
+    assert {n.id for n in concept} == {
+        n.id for n in prod
+    }  # only prod symbols are clustered
 
 
 async def test_dedup_property_getter_setter(tmp_path):
