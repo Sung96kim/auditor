@@ -71,8 +71,11 @@ export default function GraphCanvas({
     const sigma = new Sigma(g, container, {
       renderEdgeLabels: false,
       defaultEdgeColor: "#1B2230",
-      labelColor: { color: "#c8d3e0" },
-      labelSize: 11,
+      labelColor: { color: "#E6EDF5" },
+      labelSize: 13,
+      labelWeight: "600",
+      labelFont: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+      labelRenderedSizeThreshold: 0,
       nodeReducer: (_node, data) => {
         const hasFinding = overlayOn && findingsSet.has(_node);
         return {
