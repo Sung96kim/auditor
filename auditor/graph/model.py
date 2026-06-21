@@ -59,6 +59,7 @@ class GraphNode(BaseModel):
         tuple[str, str], ...
     ] = ()  # module nodes: (local_name, source_dotted)
     registry_roots: tuple[str, ...] = ()  # root names of attribute-style decorators
+    semantic_profile: tuple[str, ...] = ()  # behavior attrs that hold (Høst-Østvold)
     is_hof: bool = False
     is_stub: bool = False
     line: int = 0

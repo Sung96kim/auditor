@@ -89,6 +89,17 @@ def test_extract_registry_roots():
     assert thing.registry_roots == ("registry",)
 
 
+def test_extract_populates_semantic_profile():
+    facts = extract_file_facts("m.py", "def reader(x):\n    return db.get(x)\n", "production")
+    fn = next(n for n in facts.nodes if n.name == "reader")
+    assert "returns_value" in fn.semantic_profile
+    # module/class nodes carry no profile
+    facts2 = extract_file_facts("c.py", "class C:\n    pass\n", "production")
+    for n in facts2.nodes:
+        if n.kind in ("module", "class"):
+            assert n.semantic_profile == ()
+
+
 def test_extract_module_imports_absolute_and_relative():
     src = (
         "import a.b.c\n"

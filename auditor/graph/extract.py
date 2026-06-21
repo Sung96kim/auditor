@@ -2,6 +2,7 @@
 
 import ast
 
+from auditor.graph import semantic_profile
 from auditor.graph.model import FileGraphFacts, GraphNode, NodeKind
 from auditor.graph.tokens import normalize_tokens, split_ident, symbol_document
 
@@ -181,6 +182,7 @@ class FileExtractor:
             param_types=tuple(dict.fromkeys(ptypes)),
             decorators=decorators,
             registry_roots=_registry_roots(fn.decorator_list),
+            semantic_profile=semantic_profile.compute(fn),
             callback_names=tuple(dict.fromkeys(callback_names)),
             is_hof=is_hof,
             is_stub=_is_stub(fn),
