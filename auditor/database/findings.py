@@ -3,11 +3,7 @@
 import sqlite3
 from typing import ClassVar
 
-from auditor.database.base import (
-    BaseDB,
-    Column,
-    Table,
-)
+from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.models import Finding
 
 
@@ -54,13 +50,12 @@ class FindingsDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "file_rules": Table(
             cols=(
-                Column(name="path", type="TEXT", not_null=True),
-                Column(name="rule_id", type="TEXT", not_null=True),
+                Column(name="path", type="TEXT", not_null=True, primary_key=True),
+                Column(name="rule_id", type="TEXT", not_null=True, primary_key=True),
                 Column(name="fingerprint", type="TEXT", not_null=True),
                 Column(name="last_scanned", type="REAL", not_null=True),
             ),
-            pk=("repo", "path", "rule_id"),
-            indexes={"file_rules_path": ("repo", "path")},
+            indexes=(Index(name="file_rules_path", columns=("repo", "path")),),
         ),
         "findings": Table(
             cols=(
@@ -77,10 +72,10 @@ class FindingsDB(BaseDB):
                 Column(name="checklist_item", type="INTEGER"),
                 Column(name="standard_refs", type="TEXT", not_null=True, default="''"),
             ),
-            indexes={
-                "findings_path": ("repo", "path"),
-                "findings_severity": ("repo", "severity"),
-            },
+            indexes=(
+                Index(name="findings_path", columns=("repo", "path")),
+                Index(name="findings_severity", columns=("repo", "severity")),
+            ),
         ),
     }
 

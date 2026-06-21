@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB, Column, Table
+from auditor.database.base import BaseDB, Column, Index, Table
 
 
 class ShapesDB(BaseDB):
@@ -19,10 +19,10 @@ class ShapesDB(BaseDB):
                 Column(name="symbol", type="TEXT", not_null=True),
                 Column(name="line", type="INTEGER", not_null=True),
             ),
-            indexes={
-                "shapes_hash": ("repo", "shape_hash"),
-                "shapes_path": ("repo", "path"),
-            },
+            indexes=(
+                Index(name="shapes_hash", columns=("repo", "shape_hash")),
+                Index(name="shapes_path", columns=("repo", "path")),
+            ),
         )
     }
 

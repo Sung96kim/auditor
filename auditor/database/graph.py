@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB, Column, Table
+from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.graph.model import GraphCluster, GraphEdge, GraphNode
 
 
@@ -15,15 +15,14 @@ class GraphDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "graph_facts": Table(
             cols=(
-                Column(name="path", type="TEXT", not_null=True),
+                Column(name="path", type="TEXT", not_null=True, primary_key=True),
                 Column(name="facts_json", type="TEXT", not_null=True),
                 Column(name="content_hash", type="TEXT", not_null=True),
             ),
-            pk=("repo", "path"),
         ),
         "graph_nodes": Table(
             cols=(
-                Column(name="node_id", type="TEXT", not_null=True),
+                Column(name="node_id", type="TEXT", not_null=True, primary_key=True),
                 Column(name="kind", type="TEXT", not_null=True),
                 Column(name="name", type="TEXT", not_null=True),
                 Column(name="module", type="TEXT", not_null=True),
@@ -34,8 +33,9 @@ class GraphDB(BaseDB):
                 Column(name="abstractness", type="REAL", not_null=True, default="0"),
                 Column(name="text_sparse", type="INTEGER", not_null=True, default="0"),
             ),
-            pk=("repo", "node_id"),
-            indexes={"graph_nodes_cluster": ("repo", "cluster_id")},
+            indexes=(
+                Index(name="graph_nodes_cluster", columns=("repo", "cluster_id")),
+            ),
         ),
         "graph_edges": Table(
             cols=(
@@ -44,18 +44,19 @@ class GraphDB(BaseDB):
                 Column(name="kind", type="TEXT", not_null=True),
                 Column(name="weight", type="REAL", not_null=True, default="1"),
             ),
-            indexes={
-                "graph_edges_src": ("repo", "src"),
-                "graph_edges_dst": ("repo", "dst"),
-            },
+            indexes=(
+                Index(name="graph_edges_src", columns=("repo", "src")),
+                Index(name="graph_edges_dst", columns=("repo", "dst")),
+            ),
         ),
         "graph_clusters": Table(
             cols=(
-                Column(name="cluster_id", type="INTEGER", not_null=True),
+                Column(
+                    name="cluster_id", type="INTEGER", not_null=True, primary_key=True
+                ),
                 Column(name="label", type="TEXT", not_null=True),
                 Column(name="member_count", type="INTEGER", not_null=True),
             ),
-            pk=("repo", "cluster_id"),
         ),
     }
 

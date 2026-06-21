@@ -15,7 +15,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05
@@ -35,7 +35,7 @@ class Column(BaseModel):
 
     def render(self) -> str:
         parts = [self.name, self.type]
-        if self.primary_key:
+        if self.primary_key and self.autoincrement:
             parts.append("PRIMARY KEY")
         if self.autoincrement:
             parts.append("AUTOINCREMENT")
@@ -53,6 +53,19 @@ REPO_FK = Column(
 )
 
 
+class Index(BaseModel):
+    """Declarative index on a table."""
+
+    model_config = ConfigDict(frozen=True)
+    name: str
+    columns: tuple[str, ...]
+    unique: bool = False
+
+    def render(self, table: str) -> str:
+        kind = "UNIQUE INDEX" if self.unique else "INDEX"
+        return f"CREATE {kind} IF NOT EXISTS {self.name} ON {table} ({', '.join(self.columns)});"
+
+
 class Table(BaseModel):
     """Declarative definition of one table. `repo_fk` auto-prepends the standard repo FK column
     (the common case); set False for tables whose repo column isn't first (ignores) or that ARE the
@@ -60,11 +73,14 @@ class Table(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     cols: tuple[Column, ...]
-    pk: tuple[str, ...] | None = None
-    indexes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
-    unique_indexes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    indexes: tuple[Index, ...] = ()
     repo_fk: bool = True
     cache: bool = True
+
+    def pk_names(self) -> tuple[str, ...]:
+        body = tuple(c.name for c in self.cols if c.primary_key)
+        lead = ("repo",) if (self.repo_fk and body) else ()
+        return (*lead, *body)
 
     def insert_columns(self) -> tuple[str, ...]:
         """Column names for an INSERT — repo prepended when repo_fk; autoincrement cols excluded."""
@@ -78,17 +94,14 @@ class Table(BaseModel):
         """The CREATE TABLE/INDEX statements for this table under ``name``."""
         cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
         body = ",\n    ".join(c.render() for c in cols)
-        if self.pk:
-            body += f",\n    PRIMARY KEY ({', '.join(self.pk)})"
+        pk = self.pk_names()
+        single_auto = len(pk) == 1 and any(
+            c.name == pk[0] and c.autoincrement for c in cols
+        )
+        if pk and not single_auto:
+            body += f",\n    PRIMARY KEY ({', '.join(pk)})"
         stmts = [f"CREATE TABLE IF NOT EXISTS {name} (\n    {body}\n);"]
-        stmts += [
-            f"CREATE UNIQUE INDEX IF NOT EXISTS {i} ON {name} ({', '.join(c)});"
-            for i, c in self.unique_indexes.items()
-        ]
-        stmts += [
-            f"CREATE INDEX IF NOT EXISTS {i} ON {name} ({', '.join(c)});"
-            for i, c in self.indexes.items()
-        ]
+        stmts += [ix.render(name) for ix in self.indexes]
         return "\n".join(stmts)
 
 

@@ -27,7 +27,7 @@ class FilesDB(BaseDB):
     TABLES: ClassVar[dict[str, Table]] = {
         "files": Table(
             cols=(
-                Column(name="path", type="TEXT", not_null=True),
+                Column(name="path", type="TEXT", not_null=True, primary_key=True),
                 Column(name="sha256", type="TEXT", not_null=True),
                 Column(name="lines", type="INTEGER", not_null=True),
                 Column(name="language", type="TEXT", not_null=True),
@@ -35,7 +35,6 @@ class FilesDB(BaseDB):
                 Column(name="last_scanned", type="REAL", not_null=True),
                 Column(name="doc_path", type="TEXT"),
             ),
-            pk=("repo", "path"),
         )
     }
 

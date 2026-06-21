@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Any, ClassVar
 
-from auditor.database.base import REPO_FK, BaseDB, Column, Table
+from auditor.database.base import REPO_FK, BaseDB, Column, Index, Table
 
 
 class IgnoresDB(BaseDB):
@@ -24,15 +24,14 @@ class IgnoresDB(BaseDB):
             ),
             repo_fk=False,
             cache=False,
-            unique_indexes={
-                "ignores_unique": (
-                    "repo",
-                    "rule_id",
-                    "IFNULL(file, '')",
-                    "IFNULL(line, -1)",
-                )
-            },
-            indexes={"ignores_repo": ("repo",)},
+            indexes=(
+                Index(
+                    name="ignores_unique",
+                    columns=("repo", "rule_id", "IFNULL(file, '')", "IFNULL(line, -1)"),
+                    unique=True,
+                ),
+                Index(name="ignores_repo", columns=("repo",)),
+            ),
         )
     }
 
