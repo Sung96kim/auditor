@@ -79,43 +79,55 @@ def _is_stub(fn: _FuncDefT) -> bool:
     return len(body) == 1 and isinstance(body[0], (ast.Pass, ast.Raise))
 
 
-def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
-    try:
-        tree = ast.parse(source)
-    except (SyntaxError, ValueError):
-        return FileGraphFacts(path=rel_path, role=role, nodes=[])
+class FileExtractor:
+    """Extracts one file's FileGraphFacts. Holds the per-file context (path, role,
+    path tokens) and accumulates nodes, so the AST walk reads as methods, not closures."""
 
-    path_tokens = normalize_tokens(
-        split_ident(rel_path.removesuffix(".py").replace("/", " "))
-    )
-    nodes: list[GraphNode] = []
-
-    imports, import_bindings = _module_imports(rel_path, tree)
-    module_doc = symbol_document(
-        name=_module_dotted(rel_path).rsplit(".", 1)[-1],
-        args=[],
-        docstring=ast.get_docstring(tree) or "",
-        body_idents=[],
-        param_types=[],
-        path_tokens=path_tokens,
-        class_name=None,
-    )
-    nodes.append(
-        GraphNode(
-            id=rel_path,
-            kind=NodeKind.MODULE,
-            name=rel_path.rsplit("/", 1)[-1],
-            module=rel_path,
-            qualname=_module_dotted(rel_path),
-            doc_tokens=tuple(module_doc),
-            imports=imports,
-            import_bindings=import_bindings,
-            line=1,
-            role=role,
+    def __init__(self, rel_path: str, source: str, role: str) -> None:
+        self.rel_path = rel_path
+        self.source = source
+        self.role = role
+        self.path_tokens = normalize_tokens(
+            split_ident(rel_path.removesuffix(".py").replace("/", " "))
         )
-    )
+        self.nodes: list[GraphNode] = []
 
-    def fn_node(fn: _FuncDefT, cls: str | None) -> GraphNode:
+    def extract(self) -> FileGraphFacts:
+        try:
+            tree = ast.parse(self.source)
+        except (SyntaxError, ValueError):
+            return FileGraphFacts(path=self.rel_path, role=self.role, nodes=[])
+        self._module_node(tree)
+        self._walk(tree, None)
+        return FileGraphFacts(path=self.rel_path, role=self.role, nodes=self.nodes)
+
+    def _module_node(self, tree: ast.Module) -> None:
+        imports, import_bindings = _module_imports(self.rel_path, tree)
+        module_doc = symbol_document(
+            name=_module_dotted(self.rel_path).rsplit(".", 1)[-1],
+            args=[],
+            docstring=ast.get_docstring(tree) or "",
+            body_idents=[],
+            param_types=[],
+            path_tokens=self.path_tokens,
+            class_name=None,
+        )
+        self.nodes.append(
+            GraphNode(
+                id=self.rel_path,
+                kind=NodeKind.MODULE,
+                name=self.rel_path.rsplit("/", 1)[-1],
+                module=self.rel_path,
+                qualname=_module_dotted(self.rel_path),
+                doc_tokens=tuple(module_doc),
+                imports=imports,
+                import_bindings=import_bindings,
+                line=1,
+                role=self.role,
+            )
+        )
+
+    def _fn_node(self, fn: _FuncDefT, cls: str | None) -> GraphNode:
         params = [a.arg for a in fn.args.posonlyargs + fn.args.args]
         callees: list[str] = []
         callback_names: list[str] = []
@@ -155,14 +167,14 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
             docstring=ast.get_docstring(fn) or "",
             body_idents=body_idents,
             param_types=ptypes,
-            path_tokens=path_tokens,
+            path_tokens=self.path_tokens,
             class_name=cls,
         )
         return GraphNode(
-            id=f"{rel_path}::{qual}",
+            id=f"{self.rel_path}::{qual}",
             kind=NodeKind.METHOD if cls else NodeKind.FUNCTION,
             name=fn.name,
-            module=rel_path,
+            module=self.rel_path,
             qualname=qual,
             doc_tokens=tuple(doc),
             callees=tuple(dict.fromkeys(callees)),
@@ -173,10 +185,10 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
             is_hof=is_hof,
             is_stub=_is_stub(fn),
             line=fn.lineno,
-            role=role,
+            role=self.role,
         )
 
-    def walk(node: ast.AST, cls: str | None) -> None:
+    def _walk(self, node: ast.AST, cls: str | None) -> None:
         for child in getattr(node, "body", []):
             if isinstance(child, ast.ClassDef):
                 methods = [s.name for s in child.body if isinstance(s, _FuncDef)]
@@ -186,15 +198,15 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
                     docstring=ast.get_docstring(child) or "",
                     body_idents=methods,
                     param_types=[],
-                    path_tokens=path_tokens,
+                    path_tokens=self.path_tokens,
                     class_name=None,
                 )
-                nodes.append(
+                self.nodes.append(
                     GraphNode(
-                        id=f"{rel_path}::{child.name}",
+                        id=f"{self.rel_path}::{child.name}",
                         kind=NodeKind.CLASS,
                         name=child.name,
-                        module=rel_path,
+                        module=self.rel_path,
                         qualname=child.name,
                         doc_tokens=tuple(doc),
                         bases=tuple(
@@ -203,12 +215,13 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
                         method_names=tuple(methods),
                         registry_roots=_registry_roots(child.decorator_list),
                         line=child.lineno,
-                        role=role,
+                        role=self.role,
                     )
                 )
-                walk(child, child.name)
+                self._walk(child, child.name)
             elif isinstance(child, _FuncDef):
-                nodes.append(fn_node(child, cls))
+                self.nodes.append(self._fn_node(child, cls))
 
-    walk(tree, None)
-    return FileGraphFacts(path=rel_path, role=role, nodes=nodes)
+
+def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
+    return FileExtractor(rel_path, source, role).extract()
