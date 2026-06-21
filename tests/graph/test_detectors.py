@@ -2,6 +2,7 @@ from auditor.config import AuditorSettings
 from auditor.graph.detectors import (
     GodConcept,
     GraphContext,
+    NamingInconsistency,
     ScatteredConcept,
     run_graph_detectors,
 )
@@ -83,3 +84,49 @@ def test_run_graph_detectors_groups_by_path():
     ]
     per_file = run_graph_detectors(nodes, [], [], AuditorSettings())
     assert "m.py" in per_file and len(per_file["m.py"]) == 1
+
+
+def _pf(nid, name, profile, module="m.py", cid=0):
+    return GraphNode(
+        id=nid,
+        kind=NodeKind.FUNCTION,
+        name=name,
+        module=module,
+        qualname=name,
+        role="production",
+        cluster_id=cid,
+        semantic_profile=tuple(profile),
+        rank=0.1,
+        line=1,
+    )
+
+
+def test_naming_inconsistency_flags_synonym_verbs():
+    # get_* and fetch_* behave identically (same profile) -> synonyms; same object 'user'
+    read = ("returns_value", "no_params")
+    nodes = [_pf(f"m.py::get_user{i}", "get_user", read) for i in range(20)] + [
+        _pf(f"m.py::fetch_user{i}", "fetch_user", read) for i in range(20)
+    ]
+    # make the specific same-object pair share object tokens
+    nodes.append(_pf("m.py::get_user", "get_user", read))
+    nodes.append(_pf("m.py::fetch_user", "fetch_user", read))
+    found = NamingInconsistency(GraphContext(nodes, [], [], AuditorSettings())).detect()
+    assert any("get" in f.message and "fetch" in f.message for _, f in found)
+
+
+def test_naming_inconsistency_ignores_antonym_verbs():
+    # get_* (returns) vs delete_* (mutates, no return) -> far apart -> not flagged
+    read = ("returns_value", "no_params")
+    mutate = ("returns_none", "writes_self")
+    nodes = (
+        [_pf(f"m.py::get_user{i}", "get_user", read) for i in range(20)]
+        + [_pf(f"m.py::delete_user{i}", "delete_user", mutate) for i in range(20)]
+        + [
+            _pf("m.py::get_user", "get_user", read),
+            _pf("m.py::delete_user", "delete_user", mutate),
+        ]
+    )
+    assert (
+        NamingInconsistency(GraphContext(nodes, [], [], AuditorSettings())).detect()
+        == []
+    )

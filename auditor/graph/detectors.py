@@ -182,19 +182,79 @@ class ScatteredConcept(GraphDetector):
         return out
 
 
-GRAPH_DETECTORS: list[type[GraphDetector]] = [GodConcept, ScatteredConcept]
+def _verb(name: str) -> str:
+    n = name.lstrip("_")
+    return n.split("_")[0].lower() if "_" in n else n.lower()
 
-# Re-export unused imports to satisfy linters (these are imported for their side effects
-# or for use by downstream tasks that extend this module)
-__all__ = [
-    "ATTRS",
-    "GRAPH_DETECTORS",
-    "GodConcept",
-    "GraphContext",
-    "GraphDetector",
-    "NAMING_INCONSISTENCY_RULE",
-    "ScatteredConcept",
-    "run_graph_detectors",
+
+def _obj_tokens(name: str) -> set[str]:
+    parts = [t for t in name.lstrip("_").split("_") if t]
+    return set(parts[1:])
+
+
+class NamingInconsistency(GraphDetector):
+    rule_id: ClassVar[str] = NAMING_INCONSISTENCY_RULE
+    category: ClassVar[Category] = Category.STYLE
+
+    def __init__(self, ctx: GraphContext) -> None:
+        super().__init__(ctx)
+        groups: dict[str, list[GraphNode]] = defaultdict(list)
+        for n in ctx.prod_funcs:
+            groups[_verb(n.name)].append(n)
+        self.xi: dict[str, list[float]] = {}
+        for verb, members in groups.items():
+            if len(members) >= ctx.cfg.naming_min_verb_count:
+                self.xi[verb] = [
+                    sum(a in m.semantic_profile for m in members) / len(members)
+                    for a in ATTRS
+                ]
+
+    def _dist(self, v1: str, v2: str) -> float:
+        return sum((a - b) ** 2 for a, b in zip(self.xi[v1], self.xi[v2], strict=True))
+
+    def detect(self) -> list[tuple[str, Finding]]:
+        out: list[tuple[str, Finding]] = []
+        seen: set[tuple[str, str]] = set()
+        for cid in sorted(self.ctx.by_cluster):
+            members = sorted(self.ctx.by_cluster[cid], key=lambda m: m.id)
+            for i, a in enumerate(members):
+                for b in members[i + 1 :]:
+                    va, vb = _verb(a.name), _verb(b.name)
+                    if va == vb or va not in self.xi or vb not in self.xi:
+                        continue
+                    oa, ob = _obj_tokens(a.name), _obj_tokens(b.name)
+                    if not oa or not ob:
+                        continue
+                    jac = len(oa & ob) / len(oa | ob)
+                    if jac < self.ctx.cfg.naming_object_jaccard:
+                        continue
+                    if self._dist(va, vb) > self.ctx.cfg.naming_verb_distance:
+                        continue
+                    key = tuple(sorted((a.id, b.id)))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    anchor = min((a, b), key=lambda m: m.id)
+                    out.append(
+                        (
+                            anchor.module,
+                            self._finding(
+                                line=anchor.line,
+                                message=f"naming inconsistency: '{a.name}' and '{b.name}' "
+                                f"name one concept with synonymous verbs ({va}/{vb} behave "
+                                "identically here) — standardize the verb.",
+                                evidence=f"{a.id} | {b.id}",
+                                suggestion=f"pick one verb for this operation ({va} or {vb}).",
+                            ),
+                        )
+                    )
+        return out
+
+
+GRAPH_DETECTORS: list[type[GraphDetector]] = [
+    GodConcept,
+    ScatteredConcept,
+    NamingInconsistency,
 ]
 
 
