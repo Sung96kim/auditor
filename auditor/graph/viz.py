@@ -36,15 +36,22 @@ async def _findings_by_node(index) -> dict[str, list[str]]:
     return out
 
 
-async def build_payload(index, *, node_cap: int = 200) -> dict:
+async def build_payload(index, *, node_cap: int | None = None) -> dict:
     """Return the graph payload consumed by the visualization UI.
 
     Shape: ``{meta, clusters, nodes, edges}`` — see §4 of the Phase V contract.
     Output is deterministic: nodes sorted by id, edges by (src, dst, kind),
     clusters by cluster_id.
+
+    By default the FULL graph is included. The overview only renders clusters, but
+    the cluster drill-down and node ego views need every node + edge to be complete —
+    capping by top-rank starves them (a node's real neighbours are mostly lower-rank).
+    ``node_cap`` keeps only the top-N nodes by rank as an optional safety valve for
+    pathologically large graphs.
     """
     all_nodes = await index.graph.nodes()
-    top = sorted(all_nodes, key=lambda n: (-n["rank"], n["node_id"]))[:node_cap]
+    ranked = sorted(all_nodes, key=lambda n: (-n["rank"], n["node_id"]))
+    top = ranked[:node_cap] if node_cap is not None else ranked
     raw_nodes = sorted(top, key=lambda n: n["node_id"])
     findings_by_node = await _findings_by_node(index)
 
