@@ -6,12 +6,13 @@ Imported only via a guarded mount in cli/__init__, so the core CLI works without
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from auditor.cli.helpers import _echo_json, _run
+from auditor.cli.helpers import _echo_json, _run, _run_staged
 from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
@@ -37,11 +38,11 @@ async def _autoscan(root: Path) -> None:
     await audit_target(root, incremental=True, config_overrides=_GRAPH_OVERRIDE)
 
 
-async def _build(root: Path) -> dict:
+async def _build(root: Path, progress: Callable[[str], None] | None = None) -> dict:
     settings = load_config(root)
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
         await index.repos.register(time.time())
-        return await GraphBuilder().run(index, settings)
+        return await GraphBuilder().run(index, settings, progress=progress)
 
 
 @graph_app.command("build")
@@ -56,12 +57,14 @@ def graph_build(
     """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
     root = find_root(target)
 
-    async def run() -> dict:
+    async def run(report: Callable[[str], None]) -> dict:
         if not no_scan:
+            report("scanning repository…")
             await _autoscan(root)
-        return await _build(root)
+        report("building graph…")
+        return await _build(root, report)
 
-    _echo_json(_run(run(), "building graph…"))
+    _echo_json(_run_staged(run, "building graph…"))
 
 
 def _query_cmd(fn_name: str):
@@ -119,14 +122,17 @@ def graph_serve(
     """Serve the interactive graph UI, auto-scanning first (use --no-scan to skip)."""
     root = find_root(target)
 
-    async def run() -> str:
+    async def run(report: Callable[[str], None]) -> str:
         if not no_scan:
+            report("scanning repository…")
             await _autoscan(root)
-        await _build(root)
+        report("building graph…")
+        await _build(root, report)
+        report("preparing UI…")
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return render_app(await build_payload(index))
 
-    html = _run(run(), "preparing graph UI…")
+    html = _run_staged(run, "preparing graph UI…")
     server = ReportServer(html)
     typer.echo(f"serving graph UI at {server.url} (Ctrl-C to stop)")
     server.serve(open_browser=not no_open)

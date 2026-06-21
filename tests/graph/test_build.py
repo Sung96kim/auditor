@@ -33,6 +33,24 @@ def test_compute_abstractness_stub_method():
     assert compute_abstractness(run, proto_method_ids=set()) >= 0.4  # stub body
 
 
+async def test_build_reports_stage_progress(store):
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    seen: list[str] = []
+    await GraphBuilder().run(store, settings, progress=seen.append)
+    for label in (
+        "resolving structural edges",
+        "computing naming similarity",
+        "ranking (PageRank)",
+        "clustering concepts",
+        "persisting graph",
+    ):
+        assert label in seen
+    assert seen.index("resolving structural edges") < seen.index("clustering concepts")
+    assert seen.index("clustering concepts") < seen.index("persisting graph")
+
+
 async def test_build_writes_nodes_edges_clusters(store):
     settings = AuditorSettings(
         graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)

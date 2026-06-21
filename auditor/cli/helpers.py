@@ -6,7 +6,7 @@ they need; anything used by a single command lives in that command's module inst
 import asyncio
 import difflib
 import json
-from collections.abc import Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
@@ -19,6 +19,9 @@ from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 
 _T = TypeVar("_T")
+
+_SPINNER = "dots12"
+_SPINNER_STYLE = "#7C7CFF"
 
 
 def _echo_json(payload: object) -> None:
@@ -81,8 +84,28 @@ def _run(
     ``-v`` logging is driving the progress output instead)."""
     if not spinner:
         return asyncio.run(coro)
-    with _status.status(message, spinner="dots"):
+    with _status.status(message, spinner=_SPINNER, spinner_style=_SPINNER_STYLE):
         return asyncio.run(coro)
+
+
+def _run_staged(
+    make_coro: Callable[[Callable[[str], None]], Coroutine[Any, Any, _T]],
+    message: str = "working…",
+    *,
+    spinner: bool = True,
+) -> _T:
+    """Like _run but passes the coro factory a `report(text)` callback that live-updates the
+    spinner so long multi-stage ops can show progress. make_coro: (report) -> Coroutine."""
+    if not spinner:
+        return asyncio.run(make_coro(lambda _msg: None))
+    with _status.status(message, spinner=_SPINNER, spinner_style=_SPINNER_STYLE) as st:
+
+        def report(text: str) -> None:
+            st.update(
+                f"[dim]{text}[/dim]", spinner=_SPINNER, spinner_style=_SPINNER_STYLE
+            )
+
+        return asyncio.run(make_coro(report))
 
 
 def _open_index(root: Path) -> Coroutine[Any, Any, IndexStore]:
