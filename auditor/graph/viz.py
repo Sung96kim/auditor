@@ -43,11 +43,13 @@ async def build_payload(index, *, node_cap: int = 200) -> dict:
     Output is deterministic: nodes sorted by id, edges by (src, dst, kind),
     clusters by cluster_id.
     """
-    raw_nodes = sorted(await index.graph.nodes(), key=lambda n: n["node_id"])
+    all_nodes = await index.graph.nodes()
+    top = sorted(all_nodes, key=lambda n: (-n["rank"], n["node_id"]))[:node_cap]
+    raw_nodes = sorted(top, key=lambda n: n["node_id"])
     findings_by_node = await _findings_by_node(index)
 
     nodes = []
-    for n in raw_nodes[:node_cap]:
+    for n in raw_nodes:
         nid = n["node_id"]
         nodes.append(
             {
@@ -85,7 +87,7 @@ async def build_payload(index, *, node_cap: int = 200) -> dict:
             "cluster_id": c["cluster_id"],
             "label": c["label"],
             "member_count": c["member_count"],
-            "agg_rank": round(_agg_rank(raw_nodes, c["cluster_id"]), 6),
+            "agg_rank": round(_agg_rank(all_nodes, c["cluster_id"]), 6),
         }
         for c in sorted(await index.graph.clusters(), key=lambda c: c["cluster_id"])
     ]

@@ -106,3 +106,42 @@ async def test_to_dot_overview_sorted(store):
     node_lines = [ln.strip() for ln in lines if ln.strip().startswith('"') and "->" not in ln]
     node_ids = [ln.split('"')[1] for ln in node_lines]
     assert node_ids == sorted(node_ids)
+
+
+async def test_node_cap_keeps_top_rank_not_alphabetical(tmp_path):
+    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
+    nodes = [
+        GraphNode(
+            id=f"a{i:03d}.py::f",
+            kind=NodeKind.FUNCTION,
+            name="f",
+            module=f"a{i:03d}.py",
+            qualname="f",
+            role="production",
+            rank=0.001 * i,
+            line=1,
+        )
+        for i in range(10)
+    ]
+    nodes.append(
+        GraphNode(
+            id="zzz.py::hub",
+            kind=NodeKind.FUNCTION,
+            name="hub",
+            module="zzz.py",
+            qualname="hub",
+            role="production",
+            rank=0.99,
+            line=1,
+        )
+    )
+    await s.repos.register(0.0)
+    await s.graph.replace(nodes, [], [])
+    try:
+        p = await build_payload(s, node_cap=3)
+        ids = {n["id"] for n in p["nodes"]}
+        assert "zzz.py::hub" in ids  # highest rank kept despite late alphabet
+        assert "a000.py::f" not in ids  # lowest rank dropped despite early alphabet
+        assert len(p["nodes"]) == 3
+    finally:
+        await s.aclose()
