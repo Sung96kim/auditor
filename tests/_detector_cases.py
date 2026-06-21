@@ -1087,6 +1087,10 @@ TESTED_SEPARATELY = {
     "PY-TEST-FIXTURE-MUTABLE-WIDE-SCOPE",
     "PY-TEST-UNUSED-FIXTURE",  # repo-level; computed by the crossfile pass
     "PY-DEAD-SYMBOL",  # repo-level; computed by the crossfile pass, tested in test_dead_code.py
+    # graph-aware rules — repo-level stubs; logic runs during `graph build` (Tasks 6–8)
+    "GRAPH-GOD-CONCEPT",
+    "GRAPH-SCATTERED-CONCEPT",
+    "GRAPH-NAMING-INCONSISTENCY",
     # SQLAlchemy framework rules — tested in tests/languages/python/detectors/test_sqlalchemy.py
     "SA-MUTABLE-DEFAULT",
     "SA-LAZY-DYNAMIC",
