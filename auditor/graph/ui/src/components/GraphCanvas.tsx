@@ -10,10 +10,16 @@ import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
 import { buildGraphologyGraph, type View } from "../graph/buildGraph";
 import { easeInOutCubic, lerp, makeTween, tickTween, type TweenState } from "../graph/anim";
+import { labelBox, nodeAtPoint, type LabelBox } from "../graph/labelHit";
 
 const prefersReducedMotion =
   typeof window !== "undefined" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const LABEL_SIZE = 13;
+const LABEL_WEIGHT = "600";
+const LABEL_FONT =
+  "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
 interface GraphCanvasProps {
   payload: GraphPayload;
@@ -136,6 +142,7 @@ export default function GraphCanvas({
   onFocusRef.current = onFocus;
 
   const selectionRef = useRef<SelectionState>({ id: null, neighbors: new Set() });
+  const hoveredLabelRef = useRef<string | null>(null);
 
   const entranceTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 0, progress: 1 });
   const selectionTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 150, progress: 1 });
@@ -244,9 +251,9 @@ export default function GraphCanvas({
       renderEdgeLabels: false,
       defaultEdgeColor: "#1B2230",
       labelColor: { color: "#E6EDF5" },
-      labelSize: 13,
-      labelWeight: "600",
-      labelFont: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+      labelSize: LABEL_SIZE,
+      labelWeight: LABEL_WEIGHT,
+      labelFont: LABEL_FONT,
       labelRenderedSizeThreshold: 0,
       defaultDrawNodeHover: drawDarkNodeHover,
       nodeProgramClasses: { circle: NodeBorderProg },
@@ -254,7 +261,7 @@ export default function GraphCanvas({
       nodeReducer: (node, data) => {
         const ep = easeInOutCubic(entranceTweenRef.current.progress);
         const sp = easeInOutCubic(selectionTweenRef.current.progress);
-        const hasFinding = overlayOn && findingsSet.has(node);
+        const hasFinding = overlayOnRef.current && findingsSet.has(node);
         const sel = selectionRef.current;
 
         const pulseAmp = 0.15;
@@ -319,6 +326,13 @@ export default function GraphCanvas({
           size: lerp(0, resolved.size as number, ep),
           color: alphaColor(resolved.color as string, ep),
           borderColor: alphaColor(resolved.borderColor as string, ep),
+          // bypass sigma's label-occlusion grid so a node's label is never silently
+          // culled — force it whenever the node has a (non-dimmed) label
+          forceLabel:
+            typeof resolved.label === "string" && (resolved.label as string).length > 0,
+          // hovering a node's label flags it highlighted so it gets the same hover box
+          // as hovering the circle (sigma renders highlighted nodes via the hover renderer)
+          highlighted: node === hoveredLabelRef.current,
         };
       },
       edgeReducer: (edge, data) => {
@@ -354,6 +368,58 @@ export default function GraphCanvas({
       }
     });
 
+    // Labels are clickable too. Sigma only hit-tests the node circle, so on a
+    // background ("stage") click we rebuild each labeled node's on-screen box and
+    // test the point against it — matching the circle's click/double-click behavior.
+    const measureCtx = document.createElement("canvas").getContext("2d");
+    const labelBoxes = (): LabelBox[] => {
+      if (!measureCtx) return [];
+      measureCtx.font = `${LABEL_WEIGHT} ${LABEL_SIZE}px ${LABEL_FONT}`;
+      const boxes: LabelBox[] = [];
+      g.forEachNode((node) => {
+        const dd = sigma.getNodeDisplayData(node);
+        if (!dd || !dd.label) return; // dimmed/empty labels aren't clickable
+        const vp = sigma.framedGraphToViewport(dd);
+        const r = sigma.scaleSize(dd.size);
+        const w = measureCtx.measureText(dd.label).width;
+        boxes.push(labelBox(node, vp.x, vp.y, r, w, LABEL_SIZE));
+      });
+      return boxes;
+    };
+
+    sigma.on("clickStage", ({ event }) => {
+      const node = nodeAtPoint(event.x, event.y, labelBoxes());
+      if (!node) return;
+      if (node.startsWith("cluster:")) {
+        onDrillRef.current(parseInt(node.replace("cluster:", ""), 10));
+      } else {
+        onSelectRef.current(node);
+      }
+    });
+
+    sigma.on("doubleClickStage", (e) => {
+      const node = nodeAtPoint(e.event.x, e.event.y, labelBoxes());
+      if (!node || node.startsWith("cluster:")) return;
+      e.preventSigmaDefault();
+      onFocusRef.current(node);
+    });
+
+    // Hovering a label triggers the same hover box as hovering the circle: track the
+    // label under the pointer and flag it `highlighted` (the reducer reads this ref).
+    const handleLabelHover = (ev: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const node = nodeAtPoint(
+        ev.clientX - rect.left,
+        ev.clientY - rect.top,
+        labelBoxes(),
+      );
+      if (node === hoveredLabelRef.current) return;
+      hoveredLabelRef.current = node;
+      container.style.cursor = node ? "pointer" : "";
+      sigma.refresh();
+    };
+    container.addEventListener("mousemove", handleLabelHover);
+
     sigmaRef.current = sigma;
 
     const camera = sigma.getCamera();
@@ -381,12 +447,13 @@ export default function GraphCanvas({
     }
 
     return () => {
+      container.removeEventListener("mousemove", handleLabelHover);
       stopRaf();
       sigma.kill();
       sigmaRef.current = null;
       graphRef.current = null;
     };
-  }, [payload, view, overlayOn]);
+  }, [payload, view]);
 
   useEffect(() => {
     const sigma = sigmaRef.current;
@@ -409,8 +476,14 @@ export default function GraphCanvas({
 
   useEffect(() => {
     overlayOnRef.current = overlayOn;
+    const sigma = sigmaRef.current;
+    if (!sigma) return;
+    // Re-run reducers to apply/clear the overlay. No sigma rebuild (overlayOn is not a
+    // build-effect dep) so toggling never relayouts or flashes the canvas white.
     if (overlayOn && findingsSetRef.current.size > 0 && !prefersReducedMotion) {
       scheduleRaf();
+    } else {
+      sigma.refresh();
     }
   }, [overlayOn]);
 
