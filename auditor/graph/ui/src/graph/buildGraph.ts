@@ -60,7 +60,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
         label: node.label,
         size: nodeSize(node.rank),
         color: nodeColor(node.type),
-        type: node.type,
+        kind: node.type,
         rank: node.rank,
       });
     }
@@ -107,7 +107,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
         label: node.label,
         size: nodeSize(node.rank),
         color: nodeColor(node.type),
-        type: node.type,
+        kind: node.type,
         rank: node.rank,
       });
     }

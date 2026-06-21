@@ -58,4 +58,15 @@ describe("buildGraphologyGraph", () => {
     expect(nodeColor("class")).toBe("#B57BFF");
     expect(nodeSize(0.4)).toBeGreaterThan(nodeSize(0.1));
   });
+
+  it("does not set sigma-reserved 'type' attribute on nodes (uses 'kind')", () => {
+    const cg = buildGraphologyGraph(P, { mode: "cluster", clusterId: 0 });
+    cg.forEachNode((n) => {
+      expect(cg.getNodeAttribute(n, "type")).toBeUndefined(); // sigma 'type' = program selector
+    });
+    // the symbol kind is preserved under 'kind'
+    expect(cg.getNodeAttribute("a", "kind")).toBe("class");
+    const eg = buildGraphologyGraph(P, { mode: "ego", nodeId: "a", depth: 1 });
+    eg.forEachNode((n) => expect(eg.getNodeAttribute(n, "type")).toBeUndefined());
+  });
 });
