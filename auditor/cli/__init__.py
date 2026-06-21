@@ -34,9 +34,9 @@ _ = PythonAuditor
 
 try:  # the graph commands need the optional [graph] extra (numpy + scikit-learn)
     from auditor.cli.graph import graph_app
-
-    app.add_typer(graph_app, name="graph")
 except ImportError:
-    pass
+    from auditor.cli.graph_stub import graph_app
+
+app.add_typer(graph_app, name="graph")
 
 __all__ = ["app"]
