@@ -1,0 +1,4 @@
+node_modules
+*.tsbuildinfo
+# dist/ is intentionally committed (single-file build shipped in wheel)
+!dist/

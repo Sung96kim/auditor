@@ -42,6 +42,14 @@ auditor-mcp = "auditor.mcp_server:main"  # alias
 
 [tool.hatch.build.targets.wheel]
 packages = ["auditor"]
+exclude = [
+    "auditor/graph/ui/node_modules",
+    "auditor/graph/ui/src",
+    "auditor/graph/ui/*.ts",
+    "auditor/graph/ui/*.json",
+    "auditor/graph/ui/*.html",
+]
+force-include = { "auditor/graph/ui/dist/index.html" = "auditor/graph/ui/dist/index.html" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
