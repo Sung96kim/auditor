@@ -61,11 +61,12 @@ class GraphContext:
                 and n.kind in FUNCTION_KINDS
             ):
                 self.by_cluster[n.cluster_id].append(n)
-        self.degree: Counter[str] = Counter()
+        self.out_degree: Counter[str] = Counter()
+        self.in_degree: Counter[str] = Counter()
         for e in edges:
             if e.kind in _DEGREE_KINDS:
-                self.degree[e.src] += 1
-                self.degree[e.dst] += 1
+                self.out_degree[e.src] += 1
+                self.in_degree[e.dst] += 1
 
 
 class GraphDetector:
@@ -115,9 +116,9 @@ class GodConcept(GraphDetector):
             for n in ctx.nodes
             if n.kind == NodeKind.CLASS and n.role not in TEST_ROLES
         ]
-        ranks = [n.rank for n in self.prod]
-        degs = [ctx.degree.get(n.id, 0) for n in self.prod]
         sigma = ctx.cfg.god_concept_sigma
+        outs = [ctx.out_degree.get(n.id, 0) for n in self.prod]
+        ins = [ctx.in_degree.get(n.id, 0) for n in self.prod]
 
         def _log_floor(values: list[float]) -> float:
             # Log-space threshold: centrality distributions are heavy-tailed, so a single
@@ -131,31 +132,32 @@ class GodConcept(GraphDetector):
                 return float("inf")
             return statistics.mean(logged) + sigma * sd
 
-        self.rank_floor = _log_floor(ranks)
-        self.deg_floor = _log_floor(degs)
+        self.out_floor = _log_floor(outs)
+        self.in_floor = _log_floor(ins)
 
     def detect(self) -> list[tuple[str, Finding]]:
         out: list[tuple[str, Finding]] = []
         for n in sorted(self.prod, key=lambda x: x.id):
-            deg = self.ctx.degree.get(n.id, 0)
-            deg_out = math.log1p(deg) >= self.deg_floor
-            rank_out = math.log1p(n.rank) >= self.rank_floor
-            if not (deg_out or rank_out):
-                continue
-            if deg_out:
+            od = self.ctx.out_degree.get(n.id, 0)
+            idg = self.ctx.in_degree.get(n.id, 0)
+            if math.log1p(od) >= self.out_floor:
                 message = (
-                    f"{n.qualname} is a hub ({deg} direct connections) "
-                    "— consider decomposing it."
+                    f"{n.qualname} has high fan-out ({od}) — too many responsibilities; "
+                    "consider decomposing it."
                 )
-                suggestion = "split responsibilities; reduce inbound/outbound coupling."
-            else:
+                suggestion = (
+                    "split responsibilities; reduce what this coordinates/owns."
+                )
+            elif math.log1p(idg) >= self.in_floor:
                 message = (
-                    f"{n.qualname} is highly central (rank={n.rank:.5f}); many components "
-                    "transitively depend on it — changes here have wide blast-radius."
+                    f"{n.qualname} is a bottleneck ({idg} dependents) — changes here "
+                    "have wide blast-radius."
                 )
                 suggestion = (
                     "treat as load-bearing: change carefully and keep it well-tested."
                 )
+            else:
+                continue
             out.append(
                 self._located(n, message=message, evidence=n.id, suggestion=suggestion)
             )

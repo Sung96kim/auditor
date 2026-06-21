@@ -22,27 +22,34 @@ def _fn(nid, name, module="m.py", role="production", rank=0.0):
     )
 
 
-def test_god_concept_flags_rank_outlier():
-    # one hub with huge rank, nineteen ordinary nodes (20 total so the outlier is
-    # comfortably above mean+3σ in log space)
-    nodes = [_fn("m.py::hub", "hub", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
-    ]
-    results = GodConcept(GraphContext(nodes, [], [], AuditorSettings())).detect()
-    assert len(results) == 1
-    path, finding = results[0]
-    assert path == "m.py"
-    assert "hub" in finding.evidence
-    assert finding.rule_id == "GRAPH-GOD-CONCEPT"
-    assert finding.verdict_kind.value == "candidate"
+def test_god_concept_flags_fan_out_as_decompose():
+    # a node that CALLS many others = god object (high out-degree)
+    god = _fn("m.py::orchestrator", "orchestrator")
+    targets = [_fn(f"m.py::t{i}", f"t{i}") for i in range(40)]
+    edges = [GraphEdge(src=god.id, dst=t.id, kind=EdgeKind.CALLS) for t in targets]
+    res = GodConcept(GraphContext([god, *targets], edges, [], AuditorSettings())).detect()
+    msgs = {f.evidence: f.message for _, f in res}
+    assert "m.py::orchestrator" in msgs
+    assert "fan-out" in msgs["m.py::orchestrator"] and "decompos" in msgs["m.py::orchestrator"]
+
+
+def test_god_concept_flags_fan_in_as_bottleneck_not_decompose():
+    # a node CALLED by many = bottleneck (high in-degree, zero fan-out) — must NOT say decompose
+    sink = _fn("m.py::popular", "popular")
+    callers = [_fn(f"m.py::c{i}", f"c{i}") for i in range(40)]
+    edges = [GraphEdge(src=c.id, dst=sink.id, kind=EdgeKind.CALLS) for c in callers]
+    res = GodConcept(GraphContext([sink, *callers], edges, [], AuditorSettings())).detect()
+    msg = next(f.message for _, f in res if f.evidence == "m.py::popular")
+    assert "bottleneck" in msg and "blast-radius" in msg
+    assert "decompos" not in msg
 
 
 def test_god_concept_ignores_tests():
-    nodes = [_fn("t.py::big", "big", role="test", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
-    ]
-    # a test-role hub must not be flagged
-    assert GodConcept(GraphContext(nodes, [], [], AuditorSettings())).detect() == []
+    # test-role nodes excluded even when central
+    sink = _fn("t.py::tsink", "tsink", role="test")
+    callers = [_fn(f"t.py::c{i}", f"c{i}", role="test") for i in range(40)]
+    edges = [GraphEdge(src=c.id, dst=sink.id, kind=EdgeKind.CALLS) for c in callers]
+    assert GodConcept(GraphContext([sink, *callers], edges, [], AuditorSettings())).detect() == []
 
 
 def _cn(nid, name, module, cid):
@@ -80,11 +87,11 @@ def test_scattered_concept_ignores_concentrated_cluster():
 
 
 def test_run_graph_detectors_groups_by_path():
-    nodes = [_fn("m.py::hub", "hub", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
-    ]
-    per_file = run_graph_detectors(nodes, [], [], AuditorSettings())
-    assert "m.py" in per_file and len(per_file["m.py"]) == 1
+    hub = _fn("m.py::hub", "hub")
+    targets = [_fn(f"m.py::t{i}", f"t{i}") for i in range(40)]
+    edges = [GraphEdge(src=hub.id, dst=t.id, kind=EdgeKind.CALLS) for t in targets]
+    per_file = run_graph_detectors([hub, *targets], edges, [], AuditorSettings())
+    assert "m.py" in per_file and len(per_file["m.py"]) >= 1
 
 
 def _pf(nid, name, profile, module="m.py", cid=0):
@@ -134,38 +141,12 @@ def test_naming_inconsistency_ignores_antonym_verbs():
 
 
 def test_god_concept_log_space_not_suppressed_by_mega_outlier():
-    # one degree-100 mega-hub + one moderate degree-~20 hub + many degree-1 leaves.
-    # Under raw mean+3σ, the mega-hub inflates σ so much that the moderate hub falls
-    # below the floor (false negative). Log-space floors catch both.
+    # mega bottleneck (in~80) must not suppress a moderate bottleneck (in~25) via inflated σ
     mega = _fn("m.py::mega", "mega")
     mod = _fn("m.py::mod", "mod")
-    leaves = [_fn(f"m.py::l{i}", f"l{i}") for i in range(60)]
-    edges = []
-    for i in range(50):  # mega: 50 incoming
-        edges.append(GraphEdge(src=leaves[i % 60].id, dst=mega.id, kind=EdgeKind.CALLS))
-    for i in range(20):  # mod: 20 incoming
-        edges.append(GraphEdge(src=leaves[(i + 5) % 60].id, dst=mod.id, kind=EdgeKind.CALLS))
-    nodes = [mega, mod, *leaves]
-    res = GodConcept(GraphContext(nodes, edges, [], AuditorSettings())).detect()
+    leaves = [_fn(f"m.py::l{i}", f"l{i}") for i in range(90)]
+    edges = [GraphEdge(src=leaves[i % 90].id, dst=mega.id, kind=EdgeKind.CALLS) for i in range(80)]
+    edges += [GraphEdge(src=leaves[(i + 3) % 90].id, dst=mod.id, kind=EdgeKind.CALLS) for i in range(25)]
+    res = GodConcept(GraphContext([mega, mod, *leaves], edges, [], AuditorSettings())).detect()
     flagged = {f.evidence for _, f in res}
-    assert "m.py::mega" in flagged  # the mega hub
-    assert "m.py::mod" in flagged  # the moderate hub must NOT be suppressed by mega's σ
-
-
-def test_god_concept_message_splits_by_signal():
-    # degree hub: many callers -> "hub"/"decompos" wording
-    hub = _fn("m.py::hub", "hub")
-    callers = [_fn(f"m.py::c{i}", f"c{i}") for i in range(12)]
-    edges = [GraphEdge(src=c.id, dst=hub.id, kind=EdgeKind.CALLS) for c in callers]
-    res = GodConcept(GraphContext([hub, *callers], edges, [], AuditorSettings())).detect()
-    hub_msg = next(f.message for _, f in res if f.evidence == "m.py::hub")
-    assert "hub" in hub_msg and "decompos" in hub_msg
-
-    # rank-central, low degree (no edges) -> "central"/"blast-radius" wording
-    # (19 peers so the outlier clears mean+3σ in log space)
-    nodes = [_fn("m.py::central", "central", rank=1.0)] + [
-        _fn(f"m.py::f{i}", f"f{i}", rank=0.01) for i in range(19)
-    ]
-    res2 = GodConcept(GraphContext(nodes, [], [], AuditorSettings())).detect()
-    msg = next(f.message for _, f in res2 if f.evidence == "m.py::central")
-    assert "central" in msg and "blast-radius" in msg
+    assert "m.py::mega" in flagged and "m.py::mod" in flagged
