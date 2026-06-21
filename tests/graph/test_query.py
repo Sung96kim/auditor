@@ -80,6 +80,18 @@ async def test_concept_matches_by_label(store):
     }
 
 
+async def test_concept_no_match_returns_empty(store):
+    """A term matching no label and no member name must return {} — not the largest cluster."""
+    assert await GraphQuery(store).concept("zzznotaconcept") == {}
+
+
+async def test_concept_matches_by_member_name_when_no_label(store):
+    """No cluster is labelled 'fetch', but the 'user' cluster has a fetch_user member, so a
+    member-name match selects it rather than falling back to the biggest cluster."""
+    out = await GraphQuery(store).concept("fetch")
+    assert out["label"] == "user" and out["cluster_id"] == 1
+
+
 async def test_partial_symbol_resolves_by_suffix(store):
     assert (await GraphQuery(store).related("get_user")) == (
         await GraphQuery(store).related("m.py::get_user")

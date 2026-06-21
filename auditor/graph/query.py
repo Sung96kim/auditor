@@ -1,5 +1,7 @@
 """Read-side query API over the persisted graph (spec §10). Stdlib only."""
 
+from collections import Counter
+
 _STRUCTURAL = [
     "calls",
     "overrides",
@@ -88,15 +90,34 @@ class GraphQuery:
         return await self.index.graph.clusters()
 
     async def concept(self, term: str) -> dict:
+        """The concept cluster best matching ``term`` — by label first, else by the cluster
+        with the most members whose name contains the term. Returns ``{}`` when nothing
+        matches (rather than falling back to the largest cluster)."""
         clusters = await self.index.graph.clusters()
-        term_l = term.lower()
-        ranked = sorted(
-            clusters,
-            key=lambda c: (term_l not in c["label"].lower(), -c["member_count"]),
-        )
-        if not ranked:
+        if not clusters:
             return {}
-        best = ranked[0]
+        term_l = term.lower()
+        label_hits = [
+            c
+            for c in clusters
+            if term_l in c["label"].lower() or c["label"].lower() in term_l
+        ]
+        if label_hits:
+            best = max(label_hits, key=lambda c: c["member_count"])
+        else:
+            # no label match: rank clusters by how many of their members' names contain the
+            # term, so e.g. "submission" finds the cluster full of submission-named symbols
+            counts: Counter[int] = Counter()
+            for n in await self.index.graph.nodes():
+                cid = n.get("cluster_id")
+                if cid is not None and term_l in (n.get("name") or "").lower():
+                    counts[cid] += 1
+            if not counts:
+                return {}
+            best_id = counts.most_common(1)[0][0]
+            best = next((c for c in clusters if c["cluster_id"] == best_id), None)
+            if best is None:
+                return {}
         members = await self.index.graph.cluster_members(best["cluster_id"])
         return {
             "cluster_id": best["cluster_id"],
