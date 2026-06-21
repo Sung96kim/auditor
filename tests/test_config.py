@@ -6,6 +6,7 @@ import pytest
 from auditor.config import (
     AuditorSettings,
     CategoryConfig,
+    GraphConfig,
     OverrideConfig,
     ResolvedConfig,
     RolePolicy,
@@ -326,3 +327,14 @@ def test_resolve_packages_from_pyproject(tmp_path):
         '[tool.auditor]\nresolve_packages = ["atmosphere", "shared_lib"]\n'
     )
     assert load_config(tmp_path).resolve_packages == ["atmosphere", "shared_lib"]
+
+
+def test_graph_detect_config_defaults():
+    cfg = GraphConfig()
+    assert cfg.detect is True
+    assert cfg.god_concept_sigma == 3.0
+    assert cfg.scattered_min_modules == 5
+    assert cfg.scattered_min_ratio == 0.5
+    assert cfg.naming_verb_distance == 0.15
+    assert cfg.naming_object_jaccard == 0.6
+    assert cfg.naming_min_verb_count == 20

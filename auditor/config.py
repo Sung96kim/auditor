@@ -261,6 +261,13 @@ class GraphConfig(BaseModel):
     stopwords: list[str] = Field(
         default_factory=list
     )  # repo-specific, added on top of english/IDF
+    detect: bool = True
+    god_concept_sigma: float = Field(default=3.0, ge=0.0)
+    scattered_min_modules: int = Field(default=5, ge=1)
+    scattered_min_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
+    naming_verb_distance: float = Field(default=0.15, ge=0.0)
+    naming_object_jaccard: float = Field(default=0.6, ge=0.0, le=1.0)
+    naming_min_verb_count: int = Field(default=20, ge=1)
 
 
 class GlobalPaths(BaseSettings):
