@@ -2,102 +2,131 @@
 
 from collections import defaultdict
 
-from auditor.graph.model import TEST_ROLES, EdgeKind, GraphEdge, GraphNode
+from auditor.graph.model import (
+    FUNCTION_KINDS,
+    TEST_ROLES,
+    EdgeKind,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+)
 
-_FN_KINDS = ("function", "method")
 
+class StructuralResolver:
+    """Resolves a node set's local facts into structural GraphEdges. Holds the derived
+    indexes + edge accumulator as fields so each edge-type pass is its own method."""
 
-def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
-    fns = {n.id: n for n in nodes if n.kind in _FN_KINDS}
-    classes = {n.id: n for n in nodes if n.kind == "class"}
-    by_fn_name: dict[str, list[str]] = defaultdict(list)
-    for n in fns.values():
-        by_fn_name[n.name].append(n.id)
-    by_class_name: dict[str, list[str]] = defaultdict(list)
-    for c in classes.values():
-        by_class_name[c.name].append(c.id)
+    def __init__(self, nodes: list[GraphNode]) -> None:
+        self.nodes = nodes
+        self.fns = {n.id: n for n in nodes if n.kind in FUNCTION_KINDS}
+        self.classes = {n.id: n for n in nodes if n.kind == "class"}
+        self.modules = {n.id: n for n in nodes if n.kind == "module"}
+        self.by_fn_name: dict[str, list[str]] = defaultdict(list)
+        for n in self.fns.values():
+            self.by_fn_name[n.name].append(n.id)
+        self.by_class_name: dict[str, list[str]] = defaultdict(list)
+        for c in self.classes.values():
+            self.by_class_name[c.name].append(c.id)
+        self.role_by_id = {n.id: n.role for n in nodes}
+        self.dotted_to_id: dict[str, str] = {}
+        for mid in sorted(self.modules):
+            stem = mid.removesuffix(".py")
+            if stem.endswith("/__init__"):
+                stem = stem[: -len("/__init__")]
+            self.dotted_to_id[stem.replace("/", ".")] = mid
+        self.edges: list[GraphEdge] = []
+        self._seen: set[tuple[str, str, str]] = set()
 
-    role_by_id = {n.id: n.role for n in nodes}
-    edges: list[GraphEdge] = []
-    seen: set[tuple[str, str, str]] = set()
+    def _add(self, src: str, dst: str, kind: EdgeKind, weight: float = 1.0) -> None:
+        if src != dst and (src, dst, kind.value) not in self._seen:
+            self._seen.add((src, dst, kind.value))
+            self.edges.append(GraphEdge(src=src, dst=dst, kind=kind, weight=weight))
 
-    def add(src: str, dst: str, kind: EdgeKind, weight: float = 1.0) -> None:
-        if src != dst and (src, dst, kind.value) not in seen:
-            seen.add((src, dst, kind.value))
-            edges.append(GraphEdge(src=src, dst=dst, kind=kind, weight=weight))
-
-    def resolve_name(
-        name: str, caller: GraphNode, index: dict[str, list[str]]
+    def _resolve_name(
+        self, name: str, caller: GraphNode, index: dict[str, list[str]]
     ) -> list[str]:
         hits = index.get(name, [])
         if caller.role not in TEST_ROLES:
-            hits = [h for h in hits if role_by_id.get(h) not in TEST_ROLES]
+            hits = [h for h in hits if self.role_by_id.get(h) not in TEST_ROLES]
         same = [h for h in hits if h.split("::")[0] == caller.module]
         return same or hits
 
-    modules = {n.id: n for n in nodes if n.kind == "module"}
-    top_level = [
-        n for n in nodes if n.kind in (*_FN_KINDS, "class") and "." not in n.qualname
-    ]
-    for mid in sorted(modules):
-        for sym in sorted(top_level, key=lambda s: s.id):
-            if sym.module == mid:
-                add(mid, sym.id, EdgeKind.CONTAINS)
+    def _module_contains(self) -> None:
+        top_level = [
+            n
+            for n in self.nodes
+            if n.kind in (*FUNCTION_KINDS, NodeKind.CLASS) and "." not in n.qualname
+        ]
+        for mid in sorted(self.modules):
+            for sym in sorted(top_level, key=lambda s: s.id):
+                if sym.module == mid:
+                    self._add(mid, sym.id, EdgeKind.CONTAINS)
 
-    dotted_to_id = {}
-    for mid in sorted(modules):
-        stem = mid.removesuffix(".py")
-        if stem.endswith("/__init__"):
-            stem = stem[: -len("/__init__")]
-        dotted_to_id[stem.replace("/", ".")] = mid
-    for mid in sorted(modules):
-        for target in modules[mid].imports:
-            dst = dotted_to_id.get(target)
-            if dst is not None and dst != mid:
-                add(mid, dst, EdgeKind.IMPORTS)
+    def _imports(self) -> None:
+        for mid in sorted(self.modules):
+            for target in self.modules[mid].imports:
+                dst = self.dotted_to_id.get(target)
+                if dst is not None and dst != mid:
+                    self._add(mid, dst, EdgeKind.IMPORTS)
 
-    for n in fns.values():
-        for callee in n.callees:
-            for dst in resolve_name(callee, n, by_fn_name):
-                add(n.id, dst, EdgeKind.CALLS)
-        for cb in n.callback_names:
-            for dst in resolve_name(cb, n, by_fn_name):
-                add(n.id, dst, EdgeKind.CALLBACK_ARG)
-        for t in n.param_types:
-            for dst in resolve_name(t, n, by_class_name):
-                add(n.id, dst, EdgeKind.REFERENCES_TYPE)
+    def _call_edges(self) -> None:
+        for n in self.fns.values():
+            for callee in n.callees:
+                for dst in self._resolve_name(callee, n, self.by_fn_name):
+                    self._add(n.id, dst, EdgeKind.CALLS)
+            for cb in n.callback_names:
+                for dst in self._resolve_name(cb, n, self.by_fn_name):
+                    self._add(n.id, dst, EdgeKind.CALLBACK_ARG)
+            for t in n.param_types:
+                for dst in self._resolve_name(t, n, self.by_class_name):
+                    self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
 
-    bindings_by_module = {
-        mid: dict(modules[mid].import_bindings) for mid in sorted(modules)
-    }
-    for sym in sorted(nodes, key=lambda s: s.id):
-        if not sym.registry_roots:
-            continue
-        binds = bindings_by_module.get(sym.module, {})
-        for root in sym.registry_roots:
-            dotted = binds.get(root)
-            if dotted is None:
+    def _registered_in(self) -> None:
+        bindings_by_module = {
+            mid: dict(self.modules[mid].import_bindings) for mid in sorted(self.modules)
+        }
+        for sym in sorted(self.nodes, key=lambda s: s.id):
+            if not sym.registry_roots:
                 continue
-            dst = dotted_to_id.get(dotted)
-            if dst is not None and dst != sym.id:
-                add(sym.id, dst, EdgeKind.REGISTERED_IN)
+            binds = bindings_by_module.get(sym.module, {})
+            for root in sym.registry_roots:
+                dotted = binds.get(root)
+                if dotted is None:
+                    continue
+                dst = self.dotted_to_id.get(dotted)
+                if dst is not None and dst != sym.id:
+                    self._add(sym.id, dst, EdgeKind.REGISTERED_IN)
 
-    for c in classes.values():
-        # contains: class -> its methods (by id prefix)
-        prefix = f"{c.id}."
-        for fid in fns:
-            if fid.startswith(prefix):
-                add(c.id, fid, EdgeKind.CONTAINS)
-        # inherits + overrides
-        base_ids = [b for bn in c.bases for b in resolve_name(bn, c, by_class_name)]
-        for bid in base_ids:
-            add(c.id, bid, EdgeKind.INHERITS)
-        for mname in c.method_names:
-            mid = f"{c.id}.{mname}"
-            if mid not in fns:
-                continue
+    def _class_edges(self) -> None:
+        for c in self.classes.values():
+            prefix = f"{c.id}."
+            for fid in self.fns:
+                if fid.startswith(prefix):
+                    self._add(c.id, fid, EdgeKind.CONTAINS)
+            base_ids = [
+                b
+                for bn in c.bases
+                for b in self._resolve_name(bn, c, self.by_class_name)
+            ]
             for bid in base_ids:
-                base_method = f"{bid}.{mname}"
-                if base_method in fns:
-                    add(mid, base_method, EdgeKind.OVERRIDES)
-    return edges
+                self._add(c.id, bid, EdgeKind.INHERITS)
+            for mname in c.method_names:
+                mid = f"{c.id}.{mname}"
+                if mid not in self.fns:
+                    continue
+                for bid in base_ids:
+                    base_method = f"{bid}.{mname}"
+                    if base_method in self.fns:
+                        self._add(mid, base_method, EdgeKind.OVERRIDES)
+
+    def resolve(self) -> list[GraphEdge]:
+        self._module_contains()
+        self._imports()
+        self._call_edges()
+        self._registered_in()
+        self._class_edges()
+        return self.edges
+
+
+def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
+    return StructuralResolver(nodes).resolve()

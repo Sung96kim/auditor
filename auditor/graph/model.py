@@ -12,6 +12,12 @@ class NodeKind(StrEnum):
     METHOD = "method"
 
 
+FUNCTION_KINDS = (
+    NodeKind.FUNCTION,
+    NodeKind.METHOD,
+)  # callable symbol kinds (single source)
+
+
 class EdgeKind(StrEnum):
     CONTAINS = "contains"
     CALLS = "calls"
