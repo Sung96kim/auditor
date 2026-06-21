@@ -7,8 +7,10 @@ import Explorer from "./components/Explorer";
 import Controls from "./components/Controls";
 import type { FilterState } from "./components/Controls";
 import DetailPanel from "./components/DetailPanel";
+import TopBar from "./components/TopBar";
 import type { View } from "./graph/buildGraph";
 import { applyFilters } from "./graph/filter";
+import { breadcrumbPath, type CrumbTarget } from "./graph/breadcrumb";
 
 declare global {
   interface Window {
@@ -30,6 +32,39 @@ function makeDefaultFilters(payload: GraphPayload): FilterState {
     depth: 1,
     overlayOn: false,
   };
+}
+
+/** Uppercase, letter-spaced section header shared across all panels. */
+function SectionHeader({
+  label,
+  trailing,
+}: {
+  label: string;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "8px",
+      }}
+    >
+      <span
+        style={{
+          fontSize: "10.5px",
+          fontWeight: 700,
+          letterSpacing: "0.09em",
+          color: "#64748b",
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </span>
+      {trailing}
+    </div>
+  );
 }
 
 export default function App() {
@@ -54,17 +89,17 @@ export default function App() {
     return { ...data, nodes, edges };
   }, [data, filters.langs, filters.types, searchQuery]);
 
-  /** Effective view: selection no longer drives view; view is the navigation source of truth. */
-  const effectiveView = useMemo<View>(() => view, [view]);
-
   const handleSelect = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
   }, []);
 
-  const handleFocus = useCallback((nodeId: string) => {
-    setSelectedNodeId(nodeId);
-    setView({ mode: "ego", nodeId, depth: filters.depth });
-  }, [filters.depth]);
+  const handleFocus = useCallback(
+    (nodeId: string) => {
+      setSelectedNodeId(nodeId);
+      setView({ mode: "ego", nodeId, depth: filters.depth });
+    },
+    [filters.depth]
+  );
 
   const handleDrill = useCallback((clusterId: number) => {
     setSelectedNodeId(null);
@@ -77,6 +112,19 @@ export default function App() {
     setSearchQuery("");
     setFilters(makeDefaultFilters(data));
   }, [data]);
+
+  const handleCrumb = useCallback(
+    (target: CrumbTarget) => {
+      if (target.kind === "overview") {
+        setView({ mode: "overview" });
+        setSelectedNodeId(null);
+      } else {
+        setView({ mode: "cluster", clusterId: target.clusterId });
+        setSelectedNodeId(null);
+      }
+    },
+    []
+  );
 
   const handleLangToggle = useCallback((lang: string) => {
     setFilters((prev) => {
@@ -96,12 +144,15 @@ export default function App() {
     });
   }, []);
 
-  const handleDepthChange = useCallback((depth: number) => {
-    setFilters((prev) => ({ ...prev, depth }));
-    if (selectedNodeId) {
-      setView({ mode: "ego", nodeId: selectedNodeId, depth });
-    }
-  }, [selectedNodeId]);
+  const handleDepthChange = useCallback(
+    (depth: number) => {
+      setFilters((prev) => ({ ...prev, depth }));
+      if (selectedNodeId) {
+        setView({ mode: "ego", nodeId: selectedNodeId, depth });
+      }
+    },
+    [selectedNodeId]
+  );
 
   const handleOverlayToggle = useCallback(() => {
     setFilters((prev) => ({ ...prev, overlayOn: !prev.overlayOn }));
@@ -112,15 +163,15 @@ export default function App() {
     [data.nodes, selectedNodeId]
   );
 
-  const viewLabel =
-    view.mode === "overview"
-      ? "Overview"
-      : view.mode === "cluster"
-      ? `Cluster ${(view as Extract<View, { mode: "cluster" }>).clusterId}`
-      : `Ego: ${(view as Extract<View, { mode: "ego" }>).nodeId}`;
+  const crumbs = useMemo(
+    () => breadcrumbPath(view, data, selectedNodeId),
+    [view, data, selectedNodeId]
+  );
 
-  const sidebarWidth = 264;
-  const detailWidth = 280;
+  const title = data.meta.repo ?? "Codebase Graph";
+
+  const sidebarWidth = 268;
+  const detailWidth = 288;
 
   return (
     <div
@@ -129,81 +180,25 @@ export default function App() {
         width: "100%",
         backgroundColor: THEME.bgApp,
         color: "#e2e8f0",
-        fontFamily: "monospace",
+        fontFamily:
+          'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
       }}
     >
-      {/* ── Header ── */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "1rem",
-          padding: "0.75rem 1.25rem",
-          backgroundColor: THEME.bgPanel,
-          borderBottom: `1px solid ${THEME.border}`,
-          flexShrink: 0,
-        }}
-      >
-        <h1
-          style={{
-            color: THEME.accent,
-            margin: 0,
-            fontSize: "1rem",
-            letterSpacing: "0.05em",
-          }}
-        >
-          Auditor — Codebase Graph
-        </h1>
-        <span
-          style={{
-            color: "#64748b",
-            fontSize: "0.8rem",
-            flexGrow: 1,
-          }}
-        >
-          {viewLabel} · {data.nodes.length} nodes · {data.edges.length} edges
-        </span>
-        {view.mode !== "overview" && (
-          <button
-            onClick={handleReset}
-            style={{
-              background: THEME.bgElevated,
-              border: `1px solid ${THEME.border}`,
-              color: "#e2e8f0",
-              padding: "0.3rem 0.75rem",
-              borderRadius: "0.3rem",
-              cursor: "pointer",
-              fontSize: "0.8rem",
-              fontFamily: "monospace",
-            }}
-          >
-            ← Back
-          </button>
-        )}
-        <button
-          onClick={handleReset}
-          style={{
-            background: THEME.bgElevated,
-            border: `1px solid ${THEME.border}`,
-            color: THEME.accent,
-            padding: "0.3rem 0.75rem",
-            borderRadius: "0.3rem",
-            cursor: "pointer",
-            fontSize: "0.8rem",
-            fontFamily: "monospace",
-          }}
-        >
-          Reset
-        </button>
-      </div>
+      <TopBar
+        title={title}
+        crumbs={crumbs}
+        nodeCount={data.nodes.length}
+        edgeCount={data.edges.length}
+        clusterCount={data.clusters.length}
+        onCrumb={handleCrumb}
+      />
 
       {/* ── Body ── */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-
-        {/* ── Left sidebar: Explorer ── */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0, gap: "12px", padding: "12px" }}>
+        {/* ── Left: Explorer panel ── */}
         <div
           style={{
             width: sidebarWidth,
@@ -211,42 +206,34 @@ export default function App() {
             display: "flex",
             flexDirection: "column",
             backgroundColor: THEME.bgPanel,
-            borderRight: `1px solid ${THEME.border}`,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: "12px",
             minHeight: 0,
+            overflow: "hidden",
           }}
         >
-          {/* Section label */}
           <div
             style={{
-              padding: "12px 14px 8px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
+              padding: "12px 14px 10px",
               flexShrink: 0,
+              borderBottom: `1px solid ${THEME.border}`,
             }}
           >
-            <span
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                letterSpacing: ".8px",
-                color: "#64748b",
-              }}
-            >
-              EXPLORER
-            </span>
-            <span
-              style={{
-                fontSize: "11px",
-                color: "#64748b",
-                fontFamily: "monospace",
-              }}
-            >
-              {filteredPayload.nodes.length} nodes
-            </span>
+            <SectionHeader
+              label="Explorer"
+              trailing={
+                <span
+                  style={{
+                    fontSize: "11px",
+                    color: "#64748b",
+                    fontFamily: "monospace",
+                  }}
+                >
+                  {filteredPayload.nodes.length} nodes
+                </span>
+              }
+            />
           </div>
-
-          {/* Explorer search + list */}
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <Explorer
               nodes={filteredPayload.nodes}
@@ -259,10 +246,19 @@ export default function App() {
         </div>
 
         {/* ── Canvas ── */}
-        <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+        <div
+          style={{
+            flex: 1,
+            position: "relative",
+            minHeight: 0,
+            borderRadius: "12px",
+            overflow: "hidden",
+            border: `1px solid ${THEME.border}`,
+          }}
+        >
           <GraphCanvas
             payload={filteredPayload}
-            view={effectiveView}
+            view={view}
             onSelect={handleSelect}
             onDrill={handleDrill}
             onFocus={handleFocus}
@@ -270,20 +266,43 @@ export default function App() {
             overlayOn={filters.overlayOn}
           />
 
-          {/* NODE TYPES legend overlay (top-left of canvas) */}
+          {/* Floating Controls overlay (same chrome as side panels) */}
           <div
             style={{
               position: "absolute",
-              top: "14px",
-              left: "14px",
-              background: "rgba(14,18,27,0.88)",
+              top: "12px",
+              left: "12px",
+              width: "210px",
+              background: "rgba(14,18,27,0.92)",
               backdropFilter: "blur(10px)",
               border: `1px solid ${THEME.border}`,
-              borderRadius: "11px",
-              padding: "11px 12px",
+              borderRadius: "12px",
               zIndex: 10,
+              overflow: "hidden",
             }}
           >
+            <div
+              style={{
+                padding: "12px 14px 10px",
+                borderBottom: `1px solid ${THEME.border}`,
+              }}
+            >
+              <SectionHeader
+                label="Controls"
+                trailing={
+                  <span
+                    onClick={handleReset}
+                    style={{
+                      fontSize: "11px",
+                      color: THEME.accent,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Reset
+                  </span>
+                }
+              />
+            </div>
             <Controls
               availableLangs={availableLangs}
               filters={filters}
@@ -291,7 +310,6 @@ export default function App() {
               onTypeToggle={handleTypeToggle}
               onDepthChange={handleDepthChange}
               onOverlayToggle={handleOverlayToggle}
-              onReset={handleReset}
             />
           </div>
 
@@ -299,21 +317,27 @@ export default function App() {
           <div
             style={{
               position: "absolute",
-              bottom: "14px",
+              bottom: "12px",
               left: "50%",
               transform: "translateX(-50%)",
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              color: "#374151",
-              fontSize: "11.5px",
+              color: "#475569",
+              fontSize: "11px",
+              fontFamily: "monospace",
               pointerEvents: "none",
               zIndex: 5,
+              background: "rgba(14,18,27,0.6)",
+              border: `1px solid ${THEME.border}`,
+              borderRadius: "999px",
+              padding: "4px 12px",
+              backdropFilter: "blur(6px)",
             }}
           >
             <svg
-              width="14"
-              height="14"
+              width="13"
+              height="13"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -327,7 +351,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* ── Right panel: Detail ── */}
+        {/* ── Right: Detail panel ── */}
         <div
           style={{
             width: detailWidth,
@@ -335,27 +359,20 @@ export default function App() {
             display: "flex",
             flexDirection: "column",
             backgroundColor: THEME.bgPanel,
-            borderLeft: `1px solid ${THEME.border}`,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: "12px",
             minHeight: 0,
+            overflow: "hidden",
           }}
         >
           <div
             style={{
-              padding: "12px 14px 8px",
+              padding: "12px 14px 10px",
               flexShrink: 0,
               borderBottom: `1px solid ${THEME.border}`,
             }}
           >
-            <span
-              style={{
-                fontSize: "11px",
-                fontWeight: 600,
-                letterSpacing: ".8px",
-                color: "#64748b",
-              }}
-            >
-              NODE DETAIL
-            </span>
+            <SectionHeader label="Node Detail" />
           </div>
           <DetailPanel
             node={selectedNode}
@@ -365,37 +382,6 @@ export default function App() {
             onFocus={handleFocus}
           />
         </div>
-      </div>
-
-      {/* ── Footer ── */}
-      <div
-        style={{
-          display: "flex",
-          gap: "0.5rem",
-          padding: "0.5rem 1.25rem",
-          backgroundColor: THEME.bgPanel,
-          borderTop: `1px solid ${THEME.border}`,
-          flexShrink: 0,
-        }}
-      >
-        {(["overview", "cluster", "ego"] as const).map((m) => (
-          <span
-            key={m}
-            style={{
-              fontSize: "0.7rem",
-              padding: "0.2rem 0.6rem",
-              borderRadius: "1rem",
-              backgroundColor: view.mode === m ? THEME.accent : THEME.bgElevated,
-              color: view.mode === m ? "#fff" : "#64748b",
-              border: `1px solid ${view.mode === m ? THEME.accent : THEME.border}`,
-            }}
-          >
-            {m}
-          </span>
-        ))}
-        <span style={{ fontSize: "0.7rem", color: "#374151", marginLeft: "auto" }}>
-          {window.__AUDITOR_GRAPH__ ? "live" : "sample fixture"}
-        </span>
       </div>
     </div>
   );

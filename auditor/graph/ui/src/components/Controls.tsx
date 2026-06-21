@@ -15,8 +15,15 @@ interface ControlsProps {
   onTypeToggle: (type: NodeType) => void;
   onDepthChange: (depth: number) => void;
   onOverlayToggle: () => void;
-  onReset: () => void;
 }
+
+const SECTION_HEADER: React.CSSProperties = {
+  fontSize: "10.5px",
+  fontWeight: 700,
+  letterSpacing: "0.09em",
+  color: "#64748b",
+  textTransform: "uppercase",
+};
 
 const ALL_TYPES: NodeType[] = ["class", "function", "method", "module"];
 
@@ -34,7 +41,6 @@ export default function Controls({
   onTypeToggle,
   onDepthChange,
   onOverlayToggle,
-  onReset,
 }: ControlsProps) {
   const depthLabel =
     filters.depth === 1 ? "direct" : `${filters.depth} hops`;
@@ -50,34 +56,8 @@ export default function Controls({
     >
       {/* FILTER BY LANGUAGE */}
       <section style={{ padding: "12px 14px 10px" }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: "10px",
-          }}
-        >
-          <span
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              letterSpacing: ".7px",
-              color: "#64748b",
-            }}
-          >
-            FILTER BY LANGUAGE
-          </span>
-          <span
-            onClick={onReset}
-            style={{
-              fontSize: "11px",
-              color: THEME.accent,
-              cursor: "pointer",
-            }}
-          >
-            Reset
-          </span>
+        <div style={{ ...SECTION_HEADER, marginBottom: "10px" }}>
+          Filter by Language
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
           {availableLangs.map((lang) => {
@@ -136,16 +116,7 @@ export default function Controls({
             marginBottom: "8px",
           }}
         >
-          <span
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              letterSpacing: ".7px",
-              color: "#64748b",
-            }}
-          >
-            DEPENDENCY DEPTH
-          </span>
+          <span style={SECTION_HEADER}>Dependency Depth</span>
           <span
             style={{
               fontSize: "11px",
@@ -182,17 +153,7 @@ export default function Controls({
 
       {/* NODE TYPES */}
       <section style={{ padding: "12px 14px 10px" }}>
-        <div
-          style={{
-            fontSize: "10px",
-            fontWeight: 600,
-            letterSpacing: ".8px",
-            color: "#64748b",
-            marginBottom: "9px",
-          }}
-        >
-          NODE TYPES
-        </div>
+        <div style={{ ...SECTION_HEADER, marginBottom: "9px" }}>Node Types</div>
         <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
           {ALL_TYPES.map((t) => {
             const active = filters.types.has(t);
@@ -239,16 +200,7 @@ export default function Controls({
             justifyContent: "space-between",
           }}
         >
-          <span
-            style={{
-              fontSize: "11px",
-              fontWeight: 600,
-              letterSpacing: ".7px",
-              color: "#64748b",
-            }}
-          >
-            FINDINGS OVERLAY
-          </span>
+          <span style={SECTION_HEADER}>Overlay</span>
           <div
             onClick={onOverlayToggle}
             style={{

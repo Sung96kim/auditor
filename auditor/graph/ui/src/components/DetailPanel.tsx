@@ -99,6 +99,8 @@ export default function DetailPanel({
     ? `vscode://file/${node.path}:${node.line}`
     : null;
 
+  const accentColor = NODE_COLOR[node.type] ?? THEME.accent;
+
   return (
     <div
       style={{
@@ -109,6 +111,9 @@ export default function DetailPanel({
         flex: 1,
       }}
     >
+      {/* Node-type accent strip */}
+      <div style={{ height: "3px", background: accentColor, flexShrink: 0 }} />
+
       {/* Node header */}
       <div style={{ padding: "14px" }}>
         <div
@@ -160,14 +165,14 @@ export default function DetailPanel({
           style={{
             display: "block",
             width: "100%",
-            marginBottom: "10px",
-            padding: "5px 10px",
+            marginBottom: "12px",
+            padding: "7px 10px",
             background: THEME.accent,
             border: "none",
-            borderRadius: "6px",
+            borderRadius: "8px",
             color: "#fff",
             fontSize: "12px",
-            fontFamily: "monospace",
+            fontFamily: "inherit",
             fontWeight: 600,
             cursor: "pointer",
             letterSpacing: "0.03em",
@@ -181,40 +186,26 @@ export default function DetailPanel({
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: "5px",
+            gap: "6px",
             fontSize: "12px",
           }}
         >
           <div style={{ display: "flex", gap: "8px" }}>
-            <span style={{ color: "#4B5563", minWidth: "48px" }}>type</span>
-            <span style={{ color: "#94a3b8" }}>{node.type}</span>
-          </div>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <span style={{ color: "#4B5563", minWidth: "48px" }}>role</span>
-            <span style={{ color: "#94a3b8" }}>{node.role}</span>
-          </div>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <span style={{ color: "#4B5563", minWidth: "48px" }}>lang</span>
-            <span style={{ color: "#94a3b8" }}>{node.lang}</span>
-          </div>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <span style={{ color: "#4B5563", minWidth: "48px" }}>module</span>
-            <span
-              style={{
-                color: "#94a3b8",
-                fontFamily: "monospace",
-                fontSize: "11px",
-                wordBreak: "break-all",
-              }}
-            >
-              {node.module}
+            <span style={{ color: "#4B5563", minWidth: "52px" }}>kind</span>
+            <span style={{ color: "#94a3b8" }}>
+              {node.type} · {node.lang}
             </span>
           </div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <span style={{ color: "#4B5563", minWidth: "52px" }}>role</span>
+            <span style={{ color: "#94a3b8" }}>{node.role}</span>
+          </div>
           {vscodePath && (
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-              <span style={{ color: "#4B5563", minWidth: "48px" }}>path</span>
+            <div style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
+              <span style={{ color: "#4B5563", minWidth: "52px" }}>source</span>
               <a
                 href={vscodePath}
+                title={`${node.path}:${node.line}`}
                 style={{
                   color: THEME.accent,
                   fontSize: "11px",
@@ -223,7 +214,7 @@ export default function DetailPanel({
                   wordBreak: "break-all",
                 }}
               >
-                {node.path}:{node.line}
+                {node.module}:{node.line}
               </a>
             </div>
           )}
@@ -243,26 +234,30 @@ export default function DetailPanel({
           <div style={{ padding: "10px 14px" }}>
             <div
               style={{
-                fontSize: "10px",
-                fontWeight: 600,
-                letterSpacing: ".7px",
+                fontSize: "10.5px",
+                fontWeight: 700,
+                letterSpacing: "0.09em",
                 color: "#64748b",
+                textTransform: "uppercase",
                 marginBottom: "8px",
               }}
             >
-              FINDINGS
+              Findings
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
               {node.findings.map((f) => (
                 <span
                   key={f}
                   style={{
                     fontSize: "10px",
-                    background: "#7C2020",
+                    background: "#3A1313",
                     color: "#FCA5A5",
-                    borderRadius: "4px",
-                    padding: "2px 6px",
+                    border: "1px solid #7C2020",
+                    borderRadius: "999px",
+                    padding: "2px 9px",
                     fontFamily: "monospace",
+                    fontWeight: 600,
+                    letterSpacing: "0.02em",
                   }}
                 >
                   {f}
@@ -286,14 +281,15 @@ export default function DetailPanel({
           <div style={{ padding: "10px 14px" }}>
             <div
               style={{
-                fontSize: "10px",
-                fontWeight: 600,
-                letterSpacing: ".7px",
+                fontSize: "10.5px",
+                fontWeight: 700,
+                letterSpacing: "0.09em",
                 color: "#64748b",
+                textTransform: "uppercase",
                 marginBottom: "8px",
               }}
             >
-              NEIGHBORS ({neighbors.length})
+              Neighbors ({neighbors.length})
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
               {neighbors.map((nb) => (

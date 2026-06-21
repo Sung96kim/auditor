@@ -29,7 +29,7 @@ export interface GCluster {
 }
 
 export interface GraphPayload {
-  meta: { theme: string; accent: string; node_cap: number };
+  meta: { theme: string; accent: string; node_cap: number; repo?: string };
   clusters: GCluster[];
   nodes: GNode[];
   edges: GEdge[];
