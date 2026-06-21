@@ -3,7 +3,12 @@
 Stdlib only — pure mapping over the persisted graph (auditor/graph/ui/ renders it).
 """
 
+import json
+from pathlib import Path
+
 from auditor.graph.model import NodeKind
+
+_APP_HTML = Path(__file__).parent / "ui" / "dist" / "index.html"
 
 _TYPE = {
     NodeKind.CLASS: "class",
@@ -91,6 +96,25 @@ async def build_payload(index, *, node_cap: int = 200) -> dict:
         "nodes": nodes,
         "edges": edges,
     }
+
+
+def render_app(payload: dict) -> str:
+    """Inject ``payload`` into the built UI HTML and return the result.
+
+    The global ``window.__AUDITOR_GRAPH__`` is injected immediately before
+    ``</body>`` so the app bundle can read it at startup.
+    """
+    if not _APP_HTML.exists():
+        raise FileNotFoundError(
+            f"Built UI not found at {_APP_HTML}. "
+            "Run `pnpm build` inside auditor/graph/ui/ first."
+        )
+    html = _APP_HTML.read_text(encoding="utf-8")
+    blob = json.dumps(payload).replace("</", "<\\/")  # avoid </script> breakage
+    inject = f"<script>window.__AUDITOR_GRAPH__={blob};</script>"
+    if "</body>" in html:
+        return html.replace("</body>", inject + "</body>", 1)
+    return html + inject
 
 
 def to_dot(

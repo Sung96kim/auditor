@@ -17,8 +17,9 @@ from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.graph.build import GraphBuilder
 from auditor.graph.query import GraphQuery
-from auditor.graph.viz import build_payload, to_dot
+from auditor.graph.viz import build_payload, render_app, to_dot
 from auditor.paths import index_db_path, repo_key
+from auditor.serve import ReportServer
 
 graph_app = typer.Typer(
     no_args_is_help=True, help="Build + query the semantic code graph."
@@ -79,6 +80,26 @@ def graph_clusters(target: _Target = Path(".")) -> None:
     """List concept clusters (label + size)."""
     root = find_root(target)
     _echo_json(_run(_query_cmd("clusters")(root), "querying…"))
+
+
+@graph_app.command("serve")
+def graph_serve(
+    target: _Target = Path("."),
+    no_open: bool = typer.Option(
+        False, "--no-open", help="Skip opening a browser tab."
+    ),
+) -> None:
+    """Serve the interactive graph UI on an ephemeral local port."""
+    root = find_root(target)
+
+    async def run() -> str:
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            return render_app(await build_payload(index))
+
+    html = _run(run(), "preparing graph UI…")
+    server = ReportServer(html)
+    typer.echo(f"serving graph UI at {server.url} (Ctrl-C to stop)")
+    server.serve(open_browser=not no_open)
 
 
 @graph_app.command("export")
