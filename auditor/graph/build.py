@@ -1,11 +1,19 @@
 """Repo-level graph build (spec §6). Needs numpy + scikit-learn (via naming/rank/cluster)."""
 
 from auditor.graph.cluster import cluster_concepts
+from auditor.graph.detectors import run_graph_detectors
 from auditor.graph.model import TEST_ROLES, FileGraphFacts, GraphCluster, GraphNode
 from auditor.graph.naming import name_similar_edges
 from auditor.graph.rank import pagerank
 from auditor.graph.resolve_edges import resolve_structural
 from auditor.graph.usage import usage_similar_edges
+from auditor.languages.python.detectors.graph_rules import (
+    GOD_CONCEPT_RULE,
+    NAMING_INCONSISTENCY_RULE,
+    SCATTERED_CONCEPT_RULE,
+)
+
+_GRAPH_RULE_IDS = [GOD_CONCEPT_RULE, SCATTERED_CONCEPT_RULE, NAMING_INCONSISTENCY_RULE]
 
 
 def compute_abstractness(node: GraphNode, proto_method_ids: set[str]) -> float:
@@ -46,7 +54,7 @@ class GraphBuilder:
                 nodes.append(n)
         if not nodes:
             await index.graph.replace([], [], [])
-            return {"nodes": 0, "edges": 0, "clusters": 0}
+            return {"nodes": 0, "edges": 0, "clusters": 0, "findings": 0}
 
         symbols = self._symbol_nodes(nodes)
         structural = resolve_structural(nodes)
@@ -89,10 +97,18 @@ class GraphBuilder:
             for cid, sz in sorted(sizes.items())
         ]
         await index.graph.replace(out_nodes, all_edges, clusters)
+        findings_count = 0
+        if cfg.detect:
+            await index.findings.clear_for_rules(_GRAPH_RULE_IDS)
+            per_file = run_graph_detectors(out_nodes, all_edges, clusters, settings)
+            for path, findings in per_file.items():
+                await index.findings.add(path, findings)
+                findings_count += len(findings)
         return {
             "nodes": len(out_nodes),
             "edges": len(all_edges),
             "clusters": len(clusters),
+            "findings": findings_count,
         }
 
 

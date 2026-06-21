@@ -131,6 +131,39 @@ async def test_build_personalizes_rank_against_tests(tmp_path):
         await s.aclose()
 
 
+async def test_build_runs_detectors_and_persists(tmp_path):
+    src_hub = "def hub():\n    return 1\n"
+    callers = "from hub import hub\n" + "".join(
+        f"def c{i}():\n    return hub()\n" for i in range(12)
+    )
+    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
+    try:
+        await s.graph.set_facts(
+            "hub.py",
+            extract_file_facts("hub.py", src_hub, "production").model_dump_json(),
+            "h1",
+        )
+        await s.graph.set_facts(
+            "callers.py",
+            extract_file_facts("callers.py", callers, "production").model_dump_json(),
+            "h2",
+        )
+        settings = AuditorSettings(
+            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=True)
+        )
+        summary = await GraphBuilder().run(s, settings)
+        assert "findings" in summary
+        assert summary["findings"] >= 0
+        # detect=False clears graph findings and adds none
+        settings_off = AuditorSettings(
+            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=False)
+        )
+        summary_off = await GraphBuilder().run(s, settings_off)
+        assert summary_off["findings"] == 0
+    finally:
+        await s.aclose()
+
+
 async def test_dedup_property_getter_setter(tmp_path):
     facts = extract_file_facts("prop.py", PROP, "production")
     dup_nodes = [n for n in facts.nodes if n.id == "prop.py::Box.config"]
