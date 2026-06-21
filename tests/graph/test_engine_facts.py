@@ -22,7 +22,8 @@ async def test_scan_writes_graph_facts_when_enabled(repo):
     async with await IndexStore.connect(index_db_path(), repo_key(repo)) as idx:
         blobs = await idx.graph.all_facts()
     assert blobs and "get_user" in blobs[0]
-    assert json.loads(blobs[0])["nodes"][0]["name"] == "get_user"
+    symbols = [n for n in json.loads(blobs[0])["nodes"] if n["kind"] != "module"]
+    assert symbols[0]["name"] == "get_user"
 
 
 async def test_disabled_by_default(tmp_path, monkeypatch):

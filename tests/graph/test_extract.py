@@ -52,3 +52,20 @@ def test_stub_and_hof_and_callback_flags():
 
 def test_syntax_error_returns_empty():
     assert extract_file_facts("bad.py", "def (:", "production").nodes == []
+
+
+def test_extract_emits_module_node():
+    facts = extract_file_facts("pkg/sub/mod.py", "def foo():\n    pass\n", "production")
+    mods = [n for n in facts.nodes if n.kind == "module"]
+    assert len(mods) == 1
+    m = mods[0]
+    assert m.id == "pkg/sub/mod.py"
+    assert m.qualname == "pkg.sub.mod"
+    assert m.module == "pkg/sub/mod.py"
+    assert m.role == "production"
+
+
+def test_extract_module_node_for_init_drops_init_segment():
+    facts = extract_file_facts("pkg/__init__.py", "x = 1\n", "production")
+    m = next(n for n in facts.nodes if n.kind == "module")
+    assert m.qualname == "pkg"

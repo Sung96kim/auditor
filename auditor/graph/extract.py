@@ -9,6 +9,13 @@ _FuncDef = (ast.FunctionDef, ast.AsyncFunctionDef)
 _FuncDefT = ast.FunctionDef | ast.AsyncFunctionDef
 
 
+def _module_dotted(rel_path: str) -> str:
+    stem = rel_path.removesuffix(".py")
+    if stem.endswith("/__init__"):
+        stem = stem[: -len("/__init__")]
+    return stem.replace("/", ".")
+
+
 def _ann_type_names(node: ast.expr | None) -> list[str]:
     if node is None:
         return []
@@ -38,6 +45,28 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
         split_ident(rel_path.removesuffix(".py").replace("/", " "))
     )
     nodes: list[GraphNode] = []
+
+    module_doc = symbol_document(
+        name=_module_dotted(rel_path).rsplit(".", 1)[-1],
+        args=[],
+        docstring=ast.get_docstring(tree) or "",
+        body_idents=[],
+        param_types=[],
+        path_tokens=path_tokens,
+        class_name=None,
+    )
+    nodes.append(
+        GraphNode(
+            id=rel_path,
+            kind=NodeKind.MODULE,
+            name=rel_path.rsplit("/", 1)[-1],
+            module=rel_path,
+            qualname=_module_dotted(rel_path),
+            doc_tokens=tuple(module_doc),
+            line=1,
+            role=role,
+        )
+    )
 
     def fn_node(fn: _FuncDefT, cls: str | None) -> GraphNode:
         params = [a.arg for a in fn.args.posonlyargs + fn.args.args]

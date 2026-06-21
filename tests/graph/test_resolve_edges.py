@@ -62,3 +62,23 @@ def test_callback_arg_edge():
         "def caller():\n    return helper(run)\n"
     )
     assert ("m0.py::caller", "m0.py::run") in _pairs(_edges(src), "callback_arg")
+
+
+def test_module_contains_top_level_symbols():
+    facts = extract_file_facts(
+        "m.py",
+        "def foo():\n    pass\n\nclass Bar:\n    def baz(self):\n        pass\n",
+        "production",
+    )
+    edges = resolve_structural(facts.nodes)
+    contains = {(e.src, e.dst) for e in edges if e.kind == "contains"}
+    assert ("m.py", "m.py::foo") in contains  # module -> top-level function
+    assert ("m.py", "m.py::Bar") in contains  # module -> top-level class
+    assert (
+        "m.py::Bar",
+        "m.py::Bar.baz",
+    ) in contains  # existing class -> method still holds
+    assert (
+        "m.py",
+        "m.py::Bar.baz",
+    ) not in contains  # module does NOT directly contain methods

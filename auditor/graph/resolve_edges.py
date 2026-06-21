@@ -32,6 +32,15 @@ def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
         same = [h for h in hits if h.split("::")[0] == src_module]
         return same or hits
 
+    modules = {n.id: n for n in nodes if n.kind == "module"}
+    top_level = [
+        n for n in nodes if n.kind in (*_FN_KINDS, "class") and "." not in n.qualname
+    ]
+    for mid in sorted(modules):
+        for sym in sorted(top_level, key=lambda s: s.id):
+            if sym.module == mid:
+                add(mid, sym.id, EdgeKind.CONTAINS)
+
     for n in fns.values():
         for callee in n.callees:
             for dst in resolve_name(callee, n.module, by_fn_name):
