@@ -29,7 +29,13 @@ class GraphBuilder:
         facts = [
             FileGraphFacts.model_validate_json(b) for b in await index.graph.all_facts()
         ]
-        nodes = [n for f in facts for n in f.nodes]
+        raw = [n for f in facts for n in f.nodes]
+        seen: set[str] = set()
+        nodes = []
+        for n in raw:
+            if n.id not in seen:
+                seen.add(n.id)
+                nodes.append(n)
         if not nodes:
             await index.graph.replace([], [], [])
             return {"nodes": 0, "edges": 0, "clusters": 0}

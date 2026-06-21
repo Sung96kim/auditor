@@ -50,3 +50,37 @@ async def test_build_writes_nodes_edges_clusters(store):
     # every node got a cluster id + a rank
     nodes = await store.graph.nodes()
     assert all(n["cluster_id"] is not None for n in nodes)
+
+
+PROP = (
+    "class Box:\n"
+    "    @property\n"
+    "    def config(self):\n"
+    "        return self._c\n"
+    "    @config.setter\n"
+    "    def config(self, v):\n"
+    "        self._c = v\n"
+)
+
+
+async def test_dedup_property_getter_setter(tmp_path):
+    facts = extract_file_facts("prop.py", PROP, "production")
+    dup_nodes = [n for n in facts.nodes if n.id == "prop.py::Box.config"]
+    assert len(dup_nodes) == 2, "extractor must emit two nodes for getter+setter"
+
+    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
+    try:
+        await s.graph.set_facts(
+            "prop.py",
+            facts.model_dump_json(),
+            "h1",
+        )
+        settings = AuditorSettings(
+            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+        )
+        await GraphBuilder().run(s, settings)
+        nodes = await s.graph.nodes()
+        matching = [n for n in nodes if n["node_id"] == "prop.py::Box.config"]
+        assert len(matching) == 1
+    finally:
+        await s.aclose()
