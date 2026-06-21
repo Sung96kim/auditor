@@ -46,6 +46,20 @@ def _module_imports(
     return tuple(dict.fromkeys(targets)), tuple(dict.fromkeys(bindings))
 
 
+def _registry_roots(decorator_list: list[ast.expr]) -> tuple[str, ...]:
+    roots: list[str] = []
+    for d in decorator_list:
+        target = d.func if isinstance(d, ast.Call) else d
+        if not isinstance(target, ast.Attribute):
+            continue  # bare-Name decorators (@property, @dataclass) are not registries
+        cur: ast.expr = target.value
+        while isinstance(cur, ast.Attribute):
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            roots.append(cur.id)
+    return tuple(dict.fromkeys(roots))
+
+
 def _ann_type_names(node: ast.expr | None) -> list[str]:
     if node is None:
         return []
@@ -154,6 +168,7 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
             callees=tuple(dict.fromkeys(callees)),
             param_types=tuple(dict.fromkeys(ptypes)),
             decorators=decorators,
+            registry_roots=_registry_roots(fn.decorator_list),
             callback_names=tuple(dict.fromkeys(callback_names)),
             is_hof=is_hof,
             is_stub=_is_stub(fn),
@@ -186,6 +201,7 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
                             b.id for b in child.bases if isinstance(b, ast.Name)
                         ),
                         method_names=tuple(methods),
+                        registry_roots=_registry_roots(child.decorator_list),
                         line=child.lineno,
                         role=role,
                     )

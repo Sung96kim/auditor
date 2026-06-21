@@ -85,6 +85,29 @@ def test_imports_edges_skip_unresolved_external():
     assert not [e for e in edges if e.kind == "imports"]  # external -> no edge
 
 
+def test_registered_in_resolves_via_import_binding():
+    app_mod = extract_file_facts("pkg/app.py", "app = object()\n", "production")
+    routes = extract_file_facts(
+        "pkg/routes.py",
+        "from pkg.app import app\n\n@app.route('/x')\ndef handler():\n    pass\n",
+        "production",
+    )
+    nodes = [*app_mod.nodes, *routes.nodes]
+    edges = resolve_structural(nodes)
+    reg = {(e.src, e.dst) for e in edges if e.kind == "registered_in"}
+    assert ("pkg/routes.py::handler", "pkg/app.py") in reg
+
+
+def test_registered_in_skips_external_registry():
+    routes = extract_file_facts(
+        "pkg/routes.py",
+        "from flask import app\n\n@app.route('/x')\ndef handler():\n    pass\n",
+        "production",
+    )
+    edges = resolve_structural(routes.nodes)
+    assert not [e for e in edges if e.kind == "registered_in"]  # flask not in repo
+
+
 def test_module_contains_top_level_symbols():
     facts = extract_file_facts(
         "m.py",

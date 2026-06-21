@@ -64,6 +64,21 @@ def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
             for dst in resolve_name(t, n.module, by_class_name):
                 add(n.id, dst, EdgeKind.REFERENCES_TYPE)
 
+    bindings_by_module = {
+        mid: dict(modules[mid].import_bindings) for mid in sorted(modules)
+    }
+    for sym in sorted(nodes, key=lambda s: s.id):
+        if not sym.registry_roots:
+            continue
+        binds = bindings_by_module.get(sym.module, {})
+        for root in sym.registry_roots:
+            dotted = binds.get(root)
+            if dotted is None:
+                continue
+            dst = dotted_to_id.get(dotted)
+            if dst is not None and dst != sym.id:
+                add(sym.id, dst, EdgeKind.REGISTERED_IN)
+
     for c in classes.values():
         # contains: class -> its methods (by id prefix)
         prefix = f"{c.id}."

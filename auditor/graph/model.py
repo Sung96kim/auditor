@@ -49,6 +49,7 @@ class GraphNode(BaseModel):
     import_bindings: tuple[
         tuple[str, str], ...
     ] = ()  # module nodes: (local_name, source_dotted)
+    registry_roots: tuple[str, ...] = ()  # root names of attribute-style decorators
     is_hof: bool = False
     is_stub: bool = False
     line: int = 0

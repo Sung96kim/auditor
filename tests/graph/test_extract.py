@@ -71,6 +71,24 @@ def test_extract_module_node_for_init_drops_init_segment():
     assert m.qualname == "pkg"
 
 
+def test_extract_registry_roots():
+    src = (
+        "@app.route('/x')\n"
+        "def handler():\n    pass\n\n"
+        "@property\n"
+        "def plain():\n    pass\n\n"
+        "@registry.register\n"
+        "class Thing:\n    pass\n"
+    )
+    facts = extract_file_facts("m.py", src, "production")
+    handler = next(n for n in facts.nodes if n.name == "handler")
+    plain = next(n for n in facts.nodes if n.name == "plain")
+    thing = next(n for n in facts.nodes if n.name == "Thing")
+    assert handler.registry_roots == ("app",)
+    assert plain.registry_roots == ()  # bare-Name decorator is not a registry
+    assert thing.registry_roots == ("registry",)
+
+
 def test_extract_module_imports_absolute_and_relative():
     src = (
         "import a.b.c\n"
