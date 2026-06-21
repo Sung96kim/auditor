@@ -97,6 +97,71 @@ class FindingsDB(BaseDB):
         )
         return [_row_to_finding(r) for r in rows]
 
+    async def fingerprints(self, path: str) -> dict[str, str]:
+        """All rule_id -> fingerprint for one file in a single query (batched cache check, vs one
+        ``fingerprint`` call per rule)."""
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT rule_id, fingerprint FROM file_rules WHERE repo = ? AND path = ?",
+                (self.repo, path),
+            ).fetchall()
+        )
+        return {r["rule_id"]: r["fingerprint"] for r in rows}
+
+    async def cached_by_rule(self, path: str) -> dict[str, list[Finding]]:
+        """rule_id -> cached findings for one file in a single query (batched cache read, vs one
+        ``cached`` call per rule)."""
+        rows = await self._worker.run(
+            lambda c: c.execute(
+                "SELECT * FROM findings WHERE repo = ? AND path = ?",
+                (self.repo, path),
+            ).fetchall()
+        )
+        out: dict[str, list[Finding]] = {}
+        for r in rows:
+            out.setdefault(r["rule_id"], []).append(_row_to_finding(r))
+        return out
+
+    async def record_many(
+        self,
+        path: str,
+        results: list[tuple[str, str, list[Finding]]],
+        when: float,
+    ) -> None:
+        """Store several rules' results for one file in a single transaction (one commit, bulk
+        ``executemany``) rather than a transaction per rule. ``results`` is
+        ``(rule_id, fingerprint, findings)`` per rule; each rule's prior findings are replaced."""
+        if not results:
+            return
+        rule_ids = [rid for rid, _, _ in results]
+        fr_rows = [(self.repo, path, rid, fp, when) for rid, fp, _ in results]
+        f_rows = [
+            _finding_to_row(self.repo, path, f) for _, _, fs in results for f in fs
+        ]
+        placeholders = ",".join("?" for _ in rule_ids)
+
+        def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
+            conn.executemany(
+                "INSERT INTO file_rules (repo, path, rule_id, fingerprint, last_scanned) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(repo, path, rule_id) DO UPDATE SET "
+                "fingerprint=excluded.fingerprint, last_scanned=excluded.last_scanned",
+                fr_rows,
+            )
+            conn.execute(
+                f"DELETE FROM findings WHERE repo = ? AND path = ? AND rule_id IN ({placeholders})",  # noqa: S608
+                (self.repo, path, *rule_ids),
+            )
+            t = self.TABLES["findings"]
+            cols = ", ".join(t.insert_columns())
+            conn.executemany(
+                f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
+                f_rows,
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
     async def record(
         self,
         path: str,

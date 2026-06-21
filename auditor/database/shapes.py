@@ -63,21 +63,22 @@ class ShapesDB(BaseDB):
         return [dict(r) for r in rows]
 
     async def duplicates(self) -> dict[str, list[sqlite3.Row]]:
-        """shape_hash -> rows, for hashes spanning 2+ distinct files within this repo."""
+        """shape_hash -> rows, for hashes spanning 2+ distinct files within this repo. One query
+        (the rows for every duplicate hash at once) rather than a per-hash follow-up — the
+        ``GROUP BY`` subquery picks the qualifying hashes and the outer select fetches their rows,
+        grouped in Python."""
 
         def op(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
-            dup = conn.execute(
+            rows = conn.execute(
+                "SELECT * FROM shapes WHERE repo = ? AND shape_hash IN ("
                 "SELECT shape_hash FROM shapes WHERE repo = ? "
-                "GROUP BY shape_hash HAVING COUNT(DISTINCT path) >= 2",
-                (self.repo,),
+                "GROUP BY shape_hash HAVING COUNT(DISTINCT path) >= 2"
+                ") ORDER BY shape_hash, path, line",
+                (self.repo, self.repo),
             ).fetchall()
             out: dict[str, list[sqlite3.Row]] = {}
-            for row in dup:
-                h = row["shape_hash"]
-                out[h] = conn.execute(
-                    "SELECT * FROM shapes WHERE repo = ? AND shape_hash = ? ORDER BY path, line",
-                    (self.repo, h),
-                ).fetchall()
+            for row in rows:
+                out.setdefault(row["shape_hash"], []).append(row)
             return out
 
         return await self._worker.run(op)

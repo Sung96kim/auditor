@@ -262,16 +262,24 @@ class ScanEngine:
     ) -> ScanResult:
         index = self.index
         cached_sha = await index.files.sha(rel)
-        missed = [
-            rid
-            for rid, fp in enabled.items()
-            if cached_sha != sha or await index.findings.fingerprint(rel, rid) != fp
-        ]
+        if cached_sha != sha:
+            missed = list(enabled)  # content changed: every enabled rule must re-run
+        else:
+            fps = await index.findings.fingerprints(rel)  # one query for all rules
+            missed = [rid for rid, fp in enabled.items() if fps.get(rid) != fp]
 
         if not missed:  # nothing to re-run
-            findings = [
-                f for rid in enabled for f in await index.findings.cached(rel, rid)
-            ]
+            # Graph facts live outside the findings cache. A file first scanned before
+            # graph was enabled is a findings cache-hit yet has no facts, so an
+            # incremental `graph build` auto-scan would skip it and build an empty graph.
+            # Extract facts here when they are missing or stale for this content.
+            if self.settings.graph.enabled and await index.graph.facts_hash(rel) != sha:
+                facts = extract_file_facts(rel, source, role.value)
+                await index.graph.set_facts(rel, facts.model_dump_json(), sha)
+            cached_map = await index.findings.cached_by_rule(
+                rel
+            )  # one query for all rules
+            findings = [f for rid in enabled for f in cached_map.get(rid, [])]
             findings.sort(key=lambda f: (f.line, f.rule_id))
             # genuinely cached only if a prior scan recorded this file; a file with no
             # enabled rules (e.g. role-excluded) has nothing to do, not a cache hit.
@@ -300,10 +308,11 @@ class ScanEngine:
         by_rule: dict[str, list[Finding]] = {rid: [] for rid in missed}
         for f in res.findings:
             by_rule.setdefault(f.rule_id, []).append(f)
-        for rid in missed:
-            await index.findings.record(
-                rel, rid, enabled[rid], by_rule.get(rid, []), now
-            )
+        await index.findings.record_many(
+            rel,
+            [(rid, enabled[rid], by_rule.get(rid, [])) for rid in missed],
+            now,
+        )
 
         await index.shapes.clear(rel)
         rows = auditor.shapes(
@@ -321,8 +330,9 @@ class ScanEngine:
             await index.graph.set_facts(rel, facts.model_dump_json(), sha)
 
         hit = [rid for rid in enabled if rid not in missed]
+        cached_map = await index.findings.cached_by_rule(rel) if hit else {}
         findings = list(res.findings) + [
-            f for rid in hit for f in await index.findings.cached(rel, rid)
+            f for rid in hit for f in cached_map.get(rid, [])
         ]
         findings.sort(key=lambda f: (f.line, f.rule_id))
         return ScanResult(

@@ -95,6 +95,66 @@ async def test_record_rule_replaces(tmp_path):
         )  # ran-clean, not absent
 
 
+async def test_fingerprints_batched(tmp_path):
+    """fingerprints(path) returns every rule's fingerprint in one call."""
+    async with await IndexStore.connect(tmp_path / "i.db") as index:
+        now = time.time()
+        await index.files.upsert(_entry("a.py"))
+        await index.findings.record("a.py", "R1", "fp1", [_finding("R1")], now)
+        await index.findings.record("a.py", "R2", "fp2", [], now)
+        assert await index.findings.fingerprints("a.py") == {"R1": "fp1", "R2": "fp2"}
+        assert await index.findings.fingerprints("missing.py") == {}
+
+
+async def test_cached_by_rule_batched(tmp_path):
+    """cached_by_rule(path) groups a file's findings by rule in one call."""
+    async with await IndexStore.connect(tmp_path / "i.db") as index:
+        now = time.time()
+        await index.files.upsert(_entry("a.py"))
+        await index.findings.record(
+            "a.py", "R1", "fp1", [_finding("R1"), _finding("R1")], now
+        )
+        await index.findings.record("a.py", "R2", "fp2", [_finding("R2")], now)
+        by_rule = await index.findings.cached_by_rule("a.py")
+        assert {k: len(v) for k, v in by_rule.items()} == {"R1": 2, "R2": 1}
+        assert all(f.rule_id == "R1" for f in by_rule["R1"])
+        assert await index.findings.cached_by_rule("missing.py") == {}
+
+
+async def test_record_many_writes_and_replaces(tmp_path):
+    """record_many writes several rules at once and replaces only the given rules."""
+    async with await IndexStore.connect(tmp_path / "i.db") as index:
+        now = time.time()
+        await index.files.upsert(_entry("a.py"))
+        await index.findings.record_many(
+            "a.py",
+            [("R1", "fp1", [_finding("R1")]), ("R2", "fp2", [_finding("R2")])],
+            now,
+        )
+        assert await index.findings.fingerprints("a.py") == {"R1": "fp1", "R2": "fp2"}
+        assert {
+            k: len(v) for k, v in (await index.findings.cached_by_rule("a.py")).items()
+        } == {
+            "R1": 1,
+            "R2": 1,
+        }
+        # Re-run R1 with no findings; R2 untouched.
+        await index.findings.record_many("a.py", [("R1", "fp1b", [])], now)
+        by_rule = await index.findings.cached_by_rule("a.py")
+        assert "R1" not in by_rule and len(by_rule["R2"]) == 1
+        assert (await index.findings.fingerprints("a.py")) == {
+            "R1": "fp1b",
+            "R2": "fp2",
+        }
+
+
+async def test_record_many_empty_noop(tmp_path):
+    async with await IndexStore.connect(tmp_path / "i.db") as index:
+        await index.files.upsert(_entry("a.py"))
+        await index.findings.record_many("a.py", [], time.time())
+        assert await index.findings.fingerprints("a.py") == {}
+
+
 async def test_shapes_and_duplicates(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db") as index:
         await index.shapes.add([("hh", "model", "a.py", "A", 1)])
@@ -105,6 +165,22 @@ async def test_shapes_and_duplicates(tmp_path):
         assert {r["path"] for r in dups["hh"]} == {"a.py", "b.py"}
         await index.shapes.clear("a.py")
         assert await index.shapes.duplicates() == {}
+
+
+async def test_duplicates_multiple_groups(tmp_path):
+    """The single-query duplicates() returns every multi-file hash, rows ordered by path/line."""
+    async with await IndexStore.connect(tmp_path / "i.db") as index:
+        await index.shapes.add([("h1", "model", "b.py", "B", 9)])
+        await index.shapes.add([("h1", "model", "a.py", "A", 1)])
+        await index.shapes.add([("h2", "model", "a.py", "C", 1)])
+        await index.shapes.add([("h2", "model", "c.py", "D", 1)])
+        await index.shapes.add(
+            [("solo", "model", "a.py", "E", 1)]
+        )  # single file: excluded
+        dups = await index.shapes.duplicates()
+        assert set(dups) == {"h1", "h2"}
+        # rows within a group ordered by (path, line)
+        assert [r["path"] for r in dups["h1"]] == ["a.py", "b.py"]
 
 
 async def test_clear_findings_for_rules(tmp_path):

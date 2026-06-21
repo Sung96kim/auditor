@@ -85,6 +85,41 @@ async def test_per_rule_invalidation(tmp_path):
     assert "PY-STYLE-FILE-SIZE" in {f.rule_id for f in res["pkg/b.py"].findings}
 
 
+async def test_cached_rescan_uses_batched_queries(tmp_path):
+    """A no-op re-scan must use the per-file batched cache methods (one fingerprints +
+    one cached_by_rule per file), never the per-rule fingerprint/cached calls — guards the
+    bulk-query optimization against regressing back to per-rule round-trips."""
+    root = _make_repo(tmp_path)
+    settings = load_config(root)
+    db = root / ".auditor" / "index.db"
+    async with await IndexStore.connect(db) as index:
+        await _scan_dir(root, root / "pkg", settings, index)
+
+    counts = {"fingerprint": 0, "cached": 0, "fingerprints": 0, "cached_by_rule": 0}
+    async with await IndexStore.connect(db) as index:
+        f = index.findings
+        orig = {n: getattr(f, n) for n in counts}
+
+        def wrap(name):
+            async def w(*a, **k):
+                counts[name] += 1
+                return await orig[name](*a, **k)
+
+            return w
+
+        for n in counts:
+            setattr(f, n, wrap(n))
+        second = await _scan_dir(root, root / "pkg", settings, index)
+        assert all(r.cached for r in second.values())
+
+    assert (
+        counts["fingerprint"] == 0 and counts["cached"] == 0
+    )  # no per-rule round-trips
+    assert (
+        counts["fingerprints"] == 2 and counts["cached_by_rule"] == 2
+    )  # one each / file
+
+
 async def test_parallel_writers(tmp_path):
     root = _make_repo(tmp_path)
     settings = load_config(root)
