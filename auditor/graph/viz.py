@@ -91,3 +91,62 @@ async def build_payload(index, *, node_cap: int = 200) -> dict:
         "nodes": nodes,
         "edges": edges,
     }
+
+
+def to_dot(
+    payload: dict,
+    *,
+    cluster: str | None = None,
+    symbol: str | None = None,
+    depth: int = 1,
+) -> str:
+    """Return a deterministic Graphviz DOT string for the payload.
+
+    Default: overview (all kept nodes).
+    ``cluster``: members of the cluster with that label.
+    ``symbol``: BFS ego graph from matching node(s) to ``depth``.
+    """
+    nodes = {n["id"]: n for n in payload["nodes"]}
+    edges = payload["edges"]
+    keep: set[str]
+    if symbol is not None:
+        seeds = {
+            nid
+            for nid in nodes
+            if nid.endswith(f"::{symbol}")
+            or nid.endswith(f".{symbol}")
+            or nid == symbol
+        }
+        keep = set(seeds)
+        frontier = set(seeds)
+        for _ in range(depth):
+            nxt = set()
+            for e in edges:
+                if e["source"] in frontier and e["target"] not in keep:
+                    nxt.add(e["target"])
+                if e["target"] in frontier and e["source"] not in keep:
+                    nxt.add(e["source"])
+            keep |= nxt
+            frontier = nxt
+    elif cluster is not None:
+        cid = next(
+            (c["cluster_id"] for c in payload["clusters"] if c["label"] == cluster),
+            None,
+        )
+        keep = {nid for nid, n in nodes.items() if n["cluster"] == cid}
+    else:
+        keep = set(nodes)
+    lines = [
+        "digraph codebase {",
+        "  rankdir=LR;",
+        "  node [shape=box, style=rounded];",
+    ]
+    for nid in sorted(keep):
+        lines.append(f'  "{nid}" [label="{nodes[nid]["label"]}"];')
+    for e in sorted(
+        (e for e in edges if e["source"] in keep and e["target"] in keep),
+        key=lambda e: (e["source"], e["target"], e["kind"]),
+    ):
+        lines.append(f'  "{e["source"]}" -> "{e["target"]}" [label="{e["kind"]}"];')
+    lines.append("}")
+    return "\n".join(lines)

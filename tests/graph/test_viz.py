@@ -2,7 +2,7 @@ import pytest
 
 from auditor.database import IndexStore
 from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
-from auditor.graph.viz import build_payload
+from auditor.graph.viz import build_payload, to_dot
 
 
 @pytest.fixture
@@ -75,3 +75,34 @@ async def test_payload_node_cap(store):
     p = await build_payload(store, node_cap=2)
     assert len(p["nodes"]) <= 2
     assert p["meta"]["node_cap"] == 2
+
+
+async def test_to_dot_deterministic(store):
+    p = await build_payload(store)
+    d1 = to_dot(p)
+    d2 = to_dot(p)
+    assert d1 == d2
+    assert d1.startswith("digraph") and "m.py::Foo" in d1
+    assert '"m.py::Foo" -> "m.py::Foo.bar"' in d1
+
+
+async def test_to_dot_symbol_ego(store):
+    p = await build_payload(store)
+    d = to_dot(p, symbol="Foo", depth=1)
+    assert "Foo" in d
+
+
+async def test_to_dot_cluster_filter(store):
+    p = await build_payload(store)
+    d = to_dot(p, cluster="foo")
+    assert "m.py::Foo" in d
+    assert "m.py::Foo.bar" in d
+
+
+async def test_to_dot_overview_sorted(store):
+    p = await build_payload(store)
+    d = to_dot(p)
+    lines = d.splitlines()
+    node_lines = [ln.strip() for ln in lines if ln.strip().startswith('"') and "->" not in ln]
+    node_ids = [ln.split('"')[1] for ln in node_lines]
+    assert node_ids == sorted(node_ids)
