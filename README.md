@@ -279,6 +279,30 @@ Resolution is repo-local by default; `resolve_packages` is opt-in and read from 
 project's* environment. If it's set but no env is found, the scan warns (dependency resolution is
 then off — `commit(); refresh_orms(...); use obj` may surface as a false positive).
 
+### Semantic graph (experimental, opt-in)
+
+A queryable semantic graph of symbols — nodes are functions/classes/modules; edges link them
+structurally (calls/imports/inherits/overrides) and semantically (by how they're **named** and
+**used**). Opt-in (needs the `graph` extra: `uv tool install "auditr[graph]"`), off by default.
+
+```toml
+[tool.auditor.graph]
+enabled = true   # extract per-file graph facts during `scan -i`
+```
+
+```bash
+auditor scan . -i                 # populates per-file graph facts (when enabled)
+auditor graph build .             # repo-level pass → nodes/edges/clusters
+auditor graph related get_user .  # top semantic neighbors of a symbol
+auditor graph neighbors get_user . --depth 2   # structural neighbors
+auditor graph concept tenant .    # symbols in the 'tenant' concept cluster
+auditor graph clusters .          # list concept clusters
+```
+
+Over MCP: `graph_build`, `graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters`.
+Deterministic + offline; the naming layer is tf-idf + LSI (no model). Embeddings, cross-repo
+linking, and the visual graph view are later phases.
+
 ### Pydantic (`framework="pydantic"`)
 
 Per-file rules gated to files that import `pydantic`: `PY-PYDANTIC-V1-CONFIG-CLASS` (`candidate`) —

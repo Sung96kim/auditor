@@ -5,6 +5,7 @@ Imported only via a guarded mount in cli/__init__, so the core CLI works without
 
 import time
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -20,6 +21,8 @@ graph_app = typer.Typer(
     no_args_is_help=True, help="Build + query the semantic code graph."
 )
 
+_Target = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
+
 
 async def _build(root: Path) -> dict:
     settings = load_config(root)
@@ -29,7 +32,7 @@ async def _build(root: Path) -> dict:
 
 
 @graph_app.command("build")
-def graph_build(target: Path = Path(".")) -> None:
+def graph_build(target: _Target = Path(".")) -> None:
     """Build the semantic graph from cached facts (run `scan -i` with graph enabled first)."""
     root = find_root(target)
     _echo_json(_run(_build(root), "building graph…"))
@@ -44,7 +47,7 @@ def _query_cmd(fn_name: str):
 
 
 @graph_app.command("related")
-def graph_related(symbol: str, target: Path = Path("."), limit: int = 10) -> None:
+def graph_related(symbol: str, target: _Target = Path("."), limit: int = 10) -> None:
     """Top semantic neighbors of a symbol (name + usage), ranked."""
     root = find_root(target)
     _echo_json(
@@ -53,7 +56,7 @@ def graph_related(symbol: str, target: Path = Path("."), limit: int = 10) -> Non
 
 
 @graph_app.command("neighbors")
-def graph_neighbors(symbol: str, target: Path = Path("."), depth: int = 1) -> None:
+def graph_neighbors(symbol: str, target: _Target = Path("."), depth: int = 1) -> None:
     """Structural neighbors (calls/overrides/...) up to a depth."""
     root = find_root(target)
     _echo_json(
@@ -62,14 +65,14 @@ def graph_neighbors(symbol: str, target: Path = Path("."), depth: int = 1) -> No
 
 
 @graph_app.command("concept")
-def graph_concept(term: str, target: Path = Path(".")) -> None:
+def graph_concept(term: str, target: _Target = Path(".")) -> None:
     """Symbols in the concept cluster matching a term."""
     root = find_root(target)
     _echo_json(_run(_query_cmd("concept")(root, term=term), "querying…"))
 
 
 @graph_app.command("clusters")
-def graph_clusters(target: Path = Path(".")) -> None:
+def graph_clusters(target: _Target = Path(".")) -> None:
     """List concept clusters (label + size)."""
     root = find_root(target)
     _echo_json(_run(_query_cmd("clusters")(root), "querying…"))
