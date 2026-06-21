@@ -16,6 +16,36 @@ def _module_dotted(rel_path: str) -> str:
     return stem.replace("/", ".")
 
 
+def _module_imports(
+    rel_path: str, tree: ast.Module
+) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+    pkg_parts = rel_path.split("/")[:-1]  # directory parts of the importing file
+    targets: list[str] = []
+    bindings: list[tuple[str, str]] = []
+    for node in tree.body:  # module level only
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                targets.append(alias.name)
+                local = alias.asname or alias.name.split(".")[0]
+                bindings.append((local, alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:  # relative
+                base_parts = pkg_parts[: len(pkg_parts) - (node.level - 1)]
+                base = ".".join(base_parts)
+                source = f"{base}.{node.module}" if node.module else base
+            else:
+                source = node.module or ""
+            if not source:
+                continue
+            targets.append(source)
+            for alias in node.names:
+                targets.append(f"{source}.{alias.name}")
+                local = alias.asname or alias.name
+                bindings.append((local, source))
+    # dedupe, preserve first-seen order
+    return tuple(dict.fromkeys(targets)), tuple(dict.fromkeys(bindings))
+
+
 def _ann_type_names(node: ast.expr | None) -> list[str]:
     if node is None:
         return []
@@ -46,6 +76,7 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
     )
     nodes: list[GraphNode] = []
 
+    imports, import_bindings = _module_imports(rel_path, tree)
     module_doc = symbol_document(
         name=_module_dotted(rel_path).rsplit(".", 1)[-1],
         args=[],
@@ -63,6 +94,8 @@ def extract_file_facts(rel_path: str, source: str, role: str) -> FileGraphFacts:
             module=rel_path,
             qualname=_module_dotted(rel_path),
             doc_tokens=tuple(module_doc),
+            imports=imports,
+            import_bindings=import_bindings,
             line=1,
             role=role,
         )

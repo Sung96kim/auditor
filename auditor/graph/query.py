@@ -8,6 +8,7 @@ _STRUCTURAL = [
     "callback_arg",
     "registered_in",
     "contains",
+    "imports",
 ]
 _SEMANTIC = ["name_similar", "usage_similar"]
 

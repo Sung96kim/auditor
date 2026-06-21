@@ -64,6 +64,27 @@ def test_callback_arg_edge():
     assert ("m0.py::caller", "m0.py::run") in _pairs(_edges(src), "callback_arg")
 
 
+def test_imports_edges_resolve_within_repo():
+    a = extract_file_facts(
+        "pkg/a.py", "from pkg import b\nimport pkg.c\n", "production"
+    )
+    b = extract_file_facts("pkg/b.py", "x = 1\n", "production")
+    c = extract_file_facts("pkg/c.py", "y = 2\n", "production")
+    nodes = [*a.nodes, *b.nodes, *c.nodes]
+    edges = resolve_structural(nodes)
+    imports = {(e.src, e.dst) for e in edges if e.kind == "imports"}
+    assert ("pkg/a.py", "pkg/b.py") in imports
+    assert ("pkg/a.py", "pkg/c.py") in imports
+
+
+def test_imports_edges_skip_unresolved_external():
+    a = extract_file_facts(
+        "pkg/a.py", "import numpy\nfrom requests import get\n", "production"
+    )
+    edges = resolve_structural(a.nodes)
+    assert not [e for e in edges if e.kind == "imports"]  # external -> no edge
+
+
 def test_module_contains_top_level_symbols():
     facts = extract_file_facts(
         "m.py",

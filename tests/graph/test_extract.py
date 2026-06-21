@@ -69,3 +69,25 @@ def test_extract_module_node_for_init_drops_init_segment():
     facts = extract_file_facts("pkg/__init__.py", "x = 1\n", "production")
     m = next(n for n in facts.nodes if n.kind == "module")
     assert m.qualname == "pkg"
+
+
+def test_extract_module_imports_absolute_and_relative():
+    src = (
+        "import a.b.c\n"
+        "from x.y import z\n"
+        "from . import sib\n"
+        "from .sub import thing as t\n"
+    )
+    facts = extract_file_facts("pkg/mod.py", src, "production")
+    m = next(n for n in facts.nodes if n.kind == "module")
+    # absolute
+    assert "a.b.c" in m.imports
+    assert "x.y" in m.imports and "x.y.z" in m.imports
+    # relative: pkg/mod.py is in package "pkg"
+    assert "pkg" in m.imports  # from . import sib  -> package itself
+    assert "pkg.sib" in m.imports  # ... and the imported name as a possible submodule
+    assert "pkg.sub" in m.imports and "pkg.sub.thing" in m.imports
+    # bindings (local name -> source module)
+    bindings = dict(m.import_bindings)
+    assert bindings["z"] == "x.y"
+    assert bindings["t"] == "pkg.sub"

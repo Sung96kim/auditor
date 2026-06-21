@@ -45,6 +45,10 @@ class GraphNode(BaseModel):
     bases: tuple[str, ...] = ()  # class nodes only: base short names
     method_names: tuple[str, ...] = ()  # class nodes only: own method names
     callback_names: tuple[str, ...] = ()  # short names this fn passes as a callback arg
+    imports: tuple[str, ...] = ()  # module nodes: candidate dotted import targets
+    import_bindings: tuple[
+        tuple[str, str], ...
+    ] = ()  # module nodes: (local_name, source_dotted)
     is_hof: bool = False
     is_stub: bool = False
     line: int = 0

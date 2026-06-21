@@ -41,6 +41,18 @@ def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
             if sym.module == mid:
                 add(mid, sym.id, EdgeKind.CONTAINS)
 
+    dotted_to_id = {}
+    for mid in sorted(modules):
+        stem = mid.removesuffix(".py")
+        if stem.endswith("/__init__"):
+            stem = stem[: -len("/__init__")]
+        dotted_to_id[stem.replace("/", ".")] = mid
+    for mid in sorted(modules):
+        for target in modules[mid].imports:
+            dst = dotted_to_id.get(target)
+            if dst is not None and dst != mid:
+                add(mid, dst, EdgeKind.IMPORTS)
+
     for n in fns.values():
         for callee in n.callees:
             for dst in resolve_name(callee, n.module, by_fn_name):
