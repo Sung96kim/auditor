@@ -106,6 +106,31 @@ def test_test_and_module_nodes_excluded_from_clusters():
     }  # only prod symbols are clustered
 
 
+async def test_build_personalizes_rank_against_tests(tmp_path):
+    prod_src = "def helper():\n    return shared()\n\ndef shared():\n    return 1\n"
+    test_src = "from prod import shared\n\ndef test_thing():\n    return shared()\n"
+    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
+    try:
+        await s.graph.set_facts(
+            "prod.py",
+            extract_file_facts("prod.py", prod_src, "production").model_dump_json(),
+            "h1",
+        )
+        await s.graph.set_facts(
+            "test_x.py",
+            extract_file_facts("test_x.py", test_src, "test").model_dump_json(),
+            "h2",
+        )
+        settings = AuditorSettings(
+            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+        )
+        await GraphBuilder().run(s, settings)
+        nodes = {n["node_id"]: n for n in await s.graph.nodes()}
+        assert nodes["prod.py::helper"]["rank"] > nodes["test_x.py::test_thing"]["rank"]
+    finally:
+        await s.aclose()
+
+
 async def test_dedup_property_getter_setter(tmp_path):
     facts = extract_file_facts("prop.py", PROP, "production")
     dup_nodes = [n for n in facts.nodes if n.id == "prop.py::Box.config"]

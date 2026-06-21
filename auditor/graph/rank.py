@@ -14,6 +14,7 @@ def pagerank(
     kinds: tuple[str, ...] = _STRUCTURAL,
     damping: float = 0.85,
     iters: int = 50,
+    personalization: set[str] | None = None,
 ) -> dict[str, float]:
     n = len(node_ids)
     if n == 0:
@@ -25,9 +26,22 @@ def pagerank(
         if e.kind in kset and e.src in idx and e.dst in idx:
             out[idx[e.src]].append(idx[e.dst])
 
-    rank = np.full(n, 1.0 / n)
+    p = np.zeros(n)
+    if personalization:
+        for nid in node_ids:
+            if nid in personalization:
+                p[idx[nid]] = 1.0
+        if (
+            p.sum() == 0
+        ):  # personalization set disjoint from nodes -> fall back to uniform
+            p[:] = 1.0
+    else:
+        p[:] = 1.0
+    p /= p.sum()
+
+    rank = p.copy()
     for _ in range(iters):
-        nxt = np.full(n, (1.0 - damping) / n)
+        nxt = (1.0 - damping) * p
         dangling = 0.0
         for i in range(n):
             if out[i]:
@@ -35,7 +49,7 @@ def pagerank(
                 for j in out[i]:
                     nxt[j] += share
             else:
-                dangling += damping * rank[i] / n
-        rank = nxt + dangling
+                dangling += damping * rank[i]
+        rank = nxt + dangling * p
     rank /= rank.sum()
     return {nid: float(rank[idx[nid]]) for nid in node_ids}

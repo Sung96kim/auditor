@@ -62,7 +62,8 @@ class GraphBuilder:
         all_edges = structural + name_edges + usage_edges
 
         proto = _protocol_method_ids(nodes)
-        ranks = pagerank([n.id for n in nodes], all_edges)
+        nonrank_test = {n.id for n in nodes if n.role not in _TEST_ROLES}
+        ranks = pagerank([n.id for n in nodes], all_edges, personalization=nonrank_test)
         labels, label_names = cluster_concepts(
             self._concept_nodes(nodes), all_edges, floor=cfg.cluster_floor
         )
