@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import Sigma from "sigma";
 import type { NodeHoverDrawingFunction } from "sigma/rendering";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import type Graph from "graphology";
 import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
 import { buildGraphologyGraph, type View } from "../graph/buildGraph";
@@ -11,7 +12,14 @@ interface GraphCanvasProps {
   view: View;
   onSelect: (nodeId: string) => void;
   onDrill: (clusterId: number) => void;
+  onFocus: (nodeId: string) => void;
+  selectedNodeId?: string | null;
   overlayOn?: boolean;
+}
+
+interface SelectionState {
+  id: string | null;
+  neighbors: Set<string>;
 }
 
 const drawDarkNodeHover: NodeHoverDrawingFunction = (context, data, settings) => {
@@ -75,11 +83,26 @@ export default function GraphCanvas({
   view,
   onSelect,
   onDrill,
+  onFocus,
+  selectedNodeId = null,
   overlayOn = false,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
+  const graphRef = useRef<Graph | null>(null);
 
+  // Stash callbacks in refs so the build effect does NOT depend on them
+  const onSelectRef = useRef(onSelect);
+  const onDrillRef = useRef(onDrill);
+  const onFocusRef = useRef(onFocus);
+  onSelectRef.current = onSelect;
+  onDrillRef.current = onDrill;
+  onFocusRef.current = onFocus;
+
+  // Selection state ref — read by nodeReducer/edgeReducer without triggering rebuild
+  const selectionRef = useRef<SelectionState>({ id: null, neighbors: new Set() });
+
+  // Build effect: only depends on payload, view, overlayOn — NOT selectedNodeId or callbacks
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -87,9 +110,11 @@ export default function GraphCanvas({
     if (sigmaRef.current) {
       sigmaRef.current.kill();
       sigmaRef.current = null;
+      graphRef.current = null;
     }
 
     const g = buildGraphologyGraph(payload, view);
+    graphRef.current = g;
 
     g.forEachNode((node) => {
       g.setNodeAttribute(node, "x", (hashToFloat(node, 1234) - 0.5) * 200);
@@ -107,7 +132,7 @@ export default function GraphCanvas({
       });
     }
 
-    // Build findings set for overlay (keyed on label since graph nodes use id or cluster:N)
+    // Build findings set for overlay
     const findingsSet = new Set<string>(
       payload.nodes
         .filter((n) => n.findings.length > 0)
@@ -125,8 +150,45 @@ export default function GraphCanvas({
       labelFont: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
       labelRenderedSizeThreshold: 0,
       defaultDrawNodeHover: drawDarkNodeHover,
-      nodeReducer: (_node, data) => {
-        const hasFinding = overlayOn && findingsSet.has(_node);
+      nodeReducer: (node, data) => {
+        const hasFinding = overlayOn && findingsSet.has(node);
+        const sel = selectionRef.current;
+
+        if (sel.id !== null) {
+          if (node === sel.id) {
+            // Selected node: bright accent, larger, border
+            return {
+              ...data,
+              color: THEME.accent,
+              size: ((data.size as number ?? 8) * 1.25),
+              label: data.label as string,
+              borderColor: THEME.accent,
+              borderSize: 0.5,
+            };
+          } else if (sel.neighbors.has(node)) {
+            // Direct neighbor: keep normal appearance
+            return {
+              ...data,
+              color: hasFinding ? "#EF4444" : (data.color as string ?? THEME.accent),
+              size: hasFinding ? ((data.size as number ?? 8) * 1.3) : (data.size as number ?? 8),
+              label: data.label as string,
+              borderColor: hasFinding ? "#EF4444" : (data.color as string ?? THEME.accent),
+              borderSize: 0.15,
+            };
+          } else {
+            // Dimmed: muted color, no label, smaller
+            return {
+              ...data,
+              color: "#2A3344",
+              size: (data.size as number ?? 8) * 0.7,
+              label: "",
+              borderColor: "#2A3344",
+              borderSize: 0.1,
+            };
+          }
+        }
+
+        // No selection: original findings-overlay logic
         return {
           ...data,
           color: hasFinding ? "#EF4444" : (data.color as string ?? THEME.accent),
@@ -138,14 +200,33 @@ export default function GraphCanvas({
           borderSize: hasFinding ? 0.4 : 0.15,
         };
       },
+      edgeReducer: (edge, data) => {
+        const sel = selectionRef.current;
+        if (sel.id === null) return data;
+
+        const src = g.source(edge);
+        const tgt = g.target(edge);
+        if (src === sel.id || tgt === sel.id) {
+          // Edge incident to selected node: accent-tinted, visible
+          return { ...data, color: THEME.accent + "66", hidden: false };
+        }
+        return { ...data, hidden: true };
+      },
     });
 
     sigma.on("clickNode", ({ node }: { node: string }) => {
       if (node.startsWith("cluster:")) {
         const clusterId = parseInt(node.replace("cluster:", ""), 10);
-        onDrill(clusterId);
+        onDrillRef.current(clusterId);
       } else {
-        onSelect(node);
+        onSelectRef.current(node);
+      }
+    });
+
+    sigma.on("doubleClickNode", (e: { node: string; preventSigmaDefault?: () => void }) => {
+      if (e.preventSigmaDefault) e.preventSigmaDefault();
+      if (!e.node.startsWith("cluster:")) {
+        onFocusRef.current(e.node);
       }
     });
 
@@ -154,8 +235,24 @@ export default function GraphCanvas({
     return () => {
       sigma.kill();
       sigmaRef.current = null;
+      graphRef.current = null;
     };
-  }, [payload, view, onSelect, onDrill, overlayOn]);
+  }, [payload, view, overlayOn]);
+
+  // Selection effect: updates highlight WITHOUT rebuilding or re-running layout
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    const g = graphRef.current;
+    if (!sigma || !g) return;
+
+    const neighbors = new Set<string>(
+      selectedNodeId && g.hasNode(selectedNodeId)
+        ? g.neighbors(selectedNodeId)
+        : []
+    );
+    selectionRef.current = { id: selectedNodeId, neighbors };
+    sigma.refresh();
+  }, [selectedNodeId]);
 
   return (
     <div

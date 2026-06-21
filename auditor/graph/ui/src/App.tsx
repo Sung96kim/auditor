@@ -54,15 +54,14 @@ export default function App() {
     return { ...data, nodes, edges };
   }, [data, filters.langs, filters.types, searchQuery]);
 
-  /** Effective view: use ego view when a node is selected (respects depth slider). */
-  const effectiveView = useMemo<View>(() => {
-    if (selectedNodeId) {
-      return { mode: "ego", nodeId: selectedNodeId, depth: filters.depth };
-    }
-    return view;
-  }, [selectedNodeId, view, filters.depth]);
+  /** Effective view: selection no longer drives view; view is the navigation source of truth. */
+  const effectiveView = useMemo<View>(() => view, [view]);
 
   const handleSelect = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId);
+  }, []);
+
+  const handleFocus = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
     setView({ mode: "ego", nodeId, depth: filters.depth });
   }, [filters.depth]);
@@ -266,6 +265,8 @@ export default function App() {
             view={effectiveView}
             onSelect={handleSelect}
             onDrill={handleDrill}
+            onFocus={handleFocus}
+            selectedNodeId={selectedNodeId}
             overlayOn={filters.overlayOn}
           />
 
@@ -322,7 +323,7 @@ export default function App() {
               <circle cx="11" cy="11" r="7" />
               <circle cx="11" cy="11" r="2.5" />
             </svg>
-            Click a node to inspect · drag to reposition · scroll to zoom
+            Click to select · double-click to focus · drag to move · scroll to zoom
           </div>
         </div>
 
@@ -361,6 +362,7 @@ export default function App() {
             allNodes={data.nodes}
             edges={data.edges}
             onSelectNeighbor={handleSelect}
+            onFocus={handleFocus}
           />
         </div>
       </div>

@@ -6,6 +6,7 @@ interface DetailPanelProps {
   allNodes: GNode[];
   edges: GEdge[];
   onSelectNeighbor: (nodeId: string) => void;
+  onFocus: (nodeId: string) => void;
 }
 
 export default function DetailPanel({
@@ -13,6 +14,7 @@ export default function DetailPanel({
   allNodes,
   edges,
   onSelectNeighbor,
+  onFocus,
 }: DetailPanelProps) {
   if (!node) {
     return (
@@ -151,6 +153,28 @@ export default function DetailPanel({
         >
           {node.id}
         </div>
+
+        {/* Focus button */}
+        <button
+          onClick={() => onFocus(node.id)}
+          style={{
+            display: "block",
+            width: "100%",
+            marginBottom: "10px",
+            padding: "5px 10px",
+            background: THEME.accent,
+            border: "none",
+            borderRadius: "6px",
+            color: "#fff",
+            fontSize: "12px",
+            fontFamily: "monospace",
+            fontWeight: 600,
+            cursor: "pointer",
+            letterSpacing: "0.03em",
+          }}
+        >
+          Focus ego graph
+        </button>
 
         {/* Meta rows */}
         <div
