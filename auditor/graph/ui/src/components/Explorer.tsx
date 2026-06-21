@@ -1,0 +1,138 @@
+import type { GNode } from "../types";
+import { THEME } from "../theme";
+
+interface ExplorerProps {
+  nodes: GNode[];
+  query: string;
+  onQueryChange: (q: string) => void;
+  onSelect: (nodeId: string) => void;
+  selectedNodeId: string | null;
+}
+
+export default function Explorer({
+  nodes,
+  query,
+  onQueryChange,
+  onSelect,
+  selectedNodeId,
+}: ExplorerProps) {
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? nodes.filter(
+        (n) =>
+          n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)
+      )
+    : nodes;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+        flex: 1,
+      }}
+    >
+      {/* Search input */}
+      <div style={{ padding: "8px 10px", flexShrink: 0 }}>
+        <input
+          type="text"
+          placeholder="Search symbols…"
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            background: THEME.bgElevated,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: "6px",
+            color: "#c8d3e0",
+            fontSize: "12px",
+            fontFamily: "monospace",
+            padding: "6px 9px",
+            outline: "none",
+          }}
+        />
+      </div>
+
+      {/* Results list */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          minHeight: 0,
+        }}
+      >
+        {filtered.length === 0 ? (
+          <div
+            style={{
+              padding: "24px 16px",
+              textAlign: "center",
+              color: "#4B5563",
+              fontSize: "12px",
+            }}
+          >
+            No matching nodes
+          </div>
+        ) : (
+          filtered.map((n) => (
+            <div
+              key={n.id}
+              onClick={() => onSelect(n.id)}
+              style={{
+                padding: "6px 12px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                background:
+                  selectedNodeId === n.id ? THEME.bgElevated : "transparent",
+                borderLeft:
+                  selectedNodeId === n.id
+                    ? `2px solid ${THEME.accent}`
+                    : "2px solid transparent",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "10px",
+                  color: "#64748b",
+                  flexShrink: 0,
+                  minWidth: "44px",
+                }}
+              >
+                {n.type}
+              </span>
+              <span
+                style={{
+                  fontSize: "12px",
+                  color: "#c8d3e0",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  flex: 1,
+                }}
+              >
+                {n.label}
+              </span>
+              {n.findings.length > 0 && (
+                <span
+                  style={{
+                    fontSize: "10px",
+                    background: "#7C2020",
+                    color: "#FCA5A5",
+                    borderRadius: "4px",
+                    padding: "1px 5px",
+                    flexShrink: 0,
+                  }}
+                >
+                  {n.findings.length}
+                </span>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}

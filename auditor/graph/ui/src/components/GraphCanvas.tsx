@@ -10,6 +10,7 @@ interface GraphCanvasProps {
   view: View;
   onSelect: (nodeId: string) => void;
   onDrill: (clusterId: number) => void;
+  overlayOn?: boolean;
 }
 
 /** Simple deterministic hash of a string → float in [0, 1] */
@@ -18,11 +19,16 @@ function hashToFloat(s: string, seed: number): number {
   for (let i = 0; i < s.length; i++) {
     h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
   }
-  // Convert signed int32 to [0,1]
   return ((h >>> 0) / 0xffffffff);
 }
 
-export default function GraphCanvas({ payload, view, onSelect, onDrill }: GraphCanvasProps) {
+export default function GraphCanvas({
+  payload,
+  view,
+  onSelect,
+  onDrill,
+  overlayOn = false,
+}: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
 
@@ -30,7 +36,6 @@ export default function GraphCanvas({ payload, view, onSelect, onDrill }: GraphC
     const container = containerRef.current;
     if (!container) return;
 
-    // Kill previous sigma instance
     if (sigmaRef.current) {
       sigmaRef.current.kill();
       sigmaRef.current = null;
@@ -38,13 +43,11 @@ export default function GraphCanvas({ payload, view, onSelect, onDrill }: GraphC
 
     const g = buildGraphologyGraph(payload, view);
 
-    // Assign seeded initial positions before layout
     g.forEachNode((node) => {
       g.setNodeAttribute(node, "x", (hashToFloat(node, 1234) - 0.5) * 200);
       g.setNodeAttribute(node, "y", (hashToFloat(node, 5678) - 0.5) * 200);
     });
 
-    // Run forceAtlas2 for fixed iterations (only if graph has nodes)
     if (g.order > 0) {
       forceAtlas2.assign(g, {
         iterations: 100,
@@ -56,6 +59,13 @@ export default function GraphCanvas({ payload, view, onSelect, onDrill }: GraphC
       });
     }
 
+    // Build findings set for overlay (keyed on label since graph nodes use id or cluster:N)
+    const findingsSet = new Set<string>(
+      payload.nodes
+        .filter((n) => n.findings.length > 0)
+        .map((n) => n.id)
+    );
+
     container.style.backgroundColor = THEME.bgCanvas;
 
     const sigma = new Sigma(g, container, {
@@ -63,14 +73,19 @@ export default function GraphCanvas({ payload, view, onSelect, onDrill }: GraphC
       defaultEdgeColor: "#1B2230",
       labelColor: { color: "#c8d3e0" },
       labelSize: 11,
-      nodeReducer: (_node, data) => ({
-        ...data,
-        color: data.color as string ?? THEME.accent,
-        size: data.size as number ?? 8,
-        label: data.label as string,
-        borderColor: (data.color as string ?? THEME.accent),
-        borderSize: 0.15,
-      }),
+      nodeReducer: (_node, data) => {
+        const hasFinding = overlayOn && findingsSet.has(_node);
+        return {
+          ...data,
+          color: hasFinding ? "#EF4444" : (data.color as string ?? THEME.accent),
+          size: hasFinding
+            ? ((data.size as number ?? 8) * 1.3)
+            : (data.size as number ?? 8),
+          label: data.label as string,
+          borderColor: hasFinding ? "#EF4444" : (data.color as string ?? THEME.accent),
+          borderSize: hasFinding ? 0.4 : 0.15,
+        };
+      },
     });
 
     sigma.on("clickNode", ({ node }: { node: string }) => {
@@ -88,7 +103,7 @@ export default function GraphCanvas({ payload, view, onSelect, onDrill }: GraphC
       sigma.kill();
       sigmaRef.current = null;
     };
-  }, [payload, view, onSelect, onDrill]);
+  }, [payload, view, onSelect, onDrill, overlayOn]);
 
   return (
     <div
