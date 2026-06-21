@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import Sigma from "sigma";
+import type { NodeHoverDrawingFunction } from "sigma/rendering";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
@@ -12,6 +13,53 @@ interface GraphCanvasProps {
   onDrill: (clusterId: number) => void;
   overlayOn?: boolean;
 }
+
+const drawDarkNodeHover: NodeHoverDrawingFunction = (context, data, settings) => {
+  const size = settings.labelSize;
+  const font = settings.labelFont;
+  const weight = settings.labelWeight;
+  context.font = `${weight} ${size}px ${font}`;
+
+  context.fillStyle = "#161C28";
+  context.shadowOffsetX = 0;
+  context.shadowOffsetY = 0;
+  context.shadowBlur = 8;
+  context.shadowColor = "#000";
+  const PADDING = 4;
+  if (typeof data.label === "string" && data.label) {
+    const textWidth = context.measureText(data.label).width;
+    const boxWidth = Math.round(textWidth + 9);
+    const boxHeight = Math.round(size + 2 * PADDING);
+    const radius = Math.max(data.size, size / 2) + PADDING;
+    const angleRadian = Math.asin(boxHeight / 2 / radius);
+    const xDeltaCoord = Math.sqrt(Math.abs(radius ** 2 - (boxHeight / 2) ** 2));
+    context.beginPath();
+    context.moveTo(data.x + xDeltaCoord, data.y + boxHeight / 2);
+    context.lineTo(data.x + radius + boxWidth, data.y + boxHeight / 2);
+    context.lineTo(data.x + radius + boxWidth, data.y - boxHeight / 2);
+    context.lineTo(data.x + xDeltaCoord, data.y - boxHeight / 2);
+    context.arc(data.x, data.y, radius, angleRadian, -angleRadian);
+    context.closePath();
+    context.fill();
+  } else {
+    context.beginPath();
+    context.arc(data.x, data.y, data.size + PADDING, 0, Math.PI * 2);
+    context.closePath();
+    context.fill();
+  }
+  context.shadowBlur = 0;
+
+  context.fillStyle = data.color;
+  context.beginPath();
+  context.arc(data.x, data.y, data.size, 0, Math.PI * 2);
+  context.closePath();
+  context.fill();
+
+  if (typeof data.label === "string" && data.label) {
+    context.fillStyle = "#E6EDF5";
+    context.fillText(data.label, data.x + data.size + 3, data.y + size / 3);
+  }
+};
 
 /** Simple deterministic hash of a string → float in [0, 1] */
 function hashToFloat(s: string, seed: number): number {
@@ -76,6 +124,7 @@ export default function GraphCanvas({
       labelWeight: "600",
       labelFont: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
       labelRenderedSizeThreshold: 0,
+      defaultDrawNodeHover: drawDarkNodeHover,
       nodeReducer: (_node, data) => {
         const hasFinding = overlayOn && findingsSet.has(_node);
         return {
