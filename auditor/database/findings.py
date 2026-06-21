@@ -173,7 +173,7 @@ class FindingsDB(BaseDB):
     async def by_rule_prefix(self, prefix: str) -> list[dict]:
         rows = await self._worker.run(
             lambda c: c.execute(
-                "SELECT rule_id, evidence FROM findings WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
+                "SELECT rule_id, message, evidence FROM findings WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
                 (self.repo, f"{prefix}%"),
             ).fetchall()
         )

@@ -288,11 +288,17 @@ def rules_list(
 
 
 if _GRAPH_OK:
+    _GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
     @mcp.tool
-    async def graph_build(path: str = ".") -> dict:
-        """Build the semantic graph from cached facts (run scan with graph enabled first)."""
+    async def graph_build(path: str = ".", scan: bool = True) -> dict:
+        """Build the semantic graph. By default it first runs a forced incremental scan (graph
+        extraction on) so it works even if the repo never enabled the [graph] config — pass
+        scan=False to build from existing cached facts only. Returns {nodes, edges, clusters,
+        findings}."""
         root = find_root(Path(path))
+        if scan:
+            await audit_target(root, incremental=True, config_overrides=_GRAPH_OVERRIDE)
         settings = load_config(root)
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             await index.repos.register(time.time())
@@ -309,19 +315,34 @@ if _GRAPH_OK:
 
     @mcp.tool
     async def graph_neighbors(
-        symbol: str, path: str = ".", depth: int = 1
+        symbol: str, path: str = ".", depth: int = 1, limit: int = 25
     ) -> list[dict]:
-        """Structural neighbors (calls/overrides/inherits/...) up to a depth."""
+        """Structural neighbors (calls/overrides/inherits/...) up to a depth. Capped at ``limit``
+        (closest hops first) to keep responses small."""
         root = find_root(Path(path))
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-            return await GraphQuery(index).neighbors(symbol, depth=depth)
+            hits = await GraphQuery(index).neighbors(symbol, depth=depth)
+        return hits[:limit]
 
     @mcp.tool
-    async def graph_concept(term: str, path: str = ".") -> dict:
-        """The concept cluster best matching a term, with its members (rank-ordered)."""
+    async def graph_concept(term: str, path: str = ".", limit: int = 25) -> dict:
+        """The concept cluster best matching a term. Members (rank-ordered) are capped at
+        ``limit``; ``member_count`` is the true total. Returns {cluster_id, label, member_count,
+        members, shown}."""
         root = find_root(Path(path))
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-            return await GraphQuery(index).concept(term)
+            concept = await GraphQuery(index).concept(term)
+        if not concept:
+            return {}
+        members = concept.get("members", [])
+        capped = members[:limit]
+        return {
+            "cluster_id": concept["cluster_id"],
+            "label": concept["label"],
+            "member_count": len(members),
+            "members": capped,
+            "shown": len(capped),
+        }
 
     @mcp.tool
     async def graph_clusters(path: str = ".") -> list[dict]:
@@ -329,6 +350,37 @@ if _GRAPH_OK:
         root = find_root(Path(path))
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return await GraphQuery(index).clusters()
+
+    @mcp.tool
+    async def graph_overview(path: str = ".") -> dict:
+        """One compact call to orient: counts, the largest clusters, and the worst graph hubs.
+        Returns {nodes, edges, clusters, top_clusters, god_concepts, bottlenecks}. If the graph
+        isn't built yet (0 nodes), the counts are zero and the lists empty — no error."""
+        root = find_root(Path(path))
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            nodes = await index.graph.nodes()
+            edges = await index.graph.all_edges()
+            clusters = await index.graph.clusters()
+            findings = await index.findings.by_rule_prefix("GRAPH-")
+        god_concepts: list[str] = []
+        bottlenecks: list[str] = []
+        for f in findings:
+            if f["rule_id"] != "GRAPH-GOD-CONCEPT":
+                continue
+            if "bottleneck" in f["message"]:
+                bottlenecks.append(f["evidence"])
+            elif "fan-out" in f["message"]:
+                god_concepts.append(f["evidence"])
+        return {
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "clusters": len(clusters),
+            "top_clusters": [
+                {"label": c["label"], "size": c["member_count"]} for c in clusters[:8]
+            ],
+            "god_concepts": god_concepts[:5],
+            "bottlenecks": bottlenecks[:5],
+        }
 
 
 def main() -> None:
