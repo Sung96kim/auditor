@@ -56,11 +56,16 @@ def open_url(url: str) -> bool:
 class _ReportHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         body = self.server.payload  # type: ignore[attr-defined]
-        self.send_response(200)
-        self.send_header("Content-Type", f"{self.server.content_type}; charset=utf-8")  # type: ignore[attr-defined]
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", f"{self.server.content_type}; charset=utf-8")  # type: ignore[attr-defined]
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # the browser closed the connection mid-response (reload / navigate away /
+            # cancelled a large payload) — harmless, so don't let it surface as a traceback.
+            pass
 
     def log_message(self, *_: object) -> None:  # silence default stderr logging
         pass
