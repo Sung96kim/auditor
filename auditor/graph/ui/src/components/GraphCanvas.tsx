@@ -145,6 +145,9 @@ export default function GraphCanvas({
 
   const selectionRef = useRef<SelectionState>({ id: null, neighbors: new Set() });
   const hoveredLabelRef = useRef<string | null>(null);
+  const hoveredEdgeRef = useRef<{ edge: string; source: string; target: string } | null>(
+    null,
+  );
   // camera zoom (sigma ratio: smaller = zoomed in). When a path is selected we hide the
   // non-path labels, but reveal them once the user zooms in past this ratio so they can read
   // the neighbourhood up close. Keyed off zoom (stable during the selection tween) → no flicker.
@@ -270,6 +273,7 @@ export default function GraphCanvas({
 
     const sigma = new Sigma(g, container, {
       renderEdgeLabels: false,
+      enableEdgeEvents: true,
       defaultEdgeColor: "#1B2230",
       labelColor: { attribute: "labelColor", color: "#E6EDF5" },
       labelSize: LABEL_SIZE,
@@ -350,18 +354,28 @@ export default function GraphCanvas({
           };
         }
 
+        // endpoints of a hovered edge get an accent ring + their label, so the whole path lights up
+        const eh = hoveredEdgeRef.current;
+        const onHoveredEdge = eh != null && (node === eh.source || node === eh.target);
+        const label = onHoveredEdge
+          ? (data.label as string)
+          : (resolved.label as string);
         return {
           ...resolved,
+          label,
           size: lerp(0, resolved.size as number, ep),
           color: alphaColor(resolved.color as string, ep),
-          borderColor: alphaColor(resolved.borderColor as string, ep),
+          borderColor: onHoveredEdge
+            ? THEME.accent
+            : alphaColor(resolved.borderColor as string, ep),
+          borderSize: onHoveredEdge ? 0.5 : (resolved.borderSize as number),
           // bypass sigma's label-occlusion grid so a node's label is never silently
           // culled — force it whenever the node has a (non-dimmed) label
           forceLabel:
-            typeof resolved.label === "string" && (resolved.label as string).length > 0,
-          // hovering a node's label flags it highlighted so it gets the same hover box
-          // as hovering the circle (sigma renders highlighted nodes via the hover renderer)
-          highlighted: node === hoveredLabelRef.current,
+            typeof label === "string" && label.length > 0,
+          // hovering a node's label (or an edge touching it) flags it highlighted so it gets
+          // the same hover box (sigma renders highlighted nodes via the hover renderer)
+          highlighted: node === hoveredLabelRef.current || onHoveredEdge,
         };
       },
       edgeReducer: (edge, data) => {
@@ -369,6 +383,10 @@ export default function GraphCanvas({
         const rawWeight = (data.weight as number | undefined) ?? 1;
         const baseAlpha = Math.min(0.12 + (rawWeight / 10) * 0.43, 0.55);
 
+        // hovering an edge highlights that edge + its two endpoints (the path)
+        if (hoveredEdgeRef.current?.edge === edge) {
+          return { ...data, color: THEME.accent, size: (data.size as number ?? 1) + 1.5, zIndex: 2 };
+        }
         if (sel.id === null) {
           return { ...data, color: hexAlpha("#4A5568", baseAlpha) };
         }
@@ -380,6 +398,21 @@ export default function GraphCanvas({
         // non-incident edges are dimmed, never hidden, so the graph keeps its shape
         return { ...data, color: hexAlpha("#222A38", 0.22) };
       },
+    });
+
+    sigma.on("enterEdge", ({ edge }: { edge: string }) => {
+      hoveredEdgeRef.current = {
+        edge,
+        source: g.source(edge),
+        target: g.target(edge),
+      };
+      container.style.cursor = "pointer";
+      sigma.refresh();
+    });
+    sigma.on("leaveEdge", () => {
+      hoveredEdgeRef.current = null;
+      container.style.cursor = "";
+      sigma.refresh();
     });
 
     sigma.on("clickNode", ({ node }: { node: string }) => {
