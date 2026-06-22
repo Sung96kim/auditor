@@ -204,29 +204,69 @@ export default function GraphCanvas({
     const g = buildGraphologyGraph(payload, view);
     graphRef.current = g;
 
-    // Cluster-aware seeding: give each cluster its own anchor on a ring and start its members
-    // near it (small deterministic jitter). ForceAtlas then refines from a grouped starting
-    // point, so same-cluster nodes settle together and distinct clusters read as separate
-    // groups — instead of everything starting in one random blob.
-    const clusterIds = new Set<number>();
-    g.forEachNode((_n, a) => {
-      if (typeof a.cluster === "number") clusterIds.add(a.cluster as number);
-    });
-    const anchors = new Map<number, { x: number; y: number }>();
-    const sortedClusterIds = [...clusterIds].sort((x, y) => x - y);
-    const ringR = 100 + sortedClusterIds.length * 28;
-    sortedClusterIds.forEach((c, i) => {
-      const ang = (2 * Math.PI * i) / Math.max(1, sortedClusterIds.length);
-      anchors.set(c, { x: Math.cos(ang) * ringR, y: Math.sin(ang) * ringR });
-    });
-    g.forEachNode((node, a) => {
-      const anchor =
-        typeof a.cluster === "number" ? anchors.get(a.cluster as number) : undefined;
-      const jx = (hashToFloat(node, 1234) - 0.5) * 110;
-      const jy = (hashToFloat(node, 5678) - 0.5) * 110;
-      g.setNodeAttribute(node, "x", (anchor?.x ?? 0) + jx);
-      g.setNodeAttribute(node, "y", (anchor?.y ?? 0) + jy);
-    });
+    // Layout. Ego views get a deterministic CONCENTRIC layout (focused node centred, neighbours
+    // on rings by hop distance) — far more readable for "what connects to this" than a force
+    // tangle. Other views get cluster-aware force seeding.
+    let radialEgo = false;
+    if (view.mode === "ego" && g.hasNode(view.nodeId)) {
+      radialEgo = true;
+      const center = view.nodeId;
+      const hop = new Map<string, number>([[center, 0]]);
+      let frontier = [center];
+      while (frontier.length) {
+        const nxt: string[] = [];
+        for (const c of frontier)
+          for (const m of g.neighbors(c))
+            if (!hop.has(m)) {
+              hop.set(m, (hop.get(c) ?? 0) + 1);
+              nxt.push(m);
+            }
+        frontier = nxt;
+      }
+      const byHop = new Map<number, string[]>();
+      g.forEachNode((node) => {
+        const h = hop.get(node) ?? 1;
+        const list = byHop.get(h);
+        if (list) list.push(node);
+        else byHop.set(h, [node]);
+      });
+      const RING = 200;
+      for (const [h, list] of byHop) {
+        if (h === 0) {
+          g.setNodeAttribute(center, "x", 0);
+          g.setNodeAttribute(center, "y", 0);
+          continue;
+        }
+        list.sort();
+        list.forEach((node, i) => {
+          const ang = (2 * Math.PI * i) / list.length + h * 0.6; // offset rings so spokes don't align
+          g.setNodeAttribute(node, "x", Math.cos(ang) * RING * h);
+          g.setNodeAttribute(node, "y", Math.sin(ang) * RING * h);
+        });
+      }
+    } else {
+      // Cluster-aware seeding: each cluster gets its own anchor on a ring and its members start
+      // near it; ForceAtlas then refines from a grouped start so clusters read as groups.
+      const clusterIds = new Set<number>();
+      g.forEachNode((_n, a) => {
+        if (typeof a.cluster === "number") clusterIds.add(a.cluster as number);
+      });
+      const anchors = new Map<number, { x: number; y: number }>();
+      const sortedClusterIds = [...clusterIds].sort((x, y) => x - y);
+      const ringR = 100 + sortedClusterIds.length * 28;
+      sortedClusterIds.forEach((c, i) => {
+        const ang = (2 * Math.PI * i) / Math.max(1, sortedClusterIds.length);
+        anchors.set(c, { x: Math.cos(ang) * ringR, y: Math.sin(ang) * ringR });
+      });
+      g.forEachNode((node, a) => {
+        const anchor =
+          typeof a.cluster === "number" ? anchors.get(a.cluster as number) : undefined;
+        const jx = (hashToFloat(node, 1234) - 0.5) * 110;
+        const jy = (hashToFloat(node, 5678) - 0.5) * 110;
+        g.setNodeAttribute(node, "x", (anchor?.x ?? 0) + jx);
+        g.setNodeAttribute(node, "y", (anchor?.y ?? 0) + jy);
+      });
+    }
 
     // ForceAtlas2 is the layout cost. A deep ego (high hop depth) pulls in many nodes, so
     // scale iterations down and switch on the Barnes-Hut O(n log n) approximation past a few
@@ -234,7 +274,7 @@ export default function GraphCanvas({
     // Needs ≥2 nodes AND ≥1 edge: LinLog / outbound-attraction divide by node degree, which is
     // NaN on a single/edgeless graph (e.g. an ego of a node with no structural neighbours) — and
     // NaN positions make sigma render nothing ("the app disappears").
-    if (g.order > 1 && g.size > 0) {
+    if (!radialEgo && g.order > 1 && g.size > 0) {
       const n = g.order;
       const iterations = n > 600 ? 50 : n > 200 ? 90 : 150;
       try {
@@ -564,7 +604,10 @@ export default function GraphCanvas({
       selectionTweenRef.current = { active: false, startTime: 0, duration: 150, progress: 1 };
       sigma.refresh();
     }
-  }, [selectedNodeId]);
+    // also re-run when the graph rebuilds (view/payload): focusing the already-selected node
+    // changes the graph but not selectedNodeId, so neighbours must be recomputed against the
+    // NEW graph — otherwise they go stale and the new node's connections don't show.
+  }, [selectedNodeId, view, payload]);
 
   useEffect(() => {
     overlayOnRef.current = overlayOn;
