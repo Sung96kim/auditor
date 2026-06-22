@@ -106,7 +106,7 @@ function hexAlpha(hex: string, alpha: number): string {
 }
 
 function alphaColor(color: string, alpha: number): string {
-  if (alpha >= 1) return color;
+  if (!color || alpha >= 1) return color;
   if (color.startsWith("#") && color.length === 7) {
     return hexAlpha(color, alpha);
   }
@@ -326,8 +326,10 @@ export default function GraphCanvas({
           } else {
             // non-path node: hidden. Selecting isolates the path — the selected node, its
             // direct neighbours, and the connecting edges — and hides everything else until
-            // you deselect (click the background or press Esc).
-            resolved = { ...data, hidden: true, label: "" };
+            // you deselect (click the background or press Esc). Return early: a hidden node
+            // skips the shared size/colour processing below (which would read a borderColor it
+            // doesn't have).
+            return { ...data, hidden: true, label: "" };
           }
         } else {
           const baseSize = (data.size as number) ?? 8;
