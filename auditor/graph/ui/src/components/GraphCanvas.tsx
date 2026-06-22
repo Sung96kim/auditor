@@ -219,9 +219,19 @@ export default function GraphCanvas({
     });
 
     if (g.order > 0) {
+      // ForceAtlas2 is the layout cost. A deep ego (high hop depth) pulls in many nodes, so
+      // scale iterations down and switch on the Barnes-Hut O(n log n) approximation past a few
+      // hundred nodes — otherwise the O(n²) repulsion at 100 iterations blocks the main thread.
+      const n = g.order;
+      const iterations = n > 600 ? 30 : n > 200 ? 60 : 100;
       forceAtlas2.assign(g, {
-        iterations: 100,
-        settings: { gravity: 1, scalingRatio: 2, slowDown: 10 },
+        iterations,
+        settings: {
+          gravity: 1,
+          scalingRatio: 2,
+          slowDown: 10,
+          barnesHutOptimize: n > 300,
+        },
       });
     }
 
