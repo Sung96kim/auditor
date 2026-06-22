@@ -6,6 +6,7 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import type Graph from "graphology";
 import { createNodeBorderProgram } from "@sigma/node-border";
 import { EdgeCurvedArrowProgram } from "@sigma/edge-curve";
+import { graphlib, layout as dagreLayout } from "@dagrejs/dagre";
 import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
 import { buildGraphologyGraph, type View } from "../graph/buildGraph";
@@ -204,12 +205,12 @@ export default function GraphCanvas({
     const g = buildGraphologyGraph(payload, view);
     graphRef.current = g;
 
-    // Layout. Ego views get a deterministic CONCENTRIC layout (focused node centred, neighbours
-    // on rings by hop distance) — far more readable for "what connects to this" than a force
-    // tangle. Other views get cluster-aware force seeding.
-    let radialEgo = false;
+    // Layout. Ego → deterministic CONCENTRIC layout (focused node centred, neighbours on hop
+    // rings). Cluster/overview → a layered DAG (dagre): flow runs one direction (left→right) so
+    // start→end reads clearly instead of a force tangle. Force layout is only the fallback.
+    let positioned = false;
     if (view.mode === "ego" && g.hasNode(view.nodeId)) {
-      radialEgo = true;
+      positioned = true;
       const center = view.nodeId;
       const hop = new Map<string, number>([[center, 0]]);
       let frontier = [center];
@@ -244,9 +245,38 @@ export default function GraphCanvas({
           g.setNodeAttribute(node, "y", Math.sin(ang) * RING * h);
         });
       }
-    } else {
-      // Cluster-aware seeding: each cluster gets its own anchor on a ring and its members start
-      // near it; ForceAtlas then refines from a grouped start so clusters read as groups.
+    } else if (g.order > 1 && g.size > 0) {
+      // Layered DAG (dagre): rank nodes by edge direction so flow runs left→right and start→end
+      // reads in one direction. dagre breaks cycles + minimises crossings.
+      try {
+        const dg = new graphlib.Graph();
+        dg.setGraph({ rankdir: "LR", nodesep: 26, ranksep: 210, marginx: 20, marginy: 20 });
+        dg.setDefaultEdgeLabel(() => ({}));
+        g.forEachNode((node, a) => {
+          const sz = Math.max(14, (a.size as number) ?? 8);
+          dg.setNode(node, { width: sz, height: sz });
+        });
+        g.forEachEdge((_e: string, _a: object, s: string, t: string) => {
+          dg.setEdge(s, t);
+        });
+        dagreLayout(dg);
+        dg.nodes().forEach((node: string) => {
+          const p = dg.node(node) as { x: number; y: number } | undefined;
+          if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+            g.setNodeAttribute(node, "x", p.x);
+            g.setNodeAttribute(node, "y", p.y);
+          }
+        });
+        positioned = true;
+      } catch {
+        positioned = false; // fall back to force seeding below
+      }
+    }
+
+    if (!positioned) {
+      // Fallback: cluster-aware force seeding + ForceAtlas2 (LinLog separates clusters). Guarded
+      // for ≥2 nodes + ≥1 edge — LinLog/outbound divide by degree → NaN on a tiny/edgeless graph,
+      // and NaN positions blank the canvas.
       const clusterIds = new Set<number>();
       g.forEachNode((_n, a) => {
         if (typeof a.cluster === "number") clusterIds.add(a.cluster as number);
@@ -266,34 +296,23 @@ export default function GraphCanvas({
         g.setNodeAttribute(node, "x", (anchor?.x ?? 0) + jx);
         g.setNodeAttribute(node, "y", (anchor?.y ?? 0) + jy);
       });
-    }
-
-    // ForceAtlas2 is the layout cost. A deep ego (high hop depth) pulls in many nodes, so
-    // scale iterations down and switch on the Barnes-Hut O(n log n) approximation past a few
-    // hundred nodes — otherwise the O(n²) repulsion at 100 iterations blocks the main thread.
-    // Needs ≥2 nodes AND ≥1 edge: LinLog / outbound-attraction divide by node degree, which is
-    // NaN on a single/edgeless graph (e.g. an ego of a node with no structural neighbours) — and
-    // NaN positions make sigma render nothing ("the app disappears").
-    if (!radialEgo && g.order > 1 && g.size > 0) {
-      const n = g.order;
-      const iterations = n > 600 ? 50 : n > 200 ? 90 : 150;
-      try {
-        forceAtlas2.assign(g, {
-          iterations,
-          settings: {
-            // inferSettings tunes gravity/scalingRatio to graph size; LinLog mode is the strong
-            // cluster-separator (tightens groups, opens whitespace between them) and
-            // outbound-attraction spreads hubs — so the graph reads as distinct groups, not a
-            // single hairball. Barnes-Hut keeps big/deep graphs fast.
-            ...forceAtlas2.inferSettings(g),
-            linLogMode: true,
-            outboundAttractionDistribution: true,
-            adjustSizes: true,
-            barnesHutOptimize: n > 300,
-          },
-        });
-      } catch {
-        // a degenerate layout must never crash the view — fall back to seeded positions
+      if (g.order > 1 && g.size > 0) {
+        const n = g.order;
+        const iterations = n > 600 ? 50 : n > 200 ? 90 : 150;
+        try {
+          forceAtlas2.assign(g, {
+            iterations,
+            settings: {
+              ...forceAtlas2.inferSettings(g),
+              linLogMode: true,
+              outboundAttractionDistribution: true,
+              adjustSizes: true,
+              barnesHutOptimize: n > 300,
+            },
+          });
+        } catch {
+          // degenerate layout must never crash the view — keep seeded positions
+        }
       }
     }
     // Safety net: never hand sigma a non-finite coordinate (a degenerate layout would blank the
