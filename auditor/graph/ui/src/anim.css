@@ -160,7 +160,14 @@
 /* ─── TypeFilter / Controls checkbox rows ───────────────────────────────────── */
 .check-row {
   transition: background 120ms ease;
-  border-radius: 7px;
+}
+
+/* ─── Search clear (×) button ───────────────────────────────────────────────── */
+.search-clear {
+  transition: color 120ms ease;
+}
+.search-clear:hover {
+  color: #c8d3e0 !important;
 }
 .check-row:hover {
   background: rgba(124, 124, 255, 0.16) !important;

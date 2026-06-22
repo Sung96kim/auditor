@@ -21,7 +21,7 @@ export default function TypeFilter({ types, onToggle }: TypeFilterProps) {
         : active.join(", ");
 
   return (
-    <div style={{ padding: "0 10px 8px", flexShrink: 0, position: "relative" }}>
+    <div style={{ padding: "12px 10px 8px", flexShrink: 0, position: "relative" }}>
       <button
         onClick={() => setOpen((o) => !o)}
         className="type-filter-btn"

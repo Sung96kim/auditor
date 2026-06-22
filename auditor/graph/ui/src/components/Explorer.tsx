@@ -43,7 +43,7 @@ export default function Explorer({
       }}
     >
       {/* Search input */}
-      <div style={{ padding: "8px 10px", flexShrink: 0 }}>
+      <div style={{ padding: "8px 10px", flexShrink: 0, position: "relative" }}>
         <input
           type="text"
           placeholder="Search symbols…"
@@ -59,10 +59,33 @@ export default function Explorer({
             color: "#c8d3e0",
             fontSize: "12px",
             fontFamily: "monospace",
-            padding: "6px 9px",
+            padding: "6px 26px 6px 9px",
             outline: "none",
           }}
         />
+        {query && (
+          <button
+            onClick={() => onQueryChange("")}
+            title="Clear"
+            aria-label="Clear search"
+            className="search-clear"
+            style={{
+              position: "absolute",
+              top: "50%",
+              right: "18px",
+              transform: "translateY(-50%)",
+              background: "transparent",
+              border: "none",
+              color: "#64748b",
+              cursor: "pointer",
+              fontSize: "15px",
+              lineHeight: 1,
+              padding: "2px 4px",
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {/* Results list */}
