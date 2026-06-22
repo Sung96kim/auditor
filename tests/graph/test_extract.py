@@ -34,6 +34,35 @@ def test_class_records_bases_and_methods():
     assert impl.bases == ("Base",) and "run" in impl.method_names
 
 
+def test_nested_classes_qualified_by_outer():
+    """Same-named nested classes must stay distinct nodes (qualified by their outer class),
+    not collapse to one bare-name node."""
+    src = (
+        "class A:\n    class Args:\n        def go(self): ...\n"
+        "class B:\n    class Args(Base):\n        pass\n"
+    )
+    ids = _by_id(extract_file_facts("m.py", src, "production"))
+    assert "m.py::A.Args" in ids and "m.py::B.Args" in ids
+    assert "m.py::Args" not in ids  # not collapsed to the bare name
+    assert ids["m.py::A.Args"].name == "Args"  # simple name preserved (for resolution)
+    assert "m.py::A.Args.go" in ids  # nested-class method qualified through the chain
+    assert ids["m.py::B.Args"].bases == ("Base",)
+
+
+def test_captures_attribute_and_subscript_bases():
+    """inherits must capture attribute (`mod.Base`) and subscript (`Base[T]`) bases, not just
+    bare Name bases."""
+    src = (
+        "class A(mod.Base):\n    pass\n"
+        "class B(Generic[T]):\n    pass\n"
+        "class C(pkg.Mix[int]):\n    pass\n"
+    )
+    ids = _by_id(extract_file_facts("m.py", src, "production"))
+    assert ids["m.py::A"].bases == ("Base",)
+    assert ids["m.py::B"].bases == ("Generic",)
+    assert ids["m.py::C"].bases == ("Mix",)
+
+
 def test_decorator_call_is_not_a_callee():
     """Regression: a decorator like @app.get(...) is applied TO the function, not called BY it,
     so its call must not show up in the function's callees (it created false `calls` edges, e.g.

@@ -9,6 +9,19 @@ from auditor.graph.tokens import normalize_tokens, split_ident, symbol_document
 
 _FuncDef = (ast.FunctionDef, ast.AsyncFunctionDef)
 _FuncDefT = ast.FunctionDef | ast.AsyncFunctionDef
+
+
+def _base_name(b: ast.expr) -> str | None:
+    """Best-effort base-class name from a class base expr: ``Base`` (Name), ``mod.Base``
+    (Attribute), or ``Base[T]`` (Subscript, e.g. Generic/pydantic) all yield ``Base``."""
+    if isinstance(b, ast.Name):
+        return b.id
+    if isinstance(b, ast.Attribute):
+        return b.attr
+    if isinstance(b, ast.Subscript):
+        return _base_name(b.value)
+    return None
+
 # Python's own builtin names (dict, list, str, isinstance, type, …) — not a hand-curated list.
 # `dict(x)`/`x.dict()` and `isinstance(x, dict)` must not become call/callback edges to a repo
 # symbol that happens to share a builtin's name.
@@ -202,6 +215,9 @@ class FileExtractor:
     def _walk(self, node: ast.AST, cls: str | None) -> None:
         for child in getattr(node, "body", []):
             if isinstance(child, ast.ClassDef):
+                # qualify nested classes by their outer class so same-named nested classes
+                # (e.g. many `class Arguments(...)` under different parents) stay distinct nodes
+                qual = child.name if cls is None else f"{cls}.{child.name}"
                 methods = [s.name for s in child.body if isinstance(s, _FuncDef)]
                 doc = symbol_document(
                     name=child.name,
@@ -214,14 +230,14 @@ class FileExtractor:
                 )
                 self.nodes.append(
                     GraphNode(
-                        id=f"{self.rel_path}::{child.name}",
+                        id=f"{self.rel_path}::{qual}",
                         kind=NodeKind.CLASS,
                         name=child.name,
                         module=self.rel_path,
-                        qualname=child.name,
+                        qualname=qual,
                         doc_tokens=tuple(doc),
                         bases=tuple(
-                            b.id for b in child.bases if isinstance(b, ast.Name)
+                            n for b in child.bases if (n := _base_name(b)) is not None
                         ),
                         method_names=tuple(methods),
                         registry_roots=_registry_roots(child.decorator_list),
@@ -229,7 +245,7 @@ class FileExtractor:
                         role=self.role,
                     )
                 )
-                self._walk(child, child.name)
+                self._walk(child, qual)
             elif isinstance(child, _FuncDef):
                 self.nodes.append(self._fn_node(child, cls))
 
