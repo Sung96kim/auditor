@@ -204,9 +204,28 @@ export default function GraphCanvas({
     const g = buildGraphologyGraph(payload, view);
     graphRef.current = g;
 
-    g.forEachNode((node) => {
-      g.setNodeAttribute(node, "x", (hashToFloat(node, 1234) - 0.5) * 200);
-      g.setNodeAttribute(node, "y", (hashToFloat(node, 5678) - 0.5) * 200);
+    // Cluster-aware seeding: give each cluster its own anchor on a ring and start its members
+    // near it (small deterministic jitter). ForceAtlas then refines from a grouped starting
+    // point, so same-cluster nodes settle together and distinct clusters read as separate
+    // groups — instead of everything starting in one random blob.
+    const clusterIds = new Set<number>();
+    g.forEachNode((_n, a) => {
+      if (typeof a.cluster === "number") clusterIds.add(a.cluster as number);
+    });
+    const anchors = new Map<number, { x: number; y: number }>();
+    const sortedClusterIds = [...clusterIds].sort((x, y) => x - y);
+    const ringR = 100 + sortedClusterIds.length * 28;
+    sortedClusterIds.forEach((c, i) => {
+      const ang = (2 * Math.PI * i) / Math.max(1, sortedClusterIds.length);
+      anchors.set(c, { x: Math.cos(ang) * ringR, y: Math.sin(ang) * ringR });
+    });
+    g.forEachNode((node, a) => {
+      const anchor =
+        typeof a.cluster === "number" ? anchors.get(a.cluster as number) : undefined;
+      const jx = (hashToFloat(node, 1234) - 0.5) * 110;
+      const jy = (hashToFloat(node, 5678) - 0.5) * 110;
+      g.setNodeAttribute(node, "x", (anchor?.x ?? 0) + jx);
+      g.setNodeAttribute(node, "y", (anchor?.y ?? 0) + jy);
     });
 
     // ForceAtlas2 is the layout cost. A deep ego (high hop depth) pulls in many nodes, so

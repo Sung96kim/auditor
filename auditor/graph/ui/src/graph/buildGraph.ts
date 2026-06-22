@@ -45,6 +45,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
         size: nodeSize(cluster.agg_rank),
         color: NODE_COLOR["module"] ?? "#F0A848",
         clusterId: cluster.cluster_id,
+        cluster: cluster.cluster_id,
       });
     }
     // Count cross-cluster edges
@@ -78,6 +79,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
         color: nodeColor(node.type),
         kind: node.type,
         rank: node.rank,
+        cluster: node.cluster,
       });
     }
     const memberIds = new Set(members.map((n) => n.id));
@@ -130,6 +132,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
         color: nodeColor(node.type),
         kind: node.type,
         rank: node.rank,
+        cluster: node.cluster,
       });
     }
     const egoIds = visited;
