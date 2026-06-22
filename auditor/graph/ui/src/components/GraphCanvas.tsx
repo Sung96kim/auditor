@@ -57,11 +57,17 @@ const drawDarkNodeHover: NodeHoverDrawingFunction = (context, data, settings) =>
     const radius = Math.max(data.size, size / 2) + PADDING;
     const angleRadian = Math.asin(boxHeight / 2 / radius);
     const xDeltaCoord = Math.sqrt(Math.abs(radius ** 2 - (boxHeight / 2) ** 2));
+    const right = data.x + radius + boxWidth;
+    const top = data.y - boxHeight / 2;
+    const bottom = data.y + boxHeight / 2;
+    const cr = Math.min(6, boxHeight / 2); // round the right corners to match the left arc
     context.beginPath();
-    context.moveTo(data.x + xDeltaCoord, data.y + boxHeight / 2);
-    context.lineTo(data.x + radius + boxWidth, data.y + boxHeight / 2);
-    context.lineTo(data.x + radius + boxWidth, data.y - boxHeight / 2);
-    context.lineTo(data.x + xDeltaCoord, data.y - boxHeight / 2);
+    context.moveTo(data.x + xDeltaCoord, bottom);
+    context.lineTo(right - cr, bottom);
+    context.quadraticCurveTo(right, bottom, right, bottom - cr);
+    context.lineTo(right, top + cr);
+    context.quadraticCurveTo(right, top, right - cr, top);
+    context.lineTo(data.x + xDeltaCoord, top);
     context.arc(data.x, data.y, radius, angleRadian, -angleRadian);
     context.closePath();
     context.fill();
@@ -226,17 +232,18 @@ export default function GraphCanvas({
       // scale iterations down and switch on the Barnes-Hut O(n log n) approximation past a few
       // hundred nodes — otherwise the O(n²) repulsion at 100 iterations blocks the main thread.
       const n = g.order;
-      const iterations = n > 600 ? 30 : n > 200 ? 60 : 100;
+      const iterations = n > 600 ? 50 : n > 200 ? 90 : 150;
       forceAtlas2.assign(g, {
         iterations,
         settings: {
-          // higher repulsion + lower gravity + outbound-attraction spread clusters apart so the
-          // graph reads as distinct groups instead of one dense hairball
-          gravity: 0.4,
-          scalingRatio: 12,
+          // inferSettings tunes gravity/scalingRatio to graph size; LinLog mode is the strong
+          // cluster-separator (tightens groups, opens whitespace between them) and
+          // outbound-attraction spreads hubs — so the graph reads as distinct groups, not a
+          // single hairball. Barnes-Hut keeps big/deep graphs fast.
+          ...forceAtlas2.inferSettings(g),
+          linLogMode: true,
           outboundAttractionDistribution: true,
           adjustSizes: true,
-          slowDown: 10,
           barnesHutOptimize: n > 300,
         },
       });
@@ -413,6 +420,14 @@ export default function GraphCanvas({
       hoveredEdgeRef.current = null;
       container.style.cursor = "";
       sigma.refresh();
+    });
+    sigma.on("clickEdge", ({ edge }: { edge: string }) => {
+      // clicking an edge selects an endpoint so the relationship's node + its path show;
+      // prefer the non-cluster end (cluster nodes drill, not select)
+      const src = g.source(edge);
+      const tgt = g.target(edge);
+      const pick = src.startsWith("cluster:") ? tgt : src;
+      if (!pick.startsWith("cluster:")) onSelectRef.current(pick);
     });
 
     sigma.on("clickNode", ({ node }: { node: string }) => {
