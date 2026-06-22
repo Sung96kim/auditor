@@ -19,6 +19,7 @@ export default function DetailPanel({
   if (!node) {
     return (
       <div
+        className="anim-detail-empty"
         style={{
           flex: 1,
           display: "flex",
@@ -103,6 +104,7 @@ export default function DetailPanel({
 
   return (
     <div
+      className="anim-detail-content"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -112,7 +114,14 @@ export default function DetailPanel({
       }}
     >
       {/* Node-type accent strip */}
-      <div style={{ height: "3px", background: accentColor, flexShrink: 0 }} />
+      <div
+        style={{
+          height: "3px",
+          background: accentColor,
+          flexShrink: 0,
+          transition: "background 200ms ease",
+        }}
+      />
 
       {/* Node header */}
       <div style={{ padding: "14px" }}>
@@ -131,6 +140,7 @@ export default function DetailPanel({
               borderRadius: node.type === "class" || node.type === "module" ? "50%" : "3px",
               background: NODE_COLOR[node.type] ?? THEME.accent,
               flexShrink: 0,
+              transition: "background 200ms ease",
             }}
           />
           <span
@@ -162,6 +172,7 @@ export default function DetailPanel({
         {/* Focus button */}
         <button
           onClick={() => onFocus(node.id)}
+          className="btn-accent"
           style={{
             display: "block",
             width: "100%",
@@ -212,6 +223,7 @@ export default function DetailPanel({
                   fontFamily: "monospace",
                   textDecoration: "none",
                   wordBreak: "break-all",
+                  transition: "color 120ms ease",
                 }}
               >
                 {node.module}:{node.line}
@@ -296,6 +308,7 @@ export default function DetailPanel({
                 <div
                   key={nb.id}
                   onClick={() => onSelectNeighbor(nb.id)}
+                  className="neighbor-row"
                   style={{
                     display: "flex",
                     alignItems: "center",

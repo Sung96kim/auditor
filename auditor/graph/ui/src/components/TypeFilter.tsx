@@ -24,6 +24,7 @@ export default function TypeFilter({ types, onToggle }: TypeFilterProps) {
     <div style={{ padding: "0 10px 8px", flexShrink: 0, position: "relative" }}>
       <button
         onClick={() => setOpen((o) => !o)}
+        className="type-filter-btn"
         style={{
           width: "100%",
           boxSizing: "border-box",
@@ -48,12 +49,11 @@ export default function TypeFilter({ types, onToggle }: TypeFilterProps) {
         >
           {label}
         </span>
-        <span style={{ color: "#64748b", marginLeft: "6px" }}>
-          {open ? "▴" : "▾"}
-        </span>
+        <span className={`caret${open ? " open" : ""}`}>▾</span>
       </button>
       {open && (
         <div
+          className="anim-popover"
           style={{
             position: "absolute",
             top: "100%",
@@ -74,6 +74,7 @@ export default function TypeFilter({ types, onToggle }: TypeFilterProps) {
               <div
                 key={t}
                 onClick={() => onToggle(t)}
+                className="check-row"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -96,6 +97,7 @@ export default function TypeFilter({ types, onToggle }: TypeFilterProps) {
                     alignItems: "center",
                     justifyContent: "center",
                     flexShrink: 0,
+                    transition: "background 140ms ease, border-color 140ms ease",
                   }}
                 >
                   {on ? "✓" : ""}

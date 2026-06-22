@@ -21,6 +21,7 @@ export default function TopBar({
 }: TopBarProps) {
   return (
     <header
+      className="anim-topbar"
       style={{
         display: "flex",
         alignItems: "center",
@@ -84,6 +85,7 @@ export default function TopBar({
               )}
               <span
                 onClick={isLast ? undefined : () => onCrumb(crumb.target)}
+                className={isLast ? undefined : "crumb-link"}
                 style={{
                   fontSize: "12px",
                   fontFamily: "monospace",
@@ -94,14 +96,6 @@ export default function TopBar({
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   maxWidth: isLast ? "260px" : "200px",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isLast)
-                    (e.currentTarget as HTMLSpanElement).style.color = "#e2e8f0";
-                }}
-                onMouseLeave={(e) => {
-                  if (!isLast)
-                    (e.currentTarget as HTMLSpanElement).style.color = "#94a3b8";
                 }}
               >
                 {crumb.label}

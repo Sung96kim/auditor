@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { GNode } from "../types";
 import { THEME } from "../theme";
 
@@ -24,6 +25,14 @@ export default function Explorer({
       )
     : nodes;
 
+  // Key changes whenever the filtered list identity changes (node count or query),
+  // causing the list container to remount and replay the fade-in animation.
+  const listKey = `${filtered.length}-${q}`;
+  const prevLengthRef = useRef(filtered.length);
+  const listChanged = prevLengthRef.current !== filtered.length || q !== "";
+  prevLengthRef.current = filtered.length;
+  void listChanged; // used only for key
+
   return (
     <div
       style={{
@@ -40,6 +49,7 @@ export default function Explorer({
           placeholder="Search symbols…"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
+          className="search-input"
           style={{
             width: "100%",
             boxSizing: "border-box",
@@ -57,6 +67,8 @@ export default function Explorer({
 
       {/* Results list */}
       <div
+        key={listKey}
+        className="anim-list"
         style={{
           flex: 1,
           overflowY: "auto",
@@ -75,62 +87,64 @@ export default function Explorer({
             No matching nodes
           </div>
         ) : (
-          filtered.map((n) => (
-            <div
-              key={n.id}
-              onClick={() => onSelect(n.id)}
-              style={{
-                padding: "6px 12px",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                background:
-                  selectedNodeId === n.id ? THEME.bgElevated : "transparent",
-                borderLeft:
-                  selectedNodeId === n.id
+          filtered.map((n) => {
+            const isSelected = selectedNodeId === n.id;
+            return (
+              <div
+                key={n.id}
+                onClick={() => onSelect(n.id)}
+                className="explorer-row"
+                style={{
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  background: isSelected ? THEME.bgElevated : "transparent",
+                  borderLeft: isSelected
                     ? `2px solid ${THEME.accent}`
                     : "2px solid transparent",
-              }}
-            >
-              <span
-                style={{
-                  fontSize: "10px",
-                  color: "#64748b",
-                  flexShrink: 0,
-                  minWidth: "44px",
                 }}
               >
-                {n.type}
-              </span>
-              <span
-                style={{
-                  fontSize: "12px",
-                  color: "#c8d3e0",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  flex: 1,
-                }}
-              >
-                {n.label}
-              </span>
-              {n.findings.length > 0 && (
                 <span
                   style={{
                     fontSize: "10px",
-                    background: "#7C2020",
-                    color: "#FCA5A5",
-                    borderRadius: "4px",
-                    padding: "1px 5px",
+                    color: "#64748b",
                     flexShrink: 0,
+                    minWidth: "44px",
                   }}
                 >
-                  {n.findings.length}
+                  {n.type}
                 </span>
-              )}
-            </div>
-          ))
+                <span
+                  style={{
+                    fontSize: "12px",
+                    color: "#c8d3e0",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flex: 1,
+                  }}
+                >
+                  {n.label}
+                </span>
+                {n.findings.length > 0 && (
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      background: "#7C2020",
+                      color: "#FCA5A5",
+                      borderRadius: "4px",
+                      padding: "1px 5px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {n.findings.length}
+                  </span>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

@@ -1,4 +1,5 @@
 import "./index.css";
+import "./anim.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";

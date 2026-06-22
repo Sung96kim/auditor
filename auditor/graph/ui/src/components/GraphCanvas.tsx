@@ -296,9 +296,10 @@ export default function GraphCanvas({
               borderSize: 0.15,
             };
           } else {
-            // non-neighbor: dim (never hide) — keep the label rendered but faded, so the
-            // displayed-label set is stable across refresh frames (blanking it mid-tween is
-            // what made every label flicker on select).
+            // non-path node: dim it and HIDE its label so only the selected node + its
+            // neighbours stay labelled. Visibility keys off the stable selection state (not the
+            // animating tween value), so the displayed-label set is constant across refresh
+            // frames — that's what prevents the label flicker, not keeping every label on.
             const dimColor = "#2A3344";
             const baseColor = (data.color as string | undefined) ?? THEME.accent;
             const blendedColor = baseColor.startsWith("#") && baseColor.length === 7
@@ -308,8 +309,7 @@ export default function GraphCanvas({
               ...data,
               color: blendedColor,
               size: lerp(baseSize, baseSize * 0.7, sp),
-              label: data.label as string,
-              labelColor: blendHex("#E6EDF5", "#3D4658", sp),
+              label: "",
               borderColor: blendHex(baseColor.startsWith("#") && baseColor.length === 7 ? baseColor : dimColor, dimColor, sp),
               borderSize: 0.1,
             };

@@ -201,6 +201,7 @@ export default function App() {
       <div style={{ flex: 1, display: "flex", minHeight: 0, gap: "12px", padding: "12px" }}>
         {/* ── Left: Explorer panel ── */}
         <div
+          className="anim-sidebar"
           style={{
             width: sidebarWidth,
             flexShrink: 0,
@@ -270,6 +271,7 @@ export default function App() {
 
           {/* Floating Controls overlay (same chrome as side panels) */}
           <div
+            className="anim-controls"
             style={{
               position: "absolute",
               top: "12px",
@@ -294,6 +296,7 @@ export default function App() {
                 trailing={
                   <span
                     onClick={handleReset}
+                    className="link-reset"
                     style={{
                       fontSize: "11px",
                       color: THEME.accent,
@@ -355,6 +358,7 @@ export default function App() {
 
         {/* ── Right: Detail panel ── */}
         <div
+          className="anim-detail-panel"
           style={{
             width: detailWidth,
             flexShrink: 0,
@@ -377,6 +381,7 @@ export default function App() {
             <SectionHeader label="Node Detail" />
           </div>
           <DetailPanel
+            key={selectedNodeId ?? "__empty__"}
             node={selectedNode}
             allNodes={data.nodes}
             edges={data.edges}

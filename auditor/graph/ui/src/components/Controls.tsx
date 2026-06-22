@@ -66,12 +66,12 @@ export default function Controls({
               <div
                 key={lang}
                 onClick={() => onLangToggle(lang)}
+                className="check-row"
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: "9px",
                   padding: "6px 8px",
-                  borderRadius: "7px",
                   cursor: "pointer",
                   background: checked ? THEME.bgElevated : "transparent",
                 }}
@@ -89,6 +89,7 @@ export default function Controls({
                     color: "#fff",
                     fontSize: "10px",
                     flexShrink: 0,
+                    transition: "background 140ms ease, border-color 140ms ease",
                   }}
                 >
                   {checked ? "✓" : ""}
@@ -161,6 +162,7 @@ export default function Controls({
               <div
                 key={t}
                 onClick={() => onTypeToggle(t)}
+                className="type-row"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -203,6 +205,7 @@ export default function Controls({
           <span style={SECTION_HEADER}>Overlay</span>
           <div
             onClick={onOverlayToggle}
+            className="overlay-track"
             style={{
               width: "36px",
               height: "20px",
@@ -210,10 +213,10 @@ export default function Controls({
               background: filters.overlayOn ? THEME.accent : "#334155",
               position: "relative",
               cursor: "pointer",
-              transition: "background 0.15s",
             }}
           >
             <div
+              className="overlay-knob"
               style={{
                 position: "absolute",
                 top: "2px",
@@ -222,7 +225,6 @@ export default function Controls({
                 height: "16px",
                 borderRadius: "50%",
                 background: "#fff",
-                transition: "left 0.15s",
               }}
             />
           </div>
