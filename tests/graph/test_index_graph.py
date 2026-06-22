@@ -24,6 +24,14 @@ async def test_facts_cache_roundtrip(store):
     assert '{"path":"m.py"}' in await store.graph.all_facts()
 
 
+async def test_clear_facts_forces_reextraction(store):
+    await store.graph.set_facts("a.py", "{}", "h1")
+    await store.graph.set_facts("b.py", "{}", "h2")
+    await store.graph.clear_facts()
+    assert await store.graph.all_facts() == []
+    assert await store.graph.facts_hash("a.py") is None  # so the next scan re-extracts
+
+
 async def test_replace_graph_and_query(store):
     nodes = [_n("a", rank=0.9, cluster_id=1), _n("b", cluster_id=1)]
     edges = [GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS, weight=1.0)]

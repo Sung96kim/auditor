@@ -47,6 +47,21 @@ def test_graph_build_no_scan_skips_extraction(no_graph_config_repo):
     assert data["nodes"] == 0, f"expected nodes == 0 with --no-scan but got {data}"
 
 
+def test_graph_build_rebuild_clears_and_reextracts(no_graph_config_repo):
+    """--rebuild discards cached facts then re-extracts, so an extractor change is picked up
+    even though file contents (and their hashes) are unchanged."""
+    first = runner.invoke(app, ["graph", "build", str(no_graph_config_repo)])
+    assert first.exit_code == 0, first.output
+    assert json.loads(first.stdout)["nodes"] > 0
+
+    rebuilt = runner.invoke(
+        app, ["graph", "build", str(no_graph_config_repo), "--rebuild"]
+    )
+    assert rebuilt.exit_code == 0, rebuilt.output
+    # facts were cleared then re-extracted from source → a non-empty graph again
+    assert json.loads(rebuilt.stdout)["nodes"] > 0
+
+
 async def test_serve_reuses_existing_graph_without_rebuild(
     no_graph_config_repo, monkeypatch
 ):

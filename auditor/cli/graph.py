@@ -62,12 +62,22 @@ def graph_build(
         "--no-scan",
         help="Skip auto-scan; build from existing cached facts only.",
     ),
+    rebuild: bool = typer.Option(
+        False,
+        "--rebuild",
+        help="Discard cached graph facts and re-extract from scratch. Facts are keyed by file "
+        "content, so use this after upgrading auditor to pick up extractor changes.",
+    ),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
     root = find_root(target)
 
     async def run(report: Callable[[str], None]) -> dict:
+        if rebuild:
+            report("clearing cached facts…")
+            async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+                await index.graph.clear_facts()
         if not no_scan:
             report("scanning repository…")
             await _autoscan(root)

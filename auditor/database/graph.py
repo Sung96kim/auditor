@@ -73,6 +73,15 @@ class GraphDB(BaseDB):
 
         await self._worker.run(op)
 
+    async def clear_facts(self) -> None:
+        """Drop all cached per-file facts for this repo, forcing re-extraction on the next scan
+        (facts are keyed by content hash, so a code change to the extractor needs this)."""
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute("DELETE FROM graph_facts WHERE repo = ?", (self.repo,))
+            conn.commit()
+
+        await self._worker.run(op)
+
     async def facts_hash(self, path: str) -> str | None:
         row = await self._worker.run(
             lambda c: c.execute(
