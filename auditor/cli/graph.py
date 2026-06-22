@@ -179,32 +179,42 @@ def graph_usages(
     )
 
 
+async def _serve_html(
+    root: Path, *, rebuild: bool, report: Callable[[str], None]
+) -> str:
+    """Render the graph UI HTML. Reuses the already-built graph (fast) unless it's missing or
+    ``rebuild`` is set — only then does it pay the scan + build cost."""
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        has_graph = bool(await index.graph.nodes())
+    if rebuild or not has_graph:
+        report("scanning repository…")
+        await _autoscan(root)
+        report("building graph…")
+        await _build(root, report)
+    report("preparing UI…")
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        return render_app(await build_payload(index))
+
+
 @graph_app.command("serve")
 def graph_serve(
     target: _Target = Path("."),
-    no_scan: bool = typer.Option(
+    rebuild: bool = typer.Option(
         False,
-        "--no-scan",
-        help="Skip auto-scan; build from existing cached facts only.",
+        "--rebuild",
+        help="Re-scan and rebuild the graph before serving (use after code changes).",
     ),
     no_open: bool = typer.Option(
         False, "--no-open", help="Skip opening a browser tab."
     ),
 ) -> None:
-    """Serve the interactive graph UI, auto-scanning first (use --no-scan to skip)."""
+    """Serve the interactive graph UI. Serves the already-built graph when present (fast); only
+    scans + builds when it's missing. Pass --rebuild to force a fresh build."""
     root = find_root(target)
-
-    async def run(report: Callable[[str], None]) -> str:
-        if not no_scan:
-            report("scanning repository…")
-            await _autoscan(root)
-        report("building graph…")
-        await _build(root, report)
-        report("preparing UI…")
-        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-            return render_app(await build_payload(index))
-
-    html = _run_staged(run, "preparing graph UI…")
+    html = _run_staged(
+        lambda report: _serve_html(root, rebuild=rebuild, report=report),
+        "preparing graph UI…",
+    )
     server = ReportServer(html)
     typer.echo(f"serving graph UI at {server.url} (Ctrl-C to stop)")
     server.serve(open_browser=not no_open)

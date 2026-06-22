@@ -47,6 +47,31 @@ def test_graph_build_no_scan_skips_extraction(no_graph_config_repo):
     assert data["nodes"] == 0, f"expected nodes == 0 with --no-scan but got {data}"
 
 
+async def test_serve_reuses_existing_graph_without_rebuild(
+    no_graph_config_repo, monkeypatch
+):
+    """Relaunching `graph serve` on an already-built graph must NOT re-scan or rebuild — that
+    was the slow spin-up. It serves the persisted graph directly."""
+    from auditor.cli import graph as gmod
+
+    await audit_target(
+        no_graph_config_repo,
+        incremental=True,
+        config_overrides={"graph": {"enabled": True}},
+    )
+    await gmod._build(no_graph_config_repo)
+
+    def boom(*_a, **_k):
+        raise AssertionError("serve must not rebuild when the graph already exists")
+
+    monkeypatch.setattr(gmod, "_autoscan", boom)
+    monkeypatch.setattr(gmod, "_build", boom)
+    html = await gmod._serve_html(
+        no_graph_config_repo, rebuild=False, report=lambda _m: None
+    )
+    assert "get_user" in html and "__AUDITOR_GRAPH__" in html
+
+
 async def test_autoscan_writes_graph_facts(no_graph_config_repo):
     """After auto-scan with forced override, index.graph.all_facts() is non-empty."""
     await audit_target(
