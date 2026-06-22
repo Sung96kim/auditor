@@ -34,6 +34,16 @@ class StructuralResolver:
             if stem.endswith("/__init__"):
                 stem = stem[: -len("/__init__")]
             self.dotted_to_id[stem.replace("/", ".")] = mid
+        # module_id -> set of repo module_ids it imports (resolved from its import targets).
+        # Used to disambiguate cross-module name resolution by real import evidence.
+        self.imports_by_module: dict[str, set[str]] = {}
+        for mid, mod in self.modules.items():
+            targets = {
+                dst
+                for t in mod.imports
+                if (dst := self.dotted_to_id.get(t)) is not None
+            }
+            self.imports_by_module[mid] = targets
         self.edges: list[GraphEdge] = []
         self._seen: set[tuple[str, str, str]] = set()
 
@@ -51,11 +61,14 @@ class StructuralResolver:
         same = [h for h in hits if h.split("::")[0] == caller.module]
         if same:
             return same
-        # Cross-module: only resolve an UNAMBIGUOUS name. A call site gives us just the method
-        # name (`x.get()` → "get"), not the receiver type, so a name defined in many places
-        # (get/run/from_orm/load/…) can't be attributed — linking to all of them is a false
-        # hairball (e.g. 491 callers "calling" every `from_orm`). Skip when ambiguous.
-        return hits if len(hits) == 1 else []
+        # Cross-module: a call site gives us only the name (`x.get()` → "get"), not the receiver
+        # type, so a name defined elsewhere can't be attributed by name alone — that's what made
+        # every `.get()`/`from_orm()` link to a same-named repo method (false hairball). Use the
+        # import graph as the disambiguator: link only to a candidate whose module the caller
+        # actually imports, and only when that's unambiguous.
+        imported = self.imports_by_module.get(caller.module, frozenset())
+        gated = [h for h in hits if h.split("::")[0] in imported]
+        return gated if len(gated) == 1 else []
 
     def _module_contains(self) -> None:
         top_level = [

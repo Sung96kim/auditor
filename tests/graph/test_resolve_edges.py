@@ -40,20 +40,21 @@ def test_calls_resolved_by_name():
     assert ("m0.py::Impl.run", "m0.py::helper") in _pairs(_edges(SRC_A), "calls")
 
 
-def test_ambiguous_cross_module_name_is_skipped():
-    """A method name defined in many places can't be attributed from a call site (no receiver
-    type), so a cross-module caller must NOT edge to all of them — only an unambiguous name
-    resolves. Guards against the from_orm/get over-match (491 false edges)."""
+def test_cross_module_call_resolves_only_via_import():
+    """A call site gives only the name (no receiver type), so cross-module resolution uses the
+    import graph as the disambiguator: a name resolves only to a candidate whose module the
+    caller actually imports. This kills the from_orm/get over-match (a `dict.get()` caller that
+    never imports the service no longer edges to SubmissionFieldsService.get)."""
     edges = _edges(
-        "def use():\n    save()\n    persist()\n",  # m0: caller, no local defs
-        "def save():\n    return 1\n",  # m1
-        "def save():\n    return 2\n",  # m2 — ambiguous `save`
-        "def persist():\n    return 3\n",  # m3 — unique
+        "from m1 import save\ndef use():\n    save()\n    other()\n",  # m0 imports only m1
+        "def save():\n    return 1\n",  # m1 — imported
+        "def save():\n    return 2\n",  # m2 — also defines save, NOT imported
+        "def other():\n    return 3\n",  # m3 — not imported
     )
     calls = _pairs(edges, "calls")
-    assert ("m0.py::use", "m1.py::save") not in calls
-    assert ("m0.py::use", "m2.py::save") not in calls
-    assert ("m0.py::use", "m3.py::persist") in calls  # unique name still resolves
+    assert ("m0.py::use", "m1.py::save") in calls  # import disambiguates to m1
+    assert ("m0.py::use", "m2.py::save") not in calls  # not imported
+    assert ("m0.py::use", "m3.py::other") not in calls  # not imported → no edge
 
 
 def test_references_type_edge():
@@ -149,7 +150,9 @@ def test_production_caller_does_not_resolve_to_test_def():
 def test_production_caller_cross_module_skips_test_targets():
     # production caller with NO same-module definition of the name -> must skip the test target
     prod = extract_file_facts(
-        "svc.py", "def use():\n    return handle()\n", "production"
+        "svc.py",
+        "from helper import handle\ndef use():\n    return handle()\n",
+        "production",
     )
     helper = extract_file_facts(
         "helper.py", "def handle():\n    return 1\n", "production"
@@ -158,8 +161,8 @@ def test_production_caller_cross_module_skips_test_targets():
     nodes = [*prod.nodes, *helper.nodes, *tst.nodes]
     edges = resolve_structural(nodes)
     calls = {(e.src, e.dst) for e in edges if e.kind == "calls"}
-    assert ("svc.py::use", "helper.py::handle") in calls  # resolves to production
-    assert ("svc.py::use", "test_x.py::handle") not in calls  # never to the test def
+    assert ("svc.py::use", "helper.py::handle") in calls  # imported production target
+    assert ("svc.py::use", "test_x.py::handle") not in calls  # never the test def
 
 
 def test_module_contains_top_level_symbols():
