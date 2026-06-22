@@ -5,7 +5,7 @@ import { animateNodes } from "sigma/utils";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type Graph from "graphology";
 import { createNodeBorderProgram } from "@sigma/node-border";
-import EdgeCurveProgram from "@sigma/edge-curve";
+import { EdgeCurvedArrowProgram } from "@sigma/edge-curve";
 import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
 import { buildGraphologyGraph, type View } from "../graph/buildGraph";
@@ -345,7 +345,7 @@ export default function GraphCanvas({
       labelRenderedSizeThreshold: 0,
       defaultDrawNodeHover: drawDarkNodeHover,
       nodeProgramClasses: { circle: NodeBorderProg },
-      edgeProgramClasses: { line: EdgeCurveProgram },
+      edgeProgramClasses: { line: EdgeCurvedArrowProgram },
       nodeReducer: (node, data) => {
         const ep = easeInOutCubic(entranceTweenRef.current.progress);
         const hasFinding = overlayOnRef.current && findingsSet.has(node);

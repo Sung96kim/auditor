@@ -92,15 +92,17 @@ export default function App() {
 
   const availableLangs = useMemo(() => getDistinctLangs(data), [data]);
 
-  /** Filtered payload fed to GraphCanvas and Explorer. */
+  /** Payload fed to the canvas + Explorer. Deliberately NOT filtered by the search query —
+   * the search only narrows the Explorer LIST (which filters itself); live-filtering the canvas
+   * rebuilt sigma on every keystroke (flicker). Only lang/type filters reshape the canvas. */
   const filteredPayload = useMemo<GraphPayload>(() => {
     const { nodes, edges } = applyFilters(data, {
       langs: filters.langs,
       types: filters.types,
-      query: searchQuery,
+      query: "",
     });
     return { ...data, nodes, edges };
-  }, [data, filters.langs, filters.types, searchQuery]);
+  }, [data, filters.langs, filters.types]);
 
   const handleSelect = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
