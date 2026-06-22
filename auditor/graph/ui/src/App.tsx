@@ -4,6 +4,7 @@ import { THEME } from "./theme";
 import { sample } from "./sample";
 import GraphCanvas from "./components/GraphCanvas";
 import Explorer from "./components/Explorer";
+import TypeFilter from "./components/TypeFilter";
 import Controls from "./components/Controls";
 import type { FilterState } from "./components/Controls";
 import DetailPanel from "./components/DetailPanel";
@@ -235,11 +236,12 @@ export default function App() {
             />
           </div>
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <TypeFilter types={filters.types} onToggle={handleTypeToggle} />
             <Explorer
               nodes={filteredPayload.nodes}
               query={searchQuery}
               onQueryChange={setSearchQuery}
-              onSelect={handleSelect}
+              onSelect={handleFocus}
               selectedNodeId={selectedNodeId}
             />
           </div>
