@@ -4,7 +4,7 @@
 
 <h1 align="center">auditor</h1>
 
-<p align="center"><em>A token-efficient repo auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
+<p align="center"><em>A deterministic codebase auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
 It does the mechanical, deterministic part of a code audit — parsing, building the
 class/function manifest, running **123 anti-pattern detectors** across Python, TypeScript/React,

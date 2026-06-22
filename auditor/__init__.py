@@ -1,4 +1,4 @@
-"""auditor — a token-efficient repo auditor for coding agents.
+"""auditor — a deterministic codebase auditor for coding agents.
 
 Public API:
     from auditor import scan_file, scan_path, load_config, render, ScanEngine, IndexStore

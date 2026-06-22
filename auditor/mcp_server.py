@@ -37,7 +37,7 @@ from auditor.roles import RoleClassifier
 mcp: FastMCP = FastMCP(
     "auditor",
     instructions=(
-        "Token-efficient repo auditor. `scan` a directory or `report` a single file to get "
+        "Deterministic codebase auditor. `scan` a directory or `report` a single file to get "
         "structured findings (mechanical issues are pre-decided; semantic ones are flagged as "
         "'candidate' for you to judge). `manifest` returns a file's class/function structure. "
         "`rules_list` enumerates the detectors. "

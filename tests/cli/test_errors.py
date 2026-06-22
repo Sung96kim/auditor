@@ -5,6 +5,15 @@ import pytest
 from _support import invoke
 
 
+def test_bare_invocation_shows_help_and_exits_zero():
+    """Regression: bare `auditor` prints help and exits 0 (not Typer's no-args exit 2, which
+    `uv run` reports as PackageManagerExecutionFailed)."""
+    result = invoke()
+    assert result.exit_code == 0
+    assert "Usage" in result.output and "scan" in result.output
+    assert "Traceback" not in result.output
+
+
 @pytest.mark.parametrize("cmd", ["scan", "report", "manifest", "discover"])
 def test_missing_target_fails_cleanly(cmd):
     result = invoke(cmd, "does/not/exist.py")
