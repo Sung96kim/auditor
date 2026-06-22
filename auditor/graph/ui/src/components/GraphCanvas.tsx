@@ -142,6 +142,7 @@ export default function GraphCanvas({
   const hoveredEdgeRef = useRef<{ edge: string; source: string; target: string } | null>(
     null,
   );
+  const draggedNodeRef = useRef<string | null>(null);
 
   const entranceTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 0, progress: 1 });
   const selectionTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 150, progress: 1 });
@@ -250,11 +251,13 @@ export default function GraphCanvas({
       // reads in one direction. dagre breaks cycles + minimises crossings.
       try {
         const dg = new graphlib.Graph();
-        dg.setGraph({ rankdir: "LR", nodesep: 26, ranksep: 210, marginx: 20, marginy: 20 });
+        // node width reserves horizontal room for labels (they extend right); generous
+        // nodesep/ranksep so ranks + stacked nodes don't crowd.
+        dg.setGraph({ rankdir: "LR", nodesep: 55, ranksep: 130, marginx: 30, marginy: 30 });
         dg.setDefaultEdgeLabel(() => ({}));
         g.forEachNode((node, a) => {
-          const sz = Math.max(14, (a.size as number) ?? 8);
-          dg.setNode(node, { width: sz, height: sz });
+          const sz = Math.max(18, (a.size as number) ?? 8);
+          dg.setNode(node, { width: 170, height: sz });
         });
         g.forEachEdge((_e: string, _a: object, s: string, t: string) => {
           dg.setEdge(s, t);
@@ -508,6 +511,33 @@ export default function GraphCanvas({
       }
     });
 
+    // Node dragging: grab a node on mousedown, reposition it as the pointer moves (preventing
+    // the default camera pan), release on mouseup.
+    sigma.on("downNode", ({ node }: { node: string }) => {
+      draggedNodeRef.current = node;
+    });
+    const mouseCaptor = sigma.getMouseCaptor();
+    const onDragMove = (e: {
+      x: number;
+      y: number;
+      preventSigmaDefault: () => void;
+      original: Event;
+    }) => {
+      const node = draggedNodeRef.current;
+      if (!node) return;
+      const pos = sigma.viewportToGraph(e);
+      g.setNodeAttribute(node, "x", pos.x);
+      g.setNodeAttribute(node, "y", pos.y);
+      e.preventSigmaDefault();
+      e.original.preventDefault();
+      e.original.stopPropagation();
+    };
+    const onDragUp = () => {
+      draggedNodeRef.current = null;
+    };
+    mouseCaptor.on("mousemovebody", onDragMove);
+    mouseCaptor.on("mouseup", onDragUp);
+
     // Labels are clickable too. Sigma only hit-tests the node circle, so on a
     // background ("stage") click we rebuild each labeled node's on-screen box and
     // test the point against it — matching the circle's click/double-click behavior.
@@ -550,6 +580,7 @@ export default function GraphCanvas({
     // Hovering a label triggers the same hover box as hovering the circle: track the
     // label under the pointer and flag it `highlighted` (the reducer reads this ref).
     const handleLabelHover = (ev: MouseEvent) => {
+      if (draggedNodeRef.current) return; // ignore hover while dragging a node
       const rect = container.getBoundingClientRect();
       const node = nodeAtPoint(
         ev.clientX - rect.left,
