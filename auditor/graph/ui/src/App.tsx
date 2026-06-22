@@ -216,19 +216,33 @@ export default function App() {
       {/* ── Body ── */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, gap: "12px", padding: "12px" }}>
         {/* ── Left: Explorer panel ── */}
-        {sidebarOpen ? (
+        <div
+          className="anim-sidebar"
+          style={{
+            position: "relative",
+            width: sidebarOpen ? sidebarWidth : 34,
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: THEME.bgPanel,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: "12px",
+            minHeight: 0,
+            overflow: "hidden",
+            transition: "width 240ms cubic-bezier(0.4,0,0.2,1)",
+          }}
+        >
+          {/* full content, fixed width so it doesn't reflow while the panel animates; fades out */}
           <div
-            className="anim-sidebar"
             style={{
               width: sidebarWidth,
-              flexShrink: 0,
+              flex: 1,
+              minHeight: 0,
               display: "flex",
               flexDirection: "column",
-              backgroundColor: THEME.bgPanel,
-              border: `1px solid ${THEME.border}`,
-              borderRadius: "12px",
-              minHeight: 0,
-              overflow: "hidden",
+              opacity: sidebarOpen ? 1 : 0,
+              pointerEvents: sidebarOpen ? "auto" : "none",
+              transition: "opacity 160ms ease",
             }}
           >
             <div
@@ -274,25 +288,30 @@ export default function App() {
               />
             </div>
           </div>
-        ) : (
+          {/* expand affordance — overlays when collapsed, fades in */}
           <button
             onClick={() => setSidebarOpen(true)}
             title="Expand Explorer"
-            className="anim-sidebar collapse-btn"
+            className="collapse-btn"
             style={{
-              width: "34px",
-              flexShrink: 0,
-              backgroundColor: THEME.bgPanel,
-              border: `1px solid ${THEME.border}`,
-              borderRadius: "12px",
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
+              border: "none",
               color: "#94a3b8",
               cursor: "pointer",
               fontSize: "15px",
+              opacity: sidebarOpen ? 0 : 1,
+              pointerEvents: sidebarOpen ? "none" : "auto",
+              transition: "opacity 160ms ease",
             }}
           >
             ›
           </button>
-        )}
+        </div>
 
         {/* ── Canvas ── */}
         <div
@@ -367,7 +386,15 @@ export default function App() {
                 }
               />
             </div>
-            {controlsOpen && (
+            <div
+              style={{
+                maxHeight: controlsOpen ? "600px" : "0px",
+                opacity: controlsOpen ? 1 : 0,
+                overflow: "hidden",
+                transition:
+                  "max-height 260ms cubic-bezier(0.4,0,0.2,1), opacity 180ms ease",
+              }}
+            >
               <Controls
                 availableLangs={availableLangs}
                 filters={filters}
@@ -376,7 +403,7 @@ export default function App() {
                 onDepthChange={handleDepthChange}
                 onOverlayToggle={handleOverlayToggle}
               />
-            )}
+            </div>
           </div>
 
           {/* Hint line */}
