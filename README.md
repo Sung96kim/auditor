@@ -54,6 +54,9 @@ The command is `auditr` (with `auditr-mcp` for the MCP server); `auditor`/`audit
 are kept as aliases. The PyPI distribution is named `auditr` because `auditor` was taken,
 so you `pip install auditr` but run `auditr`.
 
+Update an installed copy in place with `auditor self update` (`--check` to only report the
+latest version, `--pre` to include pre-releases, `-y` to skip the prompt).
+
 For development on the auditor itself:
 
 ```bash
@@ -281,27 +284,32 @@ then off — `commit(); refresh_orms(...); use obj` may surface as a false posit
 
 ### Semantic graph (experimental, opt-in)
 
-A queryable semantic graph of symbols — nodes are functions/classes/modules; edges link them
-structurally (calls/imports/inherits/overrides) and semantically (by how they're **named** and
-**used**). Opt-in (needs the `graph` extra: `uv tool install "auditr[graph]"`), off by default.
-
-```toml
-[tool.auditor.graph]
-enabled = true   # extract per-file graph facts during `scan -i`
-```
+A queryable semantic graph of the codebase — nodes are functions/classes/modules; edges link
+them structurally (calls/imports/inherits/overrides/references) and semantically (by how they're
+**named** and **used**). Deterministic and offline (the naming layer is tf-idf + LSI, no model).
+Needs the `graph` extra: `uv tool install "auditr[graph]"`.
 
 ```bash
-auditor scan . -i                 # populates per-file graph facts (when enabled)
-auditor graph build .             # repo-level pass → nodes/edges/clusters
-auditor graph related get_user .  # top semantic neighbors of a symbol
-auditor graph neighbors get_user . --depth 2   # structural neighbors
-auditor graph concept tenant .    # symbols in the 'tenant' concept cluster
-auditor graph clusters .          # list concept clusters
+auditor graph build .                        # scan (auto) + build nodes/edges/clusters (--no-scan to skip)
+auditor graph serve .                        # interactive graph UI in the browser (React + sigma.js)
+auditor graph export . -f svg -o graph.svg   # static export (dot | svg)
+auditor graph search Blueprint .             # find a symbol by name, ranked
+auditor graph usages ComponentBlueprint .    # how a symbol is used: edges grouped by kind, full counts
+auditor graph neighbors get_user . --depth 2 # structural neighbors
+auditor graph related get_user .             # nearest semantic neighbors (name + usage)
+auditor graph concept tenant .               # the concept cluster matching a term
+auditor graph clusters .                     # list concept clusters
 ```
 
-Over MCP: `graph_build`, `graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters`.
-Deterministic + offline; the naming layer is tf-idf + LSI (no model). Embeddings, cross-repo
-linking, and the visual graph view are later phases.
+`graph build` auto-runs an incremental scan with fact-extraction on, so it works on any repo
+without enabling anything first; setting `[tool.auditor.graph] enabled = true` also makes a plain
+`scan -i` populate graph facts. Graph-native detectors flag **god concepts** (high fan-out →
+decompose; high fan-in → bottleneck/blast-radius), **scattered concepts**, and **naming
+inconsistencies**.
+
+Over MCP: `graph_overview` (one call to orient: counts + top clusters + worst hubs), `graph_search`,
+`graph_usages` (grouped connectivity with true totals + same-name disambiguation), `graph_build`,
+`graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters` — all compact and capped.
 
 ### Pydantic (`framework="pydantic"`)
 
@@ -402,7 +410,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 `auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
 
 <details>
-<summary><b>All 146 rules</b> (generated from <code>auditor rules list</code>)</summary>
+<summary><b>All 149 rules</b> (generated from <code>auditor rules list</code>)</summary>
 
 #### security (24)
 
@@ -532,10 +540,12 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 |---|---|---|---|
 | `PY-DEAD-SYMBOL` | low | candidate | a module-level private symbol defined but never referenced (repo-wide) |
 
-#### oop-composition (20)
+#### oop-composition (22)
 
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
+| `GRAPH-GOD-CONCEPT` | — | candidate | (graph build) a concept hub — high fan-out (decompose) or high fan-in (bottleneck/blast-radius) |
+| `GRAPH-SCATTERED-CONCEPT` | — | candidate | (graph build) one concept's implementation scattered across many modules |
 | `PY-OOP-BUILDER-CLASS` | low | candidate | a stateful class with one `build`/`create` producer — use a factory classmethod |
 | `PY-OOP-CLOSURE-CAPTURE` | suggestion | candidate | a thin inner closure capturing outer locals and passed around |
 | `PY-OOP-CONSTRUCTOR-WALL` | low | candidate | a constructor call with many kwargs (threshold) — compose sub-models |
@@ -571,10 +581,11 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `PY-TEST-SLEEP` | low | candidate | `time.sleep()` in a test |
 | `PY-TEST-UNUSED-FIXTURE` | low | candidate | a fixture defined but never requested (repo-level) |
 
-#### style (6)
+#### style (7)
 
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
+| `GRAPH-NAMING-INCONSISTENCY` | — | candidate | (graph build) the same concept named inconsistently across the codebase |
 | `PY-STYLE-FILE-SIZE` | low | auto | a file over the line-count threshold — split into a package |
 | `PY-STYLE-IF-FALSE-IMPORT` | low | auto | an import guarded by `if False:` instead of `TYPE_CHECKING` |
 | `PY-STYLE-INLINE-IMPORT` | medium | auto | an import inside a function body — move to module top |
@@ -645,9 +656,10 @@ auditor-mcp                       # stdio MCP server (or: python -m auditor.mcp_
 ```
 
 Tools: `scan`, `report`, `manifest`, `discover`, `aggregate`, `rules_list`, `ignore_add`,
-`ignore_list`, `ignore_remove`, `finding_detail`. The MCP `scan`
-takes `severity` and `since` (audit only a branch's changes), so an agent reviewing a PR pulls
-back just the changed files' findings — fewer tokens, same cross-file correctness.
+`ignore_list`, `ignore_remove`, `finding_detail` — plus the semantic-graph tools
+(`graph_overview`, `graph_search`, `graph_usages`, `graph_build`, …) when the `graph` extra is
+installed. The MCP `scan` takes `severity` and `since` (audit only a branch's changes), so an agent
+reviewing a PR pulls back just the changed files' findings — fewer tokens, same cross-file correctness.
 
 ### MCP output format
 
@@ -766,7 +778,7 @@ The image bundles the `mcp` + `ts` extras, and the incremental index persists in
 ## Development
 
 ```bash
-uv run pytest            # 1365 tests
+uv run pytest            # 1733 tests (use `uv run --extra graph pytest` for the graph suite)
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```
