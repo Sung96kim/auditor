@@ -434,15 +434,16 @@ export default function GraphCanvas({
 
         // hovering an edge highlights that edge + its two endpoints (the path)
         if (hoveredEdgeRef.current?.edge === edge) {
-          return { ...data, color: THEME.accent, size: (data.size as number ?? 1) + 1.5, zIndex: 2 };
+          return { ...data, color: THEME.accent, size: 3.4, zIndex: 2 };
         }
         if (sel.id === null) {
-          return { ...data, color: hexAlpha("#4A5568", baseAlpha) };
+          // give edges real thickness so the directional arrowheads are visible
+          return { ...data, color: hexAlpha("#6B7C99", Math.max(0.4, baseAlpha)), size: 1.8 };
         }
         const src = g.source(edge);
         const tgt = g.target(edge);
         if (src === sel.id || tgt === sel.id) {
-          return { ...data, color: THEME.accent + "AA", zIndex: 1 };
+          return { ...data, color: THEME.accent + "CC", size: 2.8, zIndex: 1 };
         }
         // selection isolates the path: hide edges that don't touch the selected node
         return { ...data, hidden: true };
