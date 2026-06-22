@@ -250,7 +250,7 @@ export default function GraphCanvas({
     const sigma = new Sigma(g, container, {
       renderEdgeLabels: false,
       defaultEdgeColor: "#1B2230",
-      labelColor: { color: "#E6EDF5" },
+      labelColor: { attribute: "labelColor", color: "#E6EDF5" },
       labelSize: LABEL_SIZE,
       labelWeight: LABEL_WEIGHT,
       labelFont: LABEL_FONT,
@@ -280,6 +280,7 @@ export default function GraphCanvas({
               color: THEME.accent,
               size: baseSize * 1.25,
               label: data.label as string,
+              labelColor: "#FFFFFF",
               borderColor: THEME.accent,
               borderSize: 0.5,
             };
@@ -290,10 +291,14 @@ export default function GraphCanvas({
               color: finalColor,
               size: hasFinding ? baseSize * 1.3 : baseSize,
               label: data.label as string,
+              labelColor: "#E6EDF5",
               borderColor: finalColor,
               borderSize: 0.15,
             };
           } else {
+            // non-neighbor: dim (never hide) — keep the label rendered but faded, so the
+            // displayed-label set is stable across refresh frames (blanking it mid-tween is
+            // what made every label flicker on select).
             const dimColor = "#2A3344";
             const baseColor = (data.color as string | undefined) ?? THEME.accent;
             const blendedColor = baseColor.startsWith("#") && baseColor.length === 7
@@ -303,7 +308,8 @@ export default function GraphCanvas({
               ...data,
               color: blendedColor,
               size: lerp(baseSize, baseSize * 0.7, sp),
-              label: sp > 0.5 ? "" : data.label as string,
+              label: data.label as string,
+              labelColor: blendHex("#E6EDF5", "#3D4658", sp),
               borderColor: blendHex(baseColor.startsWith("#") && baseColor.length === 7 ? baseColor : dimColor, dimColor, sp),
               borderSize: 0.1,
             };
@@ -346,9 +352,10 @@ export default function GraphCanvas({
         const src = g.source(edge);
         const tgt = g.target(edge);
         if (src === sel.id || tgt === sel.id) {
-          return { ...data, color: THEME.accent + "66", hidden: false };
+          return { ...data, color: THEME.accent + "AA", zIndex: 1 };
         }
-        return { ...data, hidden: true };
+        // non-incident edges are dimmed, never hidden, so the graph keeps its shape
+        return { ...data, color: hexAlpha("#222A38", 0.22) };
       },
     });
 

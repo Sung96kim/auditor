@@ -17,6 +17,7 @@ export function nodeSize(rank: number): number {
 
 export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
   const g = new Graph({ multi: false, type: "undirected" });
+  const nodeById = new Map(payload.nodes.map((n) => [n.id, n]));
 
   if (view.mode === "overview") {
     // One node per cluster, sorted by cluster_id for determinism
@@ -34,8 +35,8 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
     // Count cross-cluster edges
     const edgeCounts = new Map<string, number>();
     for (const edge of payload.edges) {
-      const srcNode = payload.nodes.find((n) => n.id === edge.source);
-      const tgtNode = payload.nodes.find((n) => n.id === edge.target);
+      const srcNode = nodeById.get(edge.source);
+      const tgtNode = nodeById.get(edge.target);
       if (!srcNode || !tgtNode) continue;
       const sc = srcNode.cluster;
       const tc = tgtNode.cluster;
@@ -77,21 +78,27 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
     }
   } else if (view.mode === "ego") {
     const { nodeId, depth } = view;
-    // BFS over edges (bidirectional)
+    // Precompute a bidirectional adjacency map once (O(edges)) so BFS is O(visited × degree)
+    // instead of re-scanning every edge per frontier node — the latter made deep ego views
+    // on the full graph extremely slow.
+    const adj = new Map<string, string[]>();
+    const link = (a: string, b: string): void => {
+      const list = adj.get(a);
+      if (list) list.push(b);
+      else adj.set(a, [b]);
+    };
+    for (const edge of payload.edges) {
+      link(edge.source, edge.target);
+      link(edge.target, edge.source);
+    }
     const visited = new Set<string>();
     const queue: Array<{ id: string; d: number }> = [{ id: nodeId, d: 0 }];
     visited.add(nodeId);
     while (queue.length > 0) {
       const item = queue.shift()!;
       if (item.d >= depth) continue;
-      for (const edge of payload.edges) {
-        let neighbor: string | null = null;
-        if (edge.source === item.id && !visited.has(edge.target)) {
-          neighbor = edge.target;
-        } else if (edge.target === item.id && !visited.has(edge.source)) {
-          neighbor = edge.source;
-        }
-        if (neighbor !== null) {
+      for (const neighbor of adj.get(item.id) ?? []) {
+        if (!visited.has(neighbor)) {
           visited.add(neighbor);
           queue.push({ id: neighbor, d: item.d + 1 });
         }
@@ -99,9 +106,8 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
     }
     // Insert nodes in sorted id order for determinism
     const sortedVisited = [...visited].sort();
-    const nodeMap = new Map(payload.nodes.map((n) => [n.id, n]));
     for (const id of sortedVisited) {
-      const node = nodeMap.get(id);
+      const node = nodeById.get(id);
       if (!node) continue;
       g.addNode(id, {
         label: node.label,
