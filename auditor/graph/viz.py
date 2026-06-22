@@ -5,8 +5,12 @@ Stdlib only — pure mapping over the persisted graph (auditor/graph/ui/ renders
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from auditor.graph.model import NodeKind
+
+if TYPE_CHECKING:
+    from auditor.database import IndexStore
 
 _APP_HTML = Path(__file__).parent / "ui" / "dist" / "index.html"
 
@@ -28,7 +32,7 @@ def _agg_rank(raw_nodes: list[dict], cid: int | None) -> float:
     return sum(n["rank"] for n in raw_nodes if n["cluster_id"] == cid)
 
 
-async def _findings_by_node(index) -> dict[str, list[str]]:
+async def _findings_by_node(index: "IndexStore") -> dict[str, list[str]]:
     """Map node_id -> [graph rule_ids]. Graph findings store the symbol id in ``evidence``."""
     out: dict[str, list[str]] = {}
     for f in await index.findings.by_rule_prefix("GRAPH-"):
@@ -36,7 +40,7 @@ async def _findings_by_node(index) -> dict[str, list[str]]:
     return out
 
 
-async def build_payload(index, *, node_cap: int | None = None) -> dict:
+async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> dict:
     """Return the graph payload consumed by the visualization UI.
 
     Shape: ``{meta, clusters, nodes, edges}`` — see §4 of the Phase V contract.

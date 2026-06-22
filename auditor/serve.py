@@ -62,9 +62,9 @@ class _ReportHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            # the browser closed the connection mid-response (reload / navigate away /
-            # cancelled a large payload) — harmless, so don't let it surface as a traceback.
+        except (BrokenPipeError, ConnectionResetError):  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION
+            # a client disconnect mid-response (reload / navigate away / cancelled a large
+            # payload) is nothing to handle — swallowing it is the correct behavior.
             pass
 
     def log_message(self, *_: object) -> None:  # silence default stderr logging

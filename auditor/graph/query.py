@@ -1,6 +1,10 @@
 """Read-side query API over the persisted graph (spec §10). Stdlib only."""
 
 from collections import Counter
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from auditor.database import IndexStore
 
 _STRUCTURAL = [
     "calls",
@@ -16,7 +20,7 @@ _SEMANTIC = ["name_similar", "usage_similar"]
 
 
 class GraphQuery:
-    def __init__(self, index) -> None:
+    def __init__(self, index: "IndexStore") -> None:
         self.index = index
 
     async def _resolve_all(self, symbol: str) -> list[str]:

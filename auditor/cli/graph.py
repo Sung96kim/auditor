@@ -6,9 +6,9 @@ Imported only via a guarded mount in cli/__init__, so the core CLI works without
 import shutil
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -77,8 +77,10 @@ def graph_build(
     _present(_run_staged(run, "building graph…"), render_graph_build, as_json=json_)
 
 
-def _query_cmd(fn_name: str):
-    async def runner(root: Path, **kw):
+def _query_cmd(
+    fn_name: str,
+) -> Callable[..., Coroutine[Any, Any, Any]]:
+    async def runner(root: Path, **kw: Any) -> Any:
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return await getattr(GraphQuery(index), fn_name)(**kw)
 
