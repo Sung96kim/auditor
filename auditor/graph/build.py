@@ -68,7 +68,7 @@ class GraphBuilder:
 
         symbols = self._symbol_nodes(nodes)
         report("resolving structural edges")
-        structural = resolve_structural(nodes)
+        structural = resolve_structural(nodes, follow_reexports=cfg.follow_reexports)
         report("computing naming similarity")
         name_edges, sparse = name_similar_edges(
             symbols,

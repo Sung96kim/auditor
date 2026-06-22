@@ -57,6 +57,31 @@ def test_cross_module_call_resolves_only_via_import():
     assert ("m0.py::use", "m3.py::other") not in calls  # not imported → no edge
 
 
+def test_follow_reexports_opt_in_resolves_through_package_init():
+    """Opt-in: a caller importing a package resolves a symbol the package __init__ re-exports
+    from a leaf module. Off by default (precision); on → recall through re-exports."""
+    caller = "from pkg import handle\ndef use():\n    return handle()\n"  # imports the package
+    init = "from pkg.leaf import handle\n"  # pkg/__init__ re-exports from the leaf
+    leaf = "def handle():\n    return 1\n"
+
+    def _nodes():
+        out = []
+        out += extract_file_facts("caller.py", caller, "production").nodes
+        out += extract_file_facts("pkg/__init__.py", init, "production").nodes
+        out += extract_file_facts("pkg/leaf.py", leaf, "production").nodes
+        return out
+
+    off = {(e.src, e.dst) for e in resolve_structural(_nodes()) if e.kind == "calls"}
+    assert ("caller.py::use", "pkg/leaf.py::handle") not in off  # default: not followed
+
+    on = {
+        (e.src, e.dst)
+        for e in resolve_structural(_nodes(), follow_reexports=True)
+        if e.kind == "calls"
+    }
+    assert ("caller.py::use", "pkg/leaf.py::handle") in on  # opt-in: followed
+
+
 def test_references_type_edge():
     # Impl.run has param ctx: Request — but Request isn't defined here, so no edge;
     # add a Request class and confirm the edge appears

@@ -16,8 +16,11 @@ class StructuralResolver:
     """Resolves a node set's local facts into structural GraphEdges. Holds the derived
     indexes + edge accumulator as fields so each edge-type pass is its own method."""
 
-    def __init__(self, nodes: list[GraphNode]) -> None:
+    def __init__(
+        self, nodes: list[GraphNode], *, follow_reexports: bool = False
+    ) -> None:
         self.nodes = nodes
+        self.follow_reexports = follow_reexports
         self.fns = {n.id: n for n in nodes if n.kind in FUNCTION_KINDS}
         self.classes = {n.id: n for n in nodes if n.kind == "class"}
         self.modules = {n.id: n for n in nodes if n.kind == "module"}
@@ -44,6 +47,15 @@ class StructuralResolver:
                 if (dst := self.dotted_to_id.get(t)) is not None
             }
             self.imports_by_module[mid] = targets
+        if self.follow_reexports:
+            # opt-in: a caller that imports a package gains the leaf modules that package's
+            # __init__ re-exports, so a symbol imported via `from pkg import X` (X defined in
+            # pkg/leaf.py) still resolves. One level only (snapshot to avoid cascading).
+            base = {mid: set(imps) for mid, imps in self.imports_by_module.items()}
+            for imps in self.imports_by_module.values():
+                for imported in tuple(imps):
+                    if imported.endswith("/__init__.py"):
+                        imps |= base.get(imported, set())
         self.edges: list[GraphEdge] = []
         self._seen: set[tuple[str, str, str]] = set()
 
@@ -147,5 +159,7 @@ class StructuralResolver:
         return self.edges
 
 
-def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
-    return StructuralResolver(nodes).resolve()
+def resolve_structural(
+    nodes: list[GraphNode], *, follow_reexports: bool = False
+) -> list[GraphEdge]:
+    return StructuralResolver(nodes, follow_reexports=follow_reexports).resolve()
