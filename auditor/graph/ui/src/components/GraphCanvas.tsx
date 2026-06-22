@@ -209,27 +209,42 @@ export default function GraphCanvas({
       g.setNodeAttribute(node, "y", (hashToFloat(node, 5678) - 0.5) * 200);
     });
 
-    if (g.order > 0) {
-      // ForceAtlas2 is the layout cost. A deep ego (high hop depth) pulls in many nodes, so
-      // scale iterations down and switch on the Barnes-Hut O(n log n) approximation past a few
-      // hundred nodes — otherwise the O(n²) repulsion at 100 iterations blocks the main thread.
+    // ForceAtlas2 is the layout cost. A deep ego (high hop depth) pulls in many nodes, so
+    // scale iterations down and switch on the Barnes-Hut O(n log n) approximation past a few
+    // hundred nodes — otherwise the O(n²) repulsion at 100 iterations blocks the main thread.
+    // Needs ≥2 nodes AND ≥1 edge: LinLog / outbound-attraction divide by node degree, which is
+    // NaN on a single/edgeless graph (e.g. an ego of a node with no structural neighbours) — and
+    // NaN positions make sigma render nothing ("the app disappears").
+    if (g.order > 1 && g.size > 0) {
       const n = g.order;
       const iterations = n > 600 ? 50 : n > 200 ? 90 : 150;
-      forceAtlas2.assign(g, {
-        iterations,
-        settings: {
-          // inferSettings tunes gravity/scalingRatio to graph size; LinLog mode is the strong
-          // cluster-separator (tightens groups, opens whitespace between them) and
-          // outbound-attraction spreads hubs — so the graph reads as distinct groups, not a
-          // single hairball. Barnes-Hut keeps big/deep graphs fast.
-          ...forceAtlas2.inferSettings(g),
-          linLogMode: true,
-          outboundAttractionDistribution: true,
-          adjustSizes: true,
-          barnesHutOptimize: n > 300,
-        },
-      });
+      try {
+        forceAtlas2.assign(g, {
+          iterations,
+          settings: {
+            // inferSettings tunes gravity/scalingRatio to graph size; LinLog mode is the strong
+            // cluster-separator (tightens groups, opens whitespace between them) and
+            // outbound-attraction spreads hubs — so the graph reads as distinct groups, not a
+            // single hairball. Barnes-Hut keeps big/deep graphs fast.
+            ...forceAtlas2.inferSettings(g),
+            linLogMode: true,
+            outboundAttractionDistribution: true,
+            adjustSizes: true,
+            barnesHutOptimize: n > 300,
+          },
+        });
+      } catch {
+        // a degenerate layout must never crash the view — fall back to seeded positions
+      }
     }
+    // Safety net: never hand sigma a non-finite coordinate (a degenerate layout would blank the
+    // canvas). Fall back to the seeded hash position.
+    g.forEachNode((node, attrs) => {
+      if (!Number.isFinite(attrs.x as number) || !Number.isFinite(attrs.y as number)) {
+        g.setNodeAttribute(node, "x", (hashToFloat(node, 1234) - 0.5) * 200);
+        g.setNodeAttribute(node, "y", (hashToFloat(node, 5678) - 0.5) * 200);
+      }
+    });
 
     const findingsSet = new Set<string>(
       payload.nodes.filter((n) => n.findings.length > 0).map((n) => n.id)

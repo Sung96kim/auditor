@@ -68,12 +68,24 @@ function SectionHeader({
   );
 }
 
+const collapseBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "#64748b",
+  cursor: "pointer",
+  fontSize: "16px",
+  lineHeight: 1,
+  padding: "0 2px",
+};
+
 export default function App() {
   const data: GraphPayload = window.__AUDITOR_GRAPH__ ?? sample;
 
   const [view, setView] = useState<View>({ mode: "overview" });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [controlsOpen, setControlsOpen] = useState(true);
   const [filters, setFilters] = useState<FilterState>(() =>
     makeDefaultFilters(data)
   );
@@ -204,53 +216,83 @@ export default function App() {
       {/* ── Body ── */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, gap: "12px", padding: "12px" }}>
         {/* ── Left: Explorer panel ── */}
-        <div
-          className="anim-sidebar"
-          style={{
-            width: sidebarWidth,
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            backgroundColor: THEME.bgPanel,
-            border: `1px solid ${THEME.border}`,
-            borderRadius: "12px",
-            minHeight: 0,
-            overflow: "hidden",
-          }}
-        >
+        {sidebarOpen ? (
           <div
+            className="anim-sidebar"
             style={{
-              padding: "12px 14px 10px",
+              width: sidebarWidth,
               flexShrink: 0,
-              borderBottom: `1px solid ${THEME.border}`,
+              display: "flex",
+              flexDirection: "column",
+              backgroundColor: THEME.bgPanel,
+              border: `1px solid ${THEME.border}`,
+              borderRadius: "12px",
+              minHeight: 0,
+              overflow: "hidden",
             }}
           >
-            <SectionHeader
-              label="Explorer"
-              trailing={
-                <span
-                  style={{
-                    fontSize: "11px",
-                    color: "#64748b",
-                    fontFamily: "monospace",
-                  }}
-                >
-                  {filteredPayload.nodes.length} nodes
-                </span>
-              }
-            />
+            <div
+              style={{
+                padding: "12px 14px 10px",
+                flexShrink: 0,
+                borderBottom: `1px solid ${THEME.border}`,
+              }}
+            >
+              <SectionHeader
+                label="Explorer"
+                trailing={
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        color: "#64748b",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      {filteredPayload.nodes.length} nodes
+                    </span>
+                    <button
+                      onClick={() => setSidebarOpen(false)}
+                      title="Collapse"
+                      className="collapse-btn"
+                      style={collapseBtnStyle}
+                    >
+                      ‹
+                    </button>
+                  </div>
+                }
+              />
+            </div>
+            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              <TypeFilter types={filters.types} onToggle={handleTypeToggle} />
+              <Explorer
+                nodes={filteredPayload.nodes}
+                query={searchQuery}
+                onQueryChange={setSearchQuery}
+                onSelect={handleFocus}
+                selectedNodeId={selectedNodeId}
+              />
+            </div>
           </div>
-          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <TypeFilter types={filters.types} onToggle={handleTypeToggle} />
-            <Explorer
-              nodes={filteredPayload.nodes}
-              query={searchQuery}
-              onQueryChange={setSearchQuery}
-              onSelect={handleFocus}
-              selectedNodeId={selectedNodeId}
-            />
-          </div>
-        </div>
+        ) : (
+          <button
+            onClick={() => setSidebarOpen(true)}
+            title="Expand Explorer"
+            className="anim-sidebar collapse-btn"
+            style={{
+              width: "34px",
+              flexShrink: 0,
+              backgroundColor: THEME.bgPanel,
+              border: `1px solid ${THEME.border}`,
+              borderRadius: "12px",
+              color: "#94a3b8",
+              cursor: "pointer",
+              fontSize: "15px",
+            }}
+          >
+            ›
+          </button>
+        )}
 
         {/* ── Canvas ── */}
         <div
@@ -299,28 +341,42 @@ export default function App() {
               <SectionHeader
                 label="Controls"
                 trailing={
-                  <span
-                    onClick={handleReset}
-                    className="link-reset"
-                    style={{
-                      fontSize: "11px",
-                      color: THEME.accent,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Reset
-                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    {controlsOpen && (
+                      <span
+                        onClick={handleReset}
+                        className="link-reset"
+                        style={{
+                          fontSize: "11px",
+                          color: THEME.accent,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Reset
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setControlsOpen((o) => !o)}
+                      title={controlsOpen ? "Collapse" : "Expand"}
+                      className="collapse-btn"
+                      style={collapseBtnStyle}
+                    >
+                      {controlsOpen ? "▾" : "▸"}
+                    </button>
+                  </div>
                 }
               />
             </div>
-            <Controls
-              availableLangs={availableLangs}
-              filters={filters}
-              onLangToggle={handleLangToggle}
-              onTypeToggle={handleTypeToggle}
-              onDepthChange={handleDepthChange}
-              onOverlayToggle={handleOverlayToggle}
-            />
+            {controlsOpen && (
+              <Controls
+                availableLangs={availableLangs}
+                filters={filters}
+                onLangToggle={handleLangToggle}
+                onTypeToggle={handleTypeToggle}
+                onDepthChange={handleDepthChange}
+                onOverlayToggle={handleOverlayToggle}
+              />
+            )}
           </div>
 
           {/* Hint line */}
