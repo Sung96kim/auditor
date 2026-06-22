@@ -133,22 +133,24 @@ class FileExtractor:
         callees: list[str] = []
         callback_names: list[str] = []
         body_idents: list[str] = []
-        for n in ast.walk(fn):
-            if isinstance(n, ast.Name):
-                body_idents.append(n.id)
-            elif isinstance(n, ast.Attribute):
-                body_idents.append(n.attr)
-            elif isinstance(n, ast.Call):
-                f = n.func
-                if isinstance(f, ast.Name):
-                    callees.append(f.id)
-                elif isinstance(f, ast.Attribute):
-                    callees.append(f.attr)
-                for a in (
-                    n.args
-                ):  # bare Name passed as a positional arg (potential callback)
-                    if isinstance(a, ast.Name):
-                        callback_names.append(a.id)
+        # walk the body statements only — NOT fn.decorator_list: a decorator like
+        # @app.get("/ping") is applied TO the function, not called BY it, so it must not
+        # become one of its callees (param/return types are collected separately below).
+        for stmt in fn.body:
+            for n in ast.walk(stmt):
+                if isinstance(n, ast.Name):
+                    body_idents.append(n.id)
+                elif isinstance(n, ast.Attribute):
+                    body_idents.append(n.attr)
+                elif isinstance(n, ast.Call):
+                    f = n.func
+                    if isinstance(f, ast.Name):
+                        callees.append(f.id)
+                    elif isinstance(f, ast.Attribute):
+                        callees.append(f.attr)
+                    for a in n.args:  # bare Name positional arg (potential callback)
+                        if isinstance(a, ast.Name):
+                            callback_names.append(a.id)
         ptypes: list[str] = []
         for a in fn.args.posonlyargs + fn.args.args:
             ptypes += _ann_type_names(a.annotation)

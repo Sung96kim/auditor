@@ -34,6 +34,23 @@ def test_class_records_bases_and_methods():
     assert impl.bases == ("Base",) and "run" in impl.method_names
 
 
+def test_decorator_call_is_not_a_callee():
+    """Regression: a decorator like @app.get(...) is applied TO the function, not called BY it,
+    so its call must not show up in the function's callees (it created false `calls` edges, e.g.
+    a `pong` healthcheck appearing to call SubmissionFieldsService.get)."""
+    src = (
+        "@app.get('/ping')\n"
+        "async def pong() -> bool:\n"
+        "    return True\n"
+    )
+    pong = _by_id(extract_file_facts("m.py", src, "production"))["m.py::pong"]
+    assert pong.callees == ()
+    # a real body call IS still captured
+    src2 = "@app.get('/x')\ndef h():\n    return do_work()\n"
+    h = _by_id(extract_file_facts("m.py", src2, "production"))["m.py::h"]
+    assert "do_work" in h.callees and "get" not in h.callees
+
+
 def test_method_captures_param_types_callees_and_doc():
     run = _by_id(extract_file_facts("m.py", SRC, "production"))["m.py::Impl.run"]
     assert "Request" in run.param_types and "Response" in run.param_types
