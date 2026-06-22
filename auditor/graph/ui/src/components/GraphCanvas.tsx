@@ -20,6 +20,8 @@ const LABEL_SIZE = 13;
 const LABEL_WEIGHT = "600";
 const LABEL_FONT =
   "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+// camera ratio below which (zoomed in) a selection's dimmed/non-path labels are revealed
+const ZOOM_LABEL_REVEAL = 0.55;
 
 interface GraphCanvasProps {
   payload: GraphPayload;
@@ -143,6 +145,11 @@ export default function GraphCanvas({
 
   const selectionRef = useRef<SelectionState>({ id: null, neighbors: new Set() });
   const hoveredLabelRef = useRef<string | null>(null);
+  // camera zoom (sigma ratio: smaller = zoomed in). When a path is selected we hide the
+  // non-path labels, but reveal them once the user zooms in past this ratio so they can read
+  // the neighbourhood up close. Keyed off zoom (stable during the selection tween) → no flicker.
+  const cameraRatioRef = useRef<number>(1);
+  const dimLabelsShownRef = useRef<boolean>(false);
 
   const entranceTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 0, progress: 1 });
   const selectionTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 150, progress: 1 });
@@ -305,11 +312,13 @@ export default function GraphCanvas({
             const blendedColor = baseColor.startsWith("#") && baseColor.length === 7
               ? blendHex(baseColor, dimColor, sp)
               : dimColor;
+            const revealed = cameraRatioRef.current < ZOOM_LABEL_REVEAL;
             resolved = {
               ...data,
               color: blendedColor,
               size: lerp(baseSize, baseSize * 0.7, sp),
-              label: "",
+              label: revealed ? (data.label as string) : "",
+              labelColor: blendHex("#E6EDF5", "#5A6678", sp),
               borderColor: blendHex(baseColor.startsWith("#") && baseColor.length === 7 ? baseColor : dimColor, dimColor, sp),
               borderSize: 0.1,
             };
@@ -431,6 +440,18 @@ export default function GraphCanvas({
 
     const camera = sigma.getCamera();
     camera.animatedReset({ duration: 400 });
+    cameraRatioRef.current = camera.ratio;
+    // On zoom, reveal/hide a selection's non-path labels. Only refresh (re-run reducers) when
+    // the reveal threshold is actually crossed and a path is selected — not on every pan tick.
+    const onCameraMove = (): void => {
+      cameraRatioRef.current = camera.ratio;
+      const shown = camera.ratio < ZOOM_LABEL_REVEAL;
+      if (shown !== dimLabelsShownRef.current) {
+        dimLabelsShownRef.current = shown;
+        if (selectionRef.current.id !== null) sigma.refresh();
+      }
+    };
+    camera.on("updated", onCameraMove);
 
     if (!prefersReducedMotion && Object.keys(targetPositions).length > 0) {
       const morphTargets: Record<string, { x: number; y: number }> = {};
