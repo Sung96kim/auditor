@@ -101,3 +101,69 @@ async def test_partial_symbol_resolves_by_suffix(store):
 async def test_unknown_symbol_safe(store):
     out = await GraphQuery(store).related("does_not_exist")
     assert out == []
+
+
+async def test_search_finds_by_substring_ranked(store):
+    out = await GraphQuery(store).search("user")
+    assert [r["id"] for r in out] == ["m.py::get_user", "m.py::fetch_user"]
+    assert out[0]["kind"] == "function" and out[0]["rank"] == 0.5
+
+
+async def test_usages_groups_in_and_out_with_counts(store):
+    # charge is called by get_user → one incoming structural edge, nothing outgoing.
+    u = await GraphQuery(store).usages("charge")
+    assert (
+        u["resolved"] == "m.py::charge" and u["total_in"] == 1 and u["total_out"] == 0
+    )
+    assert u["used_by"]["calls"] == {"count": 1, "sample": ["m.py::get_user"]}
+    assert u["depends_on"] == {}
+    # name_similar is semantic, not structural — it must not appear in usages.
+    out = await GraphQuery(store).usages("get_user")
+    assert out["depends_on"]["calls"]["sample"] == ["m.py::charge"]
+    assert out["used_by"] == {} and "name_similar" not in out["depends_on"]
+
+
+async def test_usages_unknown_returns_empty(store):
+    assert await GraphQuery(store).usages("does_not_exist") == {}
+
+
+async def test_usages_disambiguates_same_name(tmp_path):
+    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
+    nodes = [
+        GraphNode(
+            id="a.py::Thing",
+            kind=NodeKind.CLASS,
+            name="Thing",
+            module="a.py",
+            qualname="Thing",
+            rank=0.9,
+            cluster_id=1,
+        ),
+        GraphNode(
+            id="b.py::Thing",
+            kind=NodeKind.CLASS,
+            name="Thing",
+            module="b.py",
+            qualname="Thing",
+            rank=0.1,
+            cluster_id=1,
+        ),
+        GraphNode(
+            id="a.py::user",
+            kind=NodeKind.FUNCTION,
+            name="user",
+            module="a.py",
+            qualname="user",
+            rank=0.2,
+            cluster_id=1,
+        ),
+    ]
+    edges = [GraphEdge(src="a.py::user", dst="a.py::Thing", kind=EdgeKind.CALLS)]
+    await s.graph.replace(
+        nodes, edges, [GraphCluster(cluster_id=1, label="x", member_count=3)]
+    )
+    u = await GraphQuery(s).usages("Thing")
+    assert u["resolved"] == "a.py::Thing"  # highest-rank match is primary
+    assert u["ambiguous"] == ["b.py::Thing"]
+    assert u["used_by"]["calls"]["count"] == 1
+    await s.aclose()

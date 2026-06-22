@@ -19,6 +19,8 @@ from auditor.cli.render import (
     render_graph_concept,
     render_graph_neighbors,
     render_graph_related,
+    render_graph_search,
+    render_graph_usages,
     render_ignore_add,
     render_ignore_clear,
     render_ignore_list,
@@ -162,6 +164,42 @@ def test_render_graph_clusters_sorted_by_size():
     out = buf.getvalue()
     assert "large" in out
     assert out.index("large") < out.index("small")
+
+
+def test_render_graph_search_shows_symbol():
+    con, buf = _console()
+    render_graph_search(
+        con,
+        [{"id": "m.py::Foo", "kind": "class", "rank": 0.5}],
+    )
+    assert "m.py::Foo" in buf.getvalue()
+
+
+def test_render_graph_usages_groups_and_counts():
+    con, buf = _console()
+    render_graph_usages(
+        con,
+        {
+            "symbol": "Foo",
+            "resolved": "m.py::Foo",
+            "kind": "class",
+            "ambiguous": ["other.py::Foo"],
+            "used_by": {"inherits": {"count": 3, "sample": ["a.py::Sub"]}},
+            "depends_on": {},
+            "total_in": 3,
+            "total_out": 0,
+        },
+    )
+    out = buf.getvalue()
+    assert "m.py::Foo" in out and "USED BY" in out
+    assert "inherits" in out and "3" in out
+    assert "ambiguous" in out and "other.py::Foo" in out
+
+
+def test_render_graph_usages_empty():
+    con, buf = _console()
+    render_graph_usages(con, {})
+    assert "no such symbol" in buf.getvalue()
 
 
 def test_render_rules_list_shows_rule_id():

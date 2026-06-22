@@ -19,21 +19,22 @@ class GraphQuery:
     def __init__(self, index) -> None:
         self.index = index
 
-    async def _resolve(self, symbol: str) -> str | None:
+    async def _resolve_all(self, symbol: str) -> list[str]:
+        """Every node id matching ``symbol`` — exact id, or a ``.name``/``::name`` suffix —
+        sorted. A bare name can legitimately match several nodes (same-named symbols)."""
         if await self.index.graph.node(symbol):
-            return symbol
-        matches = [
+            return [symbol]
+        return sorted(
             n["node_id"]
             for n in await self.index.graph.nodes()
             if n["node_id"] == symbol
             or n["node_id"].endswith(f"::{symbol}")
             or n["node_id"].endswith(f".{symbol}")
-        ]
-        return (
-            matches[0]
-            if len(matches) == 1
-            else (sorted(matches)[0] if matches else None)
         )
+
+    async def _resolve(self, symbol: str) -> str | None:
+        matches = await self._resolve_all(symbol)
+        return matches[0] if matches else None
 
     async def related(self, symbol: str, limit: int = 10) -> list[dict]:
         nid = await self._resolve(symbol)
@@ -85,6 +86,64 @@ class GraphQuery:
                         )
             frontier = nxt
         return out
+
+    async def search(self, term: str, limit: int = 20) -> list[dict]:
+        """Find symbols whose id contains ``term`` (case-insensitive), highest-rank first —
+        for locating the exact node before a usages/neighbors query."""
+        term_l = term.lower()
+        hits = [
+            n for n in await self.index.graph.nodes() if term_l in n["node_id"].lower()
+        ]
+        hits.sort(key=lambda n: (-(n.get("rank") or 0.0), n["node_id"]))
+        return [
+            {
+                "id": n["node_id"],
+                "kind": n["kind"],
+                "rank": round(n.get("rank") or 0.0, 6),
+            }
+            for n in hits[:limit]
+        ]
+
+    async def usages(self, symbol: str, sample: int = 5) -> dict:
+        """How ``symbol`` connects: structural edges grouped by kind with full counts and a
+        rank-ordered sample, split into ``used_by`` (incoming — who depends on it) and
+        ``depends_on`` (outgoing). Picks the highest-rank node when a name is ambiguous and
+        lists the rest under ``ambiguous``. ``{}`` if the symbol isn't found."""
+        matches = await self._resolve_all(symbol)
+        if not matches:
+            return {}
+        nodes = await self.index.graph.nodes()
+        rank = {n["node_id"]: (n.get("rank") or 0.0) for n in nodes}
+        kind_of = {n["node_id"]: n["kind"] for n in nodes}
+        primary = max(matches, key=lambda nid: rank.get(nid, 0.0))
+
+        used_by: dict[str, list[str]] = {}
+        depends_on: dict[str, list[str]] = {}
+        for e in await self.index.graph.edges_of(primary, _STRUCTURAL):
+            incoming = e["dst"] == primary
+            other = e["src"] if incoming else e["dst"]
+            bucket = used_by if incoming else depends_on
+            bucket.setdefault(e["kind"], []).append(other)
+
+        def summarize(b: dict[str, list[str]]) -> dict[str, dict]:
+            out = {}
+            for k, others in b.items():
+                uniq = sorted(set(others), key=lambda o: (-rank.get(o, 0.0), o))
+                out[k] = {"count": len(uniq), "sample": uniq[:sample]}
+            return out
+
+        used = summarize(used_by)
+        deps = summarize(depends_on)
+        return {
+            "symbol": symbol,
+            "resolved": primary,
+            "kind": kind_of.get(primary),
+            "ambiguous": [m for m in matches if m != primary],
+            "used_by": used,
+            "depends_on": deps,
+            "total_in": sum(v["count"] for v in used.values()),
+            "total_out": sum(v["count"] for v in deps.values()),
+        }
 
     async def clusters(self) -> list[dict]:
         return await self.index.graph.clusters()

@@ -19,6 +19,8 @@ from auditor.cli.render import (
     render_graph_concept,
     render_graph_neighbors,
     render_graph_related,
+    render_graph_search,
+    render_graph_usages,
 )
 from auditor.config import load_config
 from auditor.database import IndexStore
@@ -140,6 +142,39 @@ def graph_clusters(
     _present(
         _run(_query_cmd("clusters")(root), "querying…"),
         render_graph_clusters,
+        as_json=json_,
+    )
+
+
+@graph_app.command("search")
+def graph_search(
+    term: str,
+    target: _Target = Path("."),
+    limit: int = 20,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Find symbols whose id contains the term (highest-rank first)."""
+    root = find_root(target)
+    _present(
+        _run(_query_cmd("search")(root, term=term, limit=limit), "searching…"),
+        render_graph_search,
+        as_json=json_,
+    )
+
+
+@graph_app.command("usages")
+def graph_usages(
+    symbol: str,
+    target: _Target = Path("."),
+    sample: int = 5,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """How a symbol is used/connected: edges grouped by kind with full counts (used_by vs
+    depends_on)."""
+    root = find_root(target)
+    _present(
+        _run(_query_cmd("usages")(root, symbol=symbol, sample=sample), "querying…"),
+        render_graph_usages,
         as_json=json_,
     )
 

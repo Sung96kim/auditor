@@ -352,6 +352,25 @@ if _GRAPH_OK:
             return await GraphQuery(index).clusters()
 
     @mcp.tool
+    async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict]:
+        """Find graph symbols whose id contains ``term`` (case-insensitive), highest-rank
+        first. Use to locate the exact symbol name before graph_usages/graph_neighbors."""
+        root = find_root(Path(path))
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            return await GraphQuery(index).search(term, limit=limit)
+
+    @mcp.tool
+    async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
+        """How a symbol is used/connected: structural edges grouped by kind with FULL counts
+        and a rank-ordered sample, split into ``used_by`` (incoming — who depends on it) and
+        ``depends_on`` (outgoing). Same-named symbols are disambiguated via ``ambiguous`` (the
+        highest-rank match is used). Returns {} if not found. Prefer this over graph_neighbors
+        for 'how is X used' — neighbors truncates silently with no totals."""
+        root = find_root(Path(path))
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            return await GraphQuery(index).usages(symbol, sample=sample)
+
+    @mcp.tool
     async def graph_overview(path: str = ".") -> dict:
         """One compact call to orient: counts, the largest clusters, and the worst graph hubs.
         Returns {nodes, edges, clusters, top_clusters, god_concepts, bottlenecks}. If the graph

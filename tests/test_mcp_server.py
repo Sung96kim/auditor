@@ -5,7 +5,7 @@ import json
 import pytest
 from fastmcp.exceptions import ToolError
 
-from auditor.mcp_server import mcp
+from auditor.mcp_server import _GRAPH_OK, mcp
 
 
 @pytest.mark.parametrize(
@@ -417,3 +417,35 @@ async def test_finding_detail_reads_from_index(sample_repo):
     )
     assert detail["rule_id"] == f["rule_id"] and detail["line"] == f["line"]
     assert detail["evidence"]  # recovered from the index, not the (now-wiped) file
+
+
+@pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
+async def test_graph_search_and_usages_tools(sample_repo):
+    """graph_search locates symbols and graph_usages returns grouped connectivity with full
+    counts — exercised through the real MCP call path."""
+    src = str(sample_repo / "src")
+    build = _structured(await mcp.call_tool("graph_build", {"path": src}))
+    assert build["nodes"] > 0
+
+    found = _structured(
+        await mcp.call_tool("graph_search", {"term": "Settings", "path": src})
+    )
+    assert isinstance(found, list) and found
+    assert all("id" in f and "rank" in f for f in found)
+
+    short = found[0]["id"].split("::")[-1].split(".")[-1]
+    u = _structured(await mcp.call_tool("graph_usages", {"symbol": short, "path": src}))
+    assert {
+        "resolved",
+        "used_by",
+        "depends_on",
+        "total_in",
+        "total_out",
+        "ambiguous",
+    } <= set(u)
+    assert u["total_in"] == sum(v["count"] for v in u["used_by"].values())
+
+    empty = _structured(
+        await mcp.call_tool("graph_usages", {"symbol": "zzz_nope_xyz", "path": src})
+    )
+    assert empty == {}

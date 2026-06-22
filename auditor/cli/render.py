@@ -95,6 +95,53 @@ def render_graph_clusters(out: Console, payload: list[dict[str, Any]]) -> None:
     out.print(t)
 
 
+def render_graph_search(out: Console, payload: list[dict[str, Any]]) -> None:
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    t.add_column("symbol")
+    t.add_column("kind")
+    t.add_column("rank", justify="right")
+    for row in payload:
+        t.add_row(
+            str(row.get("id", "")),
+            str(row.get("kind", "")),
+            str(row.get("rank", "")),
+        )
+    out.print(t)
+
+
+def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
+    if not payload:
+        out.print("[dim]no such symbol[/]")
+        return
+    out.print(
+        f"[bold {_ACCENT}]{payload.get('resolved', '')}[/] "
+        f"[dim]({payload.get('kind', '')})[/]  "
+        f"used_by [bold]{payload.get('total_in', 0)}[/] · "
+        f"depends_on [bold]{payload.get('total_out', 0)}[/]"
+    )
+    ambiguous = payload.get("ambiguous", [])
+    if ambiguous:
+        out.print("[yellow]ambiguous[/] — also matched: " + ", ".join(ambiguous))
+    for title, key in (("USED BY", "used_by"), ("DEPENDS ON", "depends_on")):
+        groups = payload.get(key, {})
+        if not groups:
+            continue
+        t = Table(
+            title=title,
+            title_justify="left",
+            border_style=_BORDER,
+            show_header=True,
+            header_style="bold",
+        )
+        t.add_column("edge")
+        t.add_column("count", justify="right")
+        t.add_column("e.g.")
+        for edge, info in sorted(groups.items(), key=lambda kv: -kv[1]["count"]):
+            sample = ", ".join(s.split("::")[-1] for s in info.get("sample", []))
+            t.add_row(edge, str(info["count"]), sample)
+        out.print(t)
+
+
 # ---------------------------------------------------------------------------
 # rules
 # ---------------------------------------------------------------------------
