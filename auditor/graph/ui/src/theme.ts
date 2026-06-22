@@ -2,7 +2,7 @@ export const NODE_COLOR: Record<string, string> = {
   class: "#B57BFF",
   file: "#5B9BFF",
   function: "#46C98B",
-  method: "#46C98B",
+  method: "#4FC3D9",
   module: "#F0A848",
 };
 

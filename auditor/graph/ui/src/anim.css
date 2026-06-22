@@ -90,12 +90,16 @@
     border-left-color 150ms ease;
 }
 .explorer-row:hover {
-  background: rgba(28, 36, 54, 0.7) !important;
+  background: rgba(124, 124, 255, 0.16) !important;
+  box-shadow: inset 2px 0 0 rgba(124, 124, 255, 0.7);
 }
 
 /* ─── Neighbor row ──────────────────────────────────────────────────────────── */
 .neighbor-row {
   transition: background 120ms ease;
+}
+.neighbor-row:hover {
+  background: rgba(124, 124, 255, 0.16) !important;
 }
 
 /* ─── Breadcrumb crumb ──────────────────────────────────────────────────────── */
@@ -159,7 +163,7 @@
   border-radius: 7px;
 }
 .check-row:hover {
-  background: rgba(22, 28, 40, 0.8) !important;
+  background: rgba(124, 124, 255, 0.16) !important;
 }
 
 /* ─── Node-type toggle row in Controls ──────────────────────────────────────── */

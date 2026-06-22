@@ -20,8 +20,8 @@ const LABEL_SIZE = 13;
 const LABEL_WEIGHT = "600";
 const LABEL_FONT =
   "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-// camera ratio below which (zoomed in) a selection's dimmed/non-path labels are revealed
-const ZOOM_LABEL_REVEAL = 0.55;
+// camera ratio below which (zoomed in close) a selection's non-path labels are revealed
+const ZOOM_LABEL_REVEAL = 0.28;
 
 interface GraphCanvasProps {
   payload: GraphPayload;
@@ -227,8 +227,12 @@ export default function GraphCanvas({
       forceAtlas2.assign(g, {
         iterations,
         settings: {
-          gravity: 1,
-          scalingRatio: 2,
+          // higher repulsion + lower gravity + outbound-attraction spread clusters apart so the
+          // graph reads as distinct groups instead of one dense hairball
+          gravity: 0.4,
+          scalingRatio: 12,
+          outboundAttractionDistribution: true,
+          adjustSizes: true,
           slowDown: 10,
           barnesHutOptimize: n > 300,
         },
