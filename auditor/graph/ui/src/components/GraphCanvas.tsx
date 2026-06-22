@@ -525,6 +525,9 @@ export default function GraphCanvas({
       if (Object.keys(morphTargets).length > 0) {
         animateNodes(g, morphTargets, { duration: 300, easing: "cubicInOut" }, () => {
           sigma.refresh();
+          // refit to the FINAL (post-morph) layout — the initial reset fitted a mix of old +
+          // new positions, which left spread-out neighbours (and their labels) off-screen
+          camera.animatedReset({ duration: 300 });
         });
       }
     }
