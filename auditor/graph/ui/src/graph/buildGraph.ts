@@ -15,9 +15,24 @@ export function nodeSize(rank: number): number {
   return 4 + Math.sqrt(Math.max(rank, 0)) * 40;
 }
 
+// Only structural relationships are drawn. The semantic similarity edges
+// (name_similar/usage_similar) are ~60% of all edges and turn every view into a hairball —
+// they're meant for `graph related` queries, not the visual graph.
+const STRUCTURAL_KINDS = new Set([
+  "calls",
+  "overrides",
+  "inherits",
+  "references_type",
+  "callback_arg",
+  "registered_in",
+  "contains",
+  "imports",
+]);
+
 export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
   const g = new Graph({ multi: false, type: "undirected" });
   const nodeById = new Map(payload.nodes.map((n) => [n.id, n]));
+  const edges = payload.edges.filter((e) => STRUCTURAL_KINDS.has(e.kind));
 
   if (view.mode === "overview") {
     // One node per cluster, sorted by cluster_id for determinism
@@ -34,7 +49,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
     }
     // Count cross-cluster edges
     const edgeCounts = new Map<string, number>();
-    for (const edge of payload.edges) {
+    for (const edge of edges) {
       const srcNode = nodeById.get(edge.source);
       const tgtNode = nodeById.get(edge.target);
       if (!srcNode || !tgtNode) continue;
@@ -66,7 +81,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
       });
     }
     const memberIds = new Set(members.map((n) => n.id));
-    for (const edge of payload.edges) {
+    for (const edge of edges) {
       if (memberIds.has(edge.source) && memberIds.has(edge.target)) {
         if (!g.hasEdge(edge.source, edge.target)) {
           g.addEdge(edge.source, edge.target, {
@@ -87,7 +102,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
       if (list) list.push(b);
       else adj.set(a, [b]);
     };
-    for (const edge of payload.edges) {
+    for (const edge of edges) {
       link(edge.source, edge.target);
       link(edge.target, edge.source);
     }
@@ -118,7 +133,7 @@ export function buildGraphologyGraph(payload: GraphPayload, view: View): Graph {
       });
     }
     const egoIds = visited;
-    for (const edge of payload.edges) {
+    for (const edge of edges) {
       if (egoIds.has(edge.source) && egoIds.has(edge.target)) {
         if (!g.hasEdge(edge.source, edge.target)) {
           g.addEdge(edge.source, edge.target, {

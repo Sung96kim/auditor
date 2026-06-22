@@ -94,6 +94,10 @@ export default function App() {
     setSelectedNodeId(nodeId);
   }, []);
 
+  const handleBackground = useCallback(() => {
+    setSelectedNodeId(null); // click empty canvas / Esc → deselect (un-isolate)
+  }, []);
+
   const handleFocus = useCallback(
     (nodeId: string) => {
       setSelectedNodeId(nodeId);
@@ -265,6 +269,7 @@ export default function App() {
             onSelect={handleSelect}
             onDrill={handleDrill}
             onFocus={handleFocus}
+            onBackground={handleBackground}
             selectedNodeId={selectedNodeId}
             overlayOn={filters.overlayOn}
           />

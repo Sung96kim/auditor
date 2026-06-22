@@ -20,8 +20,6 @@ const LABEL_SIZE = 13;
 const LABEL_WEIGHT = "600";
 const LABEL_FONT =
   "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-// camera ratio below which (zoomed in close) a selection's non-path labels are revealed
-const ZOOM_LABEL_REVEAL = 0.28;
 
 interface GraphCanvasProps {
   payload: GraphPayload;
@@ -29,6 +27,7 @@ interface GraphCanvasProps {
   onSelect: (nodeId: string) => void;
   onDrill: (clusterId: number) => void;
   onFocus: (nodeId: string) => void;
+  onBackground: () => void;
   selectedNodeId?: string | null;
   overlayOn?: boolean;
 }
@@ -114,27 +113,13 @@ function alphaColor(color: string, alpha: number): string {
   return color;
 }
 
-function blendHex(from: string, to: string, t: number): string {
-  if (t >= 1) return to;
-  if (t <= 0) return from;
-  const fr = parseInt(from.slice(1, 3), 16);
-  const fg = parseInt(from.slice(3, 5), 16);
-  const fb = parseInt(from.slice(5, 7), 16);
-  const tr = parseInt(to.slice(1, 3), 16);
-  const tg = parseInt(to.slice(3, 5), 16);
-  const tb = parseInt(to.slice(5, 7), 16);
-  const r = Math.round(lerp(fr, tr, t));
-  const gg = Math.round(lerp(fg, tg, t));
-  const b = Math.round(lerp(fb, tb, t));
-  return `rgb(${r},${gg},${b})`;
-}
-
 export default function GraphCanvas({
   payload,
   view,
   onSelect,
   onDrill,
   onFocus,
+  onBackground,
   selectedNodeId = null,
   overlayOn = false,
 }: GraphCanvasProps) {
@@ -145,20 +130,17 @@ export default function GraphCanvas({
   const onSelectRef = useRef(onSelect);
   const onDrillRef = useRef(onDrill);
   const onFocusRef = useRef(onFocus);
+  const onBackgroundRef = useRef(onBackground);
   onSelectRef.current = onSelect;
   onDrillRef.current = onDrill;
   onFocusRef.current = onFocus;
+  onBackgroundRef.current = onBackground;
 
   const selectionRef = useRef<SelectionState>({ id: null, neighbors: new Set() });
   const hoveredLabelRef = useRef<string | null>(null);
   const hoveredEdgeRef = useRef<{ edge: string; source: string; target: string } | null>(
     null,
   );
-  // camera zoom (sigma ratio: smaller = zoomed in). When a path is selected we hide the
-  // non-path labels, but reveal them once the user zooms in past this ratio so they can read
-  // the neighbourhood up close. Keyed off zoom (stable during the selection tween) → no flicker.
-  const cameraRatioRef = useRef<number>(1);
-  const dimLabelsShownRef = useRef<boolean>(false);
 
   const entranceTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 0, progress: 1 });
   const selectionTweenRef = useRef<TweenState>({ active: false, startTime: 0, duration: 150, progress: 1 });
@@ -292,7 +274,6 @@ export default function GraphCanvas({
       edgeProgramClasses: { line: EdgeCurveProgram },
       nodeReducer: (node, data) => {
         const ep = easeInOutCubic(entranceTweenRef.current.progress);
-        const sp = easeInOutCubic(selectionTweenRef.current.progress);
         const hasFinding = overlayOnRef.current && findingsSet.has(node);
         const sel = selectionRef.current;
 
@@ -328,25 +309,10 @@ export default function GraphCanvas({
               borderSize: 0.15,
             };
           } else {
-            // non-path node: dim it and HIDE its label so only the selected node + its
-            // neighbours stay labelled. Visibility keys off the stable selection state (not the
-            // animating tween value), so the displayed-label set is constant across refresh
-            // frames — that's what prevents the label flicker, not keeping every label on.
-            const dimColor = "#2A3344";
-            const baseColor = (data.color as string | undefined) ?? THEME.accent;
-            const blendedColor = baseColor.startsWith("#") && baseColor.length === 7
-              ? blendHex(baseColor, dimColor, sp)
-              : dimColor;
-            const revealed = cameraRatioRef.current < ZOOM_LABEL_REVEAL;
-            resolved = {
-              ...data,
-              color: blendedColor,
-              size: lerp(baseSize, baseSize * 0.7, sp),
-              label: revealed ? (data.label as string) : "",
-              labelColor: blendHex("#E6EDF5", "#5A6678", sp),
-              borderColor: blendHex(baseColor.startsWith("#") && baseColor.length === 7 ? baseColor : dimColor, dimColor, sp),
-              borderSize: 0.1,
-            };
+            // non-path node: hidden. Selecting isolates the path — the selected node, its
+            // direct neighbours, and the connecting edges — and hides everything else until
+            // you deselect (click the background or press Esc).
+            resolved = { ...data, hidden: true, label: "" };
           }
         } else {
           const baseSize = (data.size as number) ?? 8;
@@ -402,8 +368,8 @@ export default function GraphCanvas({
         if (src === sel.id || tgt === sel.id) {
           return { ...data, color: THEME.accent + "AA", zIndex: 1 };
         }
-        // non-incident edges are dimmed, never hidden, so the graph keeps its shape
-        return { ...data, color: hexAlpha("#222A38", 0.22) };
+        // selection isolates the path: hide edges that don't touch the selected node
+        return { ...data, hidden: true };
       },
     });
 
@@ -467,7 +433,10 @@ export default function GraphCanvas({
 
     sigma.on("clickStage", ({ event }) => {
       const node = nodeAtPoint(event.x, event.y, labelBoxes());
-      if (!node) return;
+      if (!node) {
+        onBackgroundRef.current(); // click empty space → deselect (un-isolate)
+        return;
+      }
       if (node.startsWith("cluster:")) {
         onDrillRef.current(parseInt(node.replace("cluster:", ""), 10));
       } else {
@@ -498,22 +467,15 @@ export default function GraphCanvas({
     };
     container.addEventListener("mousemove", handleLabelHover);
 
+    const handleKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") onBackgroundRef.current(); // Esc → deselect (un-isolate)
+    };
+    window.addEventListener("keydown", handleKey);
+
     sigmaRef.current = sigma;
 
     const camera = sigma.getCamera();
     camera.animatedReset({ duration: 400 });
-    cameraRatioRef.current = camera.ratio;
-    // On zoom, reveal/hide a selection's non-path labels. Only refresh (re-run reducers) when
-    // the reveal threshold is actually crossed and a path is selected — not on every pan tick.
-    const onCameraMove = (): void => {
-      cameraRatioRef.current = camera.ratio;
-      const shown = camera.ratio < ZOOM_LABEL_REVEAL;
-      if (shown !== dimLabelsShownRef.current) {
-        dimLabelsShownRef.current = shown;
-        if (selectionRef.current.id !== null) sigma.refresh();
-      }
-    };
-    camera.on("updated", onCameraMove);
 
     if (!prefersReducedMotion && Object.keys(targetPositions).length > 0) {
       const morphTargets: Record<string, { x: number; y: number }> = {};
@@ -541,6 +503,7 @@ export default function GraphCanvas({
 
     return () => {
       container.removeEventListener("mousemove", handleLabelHover);
+      window.removeEventListener("keydown", handleKey);
       stopRaf();
       sigma.kill();
       sigmaRef.current = null;
