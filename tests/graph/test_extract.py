@@ -51,6 +51,22 @@ def test_decorator_call_is_not_a_callee():
     assert "do_work" in h.callees and "get" not in h.callees
 
 
+def test_builtin_names_are_not_callees_or_callbacks():
+    """Regression: builtin calls/args must not become edges. `dict(x)` / `x.dict()` aren't calls
+    to a repo symbol named `dict`, and `isinstance(x, dict)` doesn't pass `dict` as a callback —
+    these created false calls/callback_arg edges to a same-named repo class."""
+    src = (
+        "def f(x):\n"
+        "    if isinstance(x, dict):\n"
+        "        return dict(x)\n"
+        "    return x.dict()\n"
+    )
+    f = _by_id(extract_file_facts("m.py", src, "production"))["m.py::f"]
+    assert "dict" not in f.callees  # neither dict(x) nor x.dict()
+    assert "dict" not in f.callback_names  # nor the isinstance() type arg
+    assert "isinstance" not in f.callees  # builtin call itself isn't a callee
+
+
 def test_method_captures_param_types_callees_and_doc():
     run = _by_id(extract_file_facts("m.py", SRC, "production"))["m.py::Impl.run"]
     assert "Request" in run.param_types and "Response" in run.param_types

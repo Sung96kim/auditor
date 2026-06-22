@@ -1,6 +1,7 @@
 """Per-file AST extraction → FileGraphFacts. Stdlib only (runs in the core scan)."""
 
 import ast
+import builtins
 
 from auditor.graph import semantic_profile
 from auditor.graph.model import FileGraphFacts, GraphNode, NodeKind
@@ -8,6 +9,10 @@ from auditor.graph.tokens import normalize_tokens, split_ident, symbol_document
 
 _FuncDef = (ast.FunctionDef, ast.AsyncFunctionDef)
 _FuncDefT = ast.FunctionDef | ast.AsyncFunctionDef
+# Python's own builtin names (dict, list, str, isinstance, type, …) — not a hand-curated list.
+# `dict(x)`/`x.dict()` and `isinstance(x, dict)` must not become call/callback edges to a repo
+# symbol that happens to share a builtin's name.
+_BUILTIN_NAMES = frozenset(dir(builtins))
 
 
 def _module_dotted(rel_path: str) -> str:
@@ -145,11 +150,13 @@ class FileExtractor:
                 elif isinstance(n, ast.Call):
                     f = n.func
                     if isinstance(f, ast.Name):
-                        callees.append(f.id)
+                        if f.id not in _BUILTIN_NAMES:
+                            callees.append(f.id)
                     elif isinstance(f, ast.Attribute):
-                        callees.append(f.attr)
+                        if f.attr not in _BUILTIN_NAMES:
+                            callees.append(f.attr)
                     for a in n.args:  # bare Name positional arg (potential callback)
-                        if isinstance(a, ast.Name):
+                        if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
                             callback_names.append(a.id)
         ptypes: list[str] = []
         for a in fn.args.posonlyargs + fn.args.args:
