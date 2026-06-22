@@ -49,7 +49,13 @@ class StructuralResolver:
         if caller.role not in TEST_ROLES:
             hits = [h for h in hits if self.role_by_id.get(h) not in TEST_ROLES]
         same = [h for h in hits if h.split("::")[0] == caller.module]
-        return same or hits
+        if same:
+            return same
+        # Cross-module: only resolve an UNAMBIGUOUS name. A call site gives us just the method
+        # name (`x.get()` → "get"), not the receiver type, so a name defined in many places
+        # (get/run/from_orm/load/…) can't be attributed — linking to all of them is a false
+        # hairball (e.g. 491 callers "calling" every `from_orm`). Skip when ambiguous.
+        return hits if len(hits) == 1 else []
 
     def _module_contains(self) -> None:
         top_level = [

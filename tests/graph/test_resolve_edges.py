@@ -40,6 +40,22 @@ def test_calls_resolved_by_name():
     assert ("m0.py::Impl.run", "m0.py::helper") in _pairs(_edges(SRC_A), "calls")
 
 
+def test_ambiguous_cross_module_name_is_skipped():
+    """A method name defined in many places can't be attributed from a call site (no receiver
+    type), so a cross-module caller must NOT edge to all of them — only an unambiguous name
+    resolves. Guards against the from_orm/get over-match (491 false edges)."""
+    edges = _edges(
+        "def use():\n    save()\n    persist()\n",  # m0: caller, no local defs
+        "def save():\n    return 1\n",  # m1
+        "def save():\n    return 2\n",  # m2 — ambiguous `save`
+        "def persist():\n    return 3\n",  # m3 — unique
+    )
+    calls = _pairs(edges, "calls")
+    assert ("m0.py::use", "m1.py::save") not in calls
+    assert ("m0.py::use", "m2.py::save") not in calls
+    assert ("m0.py::use", "m3.py::persist") in calls  # unique name still resolves
+
+
 def test_references_type_edge():
     # Impl.run has param ctx: Request — but Request isn't defined here, so no edge;
     # add a Request class and confirm the edge appears
