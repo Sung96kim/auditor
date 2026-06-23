@@ -3,6 +3,8 @@ import type { GraphPayload, NodeType } from "./types";
 import { THEME } from "./theme";
 import { sample } from "./sample";
 import GraphCanvas from "./components/GraphCanvas";
+import Graph3D from "./components/Graph3D";
+import GraphText from "./components/GraphText";
 import Explorer from "./components/Explorer";
 import TypeFilter from "./components/TypeFilter";
 import Controls from "./components/Controls";
@@ -86,6 +88,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [controlsOpen, setControlsOpen] = useState(true);
+  const [dim, setDim] = useState<"2d" | "3d" | "text">("2d");
   const [filters, setFilters] = useState<FilterState>(() =>
     makeDefaultFilters(data)
   );
@@ -326,16 +329,75 @@ export default function App() {
             border: `1px solid ${THEME.border}`,
           }}
         >
-          <GraphCanvas
-            payload={filteredPayload}
-            view={view}
-            onSelect={handleSelect}
-            onDrill={handleDrill}
-            onFocus={handleFocus}
-            onBackground={handleBackground}
-            selectedNodeId={selectedNodeId}
-            overlayOn={filters.overlayOn}
-          />
+          {dim === "text" ? (
+            <GraphText
+              payload={filteredPayload}
+              view={view}
+              selectedNodeId={selectedNodeId}
+              depth={filters.depth}
+            />
+          ) : dim === "3d" ? (
+            <Graph3D
+              payload={filteredPayload}
+              onSelect={handleSelect}
+              onBackground={handleBackground}
+            />
+          ) : (
+            <GraphCanvas
+              payload={filteredPayload}
+              view={view}
+              onSelect={handleSelect}
+              onDrill={handleDrill}
+              onFocus={handleFocus}
+              onBackground={handleBackground}
+              selectedNodeId={selectedNodeId}
+              overlayOn={filters.overlayOn}
+            />
+          )}
+
+          {/* 2D / 3D view toggle (top-right) */}
+          <div
+            style={{
+              position: "absolute",
+              top: "12px",
+              right: "12px",
+              display: "flex",
+              gap: "2px",
+              padding: "3px",
+              background: "rgba(14,18,27,0.92)",
+              backdropFilter: "blur(10px)",
+              border: `1px solid ${THEME.border}`,
+              borderRadius: "10px",
+              zIndex: 10,
+            }}
+          >
+            {(["2d", "3d", "text"] as const).map((d) => (
+              <button
+                key={d}
+                onClick={() => setDim(d)}
+                title={
+                  d === "3d"
+                    ? "3D view (POC)"
+                    : d === "text"
+                    ? "Text view (outline / DOT / JSON)"
+                    : "2D view"
+                }
+                style={{
+                  background: dim === d ? THEME.accent : "transparent",
+                  color: dim === d ? "#0b0e15" : "#94a3b8",
+                  border: "none",
+                  borderRadius: "7px",
+                  cursor: "pointer",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  padding: "4px 12px",
+                }}
+              >
+                {d.toUpperCase()}
+              </button>
+            ))}
+          </div>
 
           {/* Floating Controls overlay (same chrome as side panels) */}
           <div
@@ -408,7 +470,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* Hint line */}
+          {/* Hint line (canvas modes only) */}
+          {dim !== "text" && (
           <div
             style={{
               position: "absolute",
@@ -442,8 +505,11 @@ export default function App() {
               <circle cx="11" cy="11" r="7" />
               <circle cx="11" cy="11" r="2.5" />
             </svg>
-            Click to select · double-click to focus · drag to move · scroll to zoom
+            {dim === "3d"
+              ? "Drag to orbit · scroll to zoom · click a node to inspect · right-drag to pan"
+              : "Click to select · double-click to focus · drag to move · scroll to zoom"}
           </div>
+          )}
         </div>
 
         {/* ── Right: Detail panel ── */}
