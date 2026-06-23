@@ -18,7 +18,7 @@ export function nodeSize(rank: number): number {
 // Only structural relationships are drawn. The semantic similarity edges
 // (name_similar/usage_similar) are ~60% of all edges and turn every view into a hairball —
 // they're meant for `graph related` queries, not the visual graph.
-const STRUCTURAL_KINDS = new Set([
+export const STRUCTURAL_KINDS = new Set([
   "calls",
   "overrides",
   "inherits",
