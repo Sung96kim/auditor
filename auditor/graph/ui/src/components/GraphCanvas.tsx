@@ -356,8 +356,12 @@ export default function GraphCanvas({
       ],
     });
 
+    // Small focused graphs (ego / small clusters) can show every edge's kind without
+    // clutter; larger ones reveal the kind only on hover or when a node is selected.
+    const labelAllEdges = g.size <= 70;
+
     const sigma = new Sigma(g, container, {
-      renderEdgeLabels: false,
+      renderEdgeLabels: true,
       enableEdgeEvents: true,
       defaultEdgeColor: "#1B2230",
       labelColor: { attribute: "labelColor", color: "#E6EDF5" },
@@ -365,6 +369,10 @@ export default function GraphCanvas({
       labelWeight: LABEL_WEIGHT,
       labelFont: LABEL_FONT,
       labelRenderedSizeThreshold: 0,
+      edgeLabelColor: { color: "#8492A6" },
+      edgeLabelSize: 10.5,
+      edgeLabelWeight: "500",
+      edgeLabelFont: LABEL_FONT,
       defaultDrawNodeHover: drawDarkNodeHover,
       nodeProgramClasses: { circle: NodeBorderProg },
       edgeProgramClasses: { line: EdgeCurvedArrowProgram },
@@ -453,19 +461,26 @@ export default function GraphCanvas({
         const sel = selectionRef.current;
         const rawWeight = (data.weight as number | undefined) ?? 1;
         const baseAlpha = Math.min(0.12 + (rawWeight / 10) * 0.43, 0.55);
+        const kind = (data.kind as string | undefined) ?? ""; // edge relationship label
 
         // hovering an edge highlights that edge + its two endpoints (the path)
         if (hoveredEdgeRef.current?.edge === edge) {
-          return { ...data, color: THEME.accent, size: 3.4, zIndex: 2 };
+          return { ...data, label: kind, color: THEME.accent, size: 3.4, zIndex: 2 };
         }
         if (sel.id === null) {
           // give edges real thickness so the directional arrowheads are visible
-          return { ...data, color: hexAlpha("#6B7C99", Math.max(0.4, baseAlpha)), size: 1.8 };
+          return {
+            ...data,
+            label: labelAllEdges ? kind : "",
+            color: hexAlpha("#6B7C99", Math.max(0.4, baseAlpha)),
+            size: 1.8,
+          };
         }
         const src = g.source(edge);
         const tgt = g.target(edge);
         if (src === sel.id || tgt === sel.id) {
-          return { ...data, color: THEME.accent + "CC", size: 2.8, zIndex: 1 };
+          // a selected node's edges show their kind so you can read each relationship
+          return { ...data, label: kind, color: THEME.accent + "CC", size: 2.8, zIndex: 1 };
         }
         // selection isolates the path: hide edges that don't touch the selected node
         return { ...data, hidden: true };
