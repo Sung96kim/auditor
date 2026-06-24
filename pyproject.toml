@@ -40,6 +40,12 @@ auditr-mcp = "auditor.mcp_server:main"
 auditor = "auditor.cli:app"  # alias — matches the import package name
 auditor-mcp = "auditor.mcp_server:main"  # alias
 
+[tool.hatch.build]
+# auditor/graph/ui/dist/ is git-ignored (a built artifact), but the bundled UI must ship in
+# the package. `artifacts` overrides VCS ignore so the built file lands in BOTH the sdist and
+# the wheel — without it the sdist omits the file and the wheel's force-include fails.
+artifacts = ["auditor/graph/ui/dist/index.html"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["auditor"]
 exclude = [
