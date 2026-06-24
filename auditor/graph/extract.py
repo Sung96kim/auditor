@@ -22,6 +22,7 @@ def _base_name(b: ast.expr) -> str | None:
         return _base_name(b.value)
     return None
 
+
 # Python's own builtin names (dict, list, str, isinstance, type, …) — not a hand-curated list.
 # `dict(x)`/`x.dict()` and `isinstance(x, dict)` must not become call/callback edges to a repo
 # symbol that happens to share a builtin's name.
@@ -162,12 +163,10 @@ class FileExtractor:
                     body_idents.append(n.attr)
                 elif isinstance(n, ast.Call):
                     f = n.func
-                    if isinstance(f, ast.Name):
-                        if f.id not in _BUILTIN_NAMES:
-                            callees.append(f.id)
-                    elif isinstance(f, ast.Attribute):
-                        if f.attr not in _BUILTIN_NAMES:
-                            callees.append(f.attr)
+                    if isinstance(f, ast.Name) and f.id not in _BUILTIN_NAMES:
+                        callees.append(f.id)
+                    elif isinstance(f, ast.Attribute) and f.attr not in _BUILTIN_NAMES:
+                        callees.append(f.attr)
                     for a in n.args:  # bare Name positional arg (potential callback)
                         if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
                             callback_names.append(a.id)
