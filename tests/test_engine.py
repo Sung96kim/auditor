@@ -6,8 +6,8 @@ from pathlib import Path
 from loguru import logger
 
 from auditor.config import AuditorSettings, load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine, audit_target
-from auditor.index import IndexStore
 from auditor.languages.python.resolve import CalleeResolver
 from auditor.paths import index_db_path
 
@@ -85,6 +85,41 @@ async def test_per_rule_invalidation(tmp_path):
     assert "PY-STYLE-FILE-SIZE" in {f.rule_id for f in res["pkg/b.py"].findings}
 
 
+async def test_cached_rescan_uses_batched_queries(tmp_path):
+    """A no-op re-scan must use the per-file batched cache methods (one fingerprints +
+    one cached_by_rule per file), never the per-rule fingerprint/cached calls — guards the
+    bulk-query optimization against regressing back to per-rule round-trips."""
+    root = _make_repo(tmp_path)
+    settings = load_config(root)
+    db = root / ".auditor" / "index.db"
+    async with await IndexStore.connect(db) as index:
+        await _scan_dir(root, root / "pkg", settings, index)
+
+    counts = {"fingerprint": 0, "cached": 0, "fingerprints": 0, "cached_by_rule": 0}
+    async with await IndexStore.connect(db) as index:
+        f = index.findings
+        orig = {n: getattr(f, n) for n in counts}
+
+        def wrap(name):
+            async def w(*a, **k):
+                counts[name] += 1
+                return await orig[name](*a, **k)
+
+            return w
+
+        for n in counts:
+            setattr(f, n, wrap(n))
+        second = await _scan_dir(root, root / "pkg", settings, index)
+        assert all(r.cached for r in second.values())
+
+    assert (
+        counts["fingerprint"] == 0 and counts["cached"] == 0
+    )  # no per-rule round-trips
+    assert (
+        counts["fingerprints"] == 2 and counts["cached_by_rule"] == 2
+    )  # one each / file
+
+
 async def test_parallel_writers(tmp_path):
     root = _make_repo(tmp_path)
     settings = load_config(root)
@@ -101,7 +136,7 @@ async def test_parallel_writers(tmp_path):
     results = await asyncio.gather(*[worker(p) for p in files * 4])
     assert all(isinstance(n, int) for n in results)
     async with await IndexStore.connect(db) as index:
-        assert len(await index.files()) == 2
+        assert len(await index.files.list()) == 2
 
 
 async def test_scan_dispatches_each_language(tmp_path):
@@ -142,14 +177,14 @@ async def test_deleted_file_is_pruned_from_index(tmp_path):
     settings = load_config(root)
     async with await IndexStore.connect(db) as index:
         await _scan_dir(root, root / "pkg", settings, index)
-        assert {e.path for e in await index.files()} == {"pkg/a.py", "pkg/b.py"}
+        assert {e.path for e in await index.files.list()} == {"pkg/a.py", "pkg/b.py"}
 
     (root / "pkg" / "a.py").unlink()  # delete a file, then rescan
     async with await IndexStore.connect(db) as index:
         results = await _scan_dir(root, root / "pkg", settings, index)
         assert "pkg/a.py" not in results
         # reconciled out of every table, so `index list` / aggregate don't show a ghost file
-        assert {e.path for e in await index.files()} == {"pkg/b.py"}
+        assert {e.path for e in await index.files.list()} == {"pkg/b.py"}
 
 
 async def test_deleting_one_of_a_dup_pair_clears_the_crossfile_finding(tmp_path):
@@ -185,7 +220,7 @@ async def test_deleting_one_of_a_dup_pair_clears_the_crossfile_finding(tmp_path)
             f.rule_id for f in second["pkg/b.py"].findings
         }
         # and no stale finding lingers in the table for aggregate to pick up
-        assert all("a.py" not in str(f) for f in await index.all_findings())
+        assert all("a.py" not in str(f) for f in await index.findings.all())
 
 
 def test_audit_target_config_overrides(tmp_path):

@@ -1,0 +1,57 @@
+import pytest
+
+from auditor.database import IndexStore
+from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
+
+
+@pytest.fixture
+async def store(tmp_path):
+    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
+    yield s
+    await s.aclose()
+
+
+def _n(i, **kw):
+    return GraphNode(
+        id=i, kind=NodeKind.FUNCTION, name=i, module="m.py", qualname=i, **kw
+    )
+
+
+async def test_facts_cache_roundtrip(store):
+    assert await store.graph.facts_hash("m.py") is None
+    await store.graph.set_facts("m.py", '{"path":"m.py"}', "abc")
+    assert await store.graph.facts_hash("m.py") == "abc"
+    assert '{"path":"m.py"}' in await store.graph.all_facts()
+
+
+async def test_clear_facts_forces_reextraction(store):
+    await store.graph.set_facts("a.py", "{}", "h1")
+    await store.graph.set_facts("b.py", "{}", "h2")
+    await store.graph.clear_facts()
+    assert await store.graph.all_facts() == []
+    assert await store.graph.facts_hash("a.py") is None  # so the next scan re-extracts
+
+
+async def test_replace_graph_and_query(store):
+    nodes = [_n("a", rank=0.9, cluster_id=1), _n("b", cluster_id=1)]
+    edges = [GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS, weight=1.0)]
+    clusters = [GraphCluster(cluster_id=1, label="alpha", member_count=2)]
+    await store.graph.replace(nodes, edges, clusters)
+    assert (await store.graph.node("a"))["rank"] == pytest.approx(0.9)
+    assert [e["dst"] for e in await store.graph.edges_of("a", None)] == ["b"]
+    assert {m["id"] for m in await store.graph.cluster_members(1)} == {"a", "b"}
+    # replace is idempotent (clears prior rows)
+    await store.graph.replace([_n("a")], [], [])
+    assert await store.graph.node("b") is None
+
+
+async def test_all_edges(store):
+    nodes = [_n("x"), _n("y"), _n("z")]
+    edges = [
+        GraphEdge(src="x", dst="y", kind=EdgeKind.CALLS, weight=1.0),
+        GraphEdge(src="y", dst="z", kind=EdgeKind.IMPORTS, weight=0.5),
+    ]
+    await store.graph.replace(nodes, edges, [])
+    all_e = await store.graph.all_edges()
+    assert len(all_e) == 2
+    assert {(e["src"], e["dst"]) for e in all_e} == {("x", "y"), ("y", "z")}

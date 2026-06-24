@@ -4,7 +4,8 @@ from typing import Annotated
 
 import typer
 
-from auditor.cli.helpers import _echo_json, _fail
+from auditor.cli.helpers import _fail, _present
+from auditor.cli.render import render_rules_list
 from auditor.registry import REGISTRY
 
 rules_app = typer.Typer(no_args_is_help=True, help="Inspect detector rules.")
@@ -30,6 +31,7 @@ def rules_list(
         str | None,
         typer.Option("-f", "--framework", help="Filter by framework (e.g. pytest)."),
     ] = None,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List every registered detector rule."""
     if category is not None and category not in REGISTRY.categories():
@@ -63,4 +65,4 @@ def rules_list(
                 "source": REGISTRY.source_of("detector", rid),
             }
         )
-    _echo_json(rows)
+    _present(rows, render_rules_list, as_json=json_)

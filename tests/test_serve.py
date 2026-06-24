@@ -3,7 +3,19 @@
 import threading
 from urllib.request import urlopen
 
-from auditor.serve import ReportServer, _wsl_browser_command
+from auditor.serve import ReportServer, _ReportHandler, _wsl_browser_command
+
+
+def test_do_get_swallows_client_disconnect():
+    """A browser that closes the connection mid-response must not crash the handler with a
+    BrokenPipeError traceback (common with the large graph payload)."""
+    handler = object.__new__(_ReportHandler)  # bypass socket __init__
+    handler.server = type("S", (), {"payload": b"body", "content_type": "text/html"})()
+    handler.send_response = lambda *a, **k: None
+    handler.send_header = lambda *a, **k: None
+    handler.end_headers = lambda *a, **k: None
+    handler.wfile = type("W", (), {"write": lambda self, b: (_ for _ in ()).throw(BrokenPipeError())})()
+    handler.do_GET()  # must not raise
 
 
 def test_serve_returns_document_on_localhost():

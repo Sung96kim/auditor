@@ -6,23 +6,43 @@ they need; anything used by a single command lives in that command's module inst
 import asyncio
 import difflib
 import json
-from collections.abc import Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
 import typer
 from pydantic import ValidationError
+from rich.console import Console
 
 from auditor.cli.apps import _status
-from auditor.index import IndexStore
+from auditor.database import IndexStore
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 
 _T = TypeVar("_T")
 
+_SPINNER = "dots12"
+_SPINNER_STYLE = "#7C7CFF"
+
+_out = Console()
+
 
 def _echo_json(payload: object) -> None:
     typer.echo(json.dumps(payload, indent=2))
+
+
+def _present(
+    payload: object,
+    render: Callable[[Console, Any], None],
+    *,
+    as_json: bool = False,
+) -> None:
+    """Emit a command result: pretty for a human at a TTY, else raw JSON (so piped/
+    captured/agent callers and --json still get the exact machine-readable output)."""
+    if as_json or not _out.is_terminal:
+        _echo_json(payload)
+    else:
+        render(_out, payload)
 
 
 def _fail(message: str) -> NoReturn:
@@ -81,8 +101,28 @@ def _run(
     ``-v`` logging is driving the progress output instead)."""
     if not spinner:
         return asyncio.run(coro)
-    with _status.status(message, spinner="dots"):
+    with _status.status(message, spinner=_SPINNER, spinner_style=_SPINNER_STYLE):
         return asyncio.run(coro)
+
+
+def _run_staged(
+    make_coro: Callable[[Callable[[str], None]], Coroutine[Any, Any, _T]],
+    message: str = "working…",
+    *,
+    spinner: bool = True,
+) -> _T:
+    """Like _run but passes the coro factory a `report(text)` callback that live-updates the
+    spinner so long multi-stage ops can show progress. make_coro: (report) -> Coroutine."""
+    if not spinner:
+        return asyncio.run(make_coro(lambda _msg: None))
+    with _status.status(message, spinner=_SPINNER, spinner_style=_SPINNER_STYLE) as st:
+
+        def report(text: str) -> None:
+            st.update(
+                f"[dim]{text}[/dim]", spinner=_SPINNER, spinner_style=_SPINNER_STYLE
+            )
+
+        return asyncio.run(make_coro(report))
 
 
 def _open_index(root: Path) -> Coroutine[Any, Any, IndexStore]:

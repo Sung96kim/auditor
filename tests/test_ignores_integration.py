@@ -4,8 +4,8 @@ no-op (and doesn't create the shared db)."""
 
 from pathlib import Path
 
+from auditor.database import IndexStore
 from auditor.engine import audit_target
-from auditor.index import IndexStore
 from auditor.paths import index_db_path, repo_key
 
 
@@ -20,7 +20,7 @@ def _make_repo(root: Path) -> Path:
 
 async def _add_ignore(root: Path, rule_id: str, file=None, line=None, ev=None) -> None:
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        await index.add_ignore(rule_id, file, line, ev, None, 1.0)
+        await index.ignores.add(rule_id, file, line, ev, None, 1.0)
 
 
 def _rules(results):

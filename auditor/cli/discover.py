@@ -2,24 +2,30 @@
 
 from pathlib import Path
 
+import typer
 from pydantic import ValidationError
 
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
-    _echo_json,
     _fail,
     _format_config_error,
     _parse_config_json,
+    _present,
     _require_exists,
 )
 from auditor.cli.options import ConfigJson, DirTarget
+from auditor.cli.render import render_discover
 from auditor.config import load_config
 from auditor.discovery import FileDiscovery, find_root
 from auditor.roles import RoleClassifier
 
 
 @app.command()
-def discover(target: DirTarget = Path("."), config_json: ConfigJson = None) -> None:
+def discover(
+    target: DirTarget = Path("."),
+    config_json: ConfigJson = None,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
     """List auditable files with their classified role."""
     _require_exists(target)
     root = find_root(target)
@@ -40,4 +46,4 @@ def discover(target: DirTarget = Path("."), config_json: ConfigJson = None) -> N
             rel, path.read_text(encoding="utf-8", errors="replace")
         )
         out.append({"file": rel, "role": role.value})
-    _echo_json(out)
+    _present(out, render_discover, as_json=json_)

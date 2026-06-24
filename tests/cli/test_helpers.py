@@ -3,7 +3,7 @@
 import pytest
 import typer
 
-from auditor.cli.helpers import _parse_config_json, _suggest
+from auditor.cli.helpers import _parse_config_json, _run_staged, _suggest
 
 
 def test_suggest_returns_closest_match():
@@ -42,3 +42,25 @@ def test_parse_config_json_bad_json_exits():
 def test_parse_config_json_non_object_exits():
     with pytest.raises(typer.Exit):
         _parse_config_json("[1, 2]")
+
+
+def test_run_staged_no_spinner_runs_with_noop_reporter():
+    seen: list[str] = []
+
+    async def make(report):
+        report("stage one")
+        return 42
+
+    result = _run_staged(make, "msg", spinner=False)
+    assert result == 42
+    assert seen == []  # no-op reporter recorded nothing externally
+
+
+def test_run_staged_with_spinner_returns_result():
+    async def make(report):
+        report("stage one")
+        report("stage two")
+        return "ok"
+
+    # rich auto-disables the spinner off-TTY in tests, so this won't hang.
+    assert _run_staged(make, "msg") == "ok"

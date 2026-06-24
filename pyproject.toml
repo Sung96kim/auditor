@@ -1,7 +1,7 @@
 [project]
 name = "auditr"  # PyPI distribution name (import package is `auditor`)
 version = "0.2.1"
-description = "A token-efficient repo auditor for coding agents"
+description = "A deterministic codebase auditor for coding agents"
 readme = "README.md"
 requires-python = ">=3.13"
 license = { file = "LICENSE" }
@@ -27,6 +27,12 @@ ts = [
     "tree-sitter>=0.23",
     "tree-sitter-typescript>=0.23",
 ]
+graph = [
+    "numpy>=2.1",
+    "scikit-learn>=1.6",
+    "snowballstemmer>=2.2",
+    "networkx>=3",
+]
 
 [project.scripts]
 auditr = "auditor.cli:app"
@@ -36,6 +42,14 @@ auditor-mcp = "auditor.mcp_server:main"  # alias
 
 [tool.hatch.build.targets.wheel]
 packages = ["auditor"]
+exclude = [
+    "auditor/graph/ui/node_modules",
+    "auditor/graph/ui/src",
+    "auditor/graph/ui/*.ts",
+    "auditor/graph/ui/*.json",
+    "auditor/graph/ui/*.html",
+]
+force-include = { "auditor/graph/ui/dist/index.html" = "auditor/graph/ui/dist/index.html" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

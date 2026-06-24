@@ -15,10 +15,11 @@ from loguru import logger
 
 from auditor import crossfile
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
+from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
+from auditor.graph.extract import extract_file_facts
 from auditor.ignores import IgnoreList
-from auditor.index import IndexStore
 from auditor.languages.base import LanguageAuditor
 from auditor.languages.python.resolve import CalleeResolver, find_site_packages
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
@@ -260,17 +261,25 @@ class ScanEngine:
         skipped: list[SkippedRule],
     ) -> ScanResult:
         index = self.index
-        cached_sha = await index.file_sha(rel)
-        missed = [
-            rid
-            for rid, fp in enabled.items()
-            if cached_sha != sha or await index.rule_fingerprint(rel, rid) != fp
-        ]
+        cached_sha = await index.files.sha(rel)
+        if cached_sha != sha:
+            missed = list(enabled)  # content changed: every enabled rule must re-run
+        else:
+            fps = await index.findings.fingerprints(rel)  # one query for all rules
+            missed = [rid for rid, fp in enabled.items() if fps.get(rid) != fp]
 
         if not missed:  # nothing to re-run
-            findings = [
-                f for rid in enabled for f in await index.cached_findings(rel, rid)
-            ]
+            # Graph facts live outside the findings cache. A file first scanned before
+            # graph was enabled is a findings cache-hit yet has no facts, so an
+            # incremental `graph build` auto-scan would skip it and build an empty graph.
+            # Extract facts here when they are missing or stale for this content.
+            if self.settings.graph.enabled and await index.graph.facts_hash(rel) != sha:
+                facts = extract_file_facts(rel, source, role.value)
+                await index.graph.set_facts(rel, facts.model_dump_json(), sha)
+            cached_map = await index.findings.cached_by_rule(
+                rel
+            )  # one query for all rules
+            findings = [f for rid in enabled for f in cached_map.get(rid, [])]
             findings.sort(key=lambda f: (f.line, f.rule_id))
             # genuinely cached only if a prior scan recorded this file; a file with no
             # enabled rules (e.g. role-excluded) has nothing to do, not a cache hit.
@@ -286,7 +295,7 @@ class ScanEngine:
 
         res = self._audit(auditor, rel, source, role, rc, missed)
         now = time.time()
-        await index.upsert_file(
+        await index.files.upsert(
             IndexEntry(
                 path=rel,
                 sha256=sha,
@@ -299,23 +308,31 @@ class ScanEngine:
         by_rule: dict[str, list[Finding]] = {rid: [] for rid in missed}
         for f in res.findings:
             by_rule.setdefault(f.rule_id, []).append(f)
-        for rid in missed:
-            await index.record_rule(rel, rid, enabled[rid], by_rule.get(rid, []), now)
+        await index.findings.record_many(
+            rel,
+            [(rid, enabled[rid], by_rule.get(rid, [])) for rid in missed],
+            now,
+        )
 
-        await index.clear_shapes(rel)
+        await index.shapes.clear(rel)
         rows = auditor.shapes(
             source,
             method_min_statements=self.settings.threshold.dry.xfile_method_min_statements,
             cli_frameworks=self.settings.cli_frameworks,
         )
         if rows:
-            await index.add_shapes(
+            await index.shapes.add(
                 [(s.shape_hash, s.kind, rel, s.symbol, s.line) for s in rows]
             )
 
+        if self.settings.graph.enabled:
+            facts = extract_file_facts(rel, source, role.value)
+            await index.graph.set_facts(rel, facts.model_dump_json(), sha)
+
         hit = [rid for rid in enabled if rid not in missed]
+        cached_map = await index.findings.cached_by_rule(rel) if hit else {}
         findings = list(res.findings) + [
-            f for rid in hit for f in await index.cached_findings(rel, rid)
+            f for rid in hit for f in cached_map.get(rid, [])
         ]
         findings.sort(key=lambda f: (f.line, f.rule_id))
         return ScanResult(
@@ -457,7 +474,7 @@ async def audit_target(
 
     if incremental and not no_index and target.is_dir():
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-            await index.register(time.time())
+            await index.repos.register(time.time())
             results = await _run(ScanEngine(root, settings, index=index))
             if apply_ignores:
                 await _apply_ignores(index, results, show_ignored=show_ignored)
@@ -471,7 +488,7 @@ async def audit_target(
 async def _apply_ignores(
     index: IndexStore, results: list[ScanResult], *, show_ignored: bool
 ) -> None:
-    rows = await index.ignores()
+    rows = await index.ignores.list()
     if rows:
         IgnoreList.from_rows(rows).filter(results, show_ignored=show_ignored)
 

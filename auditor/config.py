@@ -249,6 +249,31 @@ class SqlAlchemyConfig(BaseModel):
     )
 
 
+class GraphConfig(BaseModel):
+    """[tool.auditor.graph] — the semantic graph is opt-in (needs the `graph` extra)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    # cross-module calls resolve only to a symbol whose module the caller imports. Turn this on
+    # to also follow package __init__ re-exports (caller imports the package, symbol lives in a
+    # leaf module) — more recall, at some precision cost.
+    follow_reexports: bool = False
+    name_similarity_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
+    knn_k: int = Field(default=8, ge=1)
+    cluster_floor: float = Field(default=0.45, ge=0.0, le=1.0)
+    stopwords: list[str] = Field(
+        default_factory=list
+    )  # repo-specific, added on top of english/IDF
+    detect: bool = True
+    god_concept_sigma: float = Field(default=3.0, ge=0.0)
+    scattered_min_modules: int = Field(default=5, ge=1)
+    scattered_min_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
+    naming_verb_distance: float = Field(default=0.15, ge=0.0)
+    naming_object_jaccard: float = Field(default=0.6, ge=0.0, le=1.0)
+    naming_min_verb_count: int = Field(default=20, ge=1)
+
+
 class GlobalPaths(BaseSettings):
     """Global auditor data locations from the environment. ``home`` ← ``$AUDITOR_HOME`` (via the
     ``AUDITOR_`` prefix), defaulting to ``~/.auditor``. Lives here so the project's BaseSettings
@@ -297,6 +322,7 @@ class AuditorSettings(BaseSettings):
     )
     design_system: DesignSystem = Field(default_factory=DesignSystem)
     sqlalchemy: SqlAlchemyConfig = Field(default_factory=SqlAlchemyConfig)
+    graph: GraphConfig = Field(default_factory=GraphConfig)
 
     @field_validator("rules", mode="after")
     @classmethod

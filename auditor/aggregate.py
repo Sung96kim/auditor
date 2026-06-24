@@ -7,8 +7,8 @@ consolidated report matches what `scan` shows.
 
 from pathlib import Path
 
+from auditor.database import IndexStore
 from auditor.ignores import IgnoreList
-from auditor.index import IndexStore
 from auditor.models import FileRole, ScanResult, Severity, severity_rank
 
 
@@ -20,8 +20,8 @@ class AuditAggregator:
 
     async def _results(self) -> list[ScanResult]:
         """Reconstruct per-file results from the index and drop ignored findings."""
-        entries = await self.index.files()
-        grouped = await self.index.findings_grouped()
+        entries = await self.index.files.list()
+        grouped = await self.index.findings.grouped()
         results = [
             ScanResult(
                 file=e.path,
@@ -31,7 +31,7 @@ class AuditAggregator:
             )
             for e in entries
         ]
-        IgnoreList.from_rows(await self.index.ignores()).filter(results)
+        IgnoreList.from_rows(await self.index.ignores.list()).filter(results)
         return results
 
     async def markdown(self) -> str:

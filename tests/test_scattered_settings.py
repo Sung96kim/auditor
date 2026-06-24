@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from auditor.database import IndexStore
 from auditor.engine import audit_target
-from auditor.index import IndexStore
 
 _RULE = "PY-CONFIG-SCATTERED-SETTINGS"
 _SETTINGS_PY = "from pydantic_settings import BaseSettings\n"
@@ -139,9 +139,9 @@ async def test_class_base_shapes_do_not_create_duplicate_findings(tmp_path):
 async def test_shapes_by_kind_returns_class_base_rows(tmp_path):
     db = tmp_path / "index.db"
     async with await IndexStore.connect(db, "/r") as s:
-        await s.add_shapes([("h1", "py-class-base", "a.py", "Foo\x1fBaseSettings", 1)])
-        await s.add_shapes([("h2", "model", "a.py", "Bar", 5)])
-        rows = await s.shapes_by_kind("py-class-base")
+        await s.shapes.add([("h1", "py-class-base", "a.py", "Foo\x1fBaseSettings", 1)])
+        await s.shapes.add([("h2", "model", "a.py", "Bar", 5)])
+        rows = await s.shapes.by_kind("py-class-base")
     assert [r["symbol"] for r in rows] == ["Foo\x1fBaseSettings"]
 
 

@@ -8,8 +8,8 @@ from pathlib import Path
 from _support import TS_DATA
 
 from auditor.config import load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine
-from auditor.index import IndexStore
 from auditor.registry import REGISTRY
 
 _PYPROJECT = (

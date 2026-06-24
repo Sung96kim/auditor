@@ -4,8 +4,8 @@ from pathlib import Path
 
 from auditor.aggregate import AuditAggregator
 from auditor.config import load_config
+from auditor.database import IndexStore
 from auditor.engine import ScanEngine
-from auditor.index import IndexStore
 
 
 def _repo(tmp_path: Path) -> Path:
