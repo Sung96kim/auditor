@@ -6,6 +6,19 @@ from collections.abc import Collection, Iterator
 from auditor.ast_util import dotted as dotted_name  # noqa: F401
 
 
+def imports_module(tree: ast.Module, top: str) -> bool:
+    """True if the file imports ``top`` or a submodule of it (``import top.x`` /
+    ``from top.x import y``) — gates framework-specific rules to files that actually use the lib."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+            a.name.split(".")[0] == top for a in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == top:
+            return True
+    return False
+
+
 def call_attr(node: ast.Call) -> str:
     """The final attribute/name of a call's func (``get`` for ``os.environ.get(...)``)."""
     func = node.func

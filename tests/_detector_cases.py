@@ -1040,6 +1040,7 @@ TESTED_SEPARATELY = {
     "PY-CONFIG-SCATTERED-SETTINGS",  # repo-level; tested in test_scattered_settings.py
     "PY-XFILE-DUP-MODEL",
     "PY-XFILE-DUP-FUNCTION",
+    "PY-XFILE-PRIVATE-USED",  # repo-level; tested in test_private_usage.py
     "TS-XFILE-DUP-COMPONENT",
     "TS-XFILE-DUP-FUNCTION",
     "TS-XFILE-DUP-JSX-BLOCK",

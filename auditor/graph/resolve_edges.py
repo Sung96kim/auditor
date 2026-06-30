@@ -49,8 +49,8 @@ class StructuralResolver:
             self.imports_by_module[mid] = targets
         if self.follow_reexports:
             # opt-in: a caller that imports a package gains the leaf modules that package's
-            # __init__ re-exports, so a symbol imported via `from pkg import X` (X defined in
-            # pkg/leaf.py) still resolves. One level only (snapshot to avoid cascading).
+            # __init__ re-exports, so a symbol imported via `from pkg import X` (X defined in a
+            # leaf submodule) still resolves. One level only (snapshot to avoid cascading).
             base = {mid: set(imps) for mid, imps in self.imports_by_module.items()}
             for imps in self.imports_by_module.values():
                 for imported in tuple(imps):

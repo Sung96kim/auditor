@@ -32,6 +32,15 @@ class DuplicateFunction(_XFileRule):
     checklist_item: ClassVar[int] = 24
 
 
+class PrivateUsedAcrossFiles(_XFileRule):
+    """Repo-level: a private (`_`-prefixed) module-level symbol referenced from another file — the
+    underscore marks it module-internal, but it's used cross-file, so it should be public.
+    Computed by the crossfile pass over symbol shapes (auditor/private_usage.py); ``run`` is a
+    no-op."""
+
+    rule_id: ClassVar[str] = "PY-XFILE-PRIVATE-USED"
+
+
 class ScatteredSettings(Detector):
     """Repo-level (computed by the crossfile pass over the class-hierarchy shapes): a BaseSettings
     subclass defined outside the project's settings home. Config category, not a dup."""

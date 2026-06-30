@@ -7,11 +7,14 @@ Per-file, local-AST. Each rule is gated to files that import sqlalchemy, so gene
 
 import ast
 from abc import abstractmethod
+from collections import defaultdict
+from collections.abc import Callable, Iterator
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext, Detector
 from auditor.languages.python.detectors._util import (
     async_function_bodies,
+    imports_module,
     is_const_false,
     kwarg,
 )
@@ -19,20 +22,6 @@ from auditor.models import Category, Finding, Severity, VerdictKind
 
 _COLUMN = {"mapped_column", "Column"}
 _EMPTY_CTORS = {"list", "dict", "set"}
-
-
-def _imports_sqlalchemy(tree: ast.Module) -> bool:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import) and any(
-            a.name.split(".")[0] == "sqlalchemy" for a in node.names
-        ):
-            return True
-        if (
-            isinstance(node, ast.ImportFrom)
-            and (node.module or "").split(".")[0] == "sqlalchemy"
-        ):
-            return True
-    return False
 
 
 def _sa_from_aliases(tree: ast.Module) -> dict[str, str]:
@@ -64,7 +53,7 @@ class SqlAlchemyRule(Detector):
     verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        if not _imports_sqlalchemy(ctx.tree):
+        if not imports_module(ctx.tree, "sqlalchemy"):
             return []
         return self.check(ctx, _sa_from_aliases(ctx.tree))
 
@@ -306,40 +295,107 @@ def _is_non_str(expr: ast.expr) -> bool:
     return False
 
 
-def _is_safe_interp_operand(expr: ast.expr) -> bool:
-    """An interpolation operand that can't carry an injection payload: any constant (incl. a
-    str literal), a provably-numeric value, or a tuple/list of such (for ``"%s %s" % (a, b)``)."""
-    if isinstance(expr, ast.Constant):
-        return True
-    if isinstance(expr, (ast.Tuple, ast.List)):
-        return all(_is_safe_interp_operand(e) for e in expr.elts)
-    return _is_non_str(expr)
-
-
 def _is_str_literal(expr: ast.expr) -> bool:
     return isinstance(expr, ast.Constant) and isinstance(expr.value, str)
 
 
-def _is_interpolated(arg: ast.expr | None) -> bool:
+# SQLAlchemy ``IdentifierPreparer`` methods that return a safely-escaped identifier.
+_QUOTE_METHODS = {"quote", "quote_identifier", "quote_schema"}
+# How far to chase a variable back through its assignments — bounds recursion, keeps it best-effort.
+_RESOLVE_DEPTH = 4
+
+_Resolver = Callable[[str], list[ast.expr]]
+
+
+def _no_resolve(_name: str) -> list[ast.expr]:
+    return []
+
+
+def _is_quote_call(expr: ast.expr) -> bool:
+    """``preparer.quote(table)`` / ``.quote_identifier(...)`` — a properly-escaped identifier."""
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Attribute)
+        and expr.func.attr in _QUOTE_METHODS
+    )
+
+
+def _is_quote_build(expr: ast.expr, resolve: _Resolver, depth: int = 0) -> bool:
+    """``expr`` is a quoted identifier or a join of them — e.g. ``prep.quote(t)`` or
+    ``", ".join(prep.quote(t) for t in tables)``. Chases variable hops so the standard safe
+    pattern (build the statement in a local, then ``text(stmt)``) isn't a false positive."""
+    if depth > _RESOLVE_DEPTH:
+        return False
+    if _is_quote_call(expr):
+        return True
+    if (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Attribute)
+        and expr.func.attr == "join"
+        and expr.args
+    ):
+        return _iterable_all_quoted(expr.args[0], resolve, depth + 1)
+    if isinstance(expr, ast.Name):
+        return any(_is_quote_build(v, resolve, depth + 1) for v in resolve(expr.id))
+    return False
+
+
+def _iterable_all_quoted(it: ast.expr, resolve: _Resolver, depth: int) -> bool:
+    if depth > _RESOLVE_DEPTH:
+        return False
+    if isinstance(it, (ast.GeneratorExp, ast.ListComp, ast.SetComp)):
+        return _quote_safe(it.elt, resolve, depth + 1)
+    if isinstance(it, (ast.List, ast.Tuple, ast.Set)):
+        return bool(it.elts) and all(
+            _quote_safe(e, resolve, depth + 1) for e in it.elts
+        )
+    if isinstance(it, ast.Name):
+        return any(_iterable_all_quoted(v, resolve, depth + 1) for v in resolve(it.id))
+    return False
+
+
+def _quote_safe(expr: ast.expr, resolve: _Resolver, depth: int = 0) -> bool:
+    """An operand that can't carry an injection payload: provably numeric, or a quoted identifier.
+    A plain ``str`` variable stays unsafe (its source is unknown), preserving the conservative
+    ``Name``-interpolation behaviour."""
+    return _is_non_str(expr) or _is_quote_build(expr, resolve, depth)
+
+
+def _is_safe_interp_operand(expr: ast.expr, resolve: _Resolver) -> bool:
+    """A ``%`` / ``.format`` operand that can't inject: any constant (incl. a str literal), a
+    provably-numeric value, a quoted identifier, or a tuple/list of such."""
+    if isinstance(expr, ast.Constant):
+        return True
+    if isinstance(expr, (ast.Tuple, ast.List)):
+        return all(_is_safe_interp_operand(e, resolve) for e in expr.elts)
+    return _quote_safe(expr, resolve)
+
+
+def _concat_unsafe(expr: ast.expr, resolve: _Resolver) -> bool:
+    """A ``+`` chain is unsafe if any leaf is neither a constant nor a provably-safe value."""
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        return _concat_unsafe(expr.left, resolve) or _concat_unsafe(expr.right, resolve)
+    return not (isinstance(expr, ast.Constant) or _quote_safe(expr, resolve))
+
+
+def _is_interpolated(arg: ast.expr | None, resolve: _Resolver = _no_resolve) -> bool:
     if isinstance(arg, ast.JoinedStr):
-        # injectable only if some interpolated value isn't provably numeric:
-        # `text(f"… {len(rows)}")` is safe, `text(f"… {name}")` is not.
+        # injectable only if some interpolated value isn't provably safe: `text(f"… {len(rows)}")`
+        # and `text(f"… {prep.quote(t)}")` are safe, `text(f"… {name}")` is not.
         return any(
-            not _is_non_str(v.value)
+            not _quote_safe(v.value, resolve)
             for v in arg.values
             if isinstance(v, ast.FormattedValue)
         )
     if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
-        return not (
-            isinstance(arg.left, ast.Constant) and isinstance(arg.right, ast.Constant)
-        )
+        return _concat_unsafe(arg, resolve)
     # `"… %s" % value` / `"… %s" % (a, b)` — %-formatted SQL with a non-constant operand
     if (
         isinstance(arg, ast.BinOp)
         and isinstance(arg.op, ast.Mod)
         and _is_str_literal(arg.left)
     ):
-        return not _is_safe_interp_operand(arg.right)
+        return not _is_safe_interp_operand(arg.right, resolve)
     # `"… {}".format(value)` — str.format with a non-constant argument
     if (
         isinstance(arg, ast.Call)
@@ -348,7 +404,71 @@ def _is_interpolated(arg: ast.expr | None) -> bool:
         and _is_str_literal(arg.func.value)
     ):
         operands = [*arg.args, *(k.value for k in arg.keywords)]
-        return not all(_is_safe_interp_operand(o) for o in operands)
+        return not all(_is_safe_interp_operand(o, resolve) for o in operands)
+    return False
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
+
+
+def _assignment_values(stmt: ast.AST) -> list[tuple[str, ast.expr]]:
+    """``name ← value`` pairs for a simple assignment (incl. ``x += …`` and annotated assigns)."""
+    if isinstance(stmt, ast.Assign):
+        return [(t.id, stmt.value) for t in stmt.targets if isinstance(t, ast.Name)]
+    if (
+        isinstance(stmt, (ast.AnnAssign, ast.AugAssign))
+        and isinstance(stmt.target, ast.Name)
+        and stmt.value is not None
+    ):
+        return [(stmt.target.id, stmt.value)]
+    return []
+
+
+def _resolver_factory(tree: ast.Module) -> Callable[[ast.AST], _Resolver]:
+    """Build a factory: given a call node, return a resolver mapping a variable name to the values
+    assigned to it in the call's function scope plus the enclosing module scope (best-effort,
+    flow-insensitive — we take every assignment to the name in scope)."""
+    parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+
+    def scope_of(node: ast.AST) -> ast.AST | None:
+        cur = parents.get(node)
+        while cur is not None and not isinstance(cur, _SCOPES):
+            cur = parents.get(cur)
+        return cur
+
+    by_scope: dict[ast.AST, dict[str, list[ast.expr]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for node in ast.walk(tree):
+        scope = scope_of(node)
+        if scope is not None:
+            for name, value in _assignment_values(node):
+                by_scope[scope][name].append(value)
+
+    def for_call(call: ast.AST) -> _Resolver:
+        scopes: list[ast.AST] = []
+        cur = scope_of(call)
+        while cur is not None:
+            scopes.append(cur)
+            cur = None if isinstance(cur, ast.Module) else scope_of(cur)
+
+        def resolve(name: str) -> list[ast.expr]:
+            return [v for s in scopes for v in by_scope.get(s, {}).get(name, [])]
+
+        return resolve
+
+    return for_call
+
+
+def _is_raw_unsafe(arg: ast.expr, resolve: _Resolver, depth: int = 0) -> bool:
+    """A raw-SQL argument is unsafe if it's an injecting interpolation — directly, or via a
+    variable that was assigned one (best-effort backward tracking)."""
+    if depth > _RESOLVE_DEPTH:
+        return False
+    if _is_interpolated(arg, resolve):
+        return True
+    if isinstance(arg, ast.Name):
+        return any(_is_raw_unsafe(v, resolve, depth + 1) for v in resolve(arg.id))
     return False
 
 
@@ -359,12 +479,13 @@ class RawSql(SqlAlchemyRule):
 
     def check(self, ctx: AuditContext, aliases: dict[str, str]) -> list[Finding]:
         out: list[Finding] = []
+        resolver_for = _resolver_factory(ctx.tree)
         for node in ast.walk(ctx.tree):
             if (
                 isinstance(node, ast.Call)
                 and _tail(node, aliases) in _RAW_FUNCS
                 and node.args
-                and _is_interpolated(node.args[0])
+                and _is_raw_unsafe(node.args[0], resolver_for(node))
             ):
                 out.append(
                     self.make_finding(
@@ -460,7 +581,7 @@ def _commit_lines(fn: ast.AST) -> list[int]:
     )
 
 
-def _unconditional_stmts(body: list[ast.stmt]):
+def _unconditional_stmts(body: list[ast.stmt]) -> Iterator[ast.stmt]:
     """Statements that always execute: top level + with/try bodies. NOT if/loop bodies."""
     for stmt in body:
         if isinstance(stmt, (ast.With, ast.AsyncWith, ast.Try)):

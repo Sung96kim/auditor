@@ -151,16 +151,16 @@ def _symbol_shapes(tree: ast.Module) -> list[ShapeRow]:
     return rows
 
 
-def _clone_signature(node: ast.AST) -> str:
+def clone_signature(node: ast.AST) -> str:
     """A rename/literal-invariant signature of an AST subtree: control flow + *called* names +
     attribute names, with variable names and literal values blanked. Two definitions share it only
     when they are the same code modulo renaming and constants — a real clone, not merely the same
     statement-type sequence that every ``walk → match → append`` detector trivially shares."""
     if isinstance(node, ast.Call):
-        args = ",".join(_clone_signature(a) for a in node.args)
+        args = ",".join(clone_signature(a) for a in node.args)
         return f"call:{ast_util.base_name(node.func)}({args})"
     if isinstance(node, ast.Attribute):
-        return f"attr:{node.attr}/{_clone_signature(node.value)}"
+        return f"attr:{node.attr}/{clone_signature(node.value)}"
     if isinstance(node, ast.Name):
         return "n"  # blank variable name
     if isinstance(node, ast.Constant):
@@ -168,7 +168,7 @@ def _clone_signature(node: ast.AST) -> str:
     children = list(ast.iter_child_nodes(node))
     if not children:
         return type(node).__name__
-    return f"{type(node).__name__}[{','.join(_clone_signature(c) for c in children)}]"
+    return f"{type(node).__name__}[{','.join(clone_signature(c) for c in children)}]"
 
 
 def _is_fixture_func(func: ast.expr) -> bool:
@@ -372,7 +372,7 @@ class ShapeExtractor:
         stmts = _body_without_docstring(fn.body)
         if len(stmts) < min_statements:
             return []
-        body = "|".join(_clone_signature(stmt) for stmt in stmts)
+        body = "|".join(clone_signature(stmt) for stmt in stmts)
         n_params = len(fn.args.posonlyargs) + len(fn.args.args)
         return [ShapeRow(_hash(f"fn|{n_params}|{body}"), "function", symbol, fn.lineno)]
 

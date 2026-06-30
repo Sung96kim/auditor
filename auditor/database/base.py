@@ -1,6 +1,6 @@
 """Base infrastructure: SQLite worker thread, retry helper, schema constants, and BaseDB.
 
-All per-table store classes subclass BaseDB; the _SqliteWorker is created once by
+All per-table store classes subclass BaseDB; the SqliteWorker is created once by
 IndexStore.connect and shared across all stores.
 """
 
@@ -126,13 +126,13 @@ def retry_on_locked(fn: Any) -> Any:
     return wrapper
 
 
-_SCHEMA_VERSION = 5
-_DEFAULT_REPO = (
+SCHEMA_VERSION = 5
+DEFAULT_REPO = (
     "."  # single-partition fallback when no repo is given (unit tests, ad-hoc dbs)
 )
 
 
-class _SqliteWorker:
+class SqliteWorker:
     """Owns the thread-bound sqlite3 connection and runs operations off a queue.
 
     Each submitted callable receives the live connection and runs on the worker thread;
@@ -175,12 +175,12 @@ class _SqliteWorker:
         self._queue.put((fn, fut))
         return await asyncio.wrap_future(fut)
 
-    async def stop(self) -> None:
+    def stop(self) -> None:
         self._queue.put(None)
 
 
 class BaseDB:
-    """Owns connection management for one repo partition: the shared _SqliteWorker reference and the
+    """Owns connection management for one repo partition: the shared SqliteWorker reference and the
     _ensure_repo helper. Table-specific store classes subclass this to inherit the plumbing; the
     worker itself is created once by IndexStore.connect and shared across all stores."""
 
@@ -196,7 +196,7 @@ class BaseDB:
         if not cls.__dict__.get("facade"):
             BaseDB._registry.append(cls)
 
-    def __init__(self, worker: "_SqliteWorker", repo: str) -> None:
+    def __init__(self, worker: "SqliteWorker", repo: str) -> None:
         self._worker = worker
         self.repo = repo
 

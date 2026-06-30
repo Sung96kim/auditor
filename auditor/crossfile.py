@@ -4,7 +4,7 @@ and functions across files (within the same role, to avoid prod-vs-test noise).
 Cheap by design — a GROUP BY over the shapes table, recomputed each scan; no re-parse.
 """
 
-from auditor import dead_code, fixture_usage, settings_cohesion
+from auditor import dead_code, fixture_usage, private_usage, settings_cohesion
 from auditor.database import IndexStore
 from auditor.models import Category, Finding, Severity, VerdictKind
 
@@ -47,7 +47,13 @@ async def run(
 ) -> dict[str, list[Finding]]:
     """Recompute cross-file findings, persist them in the index, and return them per file."""
     await index.findings.clear_for_rules(
-        [*_RULES, settings_cohesion.RULE_ID, fixture_usage.RULE_ID, *dead_code.RULE_IDS]
+        [
+            *_RULES,
+            settings_cohesion.RULE_ID,
+            fixture_usage.RULE_ID,
+            *dead_code.RULE_IDS,
+            private_usage.RULE_ID,
+        ]
     )
     roles = await index.files.roles()
     per_file = _group(await index.shapes.duplicates(), roles)
@@ -68,12 +74,14 @@ async def run(
             roles,
         ),
     )
+    sym = {k: await index.shapes.by_kind(k) for k in dead_code.KINDS}
+    _merge(per_file, dead_code.find_dead(sym, roles, entry_points=entry_point_names))
     _merge(
         per_file,
-        dead_code.find_dead(
-            {k: await index.shapes.by_kind(k) for k in dead_code.KINDS},
+        private_usage.find_leaked_private(
+            sym.get(private_usage.DEF_KIND, []),
+            sym.get(private_usage.REF_KIND, []),
             roles,
-            entry_points=entry_point_names,
         ),
     )
     for path, findings in per_file.items():
@@ -117,12 +125,14 @@ def run_in_memory(
             roles,
         ),
     )
+    sym = {k: [r for r in shape_rows if r["kind"] == k] for k in dead_code.KINDS}
+    _merge(per_file, dead_code.find_dead(sym, roles, entry_points=entry_point_names))
     _merge(
         per_file,
-        dead_code.find_dead(
-            {k: [r for r in shape_rows if r["kind"] == k] for k in dead_code.KINDS},
+        private_usage.find_leaked_private(
+            sym.get(private_usage.DEF_KIND, []),
+            sym.get(private_usage.REF_KIND, []),
             roles,
-            entry_points=entry_point_names,
         ),
     )
     return per_file

@@ -2,6 +2,8 @@
 
 from collections.abc import Callable
 
+from auditor.config import AuditorSettings
+from auditor.database import IndexStore
 from auditor.graph.cluster import cluster_concepts
 from auditor.graph.detectors import run_graph_detectors
 from auditor.graph.model import TEST_ROLES, FileGraphFacts, GraphCluster, GraphNode
@@ -44,8 +46,8 @@ class GraphBuilder:
 
     async def run(
         self,
-        index,
-        settings,
+        index: IndexStore,
+        settings: AuditorSettings,
         *,
         progress: Callable[[str], None] | None = None,
     ) -> dict[str, int]:

@@ -17,7 +17,7 @@ from auditor.languages.python.detectors._util import (
     resolve_dotted,
     test_functions,
 )
-from auditor.languages.python.shapes import _clone_signature
+from auditor.languages.python.shapes import clone_signature
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 
@@ -280,7 +280,7 @@ def _has_parametrize(fn: ast.AST) -> bool:
 
 
 def _body_signature(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
-    return "".join(_clone_signature(s) for s in fn.body)
+    return "".join(clone_signature(s) for s in fn.body)
 
 
 class ParametrizeCandidate(PytestRule):
@@ -336,7 +336,7 @@ class DuplicateSetup(PytestRule):
         for fn in candidates:
             if id(fn) in a_claimed:
                 continue
-            prefix = "".join(_clone_signature(s) for s in fn.body[:k])
+            prefix = "".join(clone_signature(s) for s in fn.body[:k])
             groups.setdefault(prefix, []).append(fn)
         out: list[Finding] = []
         for fns in groups.values():

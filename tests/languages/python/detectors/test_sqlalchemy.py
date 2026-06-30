@@ -117,6 +117,68 @@ def test_raw_sql_clean(body):
     )
 
 
+# --- SA-RAW-SQL: best-effort variable tracking ---
+@pytest.mark.parametrize(
+    "body",
+    [
+        "s = f'select {x}'\nq = text(s)\n",  # f-string built in a local, then text(var)
+        "s = 'select ' + name\nq = text(s)\n",  # concat built in a local
+        "s = 'select '\ns += f' where id = {x}'\nq = text(s)\n",  # augmented build
+        "s = f'select {x}'\nr = conn.execute(s)\n",  # execute(var)
+        "stmt = 'select * from t where id = ' + name\nconn.execute(text(stmt))\n",  # nested text(var)
+    ],
+)
+def test_raw_sql_var_tracking_fires(body):
+    assert "SA-RAW-SQL" in _ids("x=1\nname='a'\nconn=None\n" + body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "s = 'select 1'\nq = text(s)\n",  # constant var
+        "s = f'limit {int(n)}'\nq = text(s)\n",  # numeric interpolation in a var
+        "s = None\nr = conn.execute(s)\n",  # non-str var
+        "s = base_query\nq = text(s)\n",  # var assigned from another (unknown) var → can't prove unsafe
+    ],
+)
+def test_raw_sql_var_tracking_clean(body):
+    assert "SA-RAW-SQL" not in _ids("x=1\nn=1\nconn=None\nbase_query='select 1'\n" + body)
+
+
+def test_raw_sql_var_tracking_inside_function_fires():
+    src = (
+        "def run(conn, user_id):\n"
+        "    stmt = f'select * from t where id = {user_id}'\n"
+        "    return conn.execute(text(stmt))\n"
+    )
+    assert "SA-RAW-SQL" in _ids(src)
+
+
+# --- SA-RAW-SQL: dialect-preparer quoting is the safe pattern, not a false positive ---
+@pytest.mark.parametrize(
+    "body",
+    [
+        "q = text(f'TRUNCATE {prep.quote(t)}')\n",  # inline: quoted identifier interpolated
+        "q = text('TRUNCATE ' + ', '.join(prep.quote(x) for x in tables))\n",  # inline: quoted join
+        # the standard safe pattern: build the statement in locals via the preparer, then text(stmt)
+        "ids = ', '.join(prep.quote(x) for x in tables)\n"
+        "stmt = f'TRUNCATE TABLE {ids} RESTART IDENTITY CASCADE'\n"
+        "conn.execute(text(stmt))\n",
+        "parts = [prep.quote(x) for x in tables]\n"
+        "stmt = 'TRUNCATE ' + ', '.join(parts)\n"
+        "conn.execute(text(stmt))\n",
+    ],
+)
+def test_raw_sql_quoted_identifier_clean(body):
+    assert "SA-RAW-SQL" not in _ids("prep=None\nt='x'\ntables=[]\nconn=None\n" + body)
+
+
+def test_raw_sql_unquoted_join_var_fires():
+    # a join of a *raw* (non-quoted) iterable is NOT the safe pattern → still flagged
+    src = "cols = ', '.join(user_cols)\nq = text('select ' + cols)\n"
+    assert "SA-RAW-SQL" in _ids("user_cols=[]\n" + src)
+
+
 # --- SA-ASYNC-EXPIRE-ON-COMMIT ---
 @pytest.mark.parametrize(
     "body",

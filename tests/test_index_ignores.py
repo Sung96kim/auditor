@@ -4,7 +4,7 @@ repo-partitioning, FK cascade on forget, and survival across a schema-version re
 import sqlite3
 
 from auditor.database import IndexStore
-from auditor.database.base import _SCHEMA_VERSION, BaseDB
+from auditor.database.base import SCHEMA_VERSION, BaseDB
 
 
 async def test_add_list_roundtrip(tmp_path):
@@ -130,4 +130,4 @@ def test_cache_tables_exclude_ignores_and_repos():
     cache_tables = {n for s in BaseDB._registry for n, t in s.TABLES.items() if t.cache}
     assert "ignores" not in cache_tables
     assert "repos" not in cache_tables
-    assert _SCHEMA_VERSION >= 4
+    assert SCHEMA_VERSION >= 4

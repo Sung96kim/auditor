@@ -4,10 +4,10 @@ import sqlite3  # noqa: I001
 from pathlib import Path
 
 from auditor.database.base import (
-    _DEFAULT_REPO,
-    _SCHEMA_VERSION,
+    DEFAULT_REPO,
+    SCHEMA_VERSION,
     BaseDB,
-    _SqliteWorker,
+    SqliteWorker,
     retry_on_locked,
 )
 
@@ -41,16 +41,16 @@ class IndexStore(BaseDB):
     shapes: ShapesDB
     graph: GraphDB
 
-    def __init__(self, worker: "_SqliteWorker", repo: str) -> None:
+    def __init__(self, worker: "SqliteWorker", repo: str) -> None:
         super().__init__(worker, repo)
         self.db_path: Path  # set by connect()
 
     @classmethod
-    async def connect(cls, db_path: Path, repo: str = _DEFAULT_REPO) -> "IndexStore":
+    async def connect(cls, db_path: Path, repo: str = DEFAULT_REPO) -> "IndexStore":
         """Open (creating if needed) the shared index and bind this handle to ``repo``'s
         partition — every read/write through it is scoped to that repo."""
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        worker = _SqliteWorker(db_path)
+        worker = SqliteWorker(db_path)
         await worker.start()
         store = cls(worker, repo)
         store.db_path = db_path
@@ -78,12 +78,12 @@ class IndexStore(BaseDB):
         cache_tables = tuple(
             n for s in BaseDB._registry for n, t in s.TABLES.items() if t.cache
         )
-        if existing and existing != _SCHEMA_VERSION:
+        if existing and existing != SCHEMA_VERSION:
             # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
             # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
             for table in cache_tables:
                 conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
-        conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.executescript(schema)
         conn.commit()
 
@@ -94,7 +94,7 @@ class IndexStore(BaseDB):
         await self.aclose()
 
     async def aclose(self) -> None:
-        await self._worker.stop()
+        self._worker.stop()
 
     async def prune(self, keep_paths: set[str], *, prefix: str = "") -> list[str]:
         """Drop every row (files/file_rules/findings/shapes) for an indexed file under ``prefix``

@@ -15,6 +15,7 @@ from auditor.languages.base import AuditContext, Detector, ParallelSiblingMixin
 from auditor.languages.python.detectors._util import (
     decorator_names,
     dotted_name,
+    imports_module,
     is_cli_command_module,
 )
 from auditor.models import Category, Finding, Severity, VerdictKind
@@ -70,23 +71,6 @@ class DataclassInPydantic(Detector):
         return out
 
 
-def _imports_pydantic(tree: ast.Module) -> bool:
-    """File-level pydantic import — gates the v1-Config rule the way ``_imports_sqlalchemy`` gates
-    SA rules. More precise than the project-dep set, which only sees pyproject ``[project]`` deps
-    (misses requirements.txt / poetry projects)."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import) and any(
-            a.name.split(".")[0] == "pydantic" for a in node.names
-        ):
-            return True
-        if (
-            isinstance(node, ast.ImportFrom)
-            and (node.module or "").split(".")[0] == "pydantic"
-        ):
-            return True
-    return False
-
-
 class PydanticV1ConfigClass(Detector):
     """A pydantic ``BaseModel`` that still configures via an inner ``class Config:`` instead of
     ``model_config = ConfigDict(...)``. v2 keeps the inner class as a deprecated shim but does NOT
@@ -100,7 +84,7 @@ class PydanticV1ConfigClass(Detector):
     verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
 
     def run(self, ctx: AuditContext) -> list[Finding]:
-        if not _imports_pydantic(ctx.tree):
+        if not imports_module(ctx.tree, "pydantic"):
             return []
         out: list[Finding] = []
         for node in ast.walk(ctx.tree):
@@ -582,17 +566,17 @@ def _field_copies(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, int]:
             and isinstance(value, ast.Attribute)
             and target.attr == value.attr
         ):
-            source = _root_name(value.value)
+            source = root_name(value.value)
             if source is not None:
                 counts[source] = counts.get(source, 0) + 1
     return counts
 
 
-def _root_name(node: ast.expr) -> str | None:
+def root_name(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
-        return _root_name(node.value)
+        return root_name(node.value)
     return None
 
 

@@ -8,7 +8,7 @@ from typing import ClassVar
 
 from auditor.languages.base import AuditContext
 from auditor.languages.python.detectors._util import decorator_names
-from auditor.languages.python.detectors.oop import _functions, _OopCandidate, _root_name
+from auditor.languages.python.detectors.oop import _functions, _OopCandidate, root_name
 from auditor.models import Finding, Severity
 
 #: Pydantic validator decorators whose contract *is* "receive the input mapping, mutate it, and
@@ -38,7 +38,7 @@ class ModelRebuildShortcut(_OopSuggestion):
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "model_rebuild"
             ):
-                target = _root_name(node.func.value) or "Model"
+                target = root_name(node.func.value) or "Model"
                 out.append(
                     self.make_finding(
                         ctx,

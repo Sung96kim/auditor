@@ -5,7 +5,7 @@ cache-rebuild-on-schema-change path."""
 import sqlite3
 
 from auditor.database import IndexStore
-from auditor.database.base import _SCHEMA_VERSION
+from auditor.database.base import SCHEMA_VERSION
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 
@@ -67,4 +67,4 @@ async def test_schema_version_change_rebuilds_cache(tmp_path):
     raw = sqlite3.connect(db)
     version = raw.execute("PRAGMA user_version").fetchone()[0]
     raw.close()
-    assert version == _SCHEMA_VERSION
+    assert version == SCHEMA_VERSION

@@ -8,7 +8,7 @@ import sqlite3
 import pytest
 
 from auditor.database import IndexStore
-from auditor.database.base import _SCHEMA_VERSION
+from auditor.database.base import SCHEMA_VERSION
 from auditor.models import (
     Category,
     FileRole,
@@ -190,7 +190,7 @@ async def test_schema_version_recorded(tmp_path):
     conn = _raw(db)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
-    assert version == _SCHEMA_VERSION
+    assert version == SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
