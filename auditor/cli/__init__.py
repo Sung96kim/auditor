@@ -12,6 +12,7 @@ from auditor.cli import (  # noqa: F401 — imported for their @app.command() si
     manifest,
     report,
     scan,
+    version,
 )
 from auditor.cli.apps import app
 from auditor.cli.config import config_app
