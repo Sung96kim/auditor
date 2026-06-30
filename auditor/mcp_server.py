@@ -60,6 +60,7 @@ async def scan(
     show_ignored: bool = False,
     config: dict | None = None,
     detail: str = "compact",
+    isolated: bool = False,
 ) -> dict:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_skips`` ignores
@@ -74,7 +75,11 @@ async def scan(
     ``detail`` (summary|compact|full, default compact) controls payload size: compact hoists rule
     metadata into a `rules` map, slims findings, drops `evidence` (recover it with finding_detail),
     and omits clean files (`scanned` carries the total file count); full restores every field
-    inline and lists every file."""
+    inline and lists every file.
+    Auditing a single FILE still runs the repo-wide cross-file rules (duplicate/dead-code) off the
+    shared index — if the repo was never indexed, the first such call warms it once (peers come from
+    the index, not a re-audit). ``isolated`` skips that: audit only this file, no index, no
+    cross-file — faster for a quick standalone check."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
     _validate_detail(detail)
@@ -90,6 +95,7 @@ async def scan(
             report_only=report_only,
             config_overrides=config,
             show_ignored=show_ignored,
+            cross_file=not isolated,
         )
     except ValidationError as exc:
         err = exc.errors()[0]

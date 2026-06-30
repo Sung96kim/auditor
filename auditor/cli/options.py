@@ -37,6 +37,13 @@ Incremental = Annotated[
 NoIndex = Annotated[
     bool, typer.Option("-n", "--no-index", help="Force stateless (no cache).")
 ]
+Isolated = Annotated[
+    bool,
+    typer.Option(
+        "--isolated",
+        help="Single file only — skip the index + cross-file pass (faster standalone check).",
+    ),
+]
 StrictTests = Annotated[
     bool,
     typer.Option("-t", "--strict-tests", help="Audit tests at production strength."),

@@ -139,6 +139,18 @@ class ScanEngine:
         res.skipped_rules.extend(skipped)
         return res
 
+    async def scan_file_indexed(self, path: Path) -> ScanResult:
+        """Audit one file against the shared index, then run the repo-wide cross-file pass over
+        the persisted shapes — so a single-file audit surfaces cross-file findings without
+        re-auditing the rest of the repo. The file's own shape is refreshed first (so its side of
+        every comparison is current); peers are compared as of their last scan. Falls back to a
+        plain isolated result when there is no index."""
+        res = await self._scan_file(path)
+        _log_file(res)
+        if self.index is not None:
+            await self._apply_crossfile([res])
+        return res
+
     async def scan_path(self, target: Path) -> list[ScanResult]:
         files = FileDiscovery(
             self.root,
@@ -432,6 +444,7 @@ async def audit_target(
     config_overrides: dict | None = None,
     apply_ignores: bool = True,
     show_ignored: bool = False,
+    cross_file: bool = False,
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
@@ -471,6 +484,26 @@ async def audit_target(
         if report_only is not None:
             results = [r for r in results if r.file in report_only]
         return results
+
+    # A single-file audit that still gets cross-file findings off the shared index: leverage the
+    # repo's already-extracted shapes instead of re-auditing every file. Warm index (peers already
+    # scanned) → re-audit just this file + the cross-file pass; cold index → warm the whole repo
+    # once so cross-file has peers to compare against, then return only this file.
+    if cross_file and not no_index and target.is_file():
+        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            await index.repos.register(time.time())
+            engine = ScanEngine(root, settings, index=index)
+            rel = engine.rel(target)
+            warm = any(e.path != rel for e in await index.files.list())
+            if warm:
+                results = [await engine.scan_file_indexed(target)]
+            else:
+                results = [r for r in await engine.scan_path(root) if r.file == rel]
+            if report_only is not None:
+                results = [r for r in results if r.file in report_only]
+            if apply_ignores:
+                await _apply_ignores(index, results, show_ignored=show_ignored)
+            return results
 
     if incremental and not no_index and target.is_dir():
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
