@@ -8,16 +8,17 @@ import typer
 from pydantic import ValidationError
 
 from auditor.baseline import Baseline
-from auditor.cli.apps import _status, app
+from auditor.cli.apps import app
+from auditor.cli.console import err_console
 from auditor.cli.helpers import (
-    _check_format,
-    _emit,
-    _fail,
-    _format_config_error,
-    _parse_config_json,
-    _require_exists,
-    _run,
-    _suggest,
+    check_format,
+    emit,
+    fail,
+    format_config_error,
+    parse_config_json,
+    require_exists,
+    run_live,
+    suggest,
 )
 from auditor.cli.options import (
     AllowLocalPlugins,
@@ -69,7 +70,7 @@ def _severity_set(values: list[str]) -> set[str]:
     chosen = {v.lower() for v in values}
     unknown = chosen - valid
     if unknown:
-        _fail(
+        fail(
             f"unknown severity {sorted(unknown)}; choose from {[s.value for s in SEVERITIES_DESC]}"
         )
     return chosen
@@ -77,7 +78,7 @@ def _severity_set(values: list[str]) -> set[str]:
 
 def _check_severity(value: str) -> Severity:
     if value.lower() not in {s.value for s in SEVERITIES_DESC}:
-        _fail(
+        fail(
             f"unknown severity '{value}'; choose from {[s.value for s in SEVERITIES_DESC]}"
         )
     return Severity(value.lower())
@@ -99,8 +100,8 @@ def _rule_set(values: list[str]) -> set[str]:
     chosen = set(values)
     for rid in chosen:
         if rid not in known:
-            _fail(
-                f"unknown rule {rid!r}.{_suggest(rid, known)} "
+            fail(
+                f"unknown rule {rid!r}.{suggest(rid, known)} "
                 f"Run `auditor rules list` to see all rules."
             )
     return chosen
@@ -138,7 +139,7 @@ def _diff_report_only(
     if vs_base:
         ref = load_config(root).diff_base or default_base_ref(root)
         if ref is None:
-            _fail(
+            fail(
                 "no base branch found (tried main/master/develop/development); "
                 "set [tool.auditor] diff_base or use --since <ref>"
             )
@@ -151,9 +152,9 @@ def _diff_report_only(
     try:
         report_only = git_changed_files(root, ref)
     except ValueError as exc:
-        _fail(str(exc))
+        fail(str(exc))
     if report_only is None:
-        _fail("--since / --changed / --vs-base requires a git repository")
+        fail("--since / --changed / --vs-base requires a git repository")
     return report_only
 
 
@@ -187,19 +188,21 @@ def scan(
     verbose: Verbose = 0,
 ) -> None:
     """Audit a file or directory."""
-    _require_exists(target)
+    require_exists(target)
     if fmt is not None:
-        _check_format(fmt)  # fail fast on a bad --format, before the scan
+        check_format(fmt)  # fail fast on a bad --format, before the scan
     configure_logging(verbose)
 
     report_only = _diff_report_only(target, since, changed, vs_base, root)
     if report_only is not None and not no_index:
         incremental = True  # whole-repo scan stays fast via the cache
 
-    overrides = _parse_config_json(config_json)
+    overrides = parse_config_json(config_json)
+    # "." renders as ".…" against the ellipsis — show the directory's name instead.
+    target_label = target.resolve().name if str(target) == "." else target
     try:
-        results = _run(
-            audit_target(
+        results = run_live(
+            lambda report: audit_target(
                 target,
                 incremental=incremental,
                 no_index=no_index,
@@ -214,16 +217,17 @@ def scan(
                 config_overrides=overrides,
                 show_ignored=show_ignored,
                 cross_file=not isolated,
+                progress=report,
             ),
-            f"auditing {target}…",
+            f"auditing {target_label}",
             spinner=not verbose,
         )
     except ValidationError as exc:
-        _fail(f"invalid config — {_format_config_error(exc)}")
+        fail(f"invalid config — {format_config_error(exc)}")
 
     if write_baseline is not None:
         recorded = Baseline.from_results(results).write(write_baseline)
-        _status.print(
+        err_console.print(
             f"[bold]Wrote baseline[/bold] {write_baseline} — {recorded} finding(s) recorded"
         )
         return
@@ -231,7 +235,7 @@ def scan(
     hidden = 0
     if baseline is not None:
         if not baseline.exists():
-            _fail(
+            fail(
                 f"baseline file not found: {baseline} "
                 f"(create it first with `scan --write-baseline {baseline}`)"
             )
@@ -250,18 +254,18 @@ def scan(
         print_summary(results)
         if hidden:
             # human-only note; machine formats keep stdout pure (no baseline chatter)
-            _status.print(
+            err_console.print(
                 f"[dim]{hidden} pre-existing finding(s) hidden by baseline[/dim]"
             )
     else:
-        _emit(render(results, fmt or "json"), output)
+        emit(render(results, fmt or "json"), output)
     if gate_tripped:
         raise typer.Exit(1)
 
 
 def _serve_html(results: list[ScanResult]) -> None:
     server = ReportServer(render(results, "html"))
-    _status.print(
+    err_console.print(
         f"[bold]Serving audit report at[/bold] {server.url}  (Ctrl-C to stop)"
     )
     server.serve()

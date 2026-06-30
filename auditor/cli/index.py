@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import _open_index, _open_shared_index, _present, _run
+from auditor.cli.helpers import open_index, open_shared_index, present, run
 from auditor.cli.options import RootArg, ScopePaths
 from auditor.cli.render import (
     render_index_add,
@@ -31,12 +31,12 @@ def index_add(
     rels = [
         str(p.relative_to(root)) if p.is_relative_to(root) else str(p) for p in paths
     ]
-    _run(_index_add(root, rels), "registering scope…")
-    _present({"added": rels}, render_index_add, as_json=json_)
+    run(_index_add(root, rels), "registering scope…")
+    present({"added": rels}, render_index_add, as_json=json_)
 
 
 async def _index_add(root: Path, rels: list[str]) -> None:
-    async with await _open_index(root) as index:
+    async with await open_index(root) as index:
         await index.files.add_scope(rels)
 
 
@@ -47,13 +47,11 @@ def index_list(
 ) -> None:
     """List the registered scope + per-file counts."""
     root = find_root(target)
-    _present(
-        _run(_index_list(root), "reading index…"), render_index_list, as_json=json_
-    )
+    present(run(_index_list(root), "reading index…"), render_index_list, as_json=json_)
 
 
 async def _index_list(root: Path) -> list[dict]:
-    async with await _open_index(root) as index:
+    async with await open_index(root) as index:
         return [e.model_dump(mode="json") for e in await index.files.list()]
 
 
@@ -62,11 +60,11 @@ def index_repos(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List every repo registered in the shared global index (~/.auditor)."""
-    _present(_run(_index_repos(), "reading index…"), render_index_repos, as_json=json_)
+    present(run(_index_repos(), "reading index…"), render_index_repos, as_json=json_)
 
 
 async def _index_repos() -> list[dict]:
-    async with await _open_shared_index() as index:
+    async with await open_shared_index() as index:
         return await index.repos.list()
 
 
@@ -77,8 +75,8 @@ def index_forget(
 ) -> None:
     """Drop this repo's cached data from the shared global index (registry row + cascade)."""
     root = find_root(target)
-    removed = _run(_index_forget(root), "forgetting repo…")
-    _present(
+    removed = run(_index_forget(root), "forgetting repo…")
+    present(
         {"repo": repo_key(root), "removed": removed},
         render_index_forget,
         as_json=json_,
@@ -86,5 +84,5 @@ def index_forget(
 
 
 async def _index_forget(root: Path) -> bool:
-    async with await _open_shared_index() as index:
+    async with await open_shared_index() as index:
         return await index.repos.forget(repo_key(root))

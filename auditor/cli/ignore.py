@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import _fail, _open_index, _present, _run
+from auditor.cli.helpers import fail, open_index, present, run
 from auditor.cli.options import (
     AllowLocalPlugins,
     IgnoreFile,
@@ -51,16 +51,16 @@ def ignore_add(
 ) -> None:
     """Ignore a rule repo-wide (no scope), in a file (--file), or at one line (--file --line)."""
     if line is not None and file is None:
-        _fail("--line requires --file")
+        fail("--line requires --file")
     root = find_root(target)
     load_config(root, allow_local_plugins=allow_local_plugins)
     if not force and rule_id not in REGISTRY.rule_ids():
-        _fail(
+        fail(
             f"unknown rule_id {rule_id!r}; run `auditor rules list` to see rules "
             "(use --allow-local-plugins for an untrusted local plugin rule, or --force to skip)"
         )
-    _present(
-        _run(_ignore_add(root, rule_id, file, line, reason), "adding ignore…"),
+    present(
+        run(_ignore_add(root, rule_id, file, line, reason), "adding ignore…"),
         render_ignore_add,
         as_json=json_,
     )
@@ -77,7 +77,7 @@ async def _ignore_add(
             note = "no current finding at that line — stored with literal-line fallback"
         else:
             ev_hash = evidence_hash(evidence)
-    async with await _open_index(root) as index:
+    async with await open_index(root) as index:
         ignore_id = await index.ignores.add(
             rule_id, file, line, ev_hash, reason, time.time()
         )
@@ -98,13 +98,13 @@ def ignore_list(
 ) -> None:
     """List the ignores recorded for this repo (with their ids)."""
     root = find_root(target)
-    _present(
-        _run(_ignore_list(root), "reading ignores…"), render_ignore_list, as_json=json_
+    present(
+        run(_ignore_list(root), "reading ignores…"), render_ignore_list, as_json=json_
     )
 
 
 async def _ignore_list(root: Path) -> list[dict]:
-    async with await _open_index(root) as index:
+    async with await open_index(root) as index:
         return await index.ignores.list()
 
 
@@ -118,16 +118,16 @@ def ignore_rm(
 ) -> None:
     """Remove an ignore by id (`ignore rm 7`) or by selector (`ignore rm <rule_id> --file …`)."""
     root = find_root(target)
-    removed = _run(_ignore_rm(root, selector, file, line), "removing ignore…")
+    removed = run(_ignore_rm(root, selector, file, line), "removing ignore…")
     if not removed:
-        _fail(f"no matching ignore for {selector!r}")
-    _present({"removed": True, "selector": selector}, render_ignore_rm, as_json=json_)
+        fail(f"no matching ignore for {selector!r}")
+    present({"removed": True, "selector": selector}, render_ignore_rm, as_json=json_)
 
 
 async def _ignore_rm(
     root: Path, selector: str, file: str | None, line: int | None
 ) -> bool:
-    async with await _open_index(root) as index:
+    async with await open_index(root) as index:
         if selector.isdigit():
             return await index.ignores.remove_by_id(int(selector))
         return await index.ignores.remove_by_selector(selector, file, line)
@@ -140,13 +140,13 @@ def ignore_clear(
 ) -> None:
     """Remove every ignore for this repo."""
     root = find_root(target)
-    _present(
-        {"cleared": _run(_ignore_clear(root), "clearing ignores…")},
+    present(
+        {"cleared": run(_ignore_clear(root), "clearing ignores…")},
         render_ignore_clear,
         as_json=json_,
     )
 
 
 async def _ignore_clear(root: Path) -> int:
-    async with await _open_index(root) as index:
+    async with await open_index(root) as index:
         return await index.ignores.clear()

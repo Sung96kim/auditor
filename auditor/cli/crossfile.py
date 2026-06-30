@@ -6,7 +6,7 @@ import typer
 
 from auditor import crossfile as crossfile_pass
 from auditor.cli.apps import app
-from auditor.cli.helpers import _open_index, _present, _run
+from auditor.cli.helpers import open_index, present, run
 from auditor.cli.options import DirTarget
 from auditor.cli.render import render_crossfile
 from auditor.config import load_config
@@ -20,13 +20,13 @@ def crossfile(
 ) -> None:
     """Recompute cross-file duplicate findings from the index."""
     root = find_root(target)
-    count = _run(_crossfile(root), "cross-file pass…")
-    _present({"cross_file_findings": count}, render_crossfile, as_json=json_)
+    count = run(_crossfile(root), "cross-file pass…")
+    present({"cross_file_findings": count}, render_crossfile, as_json=json_)
 
 
 async def _crossfile(root: Path) -> int:
     settings = load_config(root)
-    async with await _open_index(root) as index:
+    async with await open_index(root) as index:
         per_file = await crossfile_pass.run(
             index,
             settings_modules=settings.settings_modules,

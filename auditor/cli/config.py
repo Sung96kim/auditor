@@ -6,10 +6,10 @@ import typer
 from pydantic import ValidationError
 
 from auditor.cli.helpers import (
-    _fail,
-    _format_config_error,
-    _parse_config_json,
-    _present,
+    fail,
+    format_config_error,
+    parse_config_json,
+    present,
 )
 from auditor.cli.options import ConfigJson, RootArg
 from auditor.cli.render import render_config_show
@@ -28,8 +28,8 @@ def config_show(
     """Print the resolved configuration."""
     try:
         settings = load_config(
-            find_root(target), overrides=_parse_config_json(config_json)
+            find_root(target), overrides=parse_config_json(config_json)
         )
     except ValidationError as exc:
-        _fail(f"invalid config — {_format_config_error(exc)}")
-    _present(settings.model_dump(mode="json"), render_config_show, as_json=json_)
+        fail(f"invalid config — {format_config_error(exc)}")
+    present(settings.model_dump(mode="json"), render_config_show, as_json=json_)

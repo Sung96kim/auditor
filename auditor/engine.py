@@ -9,6 +9,7 @@ import asyncio
 import re
 import time
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
@@ -151,7 +152,9 @@ class ScanEngine:
             await self._apply_crossfile([res])
         return res
 
-    async def scan_path(self, target: Path) -> list[ScanResult]:
+    async def scan_path(
+        self, target: Path, progress: Callable[[str], None] | None = None
+    ) -> list[ScanResult]:
         files = FileDiscovery(
             self.root,
             exclude_globs=tuple(self.settings.exclude),
@@ -163,7 +166,7 @@ class ScanEngine:
             target,
             self.root.name,
         )
-        results = await self._scan_files(files)
+        results = await self._scan_files(files, progress)
         if self.index is not None:
             # reconcile: drop index rows for files under this scan's scope that no longer exist,
             # so a deleted file leaves no stale findings/shapes (which would otherwise leak into
@@ -185,26 +188,51 @@ class ScanEngine:
                     "<light-black>cross-file pass over {} files</light-black>",
                     len(results),
                 )
+            if progress is not None:
+                progress("cross-file pass")
             await self._apply_crossfile(results)
         elif results:
             # no index (stateless dir scan): run the cross-file pass in memory so `scan .` still
             # surfaces XFILE + dead-code findings, just without the cache
+            if progress is not None:
+                progress("cross-file pass")
             self._apply_crossfile_in_memory(results)
         _log_summary(results)
         return results
 
-    async def _scan_files(self, files: list[Path]) -> list[ScanResult]:
+    async def _scan_files(
+        self, files: list[Path], progress: Callable[[str], None] | None = None
+    ) -> list[ScanResult]:
         """Audit files with bounded concurrency, returned in ``files`` order. The per-file parse +
         detector work is CPU-bound (GIL), so this mainly overlaps the index ``await``s on
         incremental re-scans; the single index worker serializes the writes safely. (True CPU
-        parallelism would need a process pool — a larger change deferred for stability.)"""
+        parallelism would need a process pool — a larger change deferred for stability.)
+
+        ``progress`` (if given) is called as each file completes with ``"<rel>  (<done>/<total>)"``
+        so the CLI spinner can show live progress. The count is monotonic; under concurrency the
+        named file is whichever just finished."""
+        total = len(files)
+        done = 0
+
+        def tick(path: Path) -> None:
+            nonlocal done
+            done += 1
+            if progress is not None:
+                progress(f"auditing {self.rel(path)}  ({done}/{total})")
+
         if len(files) <= 1:
-            return [await self.scan_file(p) for p in files]
+            out: list[ScanResult] = []
+            for p in files:
+                out.append(await self.scan_file(p))
+                tick(p)
+            return out
         sem = asyncio.Semaphore(_SCAN_CONCURRENCY)
 
         async def one(path: Path) -> ScanResult:
             async with sem:
-                return await self.scan_file(path)
+                result = await self.scan_file(path)
+                tick(path)
+                return result
 
         return list(await asyncio.gather(*(one(p) for p in files)))
 
@@ -445,6 +473,7 @@ async def audit_target(
     apply_ignores: bool = True,
     show_ignored: bool = False,
     cross_file: bool = False,
+    progress: Callable[[str], None] | None = None,
 ) -> list[ScanResult]:
     """High-level entry used by the CLI and MCP server: resolve root + config, optionally
     use the on-disk cache, and audit a file or directory. ``profile`` overrides the repo's
@@ -477,7 +506,7 @@ async def audit_target(
 
     async def _run(engine: ScanEngine) -> list[ScanResult]:
         results = (
-            await engine.scan_path(target)
+            await engine.scan_path(target, progress=progress)
             if target.is_dir()
             else [await engine.scan_file(target)]
         )

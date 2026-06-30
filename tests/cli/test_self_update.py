@@ -124,7 +124,7 @@ def test_check_flag_reports_update_available(monkeypatch):
         lambda **kw: {"info_version": "0.2.1", "releases": _RELEASES},
     )
     monkeypatch.setattr(
-        "auditor.cli.self_update.subprocess.run",
+        "auditor.cli.self_update.subprocess.Popen",
         lambda *a, **kw: (_ for _ in ()).throw(
             AssertionError("subprocess must not be called")
         ),
@@ -142,7 +142,7 @@ def test_check_flag_reports_already_latest(monkeypatch):
     )
 
     result = invoke("self", "update", "--check")
-    assert "already on the latest" in result.output
+    assert "up to date" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +161,9 @@ def test_update_yes_installs_and_reports_success(monkeypatch):
     )
     monkeypatch.setattr("auditor.cli.self_update.upgrade_command", lambda: fake_cmd)
     monkeypatch.setattr(
-        "auditor.cli.self_update.subprocess.run",
-        lambda cmd, **kw: captured.append(cmd) or SimpleNamespace(returncode=0),
+        "auditor.cli.self_update.subprocess.Popen",
+        lambda cmd, **kw: captured.append(cmd)
+        or SimpleNamespace(returncode=0, poll=lambda: 0, wait=lambda: 0),
     )
 
     result = invoke("self", "update", "--yes")

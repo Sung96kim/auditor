@@ -7,11 +7,11 @@ from pydantic import ValidationError
 
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
-    _fail,
-    _format_config_error,
-    _parse_config_json,
-    _present,
-    _require_exists,
+    fail,
+    format_config_error,
+    parse_config_json,
+    present,
+    require_exists,
 )
 from auditor.cli.options import ConfigJson, DirTarget
 from auditor.cli.render import render_discover
@@ -27,12 +27,12 @@ def discover(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List auditable files with their classified role."""
-    _require_exists(target)
+    require_exists(target)
     root = find_root(target)
     try:
-        settings = load_config(root, overrides=_parse_config_json(config_json))
+        settings = load_config(root, overrides=parse_config_json(config_json))
     except ValidationError as exc:
-        _fail(f"invalid config — {_format_config_error(exc)}")
+        fail(f"invalid config — {format_config_error(exc)}")
     classifier = RoleClassifier(settings.role_globs)
     out = []
     discovery = FileDiscovery(
@@ -46,4 +46,4 @@ def discover(
             rel, path.read_text(encoding="utf-8", errors="replace")
         )
         out.append({"file": rel, "role": role.value})
-    _present(out, render_discover, as_json=json_)
+    present(out, render_discover, as_json=json_)

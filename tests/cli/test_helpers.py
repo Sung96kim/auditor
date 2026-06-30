@@ -3,11 +3,11 @@
 import pytest
 import typer
 
-from auditor.cli.helpers import _parse_config_json, _run_staged, _suggest
+from auditor.cli.helpers import parse_config_json, run_staged, suggest
 
 
 def test_suggest_returns_closest_match():
-    out = _suggest(
+    out = suggest(
         "PY-SEC-DANGEROUS-EVL", ["PY-SEC-DANGEROUS-EVAL", "PY-ASYNC-SYNC-IO"]
     )
     assert out == " Did you mean 'PY-SEC-DANGEROUS-EVAL'?"
@@ -15,33 +15,33 @@ def test_suggest_returns_closest_match():
 
 def test_suggest_picks_nearest_of_several():
     cands = ["SA-RAW-SQL", "SA-MUTABLE-DEFAULT", "SA-LAZY-DYNAMIC"]
-    assert _suggest("SA-RAW-SQ", cands) == " Did you mean 'SA-RAW-SQL'?"
+    assert suggest("SA-RAW-SQ", cands) == " Did you mean 'SA-RAW-SQL'?"
 
 
 def test_suggest_empty_when_no_close_match():
-    assert _suggest("zzzzzzzz", ["PY-SEC-DANGEROUS-EVAL", "PY-ASYNC-SYNC-IO"]) == ""
+    assert suggest("zzzzzzzz", ["PY-SEC-DANGEROUS-EVAL", "PY-ASYNC-SYNC-IO"]) == ""
 
 
 def test_suggest_empty_candidates():
-    assert _suggest("anything", []) == ""
+    assert suggest("anything", []) == ""
 
 
 def test_parse_config_json_none():
-    assert _parse_config_json(None) is None
+    assert parse_config_json(None) is None
 
 
 def test_parse_config_json_object():
-    assert _parse_config_json('{"a": {"b": 1}}') == {"a": {"b": 1}}
+    assert parse_config_json('{"a": {"b": 1}}') == {"a": {"b": 1}}
 
 
 def test_parse_config_json_bad_json_exits():
     with pytest.raises(typer.Exit):
-        _parse_config_json("{not json")
+        parse_config_json("{not json")
 
 
 def test_parse_config_json_non_object_exits():
     with pytest.raises(typer.Exit):
-        _parse_config_json("[1, 2]")
+        parse_config_json("[1, 2]")
 
 
 def test_run_staged_no_spinner_runs_with_noop_reporter():
@@ -51,7 +51,7 @@ def test_run_staged_no_spinner_runs_with_noop_reporter():
         report("stage one")
         return 42
 
-    result = _run_staged(make, "msg", spinner=False)
+    result = run_staged(make, "msg", spinner=False)
     assert result == 42
     assert seen == []  # no-op reporter recorded nothing externally
 
@@ -63,4 +63,4 @@ def test_run_staged_with_spinner_returns_result():
         return "ok"
 
     # rich auto-disables the spinner off-TTY in tests, so this won't hang.
-    assert _run_staged(make, "msg") == "ok"
+    assert run_staged(make, "msg") == "ok"

@@ -4,7 +4,7 @@ from typing import Annotated
 
 import typer
 
-from auditor.cli.helpers import _fail, _present
+from auditor.cli.helpers import fail, present
 from auditor.cli.render import render_rules_list
 from auditor.registry import REGISTRY
 
@@ -35,13 +35,13 @@ def rules_list(
 ) -> None:
     """List every registered detector rule."""
     if category is not None and category not in REGISTRY.categories():
-        _fail(
+        fail(
             f"unknown category {category!r}; choose from {sorted(REGISTRY.categories())}"
         )
     if standard is not None and standard not in (known := _known_standards()):
-        _fail(f"unknown standard {standard!r}; choose from {sorted(known)}")
+        fail(f"unknown standard {standard!r}; choose from {sorted(known)}")
     if framework is not None and framework not in REGISTRY.frameworks():
-        _fail(
+        fail(
             f"unknown framework {framework!r}; choose from {sorted(REGISTRY.frameworks())}"
         )
     rows = []
@@ -65,4 +65,4 @@ def rules_list(
                 "source": REGISTRY.source_of("detector", rid),
             }
         )
-    _present(rows, render_rules_list, as_json=json_)
+    present(rows, render_rules_list, as_json=json_)

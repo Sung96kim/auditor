@@ -5,11 +5,9 @@ parseable — it's purely the interactive terminal view."""
 
 from typing import NamedTuple
 
-from rich.console import Console
-
+from auditor.cli.console import console
 from auditor.models import SEVERITIES_DESC, ScanResult, Severity
 
-_out = Console()  # stdout — the interactive human summary
 _SEV_STYLE = {
     "blocking": "bold red",
     "high": "red",
@@ -66,26 +64,26 @@ def _ignored_note(stats: _Stats) -> str:
 def print_summary(results: list[ScanResult]) -> None:
     stats = _summary_stats(results)
     if not stats.findings:
-        _out.print(
+        console.print(
             f"[green]✓ clean[/green] — {len(results)} files, no findings"
             + _ignored_note(stats)
         )
         return
 
-    _out.print(
+    console.print(
         f"[bold]{stats.findings}[/bold] findings in [bold]{stats.files_with}[/bold] "
         f"of {len(results)} files" + _ignored_note(stats)
     )
-    _out.print("  " + _severity_line(stats.totals))
+    console.print("  " + _severity_line(stats.totals))
     meta = _meta_line(stats)
     if meta:
-        _out.print(f"  [dim]{meta}[/dim]")
+        console.print(f"  [dim]{meta}[/dim]")
 
-    _out.print("\n[bold]worst files[/bold]")
+    console.print("\n[bold]worst files[/bold]")
     for r in sorted(results, key=lambda r: len(r.findings), reverse=True)[:5]:
         if r.findings:
-            _out.print(f"  [red]{len(r.findings):>3}[/red]  {r.file}")
+            console.print(f"  [red]{len(r.findings):>3}[/red]  {r.file}")
 
-    _out.print(
+    console.print(
         "\n[dim]-f json|md|sarif or -o PATH for the full report · -v/-vv/-vvv to log as it scans[/dim]"
     )

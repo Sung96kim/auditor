@@ -12,7 +12,8 @@ from typing import Annotated, Any
 
 import typer
 
-from auditor.cli.helpers import _present, _run, _run_staged
+from auditor.cli.console import ACCENT, err_console
+from auditor.cli.helpers import present, run, run_staged
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
@@ -39,12 +40,12 @@ graph_app = typer.Typer(
 _Target = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
 
 
-_GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
+GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
 
 async def _autoscan(root: Path) -> None:
     """Incremental scan with graph extraction forced on."""
-    await audit_target(root, incremental=True, config_overrides=_GRAPH_OVERRIDE)
+    await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
 
 
 async def _build(root: Path, progress: Callable[[str], None] | None = None) -> dict:
@@ -73,10 +74,12 @@ def graph_build(
     """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
     root = find_root(target)
 
-    async def run(report: Callable[[str], None]) -> dict:
+    async def do_build(report: Callable[[str], None]) -> dict:
         if rebuild:
             report("clearing cached facts…")
-            async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+            async with await IndexStore.connect(
+                index_db_path(), repo_key(root)
+            ) as index:
                 await index.graph.clear_facts()
         if not no_scan:
             report("scanning repository…")
@@ -84,7 +87,7 @@ def graph_build(
         report("building graph…")
         return await _build(root, report)
 
-    _present(_run_staged(run, "building graph…"), render_graph_build, as_json=json_)
+    present(run_staged(do_build, "building graph…"), render_graph_build, as_json=json_)
 
 
 def _query_cmd(
@@ -106,8 +109,8 @@ def graph_related(
 ) -> None:
     """Top semantic neighbors of a symbol (name + usage), ranked."""
     root = find_root(target)
-    _present(
-        _run(_query_cmd("related")(root, symbol=symbol, limit=limit), "querying…"),
+    present(
+        run(_query_cmd("related")(root, symbol=symbol, limit=limit), "querying…"),
         render_graph_related,
         as_json=json_,
     )
@@ -122,8 +125,8 @@ def graph_neighbors(
 ) -> None:
     """Structural neighbors (calls/overrides/...) up to a depth."""
     root = find_root(target)
-    _present(
-        _run(_query_cmd("neighbors")(root, symbol=symbol, depth=depth), "querying…"),
+    present(
+        run(_query_cmd("neighbors")(root, symbol=symbol, depth=depth), "querying…"),
         render_graph_neighbors,
         as_json=json_,
     )
@@ -137,8 +140,8 @@ def graph_concept(
 ) -> None:
     """Symbols in the concept cluster matching a term."""
     root = find_root(target)
-    _present(
-        _run(_query_cmd("concept")(root, term=term), "querying…"),
+    present(
+        run(_query_cmd("concept")(root, term=term), "querying…"),
         render_graph_concept,
         as_json=json_,
     )
@@ -151,8 +154,8 @@ def graph_clusters(
 ) -> None:
     """List concept clusters (label + size)."""
     root = find_root(target)
-    _present(
-        _run(_query_cmd("clusters")(root), "querying…"),
+    present(
+        run(_query_cmd("clusters")(root), "querying…"),
         render_graph_clusters,
         as_json=json_,
     )
@@ -167,8 +170,8 @@ def graph_search(
 ) -> None:
     """Find symbols whose id contains the term (highest-rank first)."""
     root = find_root(target)
-    _present(
-        _run(_query_cmd("search")(root, term=term, limit=limit), "searching…"),
+    present(
+        run(_query_cmd("search")(root, term=term, limit=limit), "searching…"),
         render_graph_search,
         as_json=json_,
     )
@@ -184,8 +187,8 @@ def graph_usages(
     """How a symbol is used/connected: edges grouped by kind with full counts (used_by vs
     depends_on)."""
     root = find_root(target)
-    _present(
-        _run(_query_cmd("usages")(root, symbol=symbol, sample=sample), "querying…"),
+    present(
+        run(_query_cmd("usages")(root, symbol=symbol, sample=sample), "querying…"),
         render_graph_usages,
         as_json=json_,
     )
@@ -223,12 +226,14 @@ def graph_serve(
     """Serve the interactive graph UI. Serves the already-built graph when present (fast); only
     scans + builds when it's missing. Pass --rebuild to force a fresh build."""
     root = find_root(target)
-    html = _run_staged(
+    html = run_staged(
         lambda report: _serve_html(root, rebuild=rebuild, report=report),
         "preparing graph UI…",
     )
     server = ReportServer(html)
-    typer.echo(f"serving graph UI at {server.url} (Ctrl-C to stop)")
+    err_console.print(
+        f"[{ACCENT}]◆[/] serving graph UI at [bold]{server.url}[/bold]  [dim](Ctrl-C to stop)[/dim]"
+    )
     server.serve(open_browser=not no_open)
 
 
@@ -243,12 +248,12 @@ def graph_export(
     """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego."""
     root = find_root(target)
 
-    async def run() -> str:
+    async def do_export() -> str:
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             payload = await build_payload(index)
         return to_dot(payload, cluster=cluster, symbol=symbol, depth=depth)
 
-    dot = _run(run(), "exporting…")
+    dot = run(do_export(), "exporting…")
     if fmt == "dot":
         typer.echo(dot)
         return

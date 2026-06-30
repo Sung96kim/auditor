@@ -294,7 +294,7 @@ def rules_list(
 
 
 if _GRAPH_OK:
-    _GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
+    GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
     @mcp.tool
     async def graph_build(path: str = ".", scan: bool = True) -> dict:
@@ -304,7 +304,7 @@ if _GRAPH_OK:
         findings}."""
         root = find_root(Path(path))
         if scan:
-            await audit_target(root, incremental=True, config_overrides=_GRAPH_OVERRIDE)
+            await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
         settings = load_config(root)
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             await index.repos.register(time.time())

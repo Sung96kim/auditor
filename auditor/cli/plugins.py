@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import _present
+from auditor.cli.helpers import present
 from auditor.cli.options import RootArg
 from auditor.cli.render import render_plugins_list
 from auditor.config import load_config
@@ -25,4 +25,4 @@ def plugins_list(
     load_config(find_root(target), loader=loader)
     payload = REGISTRY.snapshot()
     payload["warnings"] = loader.warnings
-    _present(payload, render_plugins_list, as_json=json_)
+    present(payload, render_plugins_list, as_json=json_)

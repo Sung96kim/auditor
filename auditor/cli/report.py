@@ -6,13 +6,13 @@ from pydantic import ValidationError
 
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
-    _check_format,
-    _emit,
-    _fail,
-    _format_config_error,
-    _parse_config_json,
-    _require_file,
-    _run,
+    check_format,
+    emit,
+    fail,
+    format_config_error,
+    parse_config_json,
+    require_file,
+    run,
 )
 from auditor.cli.options import (
     ConfigJson,
@@ -36,11 +36,11 @@ def report(
     config_json: ConfigJson = None,
 ) -> None:
     """Audit one file (stateless) — manifest + findings in one call."""
-    _require_file(file)
-    _check_format(fmt)
-    overrides = _parse_config_json(config_json)
+    require_file(file)
+    check_format(fmt)
+    overrides = parse_config_json(config_json)
     try:
-        results = _run(
+        results = run(
             audit_target(
                 Path(file),
                 profile=profile,
@@ -50,5 +50,5 @@ def report(
             f"auditing {file.name}…",
         )
     except ValidationError as exc:
-        _fail(f"invalid config — {_format_config_error(exc)}")
-    _emit(render(results, fmt), output)
+        fail(f"invalid config — {format_config_error(exc)}")
+    emit(render(results, fmt), output)
