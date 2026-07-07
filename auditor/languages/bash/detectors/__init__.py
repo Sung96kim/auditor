@@ -2,5 +2,6 @@
 
 from auditor.languages.bash.detectors import (
     malware,  # noqa: F401
-    secrets,
+    secrets,  # noqa: F401
+    style,  # noqa: F401
 )

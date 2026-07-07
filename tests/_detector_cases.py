@@ -1230,6 +1230,7 @@ TESTED_SEPARATELY = {
     "SH-MAL-PERSISTENCE",
     "SH-MAL-ANTIFORENSICS",
     "SH-MAL-EXFIL-URL",
+    "SH-STYLE-LONG-COMMENT",  # covered in tests/languages/bash/test_style.py
     # committed-secret sweep — covered in tests/languages/*/test_secrets.py
     "PY-SECRET-DETECTED",
     "TS-SECRET-DETECTED",
