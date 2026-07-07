@@ -7,7 +7,7 @@
 <p align="center"><em>A deterministic codebase auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
 It does the mechanical, deterministic part of a code audit — parsing, building the
-class/function manifest, running **123 anti-pattern detectors** across Python, TypeScript/React,
+class/function manifest, running **125 anti-pattern detectors** across Python, TypeScript/React,
 shell, and package manifests, hashing for an incremental cache — so an agent spends tokens only
 on the genuine judgment calls. Findings are split into `auto` (the tool decided) and `candidate`
 (evidence only; you judge).
@@ -584,7 +584,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `PY-TEST-SLEEP` | low | candidate | `time.sleep()` in a test |
 | `PY-TEST-UNUSED-FIXTURE` | low | candidate | a fixture defined but never requested (repo-level) |
 
-#### style (7)
+#### style (9)
 
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
@@ -592,7 +592,9 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `PY-STYLE-FILE-SIZE` | low | auto | a file over the line-count threshold — split into a package |
 | `PY-STYLE-IF-FALSE-IMPORT` | low | auto | an import guarded by `if False:` instead of `TYPE_CHECKING` |
 | `PY-STYLE-INLINE-IMPORT` | medium | auto | an import inside a function body — move to module top |
+| `PY-STYLE-LONG-COMMENT` | low | candidate | a standalone comment block over the prose-line threshold — tighten or move to a docstring |
 | `PY-STYLE-STALE-COMMENT` | low | candidate | a comment referencing a file path that no longer exists |
+| `SH-STYLE-LONG-COMMENT` | low | candidate | a standalone comment block over the prose-line threshold — tighten it |
 | `TS-STYLE-DUPLICATE-IMPORT` | low | auto | multiple separate imports from one module — merge them |
 | `TS-STYLE-FILE-SIZE` | low | auto | a file over the line-count threshold — split it |
 
