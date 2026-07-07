@@ -247,3 +247,16 @@ def test_divider_only_block_never_flagged():
 def test_all_comment_file_is_treated_as_preamble():
     lines = ["# line " + str(i) for i in range(10)]
     assert _blocks(_Hashes(), lines) == []
+
+
+def test_prose_starting_with_pragma_lookalike_is_flagged():
+    # bare "pragma" must not swallow prose words like "pragmatic"
+    lines = [
+        "x = 1",
+        "# pragmatic choices were made here",
+        "# pragmatic again in this line",
+        "# pragmatic once more for good",
+        "# pragmatic finally to close it",
+        "y = 2",
+    ]
+    assert _blocks(PythonCommentBlocks(), lines) == [CommentBlock(2, 4)]

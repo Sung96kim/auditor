@@ -104,7 +104,7 @@ class PythonCommentBlocks(CommentBlockAnalyzer):
     directive_prefixes: ClassVar[tuple[str, ...]] = (
         "noqa",
         "type:",
-        "pragma",
+        "pragma:",
         "mypy:",
         "ruff:",
         "fmt:",
