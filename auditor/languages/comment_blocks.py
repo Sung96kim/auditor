@@ -141,9 +141,13 @@ class PythonCommentBlocks(CommentBlockAnalyzer):
             mod = ast.parse(src)
         except (SyntaxError, ValueError):
             return set()
-        # a run of bare single words also parses (each a name expression); require a real statement
+        # a run of bare single words or literals (numbers/strings) also parses (each an atom
+        # expression); require a real statement
         substantive = any(
-            not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Name))
+            not (
+                isinstance(n, ast.Expr)
+                and isinstance(n.value, (ast.Name, ast.Constant))
+            )
             for n in mod.body
         )
         return set(range(len(bodies))) if (mod.body and substantive) else set()

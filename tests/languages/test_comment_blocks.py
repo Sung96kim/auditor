@@ -142,6 +142,18 @@ def test_python_code_indices_ignores_bare_word_list():
     assert a.code_indices(["process", "transform", "store", "done"]) == set()
 
 
+def test_python_code_indices_ignores_bare_literal_list():
+    a = PythonCommentBlocks()
+    assert a.code_indices(["1", "2", "3", "4"]) == set()
+    assert a.code_indices(['"term one"', '"term two"', '"term three"']) == set()
+
+
+def test_bare_number_list_is_prose_not_code():
+    # a pure numbered/enumerated comment block is prose, not commented-out code
+    lines = ["x = 1", "# 1", "# 2", "# 3", "# 4", "y = 2"]
+    assert _blocks(PythonCommentBlocks(), lines) == [CommentBlock(2, 4)]
+
+
 # --- shell front-end (line-scan + syntax) ---
 
 
