@@ -53,6 +53,16 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "if False:\n    import os\n",
             "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n",
         ),
+        (
+            "PY-STYLE-LONG-COMMENT",
+            "def f():\n"
+            "    # step one, we read the value\n"
+            "    # step two, we double it\n"
+            "    # step three, we log it\n"
+            "    # step four, we return it\n"
+            "    return 1\n",
+            "def f():\n    # doubles then returns\n    return 1\n",
+        ),
     ],
     "typing_rules": [
         (

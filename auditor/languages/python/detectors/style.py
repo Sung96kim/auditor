@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from auditor.languages.base import AuditContext, Detector
+from auditor.languages.comment_blocks import PythonCommentBlocks
 from auditor.languages.python.detectors._util import (
     is_const_false,
     nearest_enclosing_function,
@@ -139,3 +140,30 @@ def _exists_anywhere(root: Path, ref: str) -> bool:
         return True
     except StopIteration:
         return False
+
+
+class LongComment(Detector):
+    rule_id: ClassVar[str] = "PY-STYLE-LONG-COMMENT"
+    category: ClassVar[Category] = Category.STYLE
+    default_severity: ClassVar[Severity] = Severity.LOW
+    verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    checklist_item: ClassVar[int] = 28
+    _analyzer: ClassVar[PythonCommentBlocks] = PythonCommentBlocks()
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        threshold = ctx.config.effective(
+            self.rule_id
+        ).threshold.size.comment_block_max_lines
+        return [
+            self.make_finding(
+                ctx,
+                line=block.anchor,
+                message=f"comment block is {block.prose_count} prose lines (> {threshold}); "
+                "tighten or move to a docstring",
+                evidence=f"{block.prose_count} prose lines",
+                suggestion="delete restating comments; keep only what the code can't say",
+            )
+            for block in self._analyzer.blocks(
+                ctx.source, ctx.lines, threshold=threshold
+            )
+        ]
