@@ -80,6 +80,11 @@ class SizeThreshold(BaseModel):
     max_complexity: int = Field(
         10, ge=1, description="cyclomatic complexity ceiling per function"
     )
+    comment_block_max_lines: int = Field(
+        3,
+        ge=1,
+        description="prose comment lines in a contiguous block before it's too long",
+    )
 
 
 class DryThreshold(BaseModel):
