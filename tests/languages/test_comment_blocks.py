@@ -173,3 +173,77 @@ def test_shell_code_indices_marks_shell_syntax_not_command_names():
         "apt-get install -y curl",  # bare command, no shell syntax -> stays prose
     ]
     assert a.code_indices(bodies) == {0, 1, 3}
+
+
+# --- complex / adversarial cases ---
+
+
+def test_realistic_mixed_block_counts_only_prose():
+    lines = [
+        "def handler():",
+        "# This function validates the incoming",
+        "# payload before we hand it downstream.",
+        "# noqa: E501",
+        "# See https://example.com/spec for details",
+        "# and https://example.com/appendix too.",
+        "# ----------------------------------------",
+        "# The tricky part is the retry accounting,",
+        "# which must survive a mid-batch crash,",
+        "# so we checkpoint after every write.",
+        "    return None",
+    ]
+    # 2 prose + directive + 2 url + divider + 3 prose = 5 prose lines, anchor at first prose (2)
+    assert _blocks(PythonCommentBlocks(), lines) == [CommentBlock(2, 5)]
+
+
+def test_prose_interleaved_with_code_stays_flagged():
+    # a run mixing prose and commented-out code does NOT parse as one module, so code_indices
+    # excludes nothing and the prose (correctly) stays verbose.
+    lines = [
+        "x = 1",
+        "# we short-circuit the empty case here:",
+        "# if not items:",
+        "#     return []",
+        "# otherwise we accumulate below",
+        "y = 2",
+    ]
+    assert _blocks(PythonCommentBlocks(), lines) == [CommentBlock(2, 4)]
+
+
+def test_multiple_blocks_only_long_one_flagged():
+    lines = [
+        "import os",
+        "# short note here",
+        "# still short",
+        "def a():",
+        "    return 1",
+        "# a genuinely long block starts",
+        "# spanning several lines of prose",
+        "# that keeps going and going",
+        "# well past the threshold now",
+        "def b():",
+        "    return 2",
+    ]
+    assert _blocks(_Hashes(), lines) == [CommentBlock(6, 4)]
+
+
+def test_unicode_prose_counts_and_is_not_mistaken_for_a_table():
+    lines = [
+        "x = 1",
+        "# esta función procesa los datos",
+        "# validando cada campo requerido",
+        "# antes de guardarlos en la base",
+        "# de datos principal del sistema",
+        "y = 2",
+    ]
+    assert _blocks(_Hashes(), lines) == [CommentBlock(2, 4)]
+
+
+def test_divider_only_block_never_flagged():
+    lines = ["x = 1", "# ======", "# ======", "# ------", "# ~~~~~~", "y = 2"]
+    assert _blocks(_Hashes(), lines) == []
+
+
+def test_all_comment_file_is_treated_as_preamble():
+    lines = ["# line " + str(i) for i in range(10)]
+    assert _blocks(_Hashes(), lines) == []

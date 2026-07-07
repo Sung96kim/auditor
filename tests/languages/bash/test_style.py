@@ -39,3 +39,32 @@ def test_long_comment_skips_shellcheck_directives():
         "run_thing\n"
     )
     assert "SH-STYLE-LONG-COMMENT" not in rule_ids(run_sh_audit(src))
+
+
+def test_long_comment_counts_only_prose_in_bash():
+    src = (
+        "echo start\n"
+        "# we first probe the environment to decide\n"
+        "# which package manager to drive here\n"
+        "# apt-get install -y curl\n"
+        "# shellcheck disable=SC2086\n"
+        "# then we verify the binary landed ok\n"
+        "# and finally we symlink it into place\n"
+        "run\n"
+    )
+    # `shellcheck` is a directive; `apt-get install -y curl` has no shell *syntax* so it stays
+    # prose. 5 prose lines > 3 -> flagged. (If apt-get carried `$VAR`/`&&`/a redirect it would be
+    # excluded as commented-out shell — detection keys on grammar, not the command name.)
+    assert "SH-STYLE-LONG-COMMENT" in rule_ids(run_sh_audit(src))
+
+
+def test_long_comment_skips_commented_out_command_block():
+    src = (
+        "echo hi\n"
+        "# FOO=/opt/app\n"
+        "# export PATH=$FOO/bin:$PATH\n"
+        "# cd $FOO && ./configure\n"
+        "# make && make install\n"
+        "run\n"
+    )
+    assert "SH-STYLE-LONG-COMMENT" not in rule_ids(run_sh_audit(src))

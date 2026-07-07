@@ -4,6 +4,8 @@ import pytest
 from _detector_cases import GROUPS
 from _support import rule_ids, run_audit
 
+from auditor.config import AuditorSettings, RuleConfig, SizeThreshold, Threshold
+
 _CASES = GROUPS["style"]
 
 
@@ -78,3 +80,48 @@ def test_long_comment_skips_license_header():
 def test_long_comment_ignores_trailing_comments():
     src = "x = 1  # a\ny = 2  # b\nz = 3  # c\nw = 4  # d\n"
     assert "PY-STYLE-LONG-COMMENT" not in rule_ids(run_audit(src))
+
+
+def test_long_comment_flagged_after_module_docstring():
+    # the docstring is code (first_code_line = 1), so the block below it is NOT preamble.
+    src = (
+        '"""Module doc."""\n'
+        "# now a long explanatory block\n"
+        "# describing the module internals\n"
+        "# in far too much detail for code\n"
+        "# that should speak for itself\n"
+        "import os\n"
+    )
+    assert "PY-STYLE-LONG-COMMENT" in rule_ids(run_audit(src))
+
+
+def test_long_comment_skips_pure_commented_out_function():
+    src = (
+        "x = 1\n"
+        "# def legacy(payload):\n"
+        "#     rows = parse(payload)\n"
+        "#     return [r.id for r in rows]\n"
+        "# legacy(None)\n"
+        "y = 2\n"
+    )
+    assert "PY-STYLE-LONG-COMMENT" not in rule_ids(run_audit(src))
+
+
+def test_long_comment_respects_configured_threshold():
+    src = (
+        "x = 1\n"
+        "# one line of prose here\n"
+        "# two lines of prose here\n"
+        "# three lines of prose here\n"
+        "# four lines of prose here\n"
+        "# five lines of prose here\n"
+        "y = 2\n"
+    )
+    # raise the floor to 5: a 5-prose block no longer exceeds it
+    settings = AuditorSettings()
+    settings.rules["PY-STYLE-LONG-COMMENT"] = RuleConfig(
+        threshold=Threshold(size=SizeThreshold(comment_block_max_lines=5))
+    )
+    assert "PY-STYLE-LONG-COMMENT" not in rule_ids(run_audit(src, settings=settings))
+    # default floor of 3: the same block IS flagged
+    assert "PY-STYLE-LONG-COMMENT" in rule_ids(run_audit(src))
