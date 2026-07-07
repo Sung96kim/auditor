@@ -1,4 +1,4 @@
-"""Style-category detectors: file size, inline imports, if-False imports, stale comments."""
+"""Style-category detectors: file size, inline imports, if-False imports, stale comments, long comment blocks."""
 
 import ast
 import re

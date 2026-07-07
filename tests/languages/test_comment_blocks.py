@@ -13,7 +13,7 @@ class _Hashes(CommentBlockAnalyzer):
     isolates the core grouping / preamble / threshold logic."""
 
     def comment_lines(self, source: str, lines: list[str]) -> set[int]:
-        return {i for i, l in enumerate(lines, 1) if l.lstrip().startswith("#")}
+        return {i for i, line in enumerate(lines, 1) if line.lstrip().startswith("#")}
 
 
 def _blocks(analyzer: CommentBlockAnalyzer, lines: list[str], threshold: int = 3):
