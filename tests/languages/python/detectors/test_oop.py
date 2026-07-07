@@ -4,6 +4,8 @@ import pytest
 from _detector_cases import GROUPS
 from _support import FileRole, rule_ids, run_audit
 
+from auditor.models import Severity
+
 _CASES = GROUPS["oop"]
 
 
@@ -125,3 +127,73 @@ def test_pydantic_v1_config_class_fires_on_aliased_base():
         "        allow_population_by_field_name = True\n"
     )
     assert "PY-PYDANTIC-V1-CONFIG-CLASS" in rule_ids(run_audit(src))
+
+
+def test_field_copy_below_floor_quiet():
+    # 3 matching constructor kwargs is under the default floor of 4
+    src = "def to_result(src):\n    return Result(a=src.a, b=src.b, c=src.c)\n"
+    assert "PY-OOP-FIELD-COPY" not in rule_ids(run_audit(src))
+
+
+def test_field_copy_mixed_forms_accumulate_per_source():
+    # 2 attr assigns + 2 constructor kwargs from the same source reach the floor together
+    src = (
+        "def convert(src):\n"
+        "    out = Holder()\n"
+        "    out.a = src.a\n"
+        "    out.b = src.b\n"
+        "    return Result(c=src.c, d=src.d, out=out)\n"
+    )
+    assert "PY-OOP-FIELD-COPY" in rule_ids(run_audit(src))
+
+
+def test_field_copy_renamed_kwargs_quiet():
+    # kwargs that rename the field are a mapping, not a field-by-field copy
+    src = (
+        "def convert(src):\n"
+        "    return Result(alpha=src.a, beta=src.b, gamma=src.c, delta=src.d)\n"
+    )
+    assert "PY-OOP-FIELD-COPY" not in rule_ids(run_audit(src))
+
+
+def test_parallel_sibling_across_subclasses_in_one_file():
+    # sibling subclasses overriding the same hook with only a literal differing
+    src = (
+        "class CsvExport(Exporter):\n"
+        "    def render(self, rows):\n"
+        "        payload = build(rows)\n"
+        "        payload['format'] = 'csv'\n"
+        "        return emit(payload)\n"
+        "class JsonExport(Exporter):\n"
+        "    def render(self, rows):\n"
+        "        payload = build(rows)\n"
+        "        payload['format'] = 'json'\n"
+        "        return emit(payload)\n"
+    )
+    assert "PY-OOP-PARALLEL-SIBLING" in rule_ids(run_audit(src))
+
+
+
+def test_flat_field_model_fires_at_ten_fields():
+    # the handoff's 11-field model sat under the old floor of 12; the floor is now 10
+    src = "from pydantic import BaseModel\nclass Readiness(BaseModel):\n" + "".join(
+        f"    f{i}: str\n" for i in range(10)
+    )
+    findings = [
+        f
+        for f in run_audit(src).findings
+        if f.rule_id == "PY-OOP-FLAT-FIELD-MODEL"
+    ]
+    assert len(findings) == 1
+    # advisory only: a human calls decompose-vs-keep — never CI-blocking
+    assert findings[0].severity == Severity.SUGGESTION
+
+
+def test_flat_field_model_exempts_basesettings():
+    # flat env-var binding IS the BaseSettings contract; nesting would break it
+    src = (
+        "from pydantic_settings import BaseSettings\n"
+        "class AppSettings(BaseSettings):\n"
+        + "".join(f"    f{i}: str\n" for i in range(12))
+    )
+    assert "PY-OOP-FLAT-FIELD-MODEL" not in rule_ids(run_audit(src))

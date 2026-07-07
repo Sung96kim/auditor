@@ -5,7 +5,8 @@ import ast
 
 _FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
 _PYDANTIC_BASES = frozenset({"BaseModel", "BaseSettings"})
-_UNTYPED_DICT_RETURNS = ("dict[str, Any]", "dict[str, typing.Any]")
+_DICTISH = frozenset({"dict", "Dict"})
+_LISTISH = frozenset({"list", "List"})
 
 
 def dotted(node: ast.AST) -> str:
@@ -27,6 +28,51 @@ def base_name(node: ast.AST) -> str:
     """The final segment of a dotted name — a class base, callee, or decorator: ``a.b.c`` -> ``c``,
     ``f`` -> ``f``. Receiver-blind, for matching a node against a set of bare names."""
     return dotted(node).rsplit(".", 1)[-1]
+
+
+def _is_dictish(node: ast.expr) -> bool:
+    """A dict type in either form: bare ``dict``/``Dict`` or a ``dict[...]`` subscript."""
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return base_name(node) in _DICTISH
+    return isinstance(node, ast.Subscript) and base_name(node.value) in _DICTISH
+
+
+def untyped_collection_reason(annotation: ast.expr | None) -> str | None:
+    """Why ``annotation`` is an untyped-collection boundary — every ``.get()`` on it is ``Any``:
+    bare ``dict``/``list``, ``dict[..., Any]`` values, or a nested dict-of-dicts. ``None`` when
+    the annotation is fine. Recurses through unions (``dict | None`` / ``Optional[dict]``) and
+    containers (``list[dict[str, Any]]``)."""
+    if annotation is None:
+        return None
+    if isinstance(annotation, (ast.Name, ast.Attribute)):
+        last = base_name(annotation)
+        if last in _DICTISH:
+            return "bare dict = dict[Any, Any]"
+        if last in _LISTISH:
+            return "bare list = list[Any]"
+        return None
+    if isinstance(annotation, ast.Subscript):
+        elts = (
+            list(annotation.slice.elts)
+            if isinstance(annotation.slice, ast.Tuple)
+            else [annotation.slice]
+        )
+        if base_name(annotation.value) in _DICTISH and len(elts) == 2:
+            value = elts[1]
+            if isinstance(value, (ast.Name, ast.Attribute)) and base_name(value) == "Any":
+                return "dict[..., Any] values"
+            if _is_dictish(value):
+                return "dict-of-dicts values"
+            return untyped_collection_reason(value)
+        for elt in elts:
+            if reason := untyped_collection_reason(elt):
+                return reason
+        return None
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return untyped_collection_reason(annotation.left) or untyped_collection_reason(
+            annotation.right
+        )
+    return None
 
 
 def decorator_names(node: ast.ClassDef | _FuncDef) -> tuple[str, ...]:
@@ -65,7 +111,7 @@ def function_flags(fn: _FuncDef, *, is_method: bool) -> tuple[str, ...]:
     ]
     if untyped or any(p.annotation is None for p in fn.args.kwonlyargs):
         flags.append("UNTYPED_ARGS")
-    if fn.returns is not None and dotted(fn.returns) in _UNTYPED_DICT_RETURNS:
+    if untyped_collection_reason(fn.returns) is not None:
         flags.append("UNTYPED_DICT_RETURN")
     return tuple(flags)
 

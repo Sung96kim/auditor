@@ -16,11 +16,6 @@ def _functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef
             yield node
 
 
-def _untyped_dict(annotation: ast.expr | None) -> bool:
-    if annotation is None:
-        return False
-    text = ast.unparse(annotation)
-    return text in ("dict[str, Any]", "dict[str, typing.Any]", "Dict[str, Any]")
 
 
 class MissingHints(Detector):
@@ -71,6 +66,7 @@ class UntypedDict(Detector):
     rule_id: ClassVar[str] = "PY-TYPING-UNTYPED-DICT"
     category: ClassVar[Category] = Category.TYPING
     default_severity: ClassVar[Severity] = Severity.MEDIUM
+    version: ClassVar[str] = "2"
     checklist_item: ClassVar[int] = 6
 
     def run(self, ctx: AuditContext) -> list[Finding]:
@@ -78,23 +74,23 @@ class UntypedDict(Detector):
         for fn in _functions(ctx.tree):
             if is_route_handler(fn):
                 continue
-            if _untyped_dict(fn.returns):
+            if reason := ast_util.untyped_collection_reason(fn.returns):
                 out.append(
                     self.make_finding(
                         ctx,
                         line=fn.lineno,
-                        message=f"`{fn.name}` returns dict[str, Any]; return a typed model",
-                        suggestion="return a Pydantic model instead of an untyped dict",
+                        message=f"`{fn.name}` returns `{ast.unparse(fn.returns)}` ({reason}); return a typed model",
+                        suggestion="return a Pydantic model (or a dict of typed models) instead of an untyped collection",
                     )
                 )
             a = fn.args
             for p in a.posonlyargs + a.args + a.kwonlyargs:
-                if _untyped_dict(p.annotation):
+                if reason := ast_util.untyped_collection_reason(p.annotation):
                     out.append(
                         self.make_finding(
                             ctx,
                             line=fn.lineno,
-                            message=f"`{fn.name}` takes dict[str, Any] `{p.arg}`; accept a typed model",
+                            message=f"`{fn.name}` takes `{ast.unparse(p.annotation)}` `{p.arg}` ({reason}); accept a typed model",
                             suggestion="accept the typed model and use attribute access",
                         )
                     )

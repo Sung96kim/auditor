@@ -251,12 +251,19 @@ def test_profile_override_enables_oop(sample_repo):
     strict = cli_json(
         invoke("scan", src, "--no-index", "-f", "json", "--profile", "strict")
     )
-    base_rules = {x["rule_id"] for f in base["files"] for x in f["findings"]}
+    base_oop = {
+        (x["rule_id"], x["severity"])
+        for f in base["files"]
+        for x in f["findings"]
+        if x["rule_id"].startswith("PY-OOP-")
+    }
     strict_rules = {x["rule_id"] for f in strict["files"] for x in f["findings"]}
+    # at the base floor the opinionated oop rules stay off — only the auto
+    # dataclass rule and the always-on suggestion-tier nudges may surface
     assert not any(
-        r.startswith("PY-OOP-") and r != "PY-OOP-DATACLASS-IN-PYDANTIC"
-        for r in base_rules
-    )
+        rule != "PY-OOP-DATACLASS-IN-PYDANTIC" and severity != "suggestion"
+        for rule, severity in base_oop
+    ), base_oop
     assert "PY-OOP-CONSTRUCTOR-WALL" in strict_rules
 
 

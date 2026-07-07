@@ -1,5 +1,7 @@
 """Compact, stable JSON reporter — the default agent-facing output."""
 
+# auditor: skip-file: PY-TYPING-UNTYPED-DICT  (the JSON payload dicts ARE the wire format)
+
 import json
 from typing import ClassVar
 

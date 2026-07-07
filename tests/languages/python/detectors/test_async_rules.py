@@ -291,6 +291,80 @@ def test_no_await_body_await_only_in_nested_async_def_outer_flagged() -> None:
     )
 
 
+_LAZY = "PY-ASYNC-UNLOCKED-LAZY-INIT"
+
+
+def test_check_then_create_non_resource_not_flagged() -> None:
+    # guard-then-create where the created thing is a plain value, not an OS resource
+    src = (
+        "class Cfg:\n"
+        "    def config(self):\n"
+        "        if self.loaded():\n"
+        "            return self.loaded()\n"
+        "        return self.build()\n"
+        "    def build(self):\n"
+        "        return {'a': 1}\n"
+    )
+    assert _LAZY not in rule_ids(run_audit(src))
+
+
+def test_check_then_create_eager_init_not_flagged() -> None:
+    # creating the resource in __init__ IS the recommended fix — never flag it
+    src = (
+        "import subprocess\n"
+        "class Pool:\n"
+        "    def __init__(self):\n"
+        "        self.proc = subprocess.Popen(['worker'])\n"
+    )
+    assert _LAZY not in rule_ids(run_audit(src))
+
+
+def test_check_then_create_direct_os_call_flagged() -> None:
+    # the creator can be a direct OS call, not just a self-method that wraps one
+    src = (
+        "import socket\n"
+        "class Conn:\n"
+        "    def sock(self):\n"
+        "        if self._sock:\n"
+        "            return self._sock\n"
+        "        return socket.create_connection(self._addr)\n"
+    )
+    assert _LAZY in rule_ids(run_audit(src))
+
+
+def test_check_then_create_guard_not_returning_self_state_not_flagged() -> None:
+    # a feature-flag early exit is not the lazy-init shape (the guard must return saved state)
+    src = (
+        "import subprocess\n"
+        "class Runner:\n"
+        "    def run(self):\n"
+        "        if not self.enabled:\n"
+        "            return None\n"
+        "        return subprocess.run(self._cmd)\n"
+    )
+    assert _LAZY not in rule_ids(run_audit(src))
+
+
+def test_check_then_create_notes_locked_sibling() -> None:
+    # a sibling method in the same class locks — call that out in the message
+    src = (
+        "import subprocess\n"
+        "class Pool:\n"
+        "    def db(self):\n"
+        "        with self._lock:\n"
+        "            if self._db is None:\n"
+        "                self._db = connect_db(self._dsn)\n"
+        "        return self._db\n"
+        "    def proc(self):\n"
+        "        if self._proc:\n"
+        "            return self._proc\n"
+        "        return subprocess.Popen(self._cmd)\n"
+    )
+    findings = [f for f in run_audit(src).findings if f.rule_id == _LAZY]
+    assert len(findings) == 1
+    assert "sibling method" in findings[0].message
+
+
 def test_no_await_body_overload_stub_not_flagged() -> None:
     # CORRECT: `@overload\nasync def f(x: int) -> int: ...`
     # The body is a single Expr(Constant(...)) statement — `_is_abstract_or_stub` returns

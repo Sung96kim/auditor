@@ -6,6 +6,8 @@ per-role/per-glob policy. ``load_config`` performs the two-phase plugin/config l
 config may reference plugin-contributed rules.
 """
 
+# auditor: skip-file: PY-TYPING-UNTYPED-DICT  (raw-TOML layer boundary — tomllib dicts pre-validation)
+
 import tomllib
 from fnmatch import fnmatch
 from importlib import resources
@@ -32,12 +34,13 @@ class OopThreshold(BaseModel):
         12, ge=1, description="kwargs in a constructor call before it's a 'wall'"
     )
     flat_field_min: int = Field(
-        12, ge=1, description="fields in a flat model before it should be grouped"
+        10, ge=1, description="fields in a flat model before it should be grouped"
     )
     field_copy_min: int = Field(
-        5,
+        4,
         ge=1,
-        description="`self.x = src.x` copies before it's field-by-field copying",
+        description="same-name copies from one source (`self.x = src.x` assigns or "
+        "`Result(x=src.x, …)` constructor kwargs) before it's field-by-field copying",
     )
     module_const_min: int = Field(
         2,
@@ -48,6 +51,12 @@ class OopThreshold(BaseModel):
         5,
         ge=1,
         description="if/elif or guard-clause branches before it's a dispatch ladder",
+    )
+    cli_logic_min_calls: int = Field(
+        3,
+        ge=1,
+        description="subprocess/file-mutation calls in one CLI-module function before "
+        "it's domain logic living in the CLI layer",
     )
 
 

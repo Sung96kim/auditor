@@ -1,6 +1,8 @@
 """OOP/composition-category detectors: constructor walls, flat-field models, thin
-wrappers, builder classes, dispatch ladders, static-method classes, free-function
-orchestrators, long parameter lists, god classes, high complexity, dataclass-in-pydantic.
+wrappers, builder classes, dispatch ladders, static-method classes, long parameter
+lists, god classes, high complexity, dataclass-in-pydantic. (The orchestration pair —
+free-fn orchestrator / logic-in-CLI — lives in ``orchestration.py``; the DRY family's
+twin-methods rule in ``dry_rules.py``.)
 
 Mostly ``candidate`` (the agent judges); ``PY-OOP-DATACLASS-IN-PYDANTIC`` is auto.
 """
@@ -16,7 +18,6 @@ from auditor.languages.python.detectors._util import (
     decorator_names,
     dotted_name,
     imports_module,
-    is_cli_command_module,
 )
 from auditor.models import Category, Finding, Severity, VerdictKind
 
@@ -141,7 +142,14 @@ class ConstructorWall(_OopCandidate):
 
 
 class FlatFieldModel(_OopCandidate):
+    """Advisory-only (suggestion severity, surfaced even at the base floor): a wide flat model
+    is often a defensible wire/env root, so a human calls decompose-vs-keep. ``BaseSettings``
+    roots are exempt by construction — only direct ``BaseModel`` bases match, and the flat
+    env-var binding IS the settings contract (nesting would break it)."""
+
     rule_id: ClassVar[str] = "PY-OOP-FLAT-FIELD-MODEL"
+    default_severity: ClassVar[Severity] = Severity.SUGGESTION
+    version: ClassVar[str] = "2"
     checklist_item: ClassVar[int] = 4
 
     def run(self, ctx: AuditContext) -> list[Finding]:
@@ -151,7 +159,7 @@ class FlatFieldModel(_OopCandidate):
             if not isinstance(node, ast.ClassDef):
                 continue
             base_names = {dotted_name(b).split(".")[-1] for b in node.bases}
-            if "BaseModel" not in base_names:
+            if "BaseModel" not in base_names or "BaseSettings" in base_names:
                 continue
             fields = [
                 s.target.id
@@ -490,49 +498,9 @@ def _complexity(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
     return score
 
 
-def _intra_module_callers(
-    group: list[ast.FunctionDef | ast.AsyncFunctionDef], names: set[str]
-) -> int:
-    """How many functions in ``group`` call another top-level function of the module (by name)."""
-    return sum(
-        1
-        for fn in group
-        if {dotted_name(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
-        & names
-    )
-
-
-class FreeFnOrchestrator(_OopCandidate):
-    rule_id: ClassVar[str] = "PY-OOP-FREE-FN-ORCHESTRATOR"
-    checklist_item: ClassVar[int] = 19
-
-    def run(self, ctx: AuditContext) -> list[Finding]:
-        # Typer/Click command modules thread the CLI context between free-function commands by
-        # framework design; a coordinator class would fight the framework.
-        if is_cli_command_module(ctx.tree, ctx.config.settings.cli_frameworks):
-            return []
-        names = {
-            n.name
-            for n in ctx.tree.body
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-        # The smell is a pipeline threading one value: 3+ functions sharing a param AND
-        # calling each other — not independent helpers or CLI handlers.
-        for param, group in _functions_by_shared_param(ctx.tree).items():
-            if len(group) >= 3 and _intra_module_callers(group, names) >= 2:
-                return [
-                    self.make_finding(
-                        ctx,
-                        line=group[0].lineno,
-                        message=f"{len(group)} free functions thread `{param}` between them; use a coordinator class",
-                        suggestion="encapsulate the pipeline in an X-Coordinator/Index class that holds the state",
-                    )
-                ]
-        return []
-
-
 class FieldByFieldCopy(_OopCandidate):
     rule_id: ClassVar[str] = "PY-OOP-FIELD-COPY"
+    version: ClassVar[str] = "2"
     checklist_item: ClassVar[int] = 11
 
     def run(self, ctx: AuditContext) -> list[Finding]:
@@ -554,21 +522,37 @@ class FieldByFieldCopy(_OopCandidate):
 
 
 def _field_copies(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, int]:
-    """Count `target.attr = source.attr` assignments (same field name) per source object —
-    the lazy form of composition (item 11)."""
+    """Count same-name field copies per source object — the lazy form of composition (item 11) —
+    in all three spellings: `target.attr = source.attr` assigns, tuple-unpack rows
+    (`self.a, self.b = src.a, src.b`), and constructor kwargs (`Result(a=src.a, b=src.b)`)."""
     counts: dict[str, int] = {}
-    for node in ast.walk(fn):
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
-            continue
-        target, value = node.targets[0], node.value
-        if (
-            isinstance(target, ast.Attribute)
-            and isinstance(value, ast.Attribute)
-            and target.attr == value.attr
-        ):
+
+    def bump(target_attr: str, value: ast.expr) -> None:
+        if isinstance(value, ast.Attribute) and value.attr == target_attr:
             source = root_name(value.value)
             if source is not None:
                 counts[source] = counts.get(source, 0) + 1
+
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+            if isinstance(target, ast.Attribute):
+                bump(target.attr, value)
+            elif (
+                isinstance(target, ast.Tuple)
+                and isinstance(value, ast.Tuple)
+                and len(target.elts) == len(value.elts)
+            ):
+                for t, v in zip(target.elts, value.elts, strict=True):
+                    if isinstance(t, ast.Attribute):
+                        bump(t.attr, v)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if name[:1].isupper():  # a constructor call, like ConstructorWall
+                for kw in node.keywords:
+                    if kw.arg:
+                        bump(kw.arg, kw.value)
     return counts
 
 
@@ -581,17 +565,29 @@ def root_name(node: ast.expr) -> str | None:
 
 
 class ParallelSibling(ParallelSiblingMixin[AuditContext, ast.AST], _OopCandidate):
-    # Same-file twins only — cross-file near-twins are PY-XFILE-DUP-FUNCTION's job.
+    # Same-file twins only (top-level functions AND methods, so within-class and
+    # across-subclass twins group too) — cross-file near-twins are PY-XFILE-DUP-FUNCTION's job.
     rule_id: ClassVar[str] = "PY-OOP-PARALLEL-SIBLING"
+    version: ClassVar[str] = "2"
     checklist_item: ClassVar[int] = 17
     unit: ClassVar[str] = "function"
 
     def _candidates(self, ctx: AuditContext) -> list[tuple[str, int, ast.AST]]:
-        return [
+        out: list[tuple[str, int, ast.AST]] = [
             (n.name, n.lineno, n)
             for n in ctx.tree.body
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]
+        for cls in ctx.tree.body:
+            if isinstance(cls, ast.ClassDef):
+                out.extend(
+                    (f"{cls.name}.{m.name}", m.lineno, m)
+                    for m in cls.body
+                    if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    # dunders (__init__/__repr__ walls) are conventionally parallel
+                    and not (m.name.startswith("__") and m.name.endswith("__"))
+                )
+        return out
 
     def _walk(self, root: ast.AST) -> Iterator[ast.AST]:
         return ast.walk(root)
@@ -685,17 +681,3 @@ def _block_tokens(stmt: ast.stmt) -> list[str]:
     return out
 
 
-def _functions_by_shared_param(
-    tree: ast.Module,
-) -> dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]]:
-    """Group top-level functions by a parameter name they share (the threaded state)."""
-    groups: dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]] = {}
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        a = node.args
-        for p in a.posonlyargs + a.args + a.kwonlyargs:
-            if p.arg in ("self", "cls"):
-                continue
-            groups.setdefault(p.arg, []).append(node)
-    return groups

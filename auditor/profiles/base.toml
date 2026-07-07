@@ -13,6 +13,7 @@ PY-OOP-MODEL-REBUILD = { enabled = true }
 PY-OOP-DICT-MUTATION-BUILDER = { enabled = true }
 PY-OOP-MODULE-CONST-FOR-SUBCLASS = { enabled = true }
 PY-OOP-CLOSURE-CAPTURE = { enabled = true }
+PY-OOP-FLAT-FIELD-MODEL = { enabled = true }
 
 # Test code is classified, not dropped, and audited under a relaxed policy:
 # rules that are noise-by-design in tests are disabled or downgraded to candidate.

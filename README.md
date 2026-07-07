@@ -332,9 +332,9 @@ v2 keeps the inner class as a deprecated shim but silently ignores misspelled ke
 
 ## Detectors
 
-**90 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `secrets`,
+**96 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `secrets`,
 `supply-chain`, `correctness`, `typing`, `async`, `config`, `dead-code`, `testing`,
-`oop-composition`, and `style` (plus the `sqlalchemy`/`pydantic` framework rules) —
+`oop-composition`, and `style` (including the `sqlalchemy`/`pydantic` framework and graph rules) —
 including DRY/composition rules (cross-file duplicate model/function, within-file duplicate
 blocks, parallel siblings, field-by-field copying) and a `suggestion` tier of low-stakes nudges
 below the severity ladder. Each carries a stable `rule_id`, a category, a default severity, and
@@ -410,7 +410,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 `auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
 
 <details>
-<summary><b>All 149 rules</b> (generated from <code>auditor rules list</code>)</summary>
+<summary><b>All 152 rules</b> (generated from <code>auditor rules list</code>)</summary>
 
 #### security (24)
 
@@ -514,7 +514,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `PY-ASYNC-SEQUENTIAL-AWAITS` | low | candidate | awaits inside a loop that could be `gather`-ed concurrently |
 | `PY-ASYNC-SYNC-IO` | high | candidate | synchronous/blocking I/O in an async function — blocks the event loop |
 | `PY-ASYNC-UNAWAITED-COROUTINE` | high | auto | a coroutine call never awaited — silently does nothing |
-| `PY-ASYNC-UNLOCKED-LAZY-INIT` | high | candidate | check-then-set lazy init with no lock — concurrent race |
+| `PY-ASYNC-UNLOCKED-LAZY-INIT` | high | candidate | check-then-set lazy init (or check-then-create of an OS resource) with no lock — concurrent race |
 | `SA-ASYNC-EXPIRE-ON-COMMIT` | medium | candidate | an async session factory missing `expire_on_commit=False` — MissingGreenlet |
 | `SA-GREENLET-ATTR-AFTER-COMMIT` | medium | candidate | an ORM attribute accessed after `commit()` expired it (AsyncSession) |
 | `SA-IMPLICIT-LAZY-ASYNC` | medium | candidate | `relationship()` with no explicit `lazy=` — sync lazy-load under AsyncSession |
@@ -532,7 +532,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
 | `PY-TYPING-MISSING-HINTS` | low | auto | a function parameter or return without a type annotation |
-| `PY-TYPING-UNTYPED-DICT` | medium | auto | a `dict[str, Any]` param/return instead of a typed model |
+| `PY-TYPING-UNTYPED-DICT` | medium | auto | an untyped-collection param/return — bare `dict`/`list`, `dict[..., Any]`, or dict-of-dicts — instead of a typed model |
 
 #### dead-code (1)
 
@@ -540,7 +540,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 |---|---|---|---|
 | `PY-DEAD-SYMBOL` | low | candidate | a module-level private symbol defined but never referenced (repo-wide) |
 
-#### oop-composition (22)
+#### oop-composition (25)
 
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
@@ -553,19 +553,22 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `PY-OOP-DICT-MUTATION-BUILDER` | suggestion | candidate | a function mutating a dict param in place and returning it (validators exempt) |
 | `PY-OOP-DISPATCH-LADDER` | low | candidate | an if/elif (or guard-clause) ladder on one discriminator — use dispatch |
 | `PY-OOP-DUPLICATE-BLOCK` | low | candidate | a duplicated statement block within a file — extract a helper |
-| `PY-OOP-FIELD-COPY` | low | candidate | many `target.x = source.x` field copies — add a `from_*` classmethod |
-| `PY-OOP-FLAT-FIELD-MODEL` | low | candidate | a `BaseModel` with many flat fields (threshold) — nest sub-models |
+| `PY-OOP-FIELD-COPY` | low | candidate | many same-name field copies from one source (assigns, tuple unpack, or constructor kwargs) — add a `from_*` classmethod |
+| `PY-OOP-FLAT-FIELD-MODEL` | suggestion | candidate | a `BaseModel` with many flat fields (threshold; `BaseSettings` exempt) — decompose or keep, human's call |
 | `PY-OOP-FREE-FN-ORCHESTRATOR` | low | candidate | 3+ free functions threading one value (CLI modules exempt) — use a coordinator |
+| `PY-OOP-LOGIC-IN-CLI` | low | candidate | a CLI-module function doing subprocess/file-mutation work inline — delegate to a domain object |
 | `PY-OOP-GOD-CLASS` | low | candidate | a class over the method/attribute threshold — split responsibilities |
 | `PY-OOP-HIGH-COMPLEXITY` | low | candidate | a function over the cyclomatic-complexity threshold |
 | `PY-OOP-LONG-PARAM-LIST` | low | candidate | a function over the parameter-count threshold — bundle into an object |
 | `PY-OOP-MODEL-REBUILD` | suggestion | candidate | a `model_rebuild()` call — confirm a real circular import exists |
 | `PY-OOP-MODULE-CONST-FOR-SUBCLASS` | suggestion | candidate | module consts name-prefixed for a subclass — hoist to ClassVars |
-| `PY-OOP-PARALLEL-SIBLING` | low | candidate | same-file functions with identical skeletons differing only in constants |
+| `PY-OOP-PARALLEL-SIBLING` | low | candidate | same-file functions or methods with identical skeletons differing only in constants |
 | `PY-OOP-STATIC-METHOD-CLASS` | low | candidate | a class of only `@staticmethod`s — use functions or real OOP |
 | `PY-OOP-THIN-WRAPPER` | low | candidate | a function forwarding its args verbatim to one call |
+| `PY-OOP-TWIN-METHODS` | low | candidate | same-file methods that are clones modulo names/literals/kwargs — merge into one helper |
 | `PY-XFILE-DUP-FUNCTION` | low | candidate | a function sharing its shape with a clone in another file (CLI commands exempt) |
 | `PY-XFILE-DUP-MODEL` | low | candidate | a model sharing its field-set with a clone in another file |
+| `PY-XFILE-PRIVATE-USED` | low | candidate | a `_`-private module symbol referenced from another file — make it public |
 
 #### testing (9)
 

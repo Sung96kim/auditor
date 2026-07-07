@@ -5,6 +5,8 @@ data. Run with ``python -m auditor.mcp_server`` (stdio) or the ``auditor-mcp`` s
 Requires the ``mcp`` extra (``pip install auditor[mcp]``).
 """
 
+# auditor: skip-file: PY-TYPING-UNTYPED-DICT  (MCP tool surface — JSON payloads by contract)
+
 import ast
 import difflib
 import time

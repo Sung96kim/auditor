@@ -91,23 +91,65 @@ class SyncIoInAsync(Detector):
         return out
 
 
+#: calls that create/hold a shared OS resource — a process, socket, connection, or file.
+#: The check-then-create form only fires when the fallthrough creates one of these.
+_OS_RESOURCE_CALLS = {
+    "subprocess.Popen",
+    "subprocess.run",
+    "subprocess.check_output",
+    "subprocess.check_call",
+    "os.fork",
+    "os.forkpty",
+    "multiprocessing.Process",
+    "socket.socket",
+    "socket.create_connection",
+    "open",
+    "tempfile.NamedTemporaryFile",
+    "tempfile.TemporaryDirectory",
+    "tempfile.mkstemp",
+    "tempfile.mkdtemp",
+}
+_OS_RESOURCE_SUFFIXES = (
+    ".connect",
+    ".Popen",
+    ".Process",
+    ".write_text",
+    ".write_bytes",
+    ".touch",
+    ".mkdir",
+)
+#: file-lock calls that make a check-then-create safe (with-`lock` is handled separately)
+_LOCK_CALLS = {"fcntl.flock", "fcntl.lockf", "msvcrt.locking"}
+
+_FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
+
+
 class UnlockedLazyInit(Detector):
+    """Check-then-set/create without a lock, in two forms: (1) ``if self._x is None: self._x = …``
+    (also the ``if not self._x:`` truthiness spelling); (2) a method that returns saved state from
+    a guard, else calls a creator of a shared OS resource (process/socket/connection/file) — under
+    concurrency every cold caller passes the check and creates its own. The GIL does not make
+    check-then-set atomic."""
+
     rule_id: ClassVar[str] = "PY-ASYNC-UNLOCKED-LAZY-INIT"
     category: ClassVar[Category] = Category.ASYNC
     default_severity: ClassVar[Severity] = Severity.HIGH
     verdict_kind: ClassVar[VerdictKind] = VerdictKind.CANDIDATE
+    version: ClassVar[str] = "2"
     checklist_item: ClassVar[int] = 30
 
     def run(self, ctx: AuditContext) -> list[Finding]:
         locked = _ifs_under_lock(ctx.tree)
         out: list[Finding] = []
+        flagged: set[int] = set()
         for node in ast.walk(ctx.tree):
             if not isinstance(node, ast.If):
                 continue
-            attr = _is_none_check(node.test)
+            attr = _lazy_attr_check(node.test)
             if attr is None:
                 continue
             if _assigns_attr(node.body, attr) and id(node) not in locked:
+                flagged.add(id(node))
                 out.append(
                     self.make_finding(
                         ctx,
@@ -116,21 +158,132 @@ class UnlockedLazyInit(Detector):
                         suggestion="eager init or double-checked locking with threading.Lock",
                     )
                 )
+        for node in ast.walk(ctx.tree):
+            if isinstance(node, ast.ClassDef):
+                out.extend(self._check_then_create(ctx, node, locked, flagged))
+        return out
+
+    def _check_then_create(
+        self,
+        ctx: AuditContext,
+        cls: ast.ClassDef,
+        locked: set[int],
+        flagged: set[int],
+    ) -> list[Finding]:
+        methods = [s for s in cls.body if isinstance(s, _FuncDef)]
+        creators = {m.name for m in methods if _calls_os_resource(m)}
+        lockers = {m.name for m in methods if _uses_lock(m)}
+        out: list[Finding] = []
+        for m in methods:
+            if m.name == "__init__" or m.name in lockers:
+                continue
+            hit = _guard_then_create(m, creators)
+            if hit is None:
+                continue
+            guard, creator = hit
+            if id(guard) in locked or id(guard) in flagged:
+                continue
+            note = "; a sibling method in this class does lock" if lockers else ""
+            out.append(
+                self.make_finding(
+                    ctx,
+                    line=guard.lineno,
+                    message=(
+                        f"`{m.name}` checks saved state then calls `{creator}(...)` (creates an OS "
+                        f"resource) without a lock — concurrent cold callers each create one{note}"
+                    ),
+                    suggestion="double-checked locking (threading.Lock / fcntl.flock), or create eagerly in __init__",
+                )
+            )
         return out
 
 
-def _is_none_check(test: ast.expr) -> str | None:
+def _lazy_attr_check(test: ast.expr) -> str | None:
+    """The self-attribute a lazy-init guard tests: ``self._x is None`` or ``not self._x``."""
     if (
         isinstance(test, ast.Compare)
         and len(test.ops) == 1
         and isinstance(test.ops[0], ast.Is)
         and isinstance(test.comparators[0], ast.Constant)
         and test.comparators[0].value is None
-        and isinstance(test.left, ast.Attribute)
-        and isinstance(test.left.value, ast.Name)
-        and test.left.value.id == "self"
     ):
-        return test.left.attr
+        return _self_attr(test.left)
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _self_attr(test.operand)
+    return None
+
+
+def _self_attr(node: ast.expr) -> str | None:
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    ):
+        return node.attr
+    return None
+
+
+def _is_os_resource_call(name: str) -> bool:
+    return name in _OS_RESOURCE_CALLS or name.endswith(_OS_RESOURCE_SUFFIXES)
+
+
+def _calls_os_resource(fn: _FuncDef) -> bool:
+    return any(
+        isinstance(n, ast.Call) and _is_os_resource_call(dotted_name(n.func))
+        for n in ast.walk(fn)
+    )
+
+
+def _uses_lock(fn: _FuncDef) -> bool:
+    """The method already synchronizes: a ``with …lock…:`` block or a file-lock call."""
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.With, ast.AsyncWith)) and any(
+            "lock" in dotted_name(item.context_expr).lower() for item in node.items
+        ):
+            return True
+        if isinstance(node, ast.Call) and dotted_name(node.func) in _LOCK_CALLS:
+            return True
+    return False
+
+
+def _test_reads_self(test: ast.expr) -> bool:
+    return any(
+        isinstance(n, ast.Attribute)
+        and isinstance(n.value, ast.Name)
+        and n.value.id == "self"
+        for n in ast.walk(test)
+    )
+
+
+def _returns_self_state(body: list[ast.stmt]) -> bool:
+    """The guard returns something read off ``self`` — the 'already have it' early exit
+    (``return self.saved()`` / ``return self._proc``), not a feature-flag ``return None``."""
+    return any(
+        isinstance(n, ast.Return) and n.value is not None and _test_reads_self(n.value)
+        for s in body
+        for n in ast.walk(s)
+    )
+
+
+def _guard_then_create(
+    m: _FuncDef, creators: set[str]
+) -> tuple[ast.If, str] | None:
+    """The first ``if <reads self>: return <self state>`` whose fallthrough (or else) calls an
+    OS-resource creator — directly, or via a sibling method of the class (``creators``)."""
+    for i, stmt in enumerate(m.body):
+        if not isinstance(stmt, ast.If) or not _test_reads_self(stmt.test):
+            continue
+        if not _returns_self_state(stmt.body):
+            continue
+        for s in [*stmt.orelse, *m.body[i + 1 :]]:
+            for n in ast.walk(s):
+                if not isinstance(n, ast.Call):
+                    continue
+                name = dotted_name(n.func)
+                if (
+                    name.startswith("self.") and name[5:] in creators
+                ) or _is_os_resource_call(name):
+                    return stmt, name
     return None
 
 

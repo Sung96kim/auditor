@@ -106,11 +106,9 @@ class Registry:
     def source_of(self, kind: str, name: str) -> str:
         return self._sources.get(f"{kind}:{name}", "built-in")
 
-    def snapshot(
+    def snapshot(  # auditor: skip: PY-TYPING-UNTYPED-DICT  (JSON boundary for `plugins list`)
         self,
-    ) -> dict[
-        str, Any
-    ]:  # auditor: skip: PY-TYPING-UNTYPED-DICT  (JSON boundary for `plugins list`)
+    ) -> dict[str, Any]:
         """For ``auditor plugins list``."""
         return {
             "detectors": {

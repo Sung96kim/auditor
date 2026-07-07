@@ -85,6 +85,26 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "def f() -> dict[str, Any]:\n    return {}",
             "def f() -> int:\n    return 1",
         ),
+        (
+            "PY-TYPING-UNTYPED-DICT",
+            "def decode(self, token: str) -> dict | None:\n    return jwt_decode(token)\n",
+            "from pydantic import BaseModel\nclass Claims(BaseModel):\n    sub: str\n    role: str\ndef decode(self, token: str) -> Claims | None:\n    return Claims.model_validate(jwt_decode(token))\n",
+        ),
+        (
+            "PY-TYPING-UNTYPED-DICT",
+            "def profiles() -> dict[str, dict[str, str]]:\n    return load_profiles()\n",
+            "from pydantic import BaseModel\nclass ProfileConfig(BaseModel):\n    role: str\ndef profiles() -> dict[str, ProfileConfig]:\n    return load_profiles()\n",
+        ),
+        (
+            "PY-TYPING-UNTYPED-DICT",
+            "def total(xs: list) -> int:\n    return len(xs)\n",
+            "def total(xs: list[int]) -> int:\n    return len(xs)\n",
+        ),
+        (
+            "PY-TYPING-UNTYPED-DICT",
+            "from typing import Any\ndef rows() -> list[dict[str, Any]]:\n    return fetch()\n",
+            "from pydantic import BaseModel\nclass Row(BaseModel):\n    id: int\ndef rows() -> list[Row]:\n    return fetch()\n",
+        ),
     ],
     "correctness": [
         (
@@ -220,6 +240,42 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "class C:\n    def m(self):\n        with self._lock:\n            if self._x is None:\n                self._x = 1",
         ),
         (
+            "PY-ASYNC-UNLOCKED-LAZY-INIT",
+            # check-then-create of a shared OS resource: every cold caller passes the
+            # check and spawns its own process; last writer wins, the rest leak
+            (
+                "import subprocess\n"
+                "class ProcessPool:\n"
+                "    def resource(self):\n"
+                "        if self.saved() and self.alive(self.saved()):\n"
+                "            return self.saved()\n"
+                "        return self.create()\n"
+                "    def create(self):\n"
+                "        return subprocess.Popen(self._cmd)\n"
+            ),
+            (
+                "import fcntl\n"
+                "import subprocess\n"
+                "class ProcessPool:\n"
+                "    def resource(self):\n"
+                "        if self.saved() and self.alive(self.saved()):\n"
+                "            return self.saved()\n"
+                "        with open(self.lock_path, 'w') as lock:\n"
+                "            fcntl.flock(lock, fcntl.LOCK_EX)\n"
+                "            if self.saved():\n"
+                "                return self.saved()\n"
+                "            return self.create()\n"
+                "    def create(self):\n"
+                "        return subprocess.Popen(self._cmd)\n"
+            ),
+        ),
+        (
+            "PY-ASYNC-UNLOCKED-LAZY-INIT",
+            # truthiness lazy init is the same race as the `is None` form
+            "class Cache:\n    def pool(self):\n        if not self._pool:\n            self._pool = create_pool(self._dsn)\n        return self._pool\n",
+            "class Cache:\n    def pool(self):\n        with self._lock:\n            if not self._pool:\n                self._pool = create_pool(self._dsn)\n        return self._pool\n",
+        ),
+        (
             "PY-ASYNC-DANGLING-TASK",
             "async def f():\n    asyncio.create_task(g())\n    await h()",
             "async def f():\n    t = asyncio.create_task(g())\n    await t",
@@ -266,6 +322,93 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             "PY-CONFIG-IMPORT-TIME-IO",
             "data = requests.get('u')",
             "def load():\n    return requests.get('u')",
+        ),
+    ],
+    "orchestration": [
+        (
+            "PY-OOP-FREE-FN-ORCHESTRATOR",
+            (
+                "def validate_pipeline(pipeline):\n"
+                "    if not pipeline.steps:\n"
+                "        raise ValueError('empty')\n"
+                "    return pipeline\n"
+                "\n"
+                "def enrich_pipeline(pipeline):\n"
+                "    pipeline = validate_pipeline(pipeline)\n"
+                "    pipeline.metadata = load_meta(pipeline.id)\n"
+                "    return pipeline\n"
+                "\n"
+                "def execute_pipeline(pipeline):\n"
+                "    pipeline = enrich_pipeline(pipeline)\n"
+                "    for step in pipeline.steps:\n"
+                "        step.run()\n"
+                "    return pipeline\n"
+            ),
+            (
+                "def validate(pipeline):\n"
+                "    return bool(pipeline.steps)\n"
+                "\n"
+                "def summarize(pipeline):\n"
+                "    return len(pipeline.steps)\n"
+            ),
+        ),
+        (
+            "PY-OOP-FREE-FN-ORCHESTRATOR",
+            "def build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
+            "def only(x):\n    return x",
+        ),
+        (
+            # a Typer CLI module threads its context between free-function commands by design (iccli
+            # ic/cli/core.py); the orchestrator nudge must not fire once the module imports typer
+            "PY-OOP-FREE-FN-ORCHESTRATOR",
+            "def build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
+            "import typer\ndef build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
+        ),
+        (
+            "PY-OOP-LOGIC-IN-CLI",
+            # a CLI command doing the install itself instead of delegating to a domain object
+            (
+                "import shutil\n"
+                "import subprocess\n"
+                "import typer\n"
+                "app = typer.Typer()\n"
+                "@app.command()\n"
+                "def install(target: str) -> None:\n"
+                "    subprocess.run(['git', 'clone', REPO, target], check=True)\n"
+                "    shutil.copytree(f'{target}/assets', '/opt/assets')\n"
+                "    subprocess.run(['make', 'build'], cwd=target, check=True)\n"
+            ),
+            (
+                "import typer\n"
+                "app = typer.Typer()\n"
+                "@app.command()\n"
+                "def install(target: str) -> None:\n"
+                "    result = Installer(target).run()\n"
+                "    typer.echo(result.summary)\n"
+            ),
+        ),
+    ],
+    "dry_rules": [
+        (
+            "PY-OOP-TWIN-METHODS",
+            # near-identical methods in one class, differing only in one kwarg —
+            # the lazy form of one helper parameterized by the difference
+            (
+                "from subprocess import PIPE, STDOUT, run\n"
+                "class Git:\n"
+                "    def read(self, *argv):\n"
+                "        return run(argv, stdout=PIPE, stderr=STDOUT, text=True)\n"
+                "    def feed(self, *argv, text):\n"
+                "        return run(argv, input=text, stdout=PIPE, stderr=STDOUT, text=True)\n"
+            ),
+            (
+                "from subprocess import PIPE, STDOUT, run\n"
+                "class Git:\n"
+                "    def _merged(self, argv, *, text=None):\n"
+                "        return run(argv, input=text, stdout=PIPE, stderr=STDOUT, text=True)\n"
+                "    def parse(self, out):\n"
+                "        return json.loads(out)\n"
+            ),
         ),
     ],
     "oop": [
@@ -423,6 +566,30 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
             ),
         ),
         (
+            "PY-OOP-FIELD-COPY",
+            # constructor form: kwargs pulled one by one from a single source object
+            (
+                "def to_result(src):\n"
+                "    return Result(a=src.a, b=src.b, c=src.c, d=src.d)\n"
+            ),
+            "def to_result(src):\n    return Result.from_source(src)\n",
+        ),
+        (
+            "PY-OOP-FIELD-COPY",
+            # tuple-unpack form of the same copy
+            (
+                "class Snapshot:\n"
+                "    def __init__(self, src):\n"
+                "        self.a, self.b, self.c, self.d = src.a, src.b, src.c, src.d\n"
+            ),
+            (
+                "class Snapshot:\n"
+                "    @classmethod\n"
+                "    def from_source(cls, src):\n"
+                "        return cls(source=src)\n"
+            ),
+        ),
+        (
             "PY-OOP-FLAT-FIELD-MODEL",
             (
                 "class PaymentRecord(BaseModel):\n"
@@ -449,33 +616,6 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
                 "    user_id: str\n"
                 "    amount: float\n"
                 "    card: CardInfo\n"
-            ),
-        ),
-        (
-            "PY-OOP-FREE-FN-ORCHESTRATOR",
-            (
-                "def validate_pipeline(pipeline):\n"
-                "    if not pipeline.steps:\n"
-                "        raise ValueError('empty')\n"
-                "    return pipeline\n"
-                "\n"
-                "def enrich_pipeline(pipeline):\n"
-                "    pipeline = validate_pipeline(pipeline)\n"
-                "    pipeline.metadata = load_meta(pipeline.id)\n"
-                "    return pipeline\n"
-                "\n"
-                "def execute_pipeline(pipeline):\n"
-                "    pipeline = enrich_pipeline(pipeline)\n"
-                "    for step in pipeline.steps:\n"
-                "        step.run()\n"
-                "    return pipeline\n"
-            ),
-            (
-                "def validate(pipeline):\n"
-                "    return bool(pipeline.steps)\n"
-                "\n"
-                "def summarize(pipeline):\n"
-                "    return len(pipeline.steps)\n"
             ),
         ),
         (
@@ -541,6 +681,28 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
                 "class PaymentRule(Rule):\n"
                 "    TITLE = 'Payment Validation'\n"
                 "    STEPS = ('check_amount', 'check_currency')\n"
+            ),
+        ),
+        (
+            "PY-OOP-PARALLEL-SIBLING",
+            # near-twin METHODS in one class (same structure, only constants differ)
+            (
+                "class Exporter:\n"
+                "    def export_user(self, obj):\n"
+                "        data = obj.to_dict()\n"
+                "        data['type'] = 'user'\n"
+                "        return json.dumps(data)\n"
+                "    def export_admin(self, obj):\n"
+                "        data = obj.to_dict()\n"
+                "        data['type'] = 'admin'\n"
+                "        return json.dumps(data)\n"
+            ),
+            (
+                "class Exporter:\n"
+                "    def export(self, obj, kind):\n"
+                "        data = obj.to_dict()\n"
+                "        data['type'] = kind\n"
+                "        return json.dumps(data)\n"
             ),
         ),
         (
@@ -630,18 +792,6 @@ GROUPS: dict[str, list[tuple[str, str, str]]] = {
         ),
         ("PY-OOP-GOD-CLASS", _GOD, "class C:\n    def m(self):\n        return 1"),
         ("PY-OOP-HIGH-COMPLEXITY", _COMPLEX, "def f(x):\n    return x + 1"),
-        (
-            "PY-OOP-FREE-FN-ORCHESTRATOR",
-            "def build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
-            "def only(x):\n    return x",
-        ),
-        (
-            # a Typer CLI module threads its context between free-function commands by design (iccli
-            # ic/cli/core.py); the orchestrator nudge must not fire once the module imports typer
-            "PY-OOP-FREE-FN-ORCHESTRATOR",
-            "def build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
-            "import typer\ndef build_a(data):\n    return data\ndef build_b(data):\n    return build_a(data)\ndef build_c(data):\n    return build_b(data)",
-        ),
         (
             # `.create()` as a classmethod is the recommended factory-constructor idiom, not an
             # instance builder to collapse (iccli ic/environment.py DevEnvironment)

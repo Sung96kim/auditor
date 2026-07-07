@@ -1,5 +1,7 @@
 """SARIF 2.1.0 reporter — drops findings into CI / GitHub code scanning / SAST dashboards."""
 
+# auditor: skip-file: PY-TYPING-UNTYPED-DICT  (the SARIF payload dicts ARE the wire format)
+
 import json
 from typing import ClassVar
 

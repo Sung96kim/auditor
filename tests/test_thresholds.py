@@ -27,6 +27,18 @@ _PY_CASES = [
         "FOO_A = 1\n\nclass Foo(Base):\n    pass\n",  # one matching const
         {"oop": {"module_const_min": 1}},  # loosen from 2 → fires
     ),
+    (
+        "PY-OOP-LOGIC-IN-CLI",
+        # two work calls in a CLI command — under the default floor of 3
+        (
+            "import shutil\nimport subprocess\nimport typer\n"
+            "@app.command()\n"
+            "def clean(path: str) -> None:\n"
+            "    subprocess.run(['git', 'gc'], cwd=path)\n"
+            "    shutil.rmtree(path)\n"
+        ),
+        {"oop": {"cli_logic_min_calls": 2}},  # loosen from 3 → fires
+    ),
 ]
 
 
