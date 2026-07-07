@@ -338,3 +338,10 @@ def test_graph_detect_config_defaults():
     assert cfg.naming_verb_distance == 0.15
     assert cfg.naming_object_jaccard == 0.6
     assert cfg.naming_min_verb_count == 20
+
+
+def test_comment_block_max_lines_default():
+    rc = ResolvedConfig(AuditorSettings(), role=FileRole.PRODUCTION, rel_path="x.py")
+    assert (
+        rc.effective("PY-STYLE-FILE-SIZE").threshold.size.comment_block_max_lines == 3
+    )
