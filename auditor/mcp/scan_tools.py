@@ -13,7 +13,7 @@ from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
-from auditor.mcp.helpers import _validate_detail
+from auditor.mcp.helpers import validate_detail
 from auditor.mcp.server import mcp
 from auditor.models import ManifestEntry
 from auditor.paths import index_db_path, repo_key
@@ -57,7 +57,7 @@ async def scan(
     cross-file — faster for a quick standalone check."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
-    _validate_detail(detail)
+    validate_detail(detail)
     root = find_root(Path(path))
     report_only = git_changed_files(root, since) if since else None
     try:
@@ -102,7 +102,7 @@ async def report(
     """Audit a single file statelessly (manifest + findings). ``detail``: summary|compact|full
     (default compact — hoists rule metadata, slims findings, drops evidence; use finding_detail
     to recover a finding's evidence; detail='full' restores every field inline)."""
-    _validate_detail(detail)
+    validate_detail(detail)
     results = await audit_target(_require_file(file), profile=profile)
     return json_payload(results, detail=detail)
 
