@@ -30,6 +30,7 @@ from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target, finding_evidence_at
 from auditor.ignores import evidence_hash
+from auditor.malware.tools import status_payload
 from auditor.models import ManifestEntry
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
@@ -295,6 +296,16 @@ def rules_list(
     return rows
 
 
+@mcp.tool
+async def malware_status() -> dict:
+    """Availability of the opt-in malware-scan backends (ClamAV + osv-scanner): found/missing,
+    version, and offline-DB state. Enable scanning with config
+    [tool.auditor.malware_scan] enabled=true (or `scan` with config={"malware_scan":
+    {"enabled": true}}); install/update via the CLI (`auditor malware install|update-dbs`) —
+    network actions stay explicit and human-initiated."""
+    return status_payload()
+
+
 if _GRAPH_OK:
     GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
@@ -362,7 +373,8 @@ if _GRAPH_OK:
     @mcp.tool
     async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict]:
         """Find graph symbols whose id contains ``term`` (case-insensitive), highest-rank
-        first. Use to locate the exact symbol name before graph_usages/graph_neighbors."""
+        first. Use to locate the exact symbol name before graph_usages/graph_neighbors.
+        """
         root = find_root(Path(path))
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return await GraphQuery(index).search(term, limit=limit)
@@ -382,7 +394,8 @@ if _GRAPH_OK:
     async def graph_overview(path: str = ".") -> dict:
         """One compact call to orient: counts, the largest clusters, and the worst graph hubs.
         Returns {nodes, edges, clusters, top_clusters, god_concepts, bottlenecks}. If the graph
-        isn't built yet (0 nodes), the counts are zero and the lists empty — no error."""
+        isn't built yet (0 nodes), the counts are zero and the lists empty — no error.
+        """
         root = find_root(Path(path))
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             nodes = await index.graph.nodes()

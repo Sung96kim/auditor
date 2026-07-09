@@ -419,6 +419,15 @@ async def test_finding_detail_reads_from_index(sample_repo):
     assert detail["evidence"]  # recovered from the index, not the (now-wiped) file
 
 
+async def test_malware_status_tool(monkeypatch):
+    from auditor.malware import tools as malware_tools
+
+    monkeypatch.setattr(malware_tools.shutil, "which", lambda name: None)
+    result = _structured(await mcp.call_tool("malware_status", {}))
+    assert result["clamscan"]["found"] is False
+    assert result["osv_offline_db"]["present"] is False
+
+
 @pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
 async def test_graph_search_and_usages_tools(sample_repo):
     """graph_search locates symbols and graph_usages returns grouped connectivity with full
