@@ -31,6 +31,7 @@ from auditor.cli.options import (
     IncludeGitignored,
     Incremental,
     Isolated,
+    Malware,
     MinSeverity,
     NoIndex,
     NoSkips,
@@ -53,6 +54,7 @@ from auditor.config import load_config
 from auditor.discovery import default_base_ref, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.logconfig import configure as configure_logging
+from auditor.malware.tools import resolve_tool
 from auditor.models import (
     SEVERITIES_DESC,
     ScanResult,
@@ -133,7 +135,8 @@ def _diff_report_only(
     root: Path | None = None,
 ) -> set[str] | None:
     """Resolve the git diff ref (--since / --changed / --vs-base) and return the changed-file
-    set to scope the output to, or None if no diff mode was requested. Exits cleanly on error."""
+    set to scope the output to, or None if no diff mode was requested. Exits cleanly on error.
+    """
     root = root or find_root(target)
     ref: str | None = None
     if vs_base:
@@ -185,6 +188,7 @@ def scan(
     root: PinRoot = None,
     show_ignored: ShowIgnored = False,
     config_json: ConfigJson = None,
+    malware: Malware = None,
     verbose: Verbose = 0,
 ) -> None:
     """Audit a file or directory."""
@@ -198,6 +202,19 @@ def scan(
         incremental = True  # whole-repo scan stays fast via the cache
 
     overrides = parse_config_json(config_json)
+    if malware is not None:
+        if malware and not (
+            resolve_tool("clamdscan")
+            or resolve_tool("clamscan")
+            or resolve_tool("osv-scanner")
+        ):
+            fail(
+                "malware scan requested but neither ClamAV nor osv-scanner is "
+                "installed — run `auditor malware install`"
+            )
+        merged = dict(overrides or {})
+        merged["malware_scan"] = {**merged.get("malware_scan", {}), "enabled": malware}
+        overrides = merged
     # "." renders as ".…" against the ellipsis — show the directory's name instead.
     target_label = target.resolve().name if str(target) == "." else target
     try:
