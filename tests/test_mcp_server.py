@@ -458,3 +458,11 @@ async def test_graph_search_and_usages_tools(sample_repo):
         await mcp.call_tool("graph_usages", {"symbol": "zzz_nope_xyz", "path": src})
     )
     assert empty == {}
+
+
+def test_mcp_server_shim_reexports_package_objects():
+    import auditor.mcp
+    import auditor.mcp_server
+
+    assert auditor.mcp_server.mcp is auditor.mcp.mcp
+    assert auditor.mcp_server.main is auditor.mcp.main
