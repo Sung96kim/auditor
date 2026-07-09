@@ -8,6 +8,7 @@ plain top-level import (no inline imports, no import cycle: ``PythonAuditor`` re
 import auditor.languages.bash.auditor  # noqa: F401  (registers BashAuditor + shell detectors)
 import auditor.languages.manifest.auditor  # noqa: F401  (registers ManifestAuditor + supply-chain detectors)
 import auditor.languages.python.auditor  # noqa: F401  (registers PythonAuditor + every detector)
+import auditor.malware.rules  # noqa: F401  (registers the malware-scan rule stubs)
 import auditor.reporters  # noqa: F401  (registers json/sarif/markdown reporters)
 
 # TypeScript support needs the optional `ts` extra (tree-sitter). Register it when present;

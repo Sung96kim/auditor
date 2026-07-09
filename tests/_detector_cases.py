@@ -1253,6 +1253,12 @@ TESTED_SEPARATELY = {
     "GRAPH-GOD-CONCEPT",
     "GRAPH-SCATTERED-CONCEPT",
     "GRAPH-NAMING-INCONSISTENCY",
+    # malware-scan shell-out rules; emitted by auditor/malware/passes.py,
+    # tested in tests/malware/
+    "AV-MAL-MATCH",
+    "AV-MAL-HEURISTIC",
+    "DEP-MAL-KNOWN",
+    "DEP-VULN-KNOWN",
     # SQLAlchemy framework rules — tested in tests/languages/python/detectors/test_sqlalchemy.py
     "SA-MUTABLE-DEFAULT",
     "SA-LAZY-DYNAMIC",
