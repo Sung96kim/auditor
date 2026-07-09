@@ -23,6 +23,7 @@ from auditor.graph.extract import extract_file_facts
 from auditor.ignores import IgnoreList
 from auditor.languages.base import LanguageAuditor
 from auditor.languages.python.resolve import CalleeResolver, find_site_packages
+from auditor.malware.passes import run_malware_passes
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
@@ -167,6 +168,12 @@ class ScanEngine:
             self.root.name,
         )
         results = await self._scan_files(files, progress)
+        if self.settings.malware_scan.enabled:
+            if progress is not None:
+                progress("malware scan")
+            await run_malware_passes(
+                self.root, target, self.settings, results, self.index
+            )
         if self.index is not None:
             # reconcile: drop index rows for files under this scan's scope that no longer exist,
             # so a deleted file leaves no stale findings/shapes (which would otherwise leak into
@@ -399,7 +406,8 @@ class ScanEngine:
 
     def _apply_crossfile_in_memory(self, results: list[ScanResult]) -> None:
         """Cross-file dedup without an index: compute shapes in memory and group them, so a
-        stateless ``scan <dir>`` surfaces XFILE findings (the index path persists them instead)."""
+        stateless ``scan <dir>`` surfaces XFILE findings (the index path persists them instead).
+        """
         min_stmts = self.settings.threshold.dry.xfile_method_min_statements
         shape_rows: list[dict] = []
         roles: dict[str, str] = {}
@@ -571,7 +579,8 @@ async def finding_evidence_at(
 ) -> str | None:
     """The offending text of the finding at ``file:line`` for ``rule_id`` in the current source,
     if one exists — used to snapshot a line-level ignore so it can follow the code on later edits.
-    Scans without applying ignores so an existing ignore doesn't hide the finding being captured."""
+    Scans without applying ignores so an existing ignore doesn't hide the finding being captured.
+    """
     abs_file = root / file
     if not abs_file.is_file():
         return None
