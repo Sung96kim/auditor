@@ -288,6 +288,22 @@ class GraphConfig(BaseModel):
     naming_min_verb_count: int = Field(default=20, ge=1)
 
 
+class MalwareScanConfig(BaseModel):
+    """[tool.auditor.malware_scan] — opt-in shell-out scans: ClamAV (file contents)
+    and osv-scanner (known-bad dependency versions). No pip extra; the backends are
+    system binaries resolved at runtime (see auditor.malware.tools)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    content: bool = True  # ClamAV pass
+    dependencies: bool = True  # osv-scanner pass
+    include_vendored: bool = True  # scan node_modules/.venv/vendor — where payloads live
+    max_file_size_mb: int = Field(default=50, ge=1)
+    include_vulnerabilities: bool = False  # OSV: also report CVEs, not just MAL-*
+    scan_timeout_s: int = Field(default=600, ge=1)
+
+
 class GlobalPaths(BaseSettings):
     """Global auditor data locations from the environment. ``home`` ← ``$AUDITOR_HOME`` (via the
     ``AUDITOR_`` prefix), defaulting to ``~/.auditor``. Lives here so the project's BaseSettings
@@ -337,6 +353,7 @@ class AuditorSettings(BaseSettings):
     design_system: DesignSystem = Field(default_factory=DesignSystem)
     sqlalchemy: SqlAlchemyConfig = Field(default_factory=SqlAlchemyConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
+    malware_scan: MalwareScanConfig = Field(default_factory=MalwareScanConfig)
 
     @field_validator("rules", mode="after")
     @classmethod

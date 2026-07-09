@@ -2,6 +2,7 @@
 threshold merge, per-rule/category/role resolution, and validation."""
 
 import pytest
+from pydantic import ValidationError
 
 from auditor.config import (
     AuditorSettings,
@@ -345,3 +346,33 @@ def test_comment_block_max_lines_default():
     assert (
         rc.effective("PY-STYLE-FILE-SIZE").threshold.size.comment_block_max_lines == 3
     )
+
+
+def test_malware_scan_defaults():
+    settings = AuditorSettings()
+    ms = settings.malware_scan
+    assert ms.enabled is False
+    assert ms.content is True
+    assert ms.dependencies is True
+    assert ms.include_vendored is True
+    assert ms.max_file_size_mb == 50
+    assert ms.include_vulnerabilities is False
+    assert ms.scan_timeout_s == 600
+
+
+def test_malware_scan_from_toml(tmp_path):
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text(
+        "[malware_scan]\nenabled = true\nmax_file_size_mb = 5\n"
+    )
+    settings = load_config(tmp_path)
+    assert settings.malware_scan.enabled is True
+    assert settings.malware_scan.max_file_size_mb == 5
+    assert settings.malware_scan.content is True  # unset keys keep defaults
+
+
+def test_malware_scan_rejects_unknown_keys(tmp_path):
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    with pytest.raises(ValidationError):
+        load_config(tmp_path)
