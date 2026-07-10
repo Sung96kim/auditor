@@ -568,9 +568,9 @@ def test_partial_arg_refresh_flags_only_unrefreshed(tmp_path):
     # line 10 has both a.x and b.y — only b.y should be flagged
     flagged_attrs = {f.message for f in findings}
     assert any("b.y" in m for m in flagged_attrs), "b.y must be flagged"
-    assert not any(
-        "a.x" in m for m in flagged_attrs
-    ), "a.x must NOT be flagged (a was refreshed)"
+    assert not any("a.x" in m for m in flagged_attrs), (
+        "a.x must NOT be flagged (a was refreshed)"
+    )
 
 
 def test_refresh_before_commit_still_flags(tmp_path):
@@ -797,9 +797,9 @@ def test_dep_bulk_helper_clears_refreshed_obj_only(tmp_path: Path) -> None:
     assert findings, "SA-GREENLET-ATTR-AFTER-COMMIT must fire for b.y"
     messages = {f.message for f in findings}
     assert any("b.y" in m for m in messages), "b.y must be flagged (un-refreshed)"
-    assert not any(
-        "a.x" in m for m in messages
-    ), "a.x must NOT be flagged (a was in the refreshed list)"
+    assert not any("a.x" in m for m in messages), (
+        "a.x must NOT be flagged (a was in the refreshed list)"
+    )
 
 
 def test_non_first_param_positional_mapping(tmp_path: Path) -> None:
@@ -848,9 +848,9 @@ def test_two_helpers_one_refreshes_other_does_not(tmp_path: Path) -> None:
     assert findings, "SA-GREENLET-ATTR-AFTER-COMMIT must fire for obj_b.name"
     messages = {f.message for f in findings}
     assert any("obj_b.name" in m for m in messages), "obj_b.name must be flagged"
-    assert not any(
-        "obj_a.value" in m for m in messages
-    ), "obj_a.value must NOT be flagged (obj_a was refreshed via reload)"
+    assert not any("obj_a.value" in m for m in messages), (
+        "obj_a.value must NOT be flagged (obj_a was refreshed via reload)"
+    )
 
 
 def test_two_hop_reexport_chain_resolves_and_clears(tmp_path: Path) -> None:

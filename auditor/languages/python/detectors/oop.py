@@ -679,5 +679,3 @@ def _block_tokens(stmt: ast.stmt) -> list[str]:
         else:
             out.append(type(node).__name__)
     return out
-
-

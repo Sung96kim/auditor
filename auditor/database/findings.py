@@ -1,5 +1,9 @@
 """FindingsDB: table store for the ``findings`` and ``file_rules`` tables."""
 
+# auditor: skip-file: PY-OOP-PARALLEL-SIBLING  (data-access layer: each read method is a thin
+# delegation to the shared _fetch helper differing only in its SQL — parallel shape is the query
+# surface, not duplication; the substantive body was already extracted, clearing TWIN-METHODS)
+
 import sqlite3
 from typing import ClassVar
 
@@ -80,37 +84,34 @@ class FindingsDB(BaseDB):
     }
 
     async def fingerprint(self, path: str, rule_id: str) -> str | None:
-        row = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT fingerprint FROM file_rules WHERE repo = ? AND path = ? AND rule_id = ?",
-                (self.repo, path, rule_id),
-            ).fetchone()
+        row = await self._fetch_one(
+            "SELECT fingerprint FROM file_rules WHERE repo = ? AND path = ? AND rule_id = ?",
+            (path, rule_id),
         )
         return row["fingerprint"] if row else None
 
     async def cached(self, path: str, rule_id: str) -> list[Finding]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
+        return [
+            _row_to_finding(r)
+            for r in await self._fetch(
                 "SELECT * FROM findings WHERE repo = ? AND path = ? AND rule_id = ?",
-                (self.repo, path, rule_id),
-            ).fetchall()
-        )
-        return [_row_to_finding(r) for r in rows]
+                (path, rule_id),
+            )
+        ]
 
     async def fingerprints(self, path: str) -> dict[str, str]:
         """All rule_id -> fingerprint for one file in a single query (batched cache check, vs one
         ``fingerprint`` call per rule)."""
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT rule_id, fingerprint FROM file_rules WHERE repo = ? AND path = ?",
-                (self.repo, path),
-            ).fetchall()
+        rows = await self._fetch(
+            "SELECT rule_id, fingerprint FROM file_rules WHERE repo = ? AND path = ?",
+            (path,),
         )
         return {r["rule_id"]: r["fingerprint"] for r in rows}
 
     async def cached_by_rule(self, path: str) -> dict[str, list[Finding]]:
         """rule_id -> cached findings for one file in a single query (batched cache read, vs one
-        ``cached`` call per rule)."""
+        ``cached`` call per rule). Aggregates rather than returning rows, so it keeps its own query
+        rather than delegating to ``_fetch``."""
         rows = await self._worker.run(
             lambda c: c.execute(
                 "SELECT * FROM findings WHERE repo = ? AND path = ?",
@@ -196,17 +197,17 @@ class FindingsDB(BaseDB):
         await self._worker.run(op)
 
     async def all(self) -> list[Finding]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT * FROM findings WHERE repo = ? ORDER BY path, line, rule_id",
-                (self.repo,),
-            ).fetchall()
-        )
-        return [_row_to_finding(r) for r in rows]
+        return [
+            _row_to_finding(r)
+            for r in await self._fetch(
+                "SELECT * FROM findings WHERE repo = ? ORDER BY path, line, rule_id"
+            )
+        ]
 
     async def grouped(self) -> dict[str, list[Finding]]:
         """path -> its findings (for callers that need the file association, e.g. applying
-        ignores during aggregation)."""
+        ignores during aggregation). Aggregates rather than returning rows, so it keeps its own
+        query rather than delegating to ``_fetch``."""
 
         def op(conn: sqlite3.Connection) -> dict[str, list[Finding]]:
             rows = conn.execute(
@@ -236,13 +237,14 @@ class FindingsDB(BaseDB):
         await self._worker.run(op)
 
     async def by_rule_prefix(self, prefix: str) -> list[dict]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT rule_id, message, evidence FROM findings WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
-                (self.repo, f"{prefix}%"),
-            ).fetchall()
-        )
-        return [dict(r) for r in rows]
+        return [
+            dict(r)
+            for r in await self._fetch(
+                "SELECT rule_id, message, evidence FROM findings "
+                "WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
+                (f"{prefix}%",),
+            )
+        ]
 
     async def clear_for_rules(self, rule_ids: list[str]) -> None:
         if not rule_ids:

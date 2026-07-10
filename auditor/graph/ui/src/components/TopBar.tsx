@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { THEME } from "../theme";
 import type { Crumb, CrumbTarget } from "../graph/breadcrumb";
+import { onEnterOrSpace } from "../a11y";
 
 interface TopBarProps {
   title: string;
@@ -84,7 +85,12 @@ export default function TopBar({
                 </span>
               )}
               <span
+                role={isLast ? undefined : "button"}
+                tabIndex={isLast ? undefined : 0}
                 onClick={isLast ? undefined : () => onCrumb(crumb.target)}
+                onKeyDown={
+                  isLast ? undefined : onEnterOrSpace(() => onCrumb(crumb.target))
+                }
                 className={isLast ? undefined : "crumb-link"}
                 style={{
                   fontSize: "12px",

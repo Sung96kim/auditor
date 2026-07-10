@@ -1,5 +1,9 @@
 """GraphDB: table store for graph_facts, graph_nodes, graph_edges, and graph_clusters tables."""
 
+# auditor: skip-file: PY-OOP-PARALLEL-SIBLING  (data-access layer: each read method is a thin
+# delegation to the shared _fetch helper differing only in its SQL — parallel shape is the query
+# surface, not duplication; the substantive body was already extracted, clearing TWIN-METHODS)
+
 import sqlite3
 from typing import Any, ClassVar
 
@@ -76,6 +80,7 @@ class GraphDB(BaseDB):
     async def clear_facts(self) -> None:
         """Drop all cached per-file facts for this repo, forcing re-extraction on the next scan
         (facts are keyed by content hash, so a code change to the extractor needs this)."""
+
         def op(conn: sqlite3.Connection) -> None:
             conn.execute("DELETE FROM graph_facts WHERE repo = ?", (self.repo,))
             conn.commit()
@@ -151,61 +156,52 @@ class GraphDB(BaseDB):
         await self._worker.run(op)
 
     async def node(self, node_id: str) -> dict[str, Any] | None:
-        row = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT * FROM graph_nodes WHERE repo = ? AND node_id = ?",
-                (self.repo, node_id),
-            ).fetchone()
+        row = await self._fetch_one(
+            "SELECT * FROM graph_nodes WHERE repo = ? AND node_id = ?", (node_id,)
         )
         return dict(row) if row else None
 
     async def nodes(self) -> list[dict[str, Any]]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT * FROM graph_nodes WHERE repo = ? ORDER BY rank DESC, node_id",
-                (self.repo,),
-            ).fetchall()
-        )
-        return [dict(r) for r in rows]
+        return [
+            dict(r)
+            for r in await self._fetch(
+                "SELECT * FROM graph_nodes WHERE repo = ? ORDER BY rank DESC, node_id"
+            )
+        ]
 
     async def edges_of(
         self, node_id: str, kinds: list[str] | None
     ) -> list[dict[str, Any]]:
-        def op(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-            sql = "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? AND (src = ? OR dst = ?)"
-            params: list[Any] = [self.repo, node_id, node_id]
-            if kinds:
-                sql += f" AND kind IN ({','.join('?' for _ in kinds)})"
-                params += kinds
-            return [dict(r) for r in conn.execute(sql, params).fetchall()]
-
-        return await self._worker.run(op)
+        sql = "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? AND (src = ? OR dst = ?)"
+        params: list[Any] = [node_id, node_id]
+        if kinds:
+            sql += f" AND kind IN ({','.join('?' for _ in kinds)})"
+            params += kinds
+        return [dict(r) for r in await self._fetch(sql, tuple(params))]
 
     async def cluster_members(self, cluster_id: int) -> list[dict[str, Any]]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
+        return [
+            dict(r)
+            for r in await self._fetch(
                 "SELECT node_id AS id, name, module, rank FROM graph_nodes "
                 "WHERE repo = ? AND cluster_id = ? ORDER BY rank DESC, node_id",
-                (self.repo, cluster_id),
-            ).fetchall()
-        )
-        return [dict(r) for r in rows]
+                (cluster_id,),
+            )
+        ]
 
     async def clusters(self) -> list[dict[str, Any]]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
+        return [
+            dict(r)
+            for r in await self._fetch(
                 "SELECT cluster_id, label, member_count FROM graph_clusters "
-                "WHERE repo = ? ORDER BY member_count DESC, cluster_id",
-                (self.repo,),
-            ).fetchall()
-        )
-        return [dict(r) for r in rows]
+                "WHERE repo = ? ORDER BY member_count DESC, cluster_id"
+            )
+        ]
 
     async def all_edges(self) -> list[dict[str, Any]]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? ORDER BY src, dst, kind",
-                (self.repo,),
-            ).fetchall()
-        )
-        return [dict(r) for r in rows]
+        return [
+            dict(r)
+            for r in await self._fetch(
+                "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? ORDER BY src, dst, kind"
+            )
+        ]

@@ -43,7 +43,11 @@ async def store(tmp_path):
             line=1,
         ),
     ]
-    edges = [GraphEdge(src="m.py::Foo", dst="m.py::Foo.bar", kind=EdgeKind.CONTAINS, weight=1.0)]
+    edges = [
+        GraphEdge(
+            src="m.py::Foo", dst="m.py::Foo.bar", kind=EdgeKind.CONTAINS, weight=1.0
+        )
+    ]
     clusters = [GraphCluster(cluster_id=0, label="foo", member_count=2)]
     await s.repos.register(0.0)
     await s.graph.replace(nodes, edges, clusters)
@@ -59,8 +63,24 @@ async def test_payload_shape_and_mapping(store):
     assert by_id["m.py::Foo.bar"]["type"] == "method"
     assert by_id["m.py"]["type"] == "module"
     foo = by_id["m.py::Foo"]
-    assert {"id", "label", "type", "lang", "module", "line", "rank", "cluster", "role", "findings"} <= set(foo)
-    assert p["edges"][0] == {"source": "m.py::Foo", "target": "m.py::Foo.bar", "kind": "contains", "weight": 1.0}
+    assert {
+        "id",
+        "label",
+        "type",
+        "lang",
+        "module",
+        "line",
+        "rank",
+        "cluster",
+        "role",
+        "findings",
+    } <= set(foo)
+    assert p["edges"][0] == {
+        "source": "m.py::Foo",
+        "target": "m.py::Foo.bar",
+        "kind": "contains",
+        "weight": 1.0,
+    }
     assert p["clusters"][0]["label"] == "foo"
 
 
@@ -103,7 +123,9 @@ async def test_to_dot_overview_sorted(store):
     p = await build_payload(store)
     d = to_dot(p)
     lines = d.splitlines()
-    node_lines = [ln.strip() for ln in lines if ln.strip().startswith('"') and "->" not in ln]
+    node_lines = [
+        ln.strip() for ln in lines if ln.strip().startswith('"') and "->" not in ln
+    ]
     node_ids = [ln.split('"')[1] for ln in node_lines]
     assert node_ids == sorted(node_ids)
 

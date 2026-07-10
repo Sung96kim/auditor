@@ -1,6 +1,6 @@
 [project]
 name = "auditr"  # PyPI distribution name (import package is `auditor`)
-version = "0.7.0"
+version = "0.8.0"
 description = "A deterministic codebase auditor for coding agents"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -34,6 +34,9 @@ graph = [
     "snowballstemmer>=2.2",
     "networkx>=3",
 ]
+# Experimental: lets a client LLM orchestrate the tools in a sandbox so large intermediate
+# payloads never reach the model. Opt-in — also gated by the AUDITOR_CODE_MODE env flag.
+code-mode = ["fastmcp[code-mode]"]
 
 [project.scripts]
 auditr = "auditor.cli:app"

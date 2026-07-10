@@ -27,10 +27,15 @@ def test_god_concept_flags_fan_out_as_decompose():
     god = _fn("m.py::orchestrator", "orchestrator")
     targets = [_fn(f"m.py::t{i}", f"t{i}") for i in range(40)]
     edges = [GraphEdge(src=god.id, dst=t.id, kind=EdgeKind.CALLS) for t in targets]
-    res = GodConcept(GraphContext([god, *targets], edges, [], AuditorSettings())).detect()
+    res = GodConcept(
+        GraphContext([god, *targets], edges, [], AuditorSettings())
+    ).detect()
     msgs = {f.evidence: f.message for _, f in res}
     assert "m.py::orchestrator" in msgs
-    assert "fan-out" in msgs["m.py::orchestrator"] and "decompos" in msgs["m.py::orchestrator"]
+    assert (
+        "fan-out" in msgs["m.py::orchestrator"]
+        and "decompos" in msgs["m.py::orchestrator"]
+    )
 
 
 def test_god_concept_flags_fan_in_as_bottleneck_not_decompose():
@@ -38,7 +43,9 @@ def test_god_concept_flags_fan_in_as_bottleneck_not_decompose():
     sink = _fn("m.py::popular", "popular")
     callers = [_fn(f"m.py::c{i}", f"c{i}") for i in range(40)]
     edges = [GraphEdge(src=c.id, dst=sink.id, kind=EdgeKind.CALLS) for c in callers]
-    res = GodConcept(GraphContext([sink, *callers], edges, [], AuditorSettings())).detect()
+    res = GodConcept(
+        GraphContext([sink, *callers], edges, [], AuditorSettings())
+    ).detect()
     msg = next(f.message for _, f in res if f.evidence == "m.py::popular")
     assert "bottleneck" in msg and "blast-radius" in msg
     assert "decompos" not in msg
@@ -49,7 +56,12 @@ def test_god_concept_ignores_tests():
     sink = _fn("t.py::tsink", "tsink", role="test")
     callers = [_fn(f"t.py::c{i}", f"c{i}", role="test") for i in range(40)]
     edges = [GraphEdge(src=c.id, dst=sink.id, kind=EdgeKind.CALLS) for c in callers]
-    assert GodConcept(GraphContext([sink, *callers], edges, [], AuditorSettings())).detect() == []
+    assert (
+        GodConcept(
+            GraphContext([sink, *callers], edges, [], AuditorSettings())
+        ).detect()
+        == []
+    )
 
 
 def _cn(nid, name, module, cid):
@@ -145,8 +157,16 @@ def test_god_concept_log_space_not_suppressed_by_mega_outlier():
     mega = _fn("m.py::mega", "mega")
     mod = _fn("m.py::mod", "mod")
     leaves = [_fn(f"m.py::l{i}", f"l{i}") for i in range(90)]
-    edges = [GraphEdge(src=leaves[i % 90].id, dst=mega.id, kind=EdgeKind.CALLS) for i in range(80)]
-    edges += [GraphEdge(src=leaves[(i + 3) % 90].id, dst=mod.id, kind=EdgeKind.CALLS) for i in range(25)]
-    res = GodConcept(GraphContext([mega, mod, *leaves], edges, [], AuditorSettings())).detect()
+    edges = [
+        GraphEdge(src=leaves[i % 90].id, dst=mega.id, kind=EdgeKind.CALLS)
+        for i in range(80)
+    ]
+    edges += [
+        GraphEdge(src=leaves[(i + 3) % 90].id, dst=mod.id, kind=EdgeKind.CALLS)
+        for i in range(25)
+    ]
+    res = GodConcept(
+        GraphContext([mega, mod, *leaves], edges, [], AuditorSettings())
+    ).detect()
     flagged = {f.evidence for _, f in res}
     assert "m.py::mega" in flagged and "m.py::mod" in flagged

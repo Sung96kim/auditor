@@ -59,7 +59,10 @@ def untyped_collection_reason(annotation: ast.expr | None) -> str | None:
         )
         if base_name(annotation.value) in _DICTISH and len(elts) == 2:
             value = elts[1]
-            if isinstance(value, (ast.Name, ast.Attribute)) and base_name(value) == "Any":
+            if (
+                isinstance(value, (ast.Name, ast.Attribute))
+                and base_name(value) == "Any"
+            ):
                 return "dict[..., Any] values"
             if _is_dictish(value):
                 return "dict-of-dicts values"

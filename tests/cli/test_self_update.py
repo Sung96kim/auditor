@@ -162,8 +162,10 @@ def test_update_yes_installs_and_reports_success(monkeypatch):
     monkeypatch.setattr("auditor.cli.self_update.upgrade_command", lambda: fake_cmd)
     monkeypatch.setattr(
         "auditor.cli.self_update.subprocess.Popen",
-        lambda cmd, **kw: captured.append(cmd)
-        or SimpleNamespace(returncode=0, poll=lambda: 0, wait=lambda: 0),
+        lambda cmd, **kw: (
+            captured.append(cmd)
+            or SimpleNamespace(returncode=0, poll=lambda: 0, wait=lambda: 0)
+        ),
     )
 
     result = invoke("self", "update", "--yes")

@@ -1,11 +1,12 @@
 # auditor: skip-file: PY-TYPING-UNTYPED-DICT  (MCP tool surface — JSON payloads by contract)
 """rules_list — the detector registry/metadata MCP tool."""
 
+from auditor.mcp.helpers import READ_ONLY
 from auditor.mcp.server import mcp
 from auditor.registry import REGISTRY
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 def rules_list(
     category: str | None = None,
     standard: str | None = None,

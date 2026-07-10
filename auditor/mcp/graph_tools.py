@@ -17,13 +17,14 @@ from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import audit_target
+from auditor.mcp.helpers import MUTATING, READ_ONLY
 from auditor.mcp.server import mcp
 from auditor.paths import index_db_path, repo_key
 
 if _GRAPH_OK:
     GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
-    @mcp.tool
+    @mcp.tool(annotations=MUTATING)
     async def graph_build(path: str = ".", scan: bool = True) -> dict:
         """Build the semantic graph. By default it first runs a forced incremental scan (graph
         extraction on) so it works even if the repo never enabled the [graph] config — pass
@@ -37,7 +38,7 @@ if _GRAPH_OK:
             await index.repos.register(time.time())
             return await GraphBuilder().run(index, settings)
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def graph_related(
         symbol: str, path: str = ".", limit: int = 10
     ) -> list[dict]:
@@ -46,7 +47,7 @@ if _GRAPH_OK:
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return await GraphQuery(index).related(symbol, limit=limit)
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def graph_neighbors(
         symbol: str, path: str = ".", depth: int = 1, limit: int = 25
     ) -> list[dict]:
@@ -57,7 +58,7 @@ if _GRAPH_OK:
             hits = await GraphQuery(index).neighbors(symbol, depth=depth)
         return hits[:limit]
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def graph_concept(term: str, path: str = ".", limit: int = 25) -> dict:
         """The concept cluster best matching a term. Members (rank-ordered) are capped at
         ``limit``; ``member_count`` is the true total. Returns {cluster_id, label, member_count,
@@ -77,14 +78,14 @@ if _GRAPH_OK:
             "shown": len(capped),
         }
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def graph_clusters(path: str = ".") -> list[dict]:
         """List concept clusters (label + size), largest first."""
         root = find_root(Path(path))
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return await GraphQuery(index).clusters()
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict]:
         """Find graph symbols whose id contains ``term`` (case-insensitive), highest-rank
         first. Use to locate the exact symbol name before graph_usages/graph_neighbors.
@@ -93,7 +94,7 @@ if _GRAPH_OK:
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return await GraphQuery(index).search(term, limit=limit)
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
         """How a symbol is used/connected: structural edges grouped by kind with FULL counts
         and a rank-ordered sample, split into ``used_by`` (incoming — who depends on it) and
@@ -104,7 +105,7 @@ if _GRAPH_OK:
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             return await GraphQuery(index).usages(symbol, sample=sample)
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     async def graph_overview(path: str = ".") -> dict:
         """One compact call to orient: counts, the largest clusters, and the worst graph hubs.
         Returns {nodes, edges, clusters, top_clusters, god_concepts, bottlenecks}. If the graph

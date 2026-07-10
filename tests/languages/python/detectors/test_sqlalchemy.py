@@ -142,7 +142,9 @@ def test_raw_sql_var_tracking_fires(body):
     ],
 )
 def test_raw_sql_var_tracking_clean(body):
-    assert "SA-RAW-SQL" not in _ids("x=1\nn=1\nconn=None\nbase_query='select 1'\n" + body)
+    assert "SA-RAW-SQL" not in _ids(
+        "x=1\nn=1\nconn=None\nbase_query='select 1'\n" + body
+    )
 
 
 def test_raw_sql_var_tracking_inside_function_fires():

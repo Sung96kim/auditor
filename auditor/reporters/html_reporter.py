@@ -22,19 +22,19 @@ _SEVERITY_HUE: dict[Severity, str] = {
 }
 
 
-class _TreeNode:
-    """A directory (or the implicit root) in the sidebar file tree."""
+class TreeNode:
+    """A directory (or the implicit root) in the sidebar file tree — pure data; the reporter
+    renders it via ``HtmlReporter.render_tree``."""
 
     def __init__(self, name: str) -> None:
         self.name = name
-        self.children: dict[str, _TreeNode] = {}
+        self.children: dict[str, TreeNode] = {}
         self.files: list[ScanResult] = []
 
     def add(self, result: ScanResult) -> None:
         node = self
-        parts = result.file.split("/")
-        for part in parts[:-1]:
-            node = node.children.setdefault(part, _TreeNode(part))
+        for part in result.file.split("/")[:-1]:
+            node = node.children.setdefault(part, TreeNode(part))
         node.files.append(result)
 
     def counts(self) -> dict[Severity, int]:
@@ -47,19 +47,6 @@ class _TreeNode:
                 out[sev] += n
         return out
 
-    def render(self) -> str:
-        parts = []
-        for name in sorted(self.children):
-            child = self.children[name]
-            parts.append(
-                '<details class="dir"><summary>'
-                f'<span class="dname">{html.escape(name)}/</span>'
-                f"{_badges(child.counts())}</summary>{child.render()}</details>"
-            )
-        for r in sorted(self.files, key=lambda r: r.file):
-            parts.append(_tree_file(r))
-        return f'<div class="branch">{"".join(parts)}</div>'
-
 
 class HtmlReporter(Reporter):
     format: ClassVar[str] = "html"
@@ -68,38 +55,67 @@ class HtmlReporter(Reporter):
         flagged = sorted(
             (r for r in results if r.findings), key=lambda r: r.severity_key
         )
-        header = _header(
+        header = self.header(
             severity_totals(results), scanned=len(results), flagged=len(flagged)
         )
         if not flagged:
             body = f'{header}<p class="clean">No findings. ✅</p>'
         else:
-            tree = _TreeNode("")
+            tree = TreeNode("")
             for r in flagged:
                 tree.add(r)
-            sections = "\n".join(self._section(r) for r in flagged)
+            sections = "\n".join(self.section(r) for r in flagged)
             body = (
                 f"{header}<div class=layout>"
                 '<nav class=toc><div class="toc-head"><span class="toc-title">Files</span>'
                 '<span class="toc-actions"><button id="expand-all">Expand all</button>'
                 '<button id="collapse-all">Collapse all</button></span></div>'
-                f"{tree.render()}</nav>"
+                f"{self.render_tree(tree)}</nav>"
                 f'<main>{sections}<p class="empty" id="empty" hidden>'
                 "No findings match the filter.</p></main></div>"
             )
         return _DOCUMENT.format(style=_STYLE, body=body, script=_SCRIPT)
 
-    def _section(self, r: ScanResult) -> str:
+    def render_tree(self, node: TreeNode) -> str:
+        parts = []
+        for name in sorted(node.children):
+            child = node.children[name]
+            parts.append(
+                '<details class="dir"><summary>'
+                f'<span class="dname">{html.escape(name)}/</span>'
+                f"{self.badges(child.counts())}</summary>{self.render_tree(child)}</details>"
+            )
+        for r in sorted(node.files, key=lambda r: r.file):
+            parts.append(self.tree_file(r))
+        return f'<div class="branch">{"".join(parts)}</div>'
+
+    def header(self, totals: dict[Severity, int], *, scanned: int, flagged: int) -> str:
+        chips = "".join(
+            f'<button class="chip sev-{s.value}" data-sev="{s.value}">{totals[s]} {s.value}</button>'
+            for s in SEVERITIES_DESC
+        )
+        search = (
+            '<input id="q" type="search" placeholder="Filter findings…" autocomplete="off">'
+            if flagged
+            else ""
+        )
+        return (
+            "<header><h1>Audit report</h1>"
+            f'<p class="meta">{scanned} files scanned · {flagged} with findings</p>'
+            f'<div class="controls">{search}<div class="chips">{chips}</div></div></header>'
+        )
+
+    def section(self, r: ScanResult) -> str:
         findings = sorted(
             r.findings, key=lambda f: (-severity_rank(f.severity), f.line)
         )
-        items = "\n".join(self._finding(f) for f in findings)
+        items = "\n".join(self.finding(f) for f in findings)
         return (
-            f'<section id="{_anchor(r.file)}"><h2><code>{html.escape(r.file)}</code>'
+            f'<section id="{self.anchor(r.file)}"><h2><code>{html.escape(r.file)}</code>'
             f'<span class="role">{r.role.value}</span></h2>{items}</section>'
         )
 
-    def _finding(self, f: Finding) -> str:
+    def finding(self, f: Finding) -> str:
         mark = "🔧" if f.verdict_kind.value == "auto" else "🔎"
         refs = "".join(
             f'<span class="ref">{html.escape(ref)}</span>' for ref in f.standard_refs
@@ -125,51 +141,33 @@ class HtmlReporter(Reporter):
             f"{evidence}{suggestion}</div>"
         )
 
+    def tree_file(self, r: ScanResult) -> str:
+        name = r.file.rsplit("/", 1)[-1]
+        worst = self.worst_severity(r)
+        return (
+            f'<a class="tfile" href="#{self.anchor(r.file)}">'
+            f'<span class="dot sev-{worst.value}"></span>'
+            f'<span class="fname">{html.escape(name)}</span>'
+            f"{self.badges(r.counts)}</a>"
+        )
 
-def _header(totals: dict[Severity, int], *, scanned: int, flagged: int) -> str:
-    chips = "".join(
-        f'<button class="chip sev-{s.value}" data-sev="{s.value}">{totals[s]} {s.value}</button>'
-        for s in SEVERITIES_DESC
-    )
-    search = (
-        '<input id="q" type="search" placeholder="Filter findings…" autocomplete="off">'
-        if flagged
-        else ""
-    )
-    return (
-        "<header><h1>Audit report</h1>"
-        f'<p class="meta">{scanned} files scanned · {flagged} with findings</p>'
-        f'<div class="controls">{search}<div class="chips">{chips}</div></div></header>'
-    )
+    @staticmethod
+    def badges(counts: dict[Severity, int]) -> str:
+        bits = "".join(
+            f'<span class="b sev-{s.value}">{counts[s]}</span>'
+            for s in SEVERITIES_DESC
+            if counts[s]
+        )
+        return f'<span class="counts">{bits}</span>'
 
+    @staticmethod
+    def worst_severity(r: ScanResult) -> Severity:
+        counts = r.counts
+        return next((s for s in SEVERITIES_DESC if counts[s]), Severity.LOW)
 
-def _tree_file(r: ScanResult) -> str:
-    name = r.file.rsplit("/", 1)[-1]
-    worst = _worst_severity(r)
-    return (
-        f'<a class="tfile" href="#{_anchor(r.file)}">'
-        f'<span class="dot sev-{worst.value}"></span>'
-        f'<span class="fname">{html.escape(name)}</span>'
-        f"{_badges(r.counts)}</a>"
-    )
-
-
-def _badges(counts: dict[Severity, int]) -> str:
-    bits = "".join(
-        f'<span class="b sev-{s.value}">{counts[s]}</span>'
-        for s in SEVERITIES_DESC
-        if counts[s]
-    )
-    return f'<span class="counts">{bits}</span>'
-
-
-def _worst_severity(r: ScanResult) -> Severity:
-    counts = r.counts
-    return next((s for s in SEVERITIES_DESC if counts[s]), Severity.LOW)
-
-
-def _anchor(file: str) -> str:
-    return "f-" + "".join(ch if ch.isalnum() else "-" for ch in file)
+    @staticmethod
+    def anchor(file: str) -> str:
+        return "f-" + "".join(ch if ch.isalnum() else "-" for ch in file)
 
 
 _STYLE = """

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { GraphPayload, NodeType } from "./types";
 import { THEME } from "./theme";
+import { onEnterOrSpace } from "./a11y";
 import { sample } from "./sample";
 import GraphCanvas from "./components/GraphCanvas";
 import Graph3D from "./components/Graph3D";
@@ -427,7 +428,10 @@ export default function App() {
                   <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                     {controlsOpen && (
                       <span
+                        role="button"
+                        tabIndex={0}
                         onClick={handleReset}
+                        onKeyDown={onEnterOrSpace(handleReset)}
                         className="link-reset"
                         style={{
                           fontSize: "11px",
@@ -494,6 +498,7 @@ export default function App() {
             }}
           >
             <svg
+              aria-hidden="true"
               width="13"
               height="13"
               viewBox="0 0 24 24"

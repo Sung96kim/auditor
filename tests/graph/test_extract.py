@@ -67,11 +67,7 @@ def test_decorator_call_is_not_a_callee():
     """Regression: a decorator like @app.get(...) is applied TO the function, not called BY it,
     so its call must not show up in the function's callees (it created false `calls` edges, e.g.
     a `pong` healthcheck appearing to call SubmissionFieldsService.get)."""
-    src = (
-        "@app.get('/ping')\n"
-        "async def pong() -> bool:\n"
-        "    return True\n"
-    )
+    src = "@app.get('/ping')\nasync def pong() -> bool:\n    return True\n"
     pong = _by_id(extract_file_facts("m.py", src, "production"))["m.py::pong"]
     assert pong.callees == ()
     # a real body call IS still captured
@@ -152,7 +148,9 @@ def test_extract_registry_roots():
 
 
 def test_extract_populates_semantic_profile():
-    facts = extract_file_facts("m.py", "def reader(x):\n    return db.get(x)\n", "production")
+    facts = extract_file_facts(
+        "m.py", "def reader(x):\n    return db.get(x)\n", "production"
+    )
     fn = next(n for n in facts.nodes if n.name == "reader")
     assert "returns_value" in fn.semantic_profile
     # module/class nodes carry no profile
