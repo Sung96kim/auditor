@@ -2,7 +2,6 @@
 threshold merge, per-rule/category/role resolution, and validation."""
 
 import pytest
-from pydantic import ValidationError
 
 from auditor.config import (
     AuditorSettings,
@@ -166,13 +165,24 @@ def test_respect_gitignore_defaults_true_and_is_configurable(tmp_path):
     assert load_config(tmp_path).respect_gitignore is False
 
 
-def test_removed_include_field_is_rejected(tmp_path):
-    # `include` was a dead config field; it's removed, so setting it now errors (extra=forbid)
-    # rather than silently no-op-ing.
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname="x"\nversion="0"\n[tool.auditor]\ninclude = ["src/**"]\n'
-    )
-    with pytest.raises(Exception, match="include"):
+@pytest.mark.parametrize(
+    "config_path, content, match",
+    [
+        # `include` was a dead config field; it's removed, so setting it now errors
+        # (extra=forbid) rather than silently no-op-ing.
+        (
+            "pyproject.toml",
+            '[project]\nname="x"\nversion="0"\n[tool.auditor]\ninclude = ["src/**"]\n',
+            "include",
+        ),
+        (".auditor/config.toml", "[malware_scan]\nbogus = 1\n", "bogus"),
+    ],
+)
+def test_unknown_config_keys_rejected(tmp_path, config_path, content, match):
+    path = tmp_path / config_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    with pytest.raises(Exception, match=match):
         load_config(tmp_path)
 
 
@@ -369,10 +379,3 @@ def test_malware_scan_from_toml(tmp_path):
     assert settings.malware_scan.enabled is True
     assert settings.malware_scan.max_file_size_mb == 5
     assert settings.malware_scan.content is True  # unset keys keep defaults
-
-
-def test_malware_scan_rejects_unknown_keys(tmp_path):
-    (tmp_path / ".auditor").mkdir()
-    (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
-    with pytest.raises(ValidationError):
-        load_config(tmp_path)

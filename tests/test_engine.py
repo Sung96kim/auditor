@@ -1005,4 +1005,5 @@ async def test_scan_path_skips_malware_passes_by_default(tmp_path, monkeypatch):
         raise AssertionError("malware passes must not run when disabled")
 
     monkeypatch.setattr(engine_mod, "run_malware_passes", fail_if_called)
-    await ScanEngine(tmp_path, AuditorSettings()).scan_path(tmp_path)
+    results = await ScanEngine(tmp_path, AuditorSettings()).scan_path(tmp_path)
+    assert {r.file for r in results} == {"app.py"}

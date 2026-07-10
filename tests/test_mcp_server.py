@@ -5,6 +5,9 @@ import json
 import pytest
 from fastmcp.exceptions import ToolError
 
+import auditor.mcp
+import auditor.mcp_server
+from auditor.malware import tools as malware_tools
 from auditor.mcp_server import _GRAPH_OK, mcp
 
 
@@ -420,8 +423,6 @@ async def test_finding_detail_reads_from_index(sample_repo):
 
 
 async def test_malware_status_tool(monkeypatch):
-    from auditor.malware import tools as malware_tools
-
     monkeypatch.setattr(malware_tools.shutil, "which", lambda name: None)
     result = _structured(await mcp.call_tool("malware_status", {}))
     assert result["clamscan"]["found"] is False
@@ -461,8 +462,5 @@ async def test_graph_search_and_usages_tools(sample_repo):
 
 
 def test_mcp_server_shim_reexports_package_objects():
-    import auditor.mcp
-    import auditor.mcp_server
-
     assert auditor.mcp_server.mcp is auditor.mcp.mcp
     assert auditor.mcp_server.main is auditor.mcp.main
