@@ -34,6 +34,9 @@ graph = [
     "snowballstemmer>=2.2",
     "networkx>=3",
 ]
+# Experimental: lets a client LLM orchestrate the tools in a sandbox so large intermediate
+# payloads never reach the model. Opt-in — also gated by the AUDITOR_CODE_MODE env flag.
+code-mode = ["fastmcp[code-mode]"]
 
 [project.scripts]
 auditr = "auditor.cli:app"

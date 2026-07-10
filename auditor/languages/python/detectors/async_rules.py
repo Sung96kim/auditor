@@ -265,9 +265,7 @@ def _returns_self_state(body: list[ast.stmt]) -> bool:
     )
 
 
-def _guard_then_create(
-    m: _FuncDef, creators: set[str]
-) -> tuple[ast.If, str] | None:
+def _guard_then_create(m: _FuncDef, creators: set[str]) -> tuple[ast.If, str] | None:
     """The first ``if <reads self>: return <self state>`` whose fallthrough (or else) calls an
     OS-resource creator — directly, or via a sibling method of the class (``creators``)."""
     for i, stmt in enumerate(m.body):

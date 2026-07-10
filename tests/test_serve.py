@@ -14,7 +14,9 @@ def test_do_get_swallows_client_disconnect():
     handler.send_response = lambda *a, **k: None
     handler.send_header = lambda *a, **k: None
     handler.end_headers = lambda *a, **k: None
-    handler.wfile = type("W", (), {"write": lambda self, b: (_ for _ in ()).throw(BrokenPipeError())})()
+    handler.wfile = type(
+        "W", (), {"write": lambda self, b: (_ for _ in ()).throw(BrokenPipeError())}
+    )()
     handler.do_GET()  # must not raise
 
 

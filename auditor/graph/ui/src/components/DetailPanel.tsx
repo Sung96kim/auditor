@@ -1,5 +1,6 @@
 import type { GNode, GEdge } from "../types";
 import { THEME, NODE_COLOR } from "../theme";
+import { onEnterOrSpace } from "../a11y";
 
 interface DetailPanelProps {
   node: GNode | null;
@@ -307,7 +308,10 @@ export default function DetailPanel({
               {neighbors.map((nb) => (
                 <div
                   key={nb.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onSelectNeighbor(nb.id)}
+                  onKeyDown={onEnterOrSpace(() => onSelectNeighbor(nb.id))}
                   className="neighbor-row"
                   style={{
                     display: "flex",

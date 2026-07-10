@@ -58,11 +58,16 @@ class _ReportHandler(BaseHTTPRequestHandler):
         body = self.server.payload  # type: ignore[attr-defined]
         try:
             self.send_response(200)
-            self.send_header("Content-Type", f"{self.server.content_type}; charset=utf-8")  # type: ignore[attr-defined]
+            self.send_header(
+                "Content-Type", f"{self.server.content_type}; charset=utf-8"
+            )  # type: ignore[attr-defined]
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION
+        except (
+            BrokenPipeError,
+            ConnectionResetError,
+        ):  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION
             # a client disconnect mid-response (reload / navigate away / cancelled a large
             # payload) is nothing to handle — swallowing it is the correct behavior.
             pass

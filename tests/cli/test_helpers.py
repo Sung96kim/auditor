@@ -7,9 +7,7 @@ from auditor.cli.helpers import parse_config_json, run_staged, suggest
 
 
 def test_suggest_returns_closest_match():
-    out = suggest(
-        "PY-SEC-DANGEROUS-EVL", ["PY-SEC-DANGEROUS-EVAL", "PY-ASYNC-SYNC-IO"]
-    )
+    out = suggest("PY-SEC-DANGEROUS-EVL", ["PY-SEC-DANGEROUS-EVAL", "PY-ASYNC-SYNC-IO"])
     assert out == " Did you mean 'PY-SEC-DANGEROUS-EVAL'?"
 
 

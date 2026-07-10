@@ -206,3 +206,19 @@ class BaseDB:
             "INSERT OR IGNORE INTO repos (repo, name, last_scanned) VALUES (?, ?, 0)",
             (self.repo, name),
         )
+
+    async def _fetch(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+        """Run a read query and return the raw rows. ``self.repo`` is bound as the first ``?`` —
+        every query in this repo-partitioned store filters by it — so ``sql`` must lead with
+        ``WHERE repo = ?`` and ``params`` supplies only the binds that follow."""
+        return await self._worker.run(
+            lambda c: c.execute(sql, (self.repo, *params)).fetchall()
+        )
+
+    async def _fetch_one(
+        self, sql: str, params: tuple[Any, ...] = ()
+    ) -> sqlite3.Row | None:
+        """:meth:`_fetch` for a single row (or ``None``); binds ``self.repo`` first, as above."""
+        return await self._worker.run(
+            lambda c: c.execute(sql, (self.repo, *params)).fetchone()
+        )

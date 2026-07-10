@@ -173,16 +173,13 @@ def test_parallel_sibling_across_subclasses_in_one_file():
     assert "PY-OOP-PARALLEL-SIBLING" in rule_ids(run_audit(src))
 
 
-
 def test_flat_field_model_fires_at_ten_fields():
     # the handoff's 11-field model sat under the old floor of 12; the floor is now 10
     src = "from pydantic import BaseModel\nclass Readiness(BaseModel):\n" + "".join(
         f"    f{i}: str\n" for i in range(10)
     )
     findings = [
-        f
-        for f in run_audit(src).findings
-        if f.rule_id == "PY-OOP-FLAT-FIELD-MODEL"
+        f for f in run_audit(src).findings if f.rule_id == "PY-OOP-FLAT-FIELD-MODEL"
     ]
     assert len(findings) == 1
     # advisory only: a human calls decompose-vs-keep — never CI-blocking

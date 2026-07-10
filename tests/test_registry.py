@@ -2,6 +2,7 @@
 
 import pytest
 
+from auditor.languages.base import Detector
 from auditor.registry import REGISTRY, Registry
 
 
@@ -65,8 +66,6 @@ def test_framework_tag_and_query():
 
 
 def test_detector_framework_defaults_none():
-    from auditor.languages.base import Detector
-
     assert Detector.framework is None
 
 

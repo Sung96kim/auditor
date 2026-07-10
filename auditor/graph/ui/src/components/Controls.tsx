@@ -1,5 +1,6 @@
 import type { NodeType } from "../types";
 import { THEME, NODE_COLOR } from "../theme";
+import { onEnterOrSpace } from "../a11y";
 
 export interface FilterState {
   langs: Set<string>;
@@ -65,7 +66,10 @@ export default function Controls({
             return (
               <div
                 key={lang}
+                role="button"
+                tabIndex={0}
                 onClick={() => onLangToggle(lang)}
+                onKeyDown={onEnterOrSpace(() => onLangToggle(lang))}
                 className="check-row"
                 style={{
                   display: "flex",
@@ -130,6 +134,7 @@ export default function Controls({
         </div>
         <input
           type="range"
+          aria-label="Dependency depth"
           min={1}
           max={5}
           value={filters.depth}
@@ -161,7 +166,10 @@ export default function Controls({
             return (
               <div
                 key={t}
+                role="button"
+                tabIndex={0}
                 onClick={() => onTypeToggle(t)}
+                onKeyDown={onEnterOrSpace(() => onTypeToggle(t))}
                 className="type-row"
                 style={{
                   display: "flex",
@@ -204,7 +212,12 @@ export default function Controls({
         >
           <span style={SECTION_HEADER}>Overlay</span>
           <div
+            role="switch"
+            aria-checked={filters.overlayOn}
+            aria-label="Findings overlay"
+            tabIndex={0}
             onClick={onOverlayToggle}
+            onKeyDown={onEnterOrSpace(onOverlayToggle)}
             className="overlay-track"
             style={{
               width: "36px",

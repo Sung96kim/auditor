@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { NodeType } from "../types";
 import { THEME, NODE_COLOR } from "../theme";
+import { onEnterOrSpace } from "../a11y";
 
 const ALL_TYPES: NodeType[] = ["class", "function", "method", "module"];
 
@@ -73,7 +74,10 @@ export default function TypeFilter({ types, onToggle }: TypeFilterProps) {
             return (
               <div
                 key={t}
+                role="button"
+                tabIndex={0}
                 onClick={() => onToggle(t)}
+                onKeyDown={onEnterOrSpace(() => onToggle(t))}
                 className="check-row"
                 style={{
                   display: "flex",

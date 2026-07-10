@@ -308,13 +308,15 @@ class MalwareScanConfig(BaseModel):
 
 
 class GlobalPaths(BaseSettings):
-    """Global auditor data locations from the environment. ``home`` ← ``$AUDITOR_HOME`` (via the
-    ``AUDITOR_`` prefix), defaulting to ``~/.auditor``. Lives here so the project's BaseSettings
-    stay together (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the helper.
+    """Global auditor settings from the environment (``AUDITOR_`` prefix). ``home`` ←
+    ``$AUDITOR_HOME`` (default ``~/.auditor``); ``code_mode`` ← ``$AUDITOR_CODE_MODE`` gates the
+    experimental Code Mode MCP transform. Lives here so the project's BaseSettings stay together
+    (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the ``home`` helper.
     """
 
     model_config = SettingsConfigDict(env_prefix="AUDITOR_")
     home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
+    code_mode: bool = False
 
 
 class AuditorSettings(BaseSettings):

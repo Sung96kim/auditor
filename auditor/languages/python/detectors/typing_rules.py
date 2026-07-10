@@ -16,8 +16,6 @@ def _functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef
             yield node
 
 
-
-
 class MissingHints(Detector):
     rule_id: ClassVar[str] = "PY-TYPING-MISSING-HINTS"
     category: ClassVar[Category] = Category.TYPING

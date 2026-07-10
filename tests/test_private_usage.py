@@ -68,7 +68,11 @@ def test_private_used_in_another_file_fires():
             _prod("pkg/__init__.py", "b.py"),
         ),
         # def in a test file → test helpers aren't the signal
-        ([_def("a.py", "_h")], [_ref("b.py", "_h")], {"a.py": "test", "b.py": "production"}),
+        (
+            [_def("a.py", "_h")],
+            [_ref("b.py", "_h")],
+            {"a.py": "test", "b.py": "production"},
+        ),
         # only a TEST file references it → tests poking internals isn't the signal
         (
             [_def("a.py", "_h")],
@@ -98,7 +102,9 @@ async def test_private_used_cross_file_end_to_end(tmp_path):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "a.py").write_text("def _shared():\n    return 1\n")
-    (pkg / "b.py").write_text("from pkg.a import _shared\n\n\ndef use():\n    return _shared()\n")
+    (pkg / "b.py").write_text(
+        "from pkg.a import _shared\n\n\ndef use():\n    return _shared()\n"
+    )
     settings = load_config(tmp_path)
     async with await IndexStore.connect(tmp_path / ".auditor" / "index.db") as index:
         results = {

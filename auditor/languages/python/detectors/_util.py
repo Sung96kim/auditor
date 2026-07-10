@@ -14,7 +14,10 @@ def imports_module(tree: ast.Module, top: str) -> bool:
             a.name.split(".")[0] == top for a in node.names
         ):
             return True
-        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == top:
+        if (
+            isinstance(node, ast.ImportFrom)
+            and (node.module or "").split(".")[0] == top
+        ):
             return True
     return False
 

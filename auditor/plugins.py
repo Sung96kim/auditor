@@ -7,6 +7,7 @@ module registers by subclassing. This module only finds and imports those module
 
 import importlib
 import importlib.util
+from collections.abc import Sequence
 from importlib import metadata
 from pathlib import Path
 
@@ -71,7 +72,7 @@ class PluginLoader:
             self.warnings.append(f"failed to load local plugin {file}: {exc}")
 
 
-def _entry_points(group: str) -> list:
+def _entry_points(group: str) -> Sequence[metadata.EntryPoint]:
     try:
         return metadata.entry_points(group=group)
     except TypeError:  # very old importlib.metadata signature

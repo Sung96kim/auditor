@@ -1,13 +1,21 @@
 """mcp_server.py: the FastMCP server registers the expected tools and they call the core."""
 
 import json
+import subprocess
 
 import pytest
+from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddleware
+from mcp.types import ResourceLink
 
 import auditor.mcp
 import auditor.mcp_server
+from auditor.engine import audit_target
 from auditor.malware import tools as malware_tools
+from auditor.mcp import code_mode
+from auditor.mcp.artifacts import publish
+from auditor.mcp.server import MAX_TOOL_RESPONSE_BYTES
 from auditor.mcp_server import _GRAPH_OK, mcp
 
 
@@ -69,6 +77,21 @@ def _structured(result):
     return json.loads(result.content[0].text)
 
 
+def _link(result):
+    """The single ResourceLink content block a tool returned (aggregate / full scan)."""
+    block = result.content[0]
+    assert isinstance(block, ResourceLink)
+    return block
+
+
+async def _resource_body(link) -> str:
+    """Read the body the ResourceLink points at (resource reads bypass the size limit)."""
+    read = await mcp.read_resource(str(link.uri))
+    contents = read.contents if hasattr(read, "contents") else read
+    first = contents[0]
+    return first.content if hasattr(first, "content") else first.text
+
+
 async def test_scan_tool(sample_repo):
     result = await mcp.call_tool("scan", {"path": str(sample_repo / "src")})
     data = _structured(result)
@@ -84,6 +107,22 @@ async def test_scan_tool_rule_filter(sample_repo):
     assert kept == {"PY-SEC-DANGEROUS-EVAL"}
 
 
+async def test_scan_rule_and_severity_accept_a_bare_string(sample_repo):
+    """rule/severity take a single id as a plain string, not only a list."""
+    src = str(sample_repo / "src")
+    data = _structured(
+        await mcp.call_tool("scan", {"path": src, "rule": "PY-SEC-DANGEROUS-EVAL"})
+    )
+    assert {x["rule_id"] for f in data["files"] for x in f["findings"]} == {
+        "PY-SEC-DANGEROUS-EVAL"
+    }
+    sev = _structured(
+        await mcp.call_tool("scan", {"path": src, "severity": "blocking"})
+    )
+    findings = [x for f in sev["files"] for x in f["findings"]]
+    assert findings and all(x["severity"] == "blocking" for x in findings)
+
+
 async def test_scan_tool_unknown_rule_errors(sample_repo):
     with pytest.raises(ToolError, match="unknown rule"):
         await mcp.call_tool(
@@ -94,15 +133,37 @@ async def test_scan_tool_unknown_rule_errors(sample_repo):
 async def test_discover_tool(sample_repo):
     result = await mcp.call_tool("discover", {"path": str(sample_repo)})
     data = _structured(result)
-    assert any(f["role"] == "test" for f in data)
+    assert data["total"] == data["shown"] == len(data["files"])
+    assert any(f["role"] == "test" for f in data["files"])
+    assert data["roles"]["test"] >= 1
+
+
+async def test_discover_role_filter_and_limit(sample_repo):
+    """role narrows to one role; limit caps `files` while `total` still reports the full count."""
+    all_data = _structured(await mcp.call_tool("discover", {"path": str(sample_repo)}))
+    tests = _structured(
+        await mcp.call_tool("discover", {"path": str(sample_repo), "role": "test"})
+    )
+    assert tests["files"] and all(f["role"] == "test" for f in tests["files"])
+    assert set(tests["roles"]) == {"test"}
+    assert tests["total"] == all_data["roles"]["test"]
+
+    capped = _structured(
+        await mcp.call_tool("discover", {"path": str(sample_repo), "limit": 1})
+    )
+    assert capped["shown"] == 1
+    assert capped["total"] == all_data["total"]  # total unaffected by the cap
 
 
 async def test_ignore_tools_roundtrip(sample_repo):
     """ignore_add hides a rule on the next scan; ignore_list shows it; ignore_remove restores."""
     src = str(sample_repo / "src")
+    # limit=None so the low-severity typing rule isn't capped out of the worst-N view
     rules_before = {
         x["rule_id"]
-        for f in _structured(await mcp.call_tool("scan", {"path": src}))["files"]
+        for f in _structured(await mcp.call_tool("scan", {"path": src, "limit": None}))[
+            "files"
+        ]
         for x in f["findings"]
     }
     assert "PY-TYPING-MISSING-HINTS" in rules_before
@@ -117,14 +178,14 @@ async def test_ignore_tools_roundtrip(sample_repo):
     listed = _structured(await mcp.call_tool("ignore_list", {"path": src}))
     assert [r["rule_id"] for r in listed] == ["PY-TYPING-MISSING-HINTS"]
 
-    scanned = _structured(await mcp.call_tool("scan", {"path": src}))
+    scanned = _structured(await mcp.call_tool("scan", {"path": src, "limit": None}))
     rules_after = {x["rule_id"] for f in scanned["files"] for x in f["findings"]}
     assert "PY-TYPING-MISSING-HINTS" not in rules_after
     assert scanned["totals"]["ignored"] >= 1
 
     # show_ignored reveals
     shown = _structured(
-        await mcp.call_tool("scan", {"path": src, "show_ignored": True})
+        await mcp.call_tool("scan", {"path": src, "show_ignored": True, "limit": None})
     )
     assert "PY-TYPING-MISSING-HINTS" in {
         x["rule_id"] for f in shown["files"] for x in f["findings"]
@@ -153,13 +214,14 @@ async def test_ignore_add_validates_rule_id(sample_repo):
 
 async def test_aggregate_tool_reads_shared_index(sample_repo):
     """The aggregate tool reads the shared global index that an incremental scan populated —
-    exercises mcp_server's index_db_path()/repo_key() path end-to-end."""
-    from auditor.engine import audit_target
-
+    exercises mcp_server's index_db_path()/repo_key() path end-to-end. The report is served as
+    a ResourceLink; the markdown lives in the resource it points at."""
     await audit_target(sample_repo / "src", incremental=True, root=sample_repo)
     result = await mcp.call_tool("aggregate", {"path": str(sample_repo / "src")})
-    markdown = _structured(result)
-    assert isinstance(markdown, str) and "consolidated report" in markdown
+    link = _link(result)
+    assert link.mimeType == "text/markdown"
+    markdown = await _resource_body(link)
+    assert "consolidated report" in markdown
 
 
 async def test_manifest_tool(sample_repo):
@@ -291,14 +353,49 @@ async def test_scan_default_is_compact(sample_repo):
 
 
 async def test_scan_full_restores_legacy_shape(sample_repo):
-    data = _structured(
-        await mcp.call_tool(
-            "scan", {"path": str(sample_repo / "src"), "detail": "full"}
-        )
+    """detail='full' is the complete record served as a JSON ResourceLink, not inline."""
+    result = await mcp.call_tool(
+        "scan", {"path": str(sample_repo / "src"), "detail": "full"}
     )
+    link = _link(result)
+    assert link.mimeType == "application/json"
+    data = json.loads(await _resource_body(link))
     assert "rules" not in data
     f = next(f for fl in data["files"] for f in fl["findings"])
     assert "evidence" in f and "category" in f
+
+
+async def test_scan_limit_caps_and_reports_omitted(sample_repo):
+    """The default compact scan caps to the worst-N findings and rolls the surplus into
+    `omitted` so the agent knows the view is partial."""
+    data = _structured(
+        await mcp.call_tool("scan", {"path": str(sample_repo / "src"), "limit": 1})
+    )
+    shown = [f for fl in data["files"] for f in fl["findings"]]
+    assert len(shown) == 1
+    assert data["omitted"]["findings"] >= 1
+    # a blocking finding exists in the sample repo, so the single kept finding is the blocker
+    assert shown[0]["severity"] == "blocking"
+
+
+async def test_scan_limit_none_uncaps(sample_repo):
+    data = _structured(
+        await mcp.call_tool("scan", {"path": str(sample_repo / "src"), "limit": None})
+    )
+    assert "omitted" not in data
+
+
+async def test_report_full_is_resource_link(sample_repo):
+    result = await mcp.call_tool(
+        "report",
+        {"file": str(sample_repo / "src" / "integrations.py"), "detail": "full"},
+    )
+    link = _link(result)
+    assert link.mimeType == "application/json"
+    data = json.loads(await _resource_body(link))
+    assert "PY-SEC-DANGEROUS-EVAL" in {
+        x["rule_id"] for fl in data["files"] for x in fl["findings"]
+    }
 
 
 async def test_scan_summary(sample_repo):
@@ -359,8 +456,6 @@ async def test_finding_detail_missing_raises(sample_repo):
 
 async def test_scan_since_head(tmp_path):
     """scan with since='HEAD' on a committed git repo succeeds (smoke)."""
-    import subprocess
-
     subprocess.run(
         ["git", "-C", str(tmp_path), "init", "-q", "-b", "main"],
         check=True,
@@ -464,3 +559,63 @@ async def test_graph_search_and_usages_tools(sample_repo):
 def test_mcp_server_shim_reexports_package_objects():
     assert auditor.mcp_server.mcp is auditor.mcp.mcp
     assert auditor.mcp_server.main is auditor.mcp.main
+
+
+# --- output-volume hardening ------------------------------------------------------------
+
+
+async def test_tool_annotations_read_only_vs_mutating():
+    """Read tools advertise readOnlyHint; index-writers don't; ignore_remove is destructive."""
+    tools = {t.name: t for t in await mcp.list_tools()}
+    for name in ("scan", "report", "discover", "manifest", "aggregate", "rules_list"):
+        assert tools[name].annotations.readOnlyHint is True, name
+    assert tools["ignore_add"].annotations.readOnlyHint is False
+    assert tools["ignore_remove"].annotations.destructiveHint is True
+    if "graph_build" in tools:  # only when the graph extra is installed
+        assert tools["graph_build"].annotations.readOnlyHint is False
+
+
+def test_response_limiting_middleware_registered():
+    limiter = next(
+        (m for m in mcp.middleware if isinstance(m, ResponseLimitingMiddleware)), None
+    )
+    assert limiter is not None
+    assert limiter.max_size == MAX_TOOL_RESPONSE_BYTES
+
+
+async def test_artifact_publish_read_roundtrip():
+    link = publish(
+        "scan",
+        "/seed/path",
+        "hello body",
+        mime_type="text/plain",
+        name="n",
+        description="d",
+    )
+    assert str(link.uri).startswith("audit://artifact/")
+    assert await _resource_body(link) == "hello body"
+
+
+async def test_artifact_missing_key_raises():
+    with pytest.raises(Exception):  # noqa: B017 — FastMCP wraps the ValueError on read
+        await mcp.read_resource("audit://artifact/does-not-exist")
+
+
+def test_code_mode_off_by_default(monkeypatch):
+    monkeypatch.delenv("AUDITOR_CODE_MODE", raising=False)
+    assert code_mode.code_mode_requested() is False
+    assert code_mode.enable_code_mode(FastMCP("t")) is False
+
+
+def test_code_mode_requested_reads_env(monkeypatch):
+    monkeypatch.setenv("AUDITOR_CODE_MODE", "1")
+    assert code_mode.code_mode_requested() is True
+    monkeypatch.setenv("AUDITOR_CODE_MODE", "0")
+    assert code_mode.code_mode_requested() is False
+
+
+def test_code_mode_enables_when_requested_and_available(monkeypatch):
+    if not code_mode.code_mode_available():
+        pytest.skip("code-mode extra not installed")
+    monkeypatch.setenv("AUDITOR_CODE_MODE", "1")
+    assert code_mode.enable_code_mode(FastMCP("t")) is True

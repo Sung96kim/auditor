@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { GNode } from "../types";
 import { THEME } from "../theme";
+import { onEnterOrSpace } from "../a11y";
 
 interface ExplorerProps {
   nodes: GNode[];
@@ -46,6 +47,7 @@ export default function Explorer({
       <div style={{ padding: "8px 10px", flexShrink: 0, position: "relative" }}>
         <input
           type="text"
+          aria-label="Search symbols"
           placeholder="Search symbols…"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
@@ -115,7 +117,10 @@ export default function Explorer({
             return (
               <div
                 key={n.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelect(n.id)}
+                onKeyDown={onEnterOrSpace(() => onSelect(n.id))}
                 className="explorer-row"
                 style={{
                   padding: "6px 12px",

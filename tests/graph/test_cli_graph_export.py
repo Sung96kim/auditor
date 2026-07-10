@@ -47,7 +47,9 @@ def test_graph_export_svg_no_graphviz(tmp_path, monkeypatch):
     assert runner.invoke(app, ["scan", str(tmp_path), "-i"]).exit_code == 0
     assert runner.invoke(app, ["graph", "build", str(tmp_path)]).exit_code == 0
     with patch("auditor.cli.graph.shutil.which", return_value=None):
-        result = runner.invoke(app, ["graph", "export", str(tmp_path), "--format", "svg"])
+        result = runner.invoke(
+            app, ["graph", "export", str(tmp_path), "--format", "svg"]
+        )
     assert result.exit_code != 0
     assert "graphviz" in result.output.lower() or "dot" in result.output
 

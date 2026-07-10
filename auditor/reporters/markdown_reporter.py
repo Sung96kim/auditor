@@ -10,44 +10,48 @@ class MarkdownReporter(Reporter):
     format: ClassVar[str] = "md"
 
     def render(self, results: list[ScanResult]) -> str:
-        totals = severity_totals(results)
-        lines = ["# Audit report", ""]
-        lines.append(_totals_line(totals))
+        lines = ["# Audit report", "", self.totals_line(severity_totals(results))]
         suppressed = sum(r.suppressed for r in results)
         if suppressed:
             lines.append(f"_{suppressed} finding(s) suppressed by noqa._")
         lines.append("")
-        flagged = [r for r in results if r.findings]
-        flagged.sort(key=lambda r: r.severity_key)
+        flagged = sorted(
+            (r for r in results if r.findings), key=lambda r: r.severity_key
+        )
         if flagged:
-            lines += [
-                "## Files with findings",
-                "",
-                "| File | Role | Blocking | High | Medium | Low |",
-                "| --- | --- | --- | --- | --- | --- |",
-            ]
-            for r in flagged:
-                c = r.counts
-                lines.append(
-                    f"| `{r.file}` | {r.role.value} | {c[Severity.BLOCKING]} | "
-                    f"{c[Severity.HIGH]} | {c[Severity.MEDIUM]} | {c[Severity.LOW]} |"
-                )
-            lines.append("")
+            lines += self.summary_table(flagged)
         for r in flagged:
-            lines += [f"### `{r.file}`", ""]
-            for f in sorted(
-                r.findings, key=lambda f: (-severity_rank(f.severity), f.line)
-            ):
-                mark = "🔧" if f.verdict_kind.value == "auto" else "🔎"
-                lines.append(
-                    f"- {mark} **{f.severity.value}** `{f.rule_id}` (L{f.line}) — {f.message}"
-                )
-            lines.append("")
+            lines += self.file_section(r)
         return "\n".join(lines).rstrip() + "\n"
 
+    def totals_line(self, totals: dict[Severity, int]) -> str:
+        return (
+            f"**Totals — blocking: {totals[Severity.BLOCKING]} · high: {totals[Severity.HIGH]} · "
+            f"medium: {totals[Severity.MEDIUM]} · low: {totals[Severity.LOW]}**"
+        )
 
-def _totals_line(totals: dict[Severity, int]) -> str:
-    return (
-        f"**Totals — blocking: {totals[Severity.BLOCKING]} · high: {totals[Severity.HIGH]} · "
-        f"medium: {totals[Severity.MEDIUM]} · low: {totals[Severity.LOW]}**"
-    )
+    def summary_table(self, flagged: list[ScanResult]) -> list[str]:
+        rows = [
+            "## Files with findings",
+            "",
+            "| File | Role | Blocking | High | Medium | Low |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        for r in flagged:
+            c = r.counts
+            rows.append(
+                f"| `{r.file}` | {r.role.value} | {c[Severity.BLOCKING]} | "
+                f"{c[Severity.HIGH]} | {c[Severity.MEDIUM]} | {c[Severity.LOW]} |"
+            )
+        rows.append("")
+        return rows
+
+    def file_section(self, r: ScanResult) -> list[str]:
+        lines = [f"### `{r.file}`", ""]
+        for f in sorted(r.findings, key=lambda f: (-severity_rank(f.severity), f.line)):
+            mark = "🔧" if f.verdict_kind.value == "auto" else "🔎"
+            lines.append(
+                f"- {mark} **{f.severity.value}** `{f.rule_id}` (L{f.line}) — {f.message}"
+            )
+        lines.append("")
+        return lines

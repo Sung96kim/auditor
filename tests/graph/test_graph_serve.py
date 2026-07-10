@@ -45,7 +45,11 @@ async def store(tmp_path):
             line=1,
         ),
     ]
-    edges = [GraphEdge(src="m.py::Foo", dst="m.py::Foo.bar", kind=EdgeKind.CONTAINS, weight=1.0)]
+    edges = [
+        GraphEdge(
+            src="m.py::Foo", dst="m.py::Foo.bar", kind=EdgeKind.CONTAINS, weight=1.0
+        )
+    ]
     clusters = [GraphCluster(cluster_id=0, label="foo", member_count=2)]
     await s.repos.register(0.0)
     await s.graph.replace(nodes, edges, clusters)
@@ -57,7 +61,7 @@ async def test_render_app_injects_payload(store):
     payload = await build_payload(store)
     html = render_app(payload)
     assert "__AUDITOR_GRAPH__" in html
-    assert '"m.py::Foo"' in html          # the data is embedded
+    assert '"m.py::Foo"' in html  # the data is embedded
     assert html.strip().lower().startswith("<!doctype html") or "<html" in html.lower()
     # the injected JSON round-trips
     assert html.index("__AUDITOR_GRAPH__") > 0

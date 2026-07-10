@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from auditor.languages.base import Detector, LineIndexed
 from auditor.languages.typescript.nodes import Tsx
-from auditor.models import FileRole
+from auditor.models import FileRole, Finding
 
 if TYPE_CHECKING:
     from auditor.config import ResolvedConfig
@@ -43,5 +43,5 @@ class TsDetector(Detector):
     abstract: ClassVar[bool] = True
     language: ClassVar[str] = "typescript"
 
-    def run(self, ctx: "TsAuditContext") -> list:  # type: ignore[override]
+    def run(self, ctx: "TsAuditContext") -> list[Finding]:  # type: ignore[override]
         raise NotImplementedError

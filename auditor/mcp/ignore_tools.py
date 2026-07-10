@@ -11,12 +11,13 @@ from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
+from auditor.mcp.helpers import DESTRUCTIVE, MUTATING, READ_ONLY
 from auditor.mcp.server import mcp
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 
 
-@mcp.tool
+@mcp.tool(annotations=MUTATING)
 async def ignore_add(
     rule_id: str,
     file: str | None = None,
@@ -49,7 +50,7 @@ async def ignore_add(
     return {"id": ignore_id, "rule_id": rule_id, "file": file, "line": line}
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def ignore_list(path: str = ".") -> list[dict]:
     """List the persistent ignores recorded for this repo (with their ids)."""
     root = find_root(Path(path))
@@ -57,7 +58,7 @@ async def ignore_list(path: str = ".") -> list[dict]:
         return await index.ignores.list()
 
 
-@mcp.tool
+@mcp.tool(annotations=DESTRUCTIVE)
 async def ignore_remove(id: int, path: str = ".") -> dict:
     """Remove (unignore) a persistent ignore by its id (from ignore_list)."""
     root = find_root(Path(path))

@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from auditor.cli import app
+from auditor.cli import graph as gmod
 from auditor.database import IndexStore
 from auditor.engine import audit_target
 from auditor.paths import index_db_path, repo_key
@@ -67,8 +68,6 @@ async def test_serve_reuses_existing_graph_without_rebuild(
 ):
     """Relaunching `graph serve` on an already-built graph must NOT re-scan or rebuild — that
     was the slow spin-up. It serves the persisted graph directly."""
-    from auditor.cli import graph as gmod
-
     await audit_target(
         no_graph_config_repo,
         incremental=True,
