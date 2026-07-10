@@ -189,3 +189,11 @@ IgnoreForce = Annotated[
         help="Allow a rule_id not in the registry (e.g. a not-yet-loaded plugin rule).",
     ),
 ]
+Malware = Annotated[
+    bool | None,
+    typer.Option(
+        "--malware/--no-malware",
+        help="Run the opt-in malware scan (ClamAV content + osv-scanner dependency "
+        "passes) for this run, overriding [tool.auditor.malware_scan] enabled.",
+    ),
+]

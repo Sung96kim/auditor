@@ -18,6 +18,7 @@ from auditor.cli.apps import app
 from auditor.cli.config import config_app
 from auditor.cli.ignore import ignore_app
 from auditor.cli.index import index_app
+from auditor.cli.malware import malware_app
 from auditor.cli.plugins import plugins_app
 from auditor.cli.rules import rules_app
 from auditor.cli.self_update import self_app
@@ -29,6 +30,7 @@ app.add_typer(config_app, name="config")
 app.add_typer(rules_app, name="rules")
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(self_app, name="self")
+app.add_typer(malware_app, name="malware")
 
 # ensure all built-in languages register for discovery's suffix list
 _ = PythonAuditor

@@ -7,7 +7,7 @@
 <p align="center"><em>A deterministic codebase auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
 It does the mechanical, deterministic part of a code audit — parsing, building the
-class/function manifest, running **125 anti-pattern detectors** across Python, TypeScript/React,
+class/function manifest, running **129 anti-pattern detectors** across Python, TypeScript/React,
 shell, and package manifests, hashing for an incremental cache — so an agent spends tokens only
 on the genuine judgment calls. Findings are split into `auto` (the tool decided) and `candidate`
 (evidence only; you judge).
@@ -329,6 +329,29 @@ v2 keeps the inner class as a deprecated shim but silently ignores misspelled ke
 - **Per-rule cache**: each rule has a fingerprint = `hash(detector version + its resolved
   config)`; cached findings are reused only when the file content hash **and** that rule's
   fingerprint match.
+
+### Malware scan (opt-in)
+
+Signature-based scanning via two widely adopted external scanners — auditor
+orchestrates, caches, and merges findings; it vendors no signatures and adds no
+Python dependencies:
+
+- **ClamAV** (content): every file — binaries and vendored dirs included — scanned
+  through `clamdscan`/`clamscan`. `AV-MAL-MATCH` (auto/blocking, gates `--fail-on`),
+  `AV-MAL-HEURISTIC` (candidate/high: PUA + heuristics).
+- **osv-scanner** (dependencies): lockfiles checked for OpenSSF `MAL-*` known-malicious
+  advisories. `DEP-MAL-KNOWN` (auto/blocking); CVEs opt-in via
+  `include_vulnerabilities` as `DEP-VULN-KNOWN` (candidate/high).
+
+```toml
+[tool.auditor.malware_scan]
+enabled = true          # or per-run: auditor scan --malware
+```
+
+Setup: `auditor malware install` (osv-scanner: checksum-verified download to
+`~/.auditor/bin`; ClamAV: your package manager, with confirmation), then
+`auditor malware update-dbs`. Scans are fully offline; `install`/`update-dbs` are the
+only networked commands. `auditor malware status` shows tool + DB state.
 
 ## Detectors
 

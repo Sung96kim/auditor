@@ -5,6 +5,9 @@ import json
 import pytest
 from fastmcp.exceptions import ToolError
 
+import auditor.mcp
+import auditor.mcp_server
+from auditor.malware import tools as malware_tools
 from auditor.mcp_server import _GRAPH_OK, mcp
 
 
@@ -419,6 +422,13 @@ async def test_finding_detail_reads_from_index(sample_repo):
     assert detail["evidence"]  # recovered from the index, not the (now-wiped) file
 
 
+async def test_malware_status_tool(monkeypatch):
+    monkeypatch.setattr(malware_tools.shutil, "which", lambda name: None)
+    result = _structured(await mcp.call_tool("malware_status", {}))
+    assert result["clamscan"]["found"] is False
+    assert result["osv_offline_db"]["present"] is False
+
+
 @pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
 async def test_graph_search_and_usages_tools(sample_repo):
     """graph_search locates symbols and graph_usages returns grouped connectivity with full
@@ -449,3 +459,8 @@ async def test_graph_search_and_usages_tools(sample_repo):
         await mcp.call_tool("graph_usages", {"symbol": "zzz_nope_xyz", "path": src})
     )
     assert empty == {}
+
+
+def test_mcp_server_shim_reexports_package_objects():
+    assert auditor.mcp_server.mcp is auditor.mcp.mcp
+    assert auditor.mcp_server.main is auditor.mcp.main

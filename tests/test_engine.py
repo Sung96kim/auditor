@@ -5,10 +5,12 @@ from pathlib import Path
 
 from loguru import logger
 
+from auditor import engine as engine_mod
 from auditor.config import AuditorSettings, load_config
 from auditor.database import IndexStore
 from auditor.engine import ScanEngine, audit_target
 from auditor.languages.python.resolve import CalleeResolver
+from auditor.models import FileRole, ScanResult
 from auditor.paths import index_db_path
 
 
@@ -142,7 +144,8 @@ async def test_parallel_writers(tmp_path):
 async def test_scan_dispatches_each_language(tmp_path):
     """Discovery + dispatch route every language through the engine: a `.py` (by suffix), a `.sh`
     (by suffix), and a `package.json` (by filename) each reach their auditor and surface their
-    representative rule. Also exercises the engine's rule-id pre-filter for shell/manifest."""
+    representative rule. Also exercises the engine's rule-id pre-filter for shell/manifest.
+    """
     root = tmp_path
     (root / "pyproject.toml").write_text(
         '[project]\nname = "x"\nversion = "0"\n[tool.auditor]\nextends = "base"\n'
@@ -565,9 +568,9 @@ def test_partial_arg_refresh_flags_only_unrefreshed(tmp_path):
     # line 10 has both a.x and b.y — only b.y should be flagged
     flagged_attrs = {f.message for f in findings}
     assert any("b.y" in m for m in flagged_attrs), "b.y must be flagged"
-    assert not any("a.x" in m for m in flagged_attrs), (
-        "a.x must NOT be flagged (a was refreshed)"
-    )
+    assert not any(
+        "a.x" in m for m in flagged_attrs
+    ), "a.x must NOT be flagged (a was refreshed)"
 
 
 def test_refresh_before_commit_still_flags(tmp_path):
@@ -794,9 +797,9 @@ def test_dep_bulk_helper_clears_refreshed_obj_only(tmp_path: Path) -> None:
     assert findings, "SA-GREENLET-ATTR-AFTER-COMMIT must fire for b.y"
     messages = {f.message for f in findings}
     assert any("b.y" in m for m in messages), "b.y must be flagged (un-refreshed)"
-    assert not any("a.x" in m for m in messages), (
-        "a.x must NOT be flagged (a was in the refreshed list)"
-    )
+    assert not any(
+        "a.x" in m for m in messages
+    ), "a.x must NOT be flagged (a was in the refreshed list)"
 
 
 def test_non_first_param_positional_mapping(tmp_path: Path) -> None:
@@ -845,9 +848,9 @@ def test_two_helpers_one_refreshes_other_does_not(tmp_path: Path) -> None:
     assert findings, "SA-GREENLET-ATTR-AFTER-COMMIT must fire for obj_b.name"
     messages = {f.message for f in findings}
     assert any("obj_b.name" in m for m in messages), "obj_b.name must be flagged"
-    assert not any("obj_a.value" in m for m in messages), (
-        "obj_a.value must NOT be flagged (obj_a was refreshed via reload)"
-    )
+    assert not any(
+        "obj_a.value" in m for m in messages
+    ), "obj_a.value must NOT be flagged (obj_a was refreshed via reload)"
 
 
 def test_two_hop_reexport_chain_resolves_and_clears(tmp_path: Path) -> None:
@@ -971,3 +974,36 @@ def test_dep_conditional_refresh_still_flags_greenlet(tmp_path: Path) -> None:
         "SA-GREENLET-ATTR-AFTER-COMMIT must fire: reload is resolved but its refresh is "
         "inside an `if` branch — _refresh_effects requires unconditional refresh proof"
     )
+
+
+# ---------------------------------------------------------------------------
+# Malware pass wiring
+# ---------------------------------------------------------------------------
+
+
+async def test_scan_path_runs_malware_passes_when_enabled(tmp_path, monkeypatch):
+    (tmp_path / "app.py").write_text("print('hi')\n")
+    seen = {}
+
+    async def fake_passes(root, target, settings, results, index, **kwargs):
+        seen["root"] = root
+        results.append(
+            ScanResult(file="payload.bin", language="binary", role=FileRole.PRODUCTION)
+        )
+
+    monkeypatch.setattr(engine_mod, "run_malware_passes", fake_passes)
+    settings = AuditorSettings(malware_scan={"enabled": True})
+    results = await ScanEngine(tmp_path, settings).scan_path(tmp_path)
+    assert seen["root"] == tmp_path
+    assert "payload.bin" in {r.file for r in results}
+
+
+async def test_scan_path_skips_malware_passes_by_default(tmp_path, monkeypatch):
+    (tmp_path / "app.py").write_text("print('hi')\n")
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("malware passes must not run when disabled")
+
+    monkeypatch.setattr(engine_mod, "run_malware_passes", fail_if_called)
+    results = await ScanEngine(tmp_path, AuditorSettings()).scan_path(tmp_path)
+    assert {r.file for r in results} == {"app.py"}
