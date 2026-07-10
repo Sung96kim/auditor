@@ -168,19 +168,26 @@ class ScanEngine:
             self.root.name,
         )
         results = await self._scan_files(files, progress)
+        malware_keep: set[str] = set()
         if self.settings.malware_scan.enabled:
             if progress is not None:
                 progress("malware scan")
-            await run_malware_passes(
-                self.root, target, self.settings, results, self.index
+            malware_keep = (
+                await run_malware_passes(
+                    self.root, target, self.settings, results, self.index
+                )
+                or set()  # tolerate monkeypatched fakes that return None
             )
         if self.index is not None:
             # reconcile: drop index rows for files under this scan's scope that no longer exist,
             # so a deleted file leaves no stale findings/shapes (which would otherwise leak into
             # `aggregate` and produce phantom cross-file dup findings). Runs before the cross-file
-            # pass so it doesn't group shapes from removed files.
+            # pass so it doesn't group shapes from removed files. ``malware_keep`` covers clean
+            # malware-only files (binaries/lockfiles with cache rows but no findings → no
+            # ScanResult), whose rows would otherwise be pruned in the same run they were written.
             pruned = await self.index.prune(
-                {r.file for r in results}, prefix=self._scope_prefix(target)
+                {r.file for r in results} | malware_keep,
+                prefix=self._scope_prefix(target),
             )
             if pruned:
                 logger.opt(colors=True).info(
