@@ -251,7 +251,8 @@ class DesignSystem(BaseModel):
 
 class SqlAlchemyConfig(BaseModel):
     """Declared facts about the project's SQLAlchemy engine/session, so config-dependent rules are
-    accurate instead of guessing (the real factory often lives in a shared lib the auditor can't see)."""
+    accurate instead of guessing (the real factory often lives in a shared lib the auditor can't see).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -298,7 +299,9 @@ class MalwareScanConfig(BaseModel):
     enabled: bool = False
     content: bool = True  # ClamAV pass
     dependencies: bool = True  # osv-scanner pass
-    include_vendored: bool = True  # scan node_modules/.venv/vendor — where payloads live
+    include_vendored: bool = (
+        True  # scan node_modules/.venv/vendor — where payloads live
+    )
     max_file_size_mb: int = Field(default=50, ge=1)
     include_vulnerabilities: bool = False  # OSV: also report CVEs, not just MAL-*
     scan_timeout_s: int = Field(default=600, ge=1)
@@ -307,7 +310,8 @@ class MalwareScanConfig(BaseModel):
 class GlobalPaths(BaseSettings):
     """Global auditor data locations from the environment. ``home`` ← ``$AUDITOR_HOME`` (via the
     ``AUDITOR_`` prefix), defaulting to ``~/.auditor``. Lives here so the project's BaseSettings
-    stay together (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the helper."""
+    stay together (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the helper.
+    """
 
     model_config = SettingsConfigDict(env_prefix="AUDITOR_")
     home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
