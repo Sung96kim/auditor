@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 SCRIPT = (
     Path(__file__).resolve().parents[2] / "plugin" / "statusline" / "auditor_status.py"
 )
@@ -59,3 +61,26 @@ def test_stale_marker(tmp_path):
         age=3600,
     )
     assert "⟳" in _run(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json at all",  # decode error
+        "[]",  # valid JSON, non-dict payload
+        '{"severity": 5, "configured": true, "written_at": 0}',  # non-dict severity
+        '{"severity": {"blocking": "x"}, "written_at": "soon"}',  # non-numeric fields
+    ],
+)
+def test_malformed_cache_degrades_without_crashing(tmp_path, raw):
+    d = tmp_path / ".auditor"
+    d.mkdir(parents=True)
+    (d / ".status.json").write_text(raw)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        input=json.dumps({"cwd": str(tmp_path)}),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "Traceback" not in proc.stderr
