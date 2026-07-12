@@ -15,6 +15,7 @@ from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
+from auditor.malware.tools import resolve_tool
 from auditor.mcp.artifacts import publish
 from auditor.mcp.helpers import READ_ONLY, validate_detail
 from auditor.mcp.server import mcp
@@ -68,6 +69,7 @@ async def scan(
     detail: str = "compact",
     limit: int | None = 50,
     isolated: bool = False,
+    malware: bool = False,
 ) -> dict | ResourceLink:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_skips`` ignores
@@ -91,13 +93,23 @@ async def scan(
     Auditing a single FILE still runs the repo-wide cross-file rules (duplicate/dead-code) off the
     shared index — if the repo was never indexed, the first such call warms it once (peers come from
     the index, not a re-audit). ``isolated`` skips that: audit only this file, no index, no
-    cross-file — faster for a quick standalone check."""
+    cross-file — faster for a quick standalone check. ``malware=true`` also runs the opt-in
+    malware pass (requires a backend; see malware_status/malware_install)."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
     validate_detail(detail)
     severity = _as_list(severity)
     rule = _as_list(rule)
     root = find_root(Path(path))
+    if malware:
+        if not (resolve_tool("clamdscan") or resolve_tool("clamscan") or resolve_tool("osv-scanner")):
+            raise ToolError(
+                "malware scan requested but neither ClamAV nor osv-scanner is installed — "
+                "run malware_install (or `auditor malware install`)"
+            )
+        merged = dict(config or {})
+        merged["malware_scan"] = {**merged.get("malware_scan", {}), "enabled": True}
+        config = merged
     report_only = git_changed_files(root, since) if since else None
     try:
         results = await audit_target(

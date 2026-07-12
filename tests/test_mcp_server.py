@@ -264,6 +264,15 @@ async def test_scan_tool_bad_config_errors(sample_repo):
         )
 
 
+async def test_scan_malware_flag_requires_backend(monkeypatch):
+    import auditor.mcp.scan_tools as st
+
+    monkeypatch.setattr(st, "resolve_tool", lambda name: None)  # no backends
+    with pytest.raises(ToolError) as exc:
+        await mcp.call_tool("scan", {"path": "auditor", "malware": True})
+    assert "malware" in str(exc.value).lower()
+
+
 # --- new gap-fill tests -------------------------------------------------------------------
 
 
