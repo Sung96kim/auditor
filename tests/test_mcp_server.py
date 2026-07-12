@@ -20,6 +20,14 @@ from auditor.mcp import code_mode
 from auditor.mcp.artifacts import publish
 from auditor.mcp.server import MAX_TOOL_RESPONSE_BYTES
 from auditor.mcp_server import _GRAPH_OK, mcp
+from auditor.models import (
+    Category,
+    FileRole,
+    Finding,
+    ScanResult,
+    Severity,
+    VerdictKind,
+)
 
 
 @pytest.mark.parametrize(
@@ -318,6 +326,38 @@ async def test_scan_fail_on_reports_gate():
 async def test_scan_fail_on_rejects_bad_severity():
     with pytest.raises(ToolError):
         await mcp.call_tool("scan", {"path": "auditor", "fail_on": "nope"})
+
+
+async def test_scan_gate_reflects_unfiltered_scan(monkeypatch):
+    """The gate must trip on the pre-filter scan, even when a display filter (severity=/rule=)
+    hides the triggering finding from the returned `files`. Regression guard for the ordering:
+    the gate has to be computed from `audit_target`'s raw results, before severity/rule filters
+    mutate `r.findings` in place."""
+    triggering = Finding(
+        rule_id="PY-TEST",
+        category=Category.CORRECTNESS,
+        severity=Severity.HIGH,
+        verdict_kind=VerdictKind.AUTO,
+        line=1,
+        message="m",
+    )
+    result = ScanResult(
+        file="a.py", language="python", role=FileRole.PRODUCTION, findings=[triggering]
+    )
+
+    async def fake_audit_target(*args, **kwargs):
+        return [result]
+
+    monkeypatch.setattr(st, "audit_target", fake_audit_target)
+
+    data = _structured(
+        await mcp.call_tool(
+            "scan", {"path": "auditor", "fail_on": "high", "severity": "blocking"}
+        )
+    )
+    findings = [f for fl in data["files"] for f in fl["findings"]]
+    assert findings == []
+    assert data["gate"]["tripped"] is True
 
 
 # --- new gap-fill tests -------------------------------------------------------------------

@@ -78,18 +78,25 @@ async def scan(
     - ``since`` (git ref): scope output to files changed vs the ref — the whole repo is still
       scanned so cross-file rules hold. ``isolated``: one file, no index, no cross-file.
       ``incremental``: reuse/update the shared cache so only changed files re-parse.
-    - ``severity`` / ``rule`` (str or list): keep only matching findings. ``no_skips``: ignore
-      in-file ``auditor: skip`` directives. ``show_ignored``: include persistent ignores.
+    - ``severity`` (blocking|high|medium|low|suggestion) / ``rule`` (str or list): keep only
+      matching findings. ``no_skips``: ignore in-file ``auditor: skip`` directives.
+      ``show_ignored``: include persistent ignores.
     - ``profile`` (base|strict|pydantic|all-strict) and ``config`` (dict of overrides): tune rules.
       ``strict_tests``: audit test files at full production strength. ``malware=true``: opt-in
       malware pass (needs a backend — see malware_status/malware_install).
     - ``detail`` (summary|compact|full, default compact) + ``limit`` (compact, default 50: worst-N,
       rest under ``omitted``): size control. ``full`` returns a ResourceLink; recover dropped
       ``evidence`` with finding_detail.
-    - ``fail_on`` (a severity): adds ``gate: {fail_on, tripped}`` — auto findings only, for CI."""
+    - ``fail_on`` (blocking|high|medium|low|suggestion): adds ``gate: {fail_on, tripped}`` — auto
+      findings only, for CI."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
     validate_detail(detail)
+    if fail_on is not None:
+        try:
+            check_severity(fail_on)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
     severity = _as_list(severity)
     rule = _as_list(rule)
     root = find_root(Path(path))
@@ -127,10 +134,6 @@ async def scan(
         ) from exc
     gate = None
     if fail_on is not None:
-        try:
-            check_severity(fail_on)
-        except ValueError as exc:
-            raise ToolError(str(exc)) from exc
         gate = {"fail_on": fail_on, "tripped": gate_tripped(results, fail_on)}
     if severity:
         wanted = {s.lower() for s in severity}
