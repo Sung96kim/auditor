@@ -177,6 +177,21 @@ class FileDiscovery:
         out = [p for p in candidates if not self._excluded(p, soft_active=soft_active)]
         return sorted(set(out))
 
+    def all_files(self, target: Path) -> list[Path]:
+        """Every non-excluded file under ``target`` — like :meth:`files`, honoring gitignore,
+        excludes, and soft-skips, but WITHOUT the language-suffix filter. For the content secret
+        sweep, which reads any file, not only recognized code/config types."""
+        if target.is_file():
+            return [target]
+        soft_active = not _in_soft_skip(self._rel(target))
+        tracked = self._git_tracked()
+        if tracked is not None:
+            candidates = [p for p in tracked if self._under(p, target) and p.is_file()]
+        else:
+            candidates = [p for p in target.rglob("*") if p.is_file()]
+        out = [p for p in candidates if not self._excluded(p, soft_active=soft_active)]
+        return sorted(set(out))
+
     # --- internals --------------------------------------------------------
 
     def _supported(self, path: Path) -> bool:

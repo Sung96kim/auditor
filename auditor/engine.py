@@ -22,6 +22,7 @@ from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.graph.extract import extract_file_facts
 from auditor.ignores import IgnoreList
 from auditor.languages.base import LanguageAuditor
+from auditor.languages.config.auditor import ConfigAuditor
 from auditor.languages.python.resolve import CalleeResolver, find_site_packages
 from auditor.malware.passes import run_malware_passes
 from auditor.models import FileRole, Finding, IndexEntry, ScanResult, SkippedRule
@@ -31,6 +32,25 @@ from auditor.roles import RoleClassifier
 from auditor.skips import filter_findings
 
 _DEP_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
+
+_SECRET_SWEEP_MAX_BYTES = (
+    2 * 1024 * 1024
+)  # skip files larger than this in the content sweep
+
+
+def _read_text_for_sweep(path: Path) -> str | None:
+    """Text of ``path`` for the content secret sweep, or ``None`` if it is binary or oversized."""
+    try:
+        if path.stat().st_size > _SECRET_SWEEP_MAX_BYTES:
+            return None
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data[:8192]:  # a NUL byte in the head window => binary
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
 #: max files audited concurrently — overlaps index I/O on re-scans (CPU work stays GIL-serialized)
 _SCAN_CONCURRENCY = 8
 
@@ -168,6 +188,9 @@ class ScanEngine:
             self.root.name,
         )
         results = await self._scan_files(files, progress)
+        # content secret sweep: catch credentials in any file no language auditor claims
+        # (docs, data dumps, extensionless configs) — code/config files are already covered.
+        results.extend(self._sweep_unclassified_for_secrets(target))
         malware_keep: set[str] = set()
         if self.settings.malware_scan.enabled:
             if progress is not None:
@@ -213,6 +236,32 @@ class ScanEngine:
             self._apply_crossfile_in_memory(results)
         _log_summary(results)
         return results
+
+    def _sweep_unclassified_for_secrets(self, target: Path) -> list[ScanResult]:
+        """Run the config secret detectors over every file no language auditor claims, so a
+        credential leaked into a ``.md`` / ``.txt`` / ``.sql`` / extensionless file is caught, not
+        only in code and config files. Gitignore, excludes, and soft-skips are honored (via
+        ``FileDiscovery``); binaries and oversized files are skipped."""
+        disc = FileDiscovery(
+            self.root,
+            exclude_globs=tuple(self.settings.exclude),
+            respect_gitignore=self.settings.respect_gitignore,
+        )
+        auditor = ConfigAuditor()
+        out: list[ScanResult] = []
+        for path in disc.all_files(target):
+            rel = self.rel(path)
+            if REGISTRY.language_for_path(rel) is not None:
+                continue  # a language auditor already handles this file
+            source = _read_text_for_sweep(path)
+            if source is None:
+                continue
+            role = self.roles.classify(rel, source)
+            rc = ResolvedConfig(self.settings, role=role, rel_path=rel)
+            res = auditor.audit(file_path=rel, source=source, role=role, config=rc)
+            if res.findings:
+                out.append(res)
+        return out
 
     async def _scan_files(
         self, files: list[Path], progress: Callable[[str], None] | None = None
