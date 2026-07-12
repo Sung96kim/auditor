@@ -190,12 +190,12 @@ def test_root_option_overrides_autodetected_root(tmp_path):
         '[project]\nname="s"\nversion="0"\n[tool.auditor]\nextends="strict"\n'
     )
     (sub / "a.py").write_text("eval(x)\n")
-    # auto-detected: find_root(sub) == sub, so the path is "a.py"
+    # auto-detected: find_root(sub) == sub, so the path is "a.py" (+ pyproject.toml, scanned clean)
     auto = cli_json(invoke("scan", str(sub), "-f", "json"))
-    assert [r["file"] for r in auto["files"]] == ["a.py"]
+    assert [r["file"] for r in auto["files"]] == ["a.py", "pyproject.toml"]
     # pinned to the outer root: the path becomes "sub/a.py"
     pinned = cli_json(invoke("scan", str(sub), "--root", str(tmp_path), "-f", "json"))
-    assert [r["file"] for r in pinned["files"]] == ["sub/a.py"]
+    assert [r["file"] for r in pinned["files"]] == ["sub/a.py", "sub/pyproject.toml"]
 
 
 # --- scope / profile flags ---------------------------------------------------------------
@@ -286,7 +286,8 @@ def _gitignore_repo(root, *, respect: bool | None = None):
 def test_scan_skips_gitignored_by_default(tmp_path):
     _gitignore_repo(tmp_path)
     payload = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
-    assert [r["file"] for r in payload["files"]] == ["a.py"]  # ignored.py skipped
+    # ignored.py skipped; pyproject.toml is scanned (clean) for config secrets
+    assert [r["file"] for r in payload["files"]] == ["a.py", "pyproject.toml"]
 
 
 def test_include_gitignored_flag(tmp_path):
@@ -296,13 +297,13 @@ def test_include_gitignored_flag(tmp_path):
             "scan", str(tmp_path), "--no-index", "--include-gitignored", "-f", "json"
         )
     )
-    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py"}
+    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py", "pyproject.toml"}
 
 
 def test_respect_gitignore_config_toggle(tmp_path):
     _gitignore_repo(tmp_path, respect=False)  # [tool.auditor] respect_gitignore=false
     payload = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
-    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py"}
+    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py", "pyproject.toml"}
 
 
 def test_scan_soft_skips_migrations_until_targeted(tmp_path):
@@ -317,7 +318,8 @@ def test_scan_soft_skips_migrations_until_targeted(tmp_path):
     (mig / "0001_init.py").write_text("def f(x):\n    eval(x)\n")
 
     whole = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
-    assert [r["file"] for r in whole["files"]] == ["app/real.py"]  # migrations dropped
+    # migrations dropped; pyproject.toml scanned (clean) for config secrets
+    assert [r["file"] for r in whole["files"]] == ["app/real.py", "pyproject.toml"]
 
     targeted = cli_json(invoke("scan", str(mig), "--no-index", "-f", "json"))
     assert [r["file"] for r in targeted["files"]] == ["app/migrations/0001_init.py"]

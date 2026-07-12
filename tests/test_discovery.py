@@ -12,6 +12,7 @@ from auditor.discovery import (
     find_root,
     git_changed_files,
 )
+from auditor.registry import REGISTRY
 
 
 def _git(root: Path, *args: str) -> None:
@@ -64,7 +65,7 @@ def test_tracked_but_deleted_file_is_skipped(tmp_path):
     files = {
         p.relative_to(tmp_path).as_posix() for p in discover(tmp_path, root=tmp_path)
     }
-    assert files == {"a.py"}
+    assert files == {"a.py", "pyproject.toml"}  # pyproject.toml is scanned (config secrets)
 
 
 def test_custom_exclude_glob(tmp_path):
@@ -101,7 +102,8 @@ def _migration_tree(tmp_path: Path) -> Path:
 def test_migrations_soft_skipped_on_whole_repo(tmp_path):
     root = _migration_tree(tmp_path)
     files = {p.relative_to(root).as_posix() for p in FileDiscovery(root).files(root)}
-    assert files == {"src/real.py"}  # migrations + alembic/versions dropped
+    # migrations + alembic/versions dropped; pyproject.toml is scanned (config secrets)
+    assert files == {"src/real.py", "pyproject.toml"}
 
 
 def test_migrations_scanned_when_targeted(tmp_path):
@@ -134,7 +136,8 @@ def test_alembic_migration_dir_variants_soft_skipped(tmp_path):
         p.relative_to(tmp_path).as_posix()
         for p in FileDiscovery(tmp_path).files(tmp_path)
     }
-    assert files == {"src/real.py"}  # every alembic migration dir variant dropped
+    # every alembic migration dir variant dropped; pyproject.toml is scanned (config secrets)
+    assert files == {"src/real.py", "pyproject.toml"}
 
 
 def test_test_dir_named_migrations_is_not_soft_skipped(tmp_path):
@@ -171,7 +174,7 @@ def test_gitignore_respected_by_default(tmp_path):
     (tmp_path / "secret.py").write_text("y = 2\n")
     (tmp_path / ".gitignore").write_text("secret.py\n")
     files = {p.name for p in FileDiscovery(tmp_path).files(tmp_path)}
-    assert files == {"a.py"}  # gitignored file skipped
+    assert files == {"a.py", "pyproject.toml"}  # gitignored file skipped; pyproject.toml scanned
 
 
 def test_gitignore_can_be_disabled(tmp_path):
@@ -181,7 +184,7 @@ def test_gitignore_can_be_disabled(tmp_path):
     (tmp_path / "secret.py").write_text("y = 2\n")
     (tmp_path / ".gitignore").write_text("secret.py\n")
     fd = FileDiscovery(tmp_path, respect_gitignore=False)
-    assert {p.name for p in fd.files(tmp_path)} == {"a.py", "secret.py"}
+    assert {p.name for p in fd.files(tmp_path)} == {"a.py", "secret.py", "pyproject.toml"}
 
 
 def test_manifest_discovered_by_filename_not_generic_json(tmp_path):
@@ -189,10 +192,13 @@ def test_manifest_discovered_by_filename_not_generic_json(tmp_path):
     app = tmp_path / "app"
     app.mkdir()
     (app / "package.json").write_text('{"name": "x"}\n')  # a manifest — by filename
-    (app / "tsconfig.json").write_text("{}\n")  # a generic .json — not audited
+    (app / "tsconfig.json").write_text("{}\n")  # a generic .json — scanned by the config auditor
     (app / "index.py").write_text("x = 1\n")
     found = {p.name for p in FileDiscovery(tmp_path).files(app)}
-    assert found == {"package.json", "index.py"}
+    assert found == {"package.json", "index.py", "tsconfig.json"}
+    # routing still distinguishes them: package.json -> manifest, tsconfig.json -> config
+    assert REGISTRY.language_for_path("app/package.json").language == "manifest"
+    assert REGISTRY.language_for_path("app/tsconfig.json").language == "config"
 
 
 # ---------------------------------------------------------------------------

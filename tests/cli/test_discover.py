@@ -23,7 +23,8 @@ def test_discover_honors_config_exclude(tmp_path):
     (root / "legacy" / "old.py").write_text("x = 1\n")
 
     files = {f["file"] for f in cli_json(invoke("discover", str(root)))}
-    assert files == {"src/a.py"}  # legacy/ excluded, matching what scan audits
+    # legacy/ excluded, matching what scan audits; pyproject.toml scanned for config secrets
+    assert files == {"src/a.py", "pyproject.toml"}
 
 
 def test_discover_skips_gitignored_and_migrations(tmp_path):
@@ -39,7 +40,8 @@ def test_discover_skips_gitignored_and_migrations(tmp_path):
     (tmp_path / "migrations" / "0001.py").write_text("z = 3\n")
 
     files = {f["file"] for f in cli_json(invoke("discover", str(tmp_path)))}
-    assert files == {"src/a.py"}  # secret.py (gitignored) + migrations/ both dropped
+    # secret.py (gitignored) + migrations/ both dropped; pyproject.toml scanned for config secrets
+    assert files == {"src/a.py", "pyproject.toml"}
 
 
 def test_discover_accepts_config_json(tmp_path):

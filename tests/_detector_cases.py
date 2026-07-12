@@ -1235,6 +1235,9 @@ TESTED_SEPARATELY = {
     "PY-SECRET-DETECTED",
     "TS-SECRET-DETECTED",
     "SH-SECRET-DETECTED",
+    # config/data-file secrets — covered in tests/languages/config/test_secrets.py
+    "CFG-SECRET-DETECTED",
+    "CFG-ENV-FILE-COMMITTED",
     # supply-chain — covered in tests/languages/manifest/ and tests/languages/python/
     "MF-SUPPLY-INSTALL-HOOK",
     "PY-SUPPLY-SETUP-EXEC",
