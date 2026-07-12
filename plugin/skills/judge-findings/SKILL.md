@@ -13,6 +13,8 @@ Judge the `candidate` findings auditor leaves for you (the `auto` ones are alrea
 1. Scan the scope (arg, else the git working-tree changes):
    - MCP: `scan(path=<scope>)`; CLI: `auditr scan <scope> -f json`.
 2. For each finding with `verdict_kind == "candidate"`, worst-severity-first:
+   - MCP path: `scan` defaults to compact output (no `evidence`) — call `finding_detail(file,
+     rule_id, line)` first (or re-`scan` with `detail="full"`). CLI JSON already has `evidence`.
    - Read `message`, `evidence`, `suggestion`; open the site at `file:line`.
    - Decide: **fix** it, **suppress** a true false-positive with a line-anchored
      `# auditor: skip: <RULE-ID>` directive, or **dismiss** with a reason.

@@ -7,7 +7,7 @@ Set up auditor in this repo. Report what already exists; don't clobber it.
 
 ## Steps
 
-1. Check the CLI: `auditr --version`. If missing, install with the extras the repo needs:
+1. Check the CLI: `auditr version`. If missing, install with the extras the repo needs:
    `uv tool install "auditr[mcp,ts,graph]"` (drop extras that don't apply).
 2. Scaffold config if absent: create `.auditor/config.toml` (see `auditr config show` for the
    resolved defaults). Choose a profile with `-p` (base | strict | pydantic | all-strict).

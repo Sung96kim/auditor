@@ -16,5 +16,6 @@ Answer structural questions with auditor's semantic graph. Requires the `[graph]
    - `graph related` / `graph neighbors` — nearby code.
    - `graph clusters` — hotspots and cohesive groups.
    - `graph search` / `graph concept` — locate by name/term.
-3. For a visual, `auditr graph serve` opens the browser UI (CLI only).
+3. For a visual, `auditr graph serve` opens the browser UI (CLI only); `auditr graph export`
+   renders a Graphviz DOT/SVG of the graph, a cluster, or a symbol's ego-graph.
 4. Use `usages` when judging whether a finding matters — dead code vs. widely-used.
