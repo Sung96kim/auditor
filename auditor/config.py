@@ -436,6 +436,22 @@ def _read_repo_tomls(root: Path) -> tuple[dict, dict]:
     return pyproject, standalone
 
 
+def is_configured(root: Path) -> bool:
+    """True if the repo has been configured — a standalone ``.auditor/config.toml``
+    or a ``[tool.auditor]`` table in ``pyproject.toml`` (the two sources
+    ``_read_repo_tomls`` layers together)."""
+    if (root / ".auditor" / "config.toml").exists():
+        return True
+    pp = root / "pyproject.toml"
+    if not pp.exists():
+        return False
+    try:
+        data = tomllib.loads(pp.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return "auditor" in data.get("tool", {})
+
+
 def merged_config_dict(
     root: Path, *, profile: str | None = None, overrides: dict | None = None
 ) -> dict:

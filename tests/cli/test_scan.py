@@ -278,7 +278,26 @@ def test_scan_dir_writes_status_cache(sample_repo):
     assert status_file.exists()
     data = json.loads(status_file.read_text())
     assert data["severity"]["blocking"] >= 1
-    assert data["configured"] is False  # no .auditor/config.toml in the fixture
+    # the fixture's pyproject.toml has a [tool.auditor] table — configured, even
+    # though there's no standalone .auditor/config.toml
+    assert data["configured"] is True
+
+
+def test_scan_dir_writes_status_cache_configured_false_without_pyproject_table(
+    sample_repo,
+):
+    # drop the fixture's [tool.auditor] table — neither config source is present
+    (sample_repo / "pyproject.toml").write_text(
+        '[project]\nname = "sample"\nversion = "0.0.0"\n'
+        'dependencies = ["pydantic", "requests", "pyyaml"]\n'
+    )
+
+    result = invoke("scan", str(sample_repo), "--no-index")
+    assert result.exit_code == 0, result.output
+
+    status_file = sample_repo / ".auditor" / ".status.json"
+    data = json.loads(status_file.read_text())
+    assert data["configured"] is False
 
 
 def test_scan_dir_writes_status_cache_configured_true(sample_repo):

@@ -4,7 +4,24 @@
 import json
 import shutil
 import sys
+import tomllib
 from pathlib import Path
+
+
+def _is_configured(cwd: Path) -> bool:
+    """True if ``.auditor/config.toml`` exists or ``pyproject.toml`` has a
+    ``[tool.auditor]`` table. Mirrors ``auditor.config.is_configured`` in stdlib
+    only (this hook can't import the ``auditor`` package)."""
+    if (cwd / ".auditor" / "config.toml").exists():
+        return True
+    pp = cwd / "pyproject.toml"
+    if not pp.exists():
+        return False
+    try:
+        data = tomllib.loads(pp.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return "auditor" in data.get("tool", {})
 
 
 def _emit(context: str) -> None:
@@ -29,7 +46,7 @@ def main() -> None:
     if shutil.which("auditr") is None:
         return  # tool not installed → say nothing
     cwd = Path(payload.get("cwd") or ".")
-    configured = (cwd / ".auditor" / "config.toml").exists()
+    configured = _is_configured(cwd)
     state = "configured" if configured else "not yet configured (run /auditor:setup)"
     _emit(
         "auditor (deterministic code auditor) is available. "

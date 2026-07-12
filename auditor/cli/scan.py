@@ -50,7 +50,7 @@ from auditor.cli.options import (
     WriteBaseline,
 )
 from auditor.cli.summary import print_summary
-from auditor.config import load_config
+from auditor.config import is_configured, load_config
 from auditor.discovery import default_base_ref, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity as _check_severity
@@ -240,9 +240,7 @@ def scan(
         return
 
     if target.is_dir():
-        write_status(
-            root, results, configured=(root / ".auditor" / "config.toml").exists()
-        )
+        write_status(root, results, configured=is_configured(root))
 
     hidden = 0
     if baseline is not None:
