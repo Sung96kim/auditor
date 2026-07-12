@@ -7,7 +7,7 @@
 <p align="center"><em>A deterministic codebase auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
 It runs the mechanical part of a code audit: parsing, building the class/function manifest,
-running 158 anti-pattern detectors across Python, TypeScript/React, shell, and package
+running 160 anti-pattern detectors across Python, TypeScript/React, shell, and package
 manifests, and caching results incrementally. The agent then spends its tokens only on the
 genuine judgment calls. Findings are split into `auto` (the tool decided) and `candidate`
 (evidence only; you judge).
@@ -53,8 +53,14 @@ The command is `auditr` (with `auditr-mcp` for the MCP server); `auditor`/`audit
 are kept as aliases. The PyPI distribution is named `auditr` because `auditor` was taken,
 so you `pip install auditr` but run `auditr`.
 
-Update an installed copy in place with `auditor self update` (`--check` to only report the
-latest version, `--pre` to include pre-releases, `-y` to skip the prompt).
+Update an installed copy in place:
+
+```bash
+auditor self update           # update to the latest release
+auditor self update --check   # only report the latest version, don't install
+auditor self update --pre     # include pre-releases
+auditor self update -y        # skip the confirmation prompt
+```
 
 For development on the auditor itself:
 
@@ -342,10 +348,13 @@ caches, and merges findings; it vendors no signatures and adds no Python depende
 enabled = true          # or per-run: auditor scan --malware
 ```
 
-Setup: `auditor malware install` (osv-scanner: checksum-verified download to
-`~/.auditor/bin`; ClamAV: your package manager, with confirmation), then
-`auditor malware update-dbs`. Scans are fully offline; `install`/`update-dbs` are the
-only networked commands. `auditor malware status` shows tool + DB state.
+Setup (`install`/`update-dbs` are the only networked commands; scans themselves are offline):
+
+```bash
+auditor malware install       # osv-scanner: checksum-verified download to ~/.auditor/bin; ClamAV: your package manager (with confirmation)
+auditor malware update-dbs    # download / refresh the signature databases
+auditor malware status        # show tool + database state
+```
 
 ## Detectors
 
@@ -380,11 +389,14 @@ the same as formatted code. Most rules are `blocking`; the path/blob/destructive
 `candidate`s you judge. ClamAV content scanning and osv-scanner dependency checks add two more
 each (see [Malware scan](#malware-scan-opt-in)).
 
-**Secrets** (`secrets`, on by default): a committed-credential sweep for Python, TS, and shell
-(`PY-`/`TS-`/`SH-SECRET-DETECTED`) — high-confidence, format-validated provider patterns (AWS,
-GitHub, Stripe, Slack, OpenAI, Google, JWTs, database URIs, PEM private keys, and many
-newer-wave providers). Tuned against a 700+-file real-repo corpus for a near-zero false-positive
-rate; benign lookalikes (UUIDs, hashes, example URLs) are excluded.
+**Secrets** (`secrets`, on by default). A committed-credential sweep using high-confidence,
+format-validated provider patterns (AWS, GitHub, Stripe, Slack, OpenAI, Google, JWTs, database
+URIs, PEM private keys, and many newer-wave providers). Tuned against a 700+-file real-repo corpus
+for a near-zero false-positive rate; benign lookalikes (UUIDs, hashes, example URLs) are excluded.
+
+- **Code** (`PY-`/`TS-`/`SH-SECRET-DETECTED`): the sweep over string literals in Python, TS, and shell.
+- **Config/data files** (`CFG-SECRET-DETECTED`): the same catalog over the raw text of `.env`, `.yaml`, `.json`, `.toml`, `.ini`, `.tfvars`, `.pem`, and similar files — where credentials most often leak. Scans by content, not just code.
+- **Committed dotenv** (`CFG-ENV-FILE-COMMITTED`, blocking): a `.env` file tracked by the repo. Since gitignored files are skipped, a `.env` that turns up in a scan is not gitignored — the exact leak this catches. `.env.example`/`.sample`/`.template` are exempt.
 
 **Supply-chain** (`supply-chain`, on by default). The install-time *code-execution* vectors:
 
@@ -442,7 +454,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 `auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
 
 <details>
-<summary><b>All 158 rules</b> (generated from <code>auditor rules list</code>)</summary>
+<summary><b>All 160 rules</b> (generated from <code>auditor rules list</code>)</summary>
 
 #### security (24)
 
@@ -510,10 +522,12 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `TS-MAL-OBFUSCATED-EXEC` | blocking | auto | `eval`/`Function` of an `atob`/base64-decoded payload |
 | `TS-MAL-REMOTE-EXEC` | blocking | auto | `eval`/`Function` of a fetched response body |
 
-#### secrets (3)
+#### secrets (5)
 
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
+| `CFG-ENV-FILE-COMMITTED` | blocking | auto | a dotenv file (`.env`, `.env.local`, …) tracked by the repo — not gitignored |
+| `CFG-SECRET-DETECTED` | high | auto | a committed provider credential in a config/data file (`.env`, `.yaml`, `.json`, …) |
 | `PY-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in Python source |
 | `SH-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in a shell script |
 | `TS-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in TS/JS source |
