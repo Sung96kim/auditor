@@ -43,3 +43,11 @@ def test_write_status_rolls_up_counts(tmp_path: Path):
     assert data["severity"]["blocking"] == 0
     assert data["configured"] is True
     assert isinstance(data["written_at"], int)
+
+
+def test_write_status_swallows_oserror_on_unwritable_target(tmp_path: Path):
+    # ".auditor" exists as a *file*, so mkdir(parents=True) on its child raises OSError
+    (tmp_path / ".auditor").write_text("not a directory")
+    out = write_status(tmp_path, [_result(Severity.HIGH)], configured=True)
+    assert out == tmp_path / ".auditor" / ".status.json"
+    assert not out.exists()

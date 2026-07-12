@@ -19,14 +19,17 @@ def write_status(root: Path, results: list[ScanResult], *, configured: bool) -> 
         for sev, n in r.counts.items():
             counts[sev.value] = counts.get(sev.value, 0) + n
     out = root / ".auditor" / ".status.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        json.dumps(
-            {
-                "severity": counts,
-                "configured": configured,
-                "written_at": int(time.time()),
-            }
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(
+                {
+                    "severity": counts,
+                    "configured": configured,
+                    "written_at": int(time.time()),
+                }
+            )
         )
-    )
+    except OSError:
+        pass  # best-effort cache (gitignored) — a read-only fs must not fail the scan
     return out
