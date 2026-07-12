@@ -103,6 +103,9 @@ registers the server automatically — no separate `claude mcp add` needed.
 - `aggregate-report` — roll the incremental index into a repo-wide `AUDIT.md`
 - `write-detector` — author a repo-local detector under `.auditor/plugins/`
 
+Each skill stays a thin, scannable workflow and carries deeper `references/` — per-category
+judgment heuristics, output-reading guides, and worked examples — that the agent loads on demand.
+
 ### Subagent
 
 `@auditor-reviewer` runs a full or changeset scan in its own context and returns a triaged
@@ -217,6 +220,17 @@ risky()  # auditor: skip                          — suppress every finding on 
 risky()  # auditor: skip: PY-SEC-DANGEROUS-EVAL    — suppress just that rule (comma-separate more)
 # auditor: skip-file                              — suppress the whole file
 # auditor: skip-file: PY-SEC-HARDCODED-SECRET      — suppress one rule file-wide
+```
+
+On a multi-line Python statement (a wrapped `except (...)`, a `def(...)` signature, a multi-line
+call), the directive is honored **anywhere in the statement** — a natural trailing comment on the
+closing `):` works, not only the first line:
+
+```python
+except (
+    BrokenPipeError,
+    ConnectionResetError,
+):  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION   — suppresses the finding on the `except` line
 ```
 
 `scan --no-skips` ignores all directives (an un-silenceable sweep). Suppressed counts are surfaced,
