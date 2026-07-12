@@ -10,10 +10,12 @@ from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddlewa
 from mcp.types import ResourceLink
 
 import auditor.mcp
+import auditor.mcp.malware_tools as mcp_malware_tools
 import auditor.mcp.scan_tools as st
 import auditor.mcp_server
 from auditor.engine import audit_target
 from auditor.malware import tools as malware_tools
+from auditor.malware.dbs import DbUpdateReport
 from auditor.mcp import code_mode
 from auditor.mcp.artifacts import publish
 from auditor.mcp.server import MAX_TOOL_RESPONSE_BYTES
@@ -568,14 +570,47 @@ async def test_malware_tools_registered():
 
 
 async def test_malware_update_dbs_returns_report(monkeypatch):
-    import auditor.mcp.malware_tools as mt
-    from auditor.malware.dbs import DbUpdateReport
-
     monkeypatch.setattr(
-        mt, "update_databases", lambda path: DbUpdateReport(notes=["ok"])
+        mcp_malware_tools,
+        "update_databases",
+        lambda path: DbUpdateReport(notes=["ok"]),
     )
     data = _structured(await mcp.call_tool("malware_update_dbs", {"path": "."}))
     assert "ok" in data["notes"]
+
+
+async def test_malware_install_backend_present_never_shells_out(monkeypatch):
+    """resolve_tool finds osv-scanner: install is a no-op, and download_osv is never called."""
+    monkeypatch.setattr(mcp_malware_tools, "resolve_tool", lambda name: "/fake/osv")
+
+    def _raise(*args, **kwargs):
+        raise AssertionError("malware_install must never shell out")
+
+    monkeypatch.setattr(mcp_malware_tools, "download_osv", lambda *a, **k: _raise())
+    monkeypatch.setattr("subprocess.run", _raise)
+    data = _structured(await mcp.call_tool("malware_install", {}))
+    assert data["osv"] == "already installed"
+
+
+async def test_malware_install_backend_absent_never_shells_out(monkeypatch):
+    """resolve_tool finds nothing: osv is downloaded (verified) and the ClamAV command is
+    only ever returned for a human to run — never executed."""
+    monkeypatch.setattr(mcp_malware_tools, "resolve_tool", lambda name: None)
+    monkeypatch.setattr(
+        mcp_malware_tools, "download_osv", lambda bin_dir: "/fake/bin/osv-scanner"
+    )
+    fake_command = ["sudo", "apt-get", "install", "-y", "clamav"]
+    monkeypatch.setattr(
+        mcp_malware_tools, "clamav_install_command", lambda: fake_command
+    )
+
+    def _raise(*args, **kwargs):
+        raise AssertionError("malware_install must never shell out")
+
+    monkeypatch.setattr("subprocess.run", _raise)
+    data = _structured(await mcp.call_tool("malware_install", {}))
+    assert "installed ->" in data["osv"]
+    assert data["clamav_command"] == fake_command
 
 
 @pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
@@ -625,6 +660,8 @@ async def test_tool_annotations_read_only_vs_mutating():
         assert tools[name].annotations.readOnlyHint is True, name
     assert tools["ignore_add"].annotations.readOnlyHint is False
     assert tools["ignore_remove"].annotations.destructiveHint is True
+    assert tools["malware_update_dbs"].annotations.readOnlyHint is False
+    assert tools["malware_install"].annotations.readOnlyHint is False
     if "graph_build" in tools:  # only when the graph extra is installed
         assert tools["graph_build"].annotations.readOnlyHint is False
 
