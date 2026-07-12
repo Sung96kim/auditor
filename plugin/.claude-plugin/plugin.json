@@ -9,7 +9,7 @@
   "license": "MIT",
   "keywords": ["audit", "code-quality", "security", "static-analysis"],
   "skills": "./skills/",
-  "agents": "./agents/",
+  "agents": ["./agents/auditor-reviewer.md"],
   "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }
