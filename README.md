@@ -395,7 +395,7 @@ URIs, PEM private keys, and many newer-wave providers). Tuned against a 700+-fil
 for a near-zero false-positive rate; benign lookalikes (UUIDs, hashes, example URLs) are excluded.
 
 - **Code** (`PY-`/`TS-`/`SH-SECRET-DETECTED`): the sweep over string literals in Python, TS, and shell.
-- **Config/data files** (`CFG-SECRET-DETECTED`): the same catalog over the raw text of `.env`, `.yaml`, `.json`, `.toml`, `.ini`, `.tfvars`, `.pem`, and similar files — where credentials most often leak. Scans by content, not just code.
+- **Every other file** (`CFG-SECRET-DETECTED`): a content sweep runs the same catalog over the raw text of *any* file a language auditor doesn't claim — config/data (`.env`, `.yaml`, `.json`, `.toml`, `.ini`, `.tfvars`, `.pem`), docs, dumps, extensionless configs. Gitignored files are skipped; binaries and oversized files are skipped.
 - **Committed dotenv** (`CFG-ENV-FILE-COMMITTED`, blocking): a `.env` file tracked by the repo. Since gitignored files are skipped, a `.env` that turns up in a scan is not gitignored — the exact leak this catches. `.env.example`/`.sample`/`.template` are exempt.
 
 **Supply-chain** (`supply-chain`, on by default). The install-time *code-execution* vectors:
@@ -527,7 +527,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
 | `CFG-ENV-FILE-COMMITTED` | blocking | auto | a dotenv file (`.env`, `.env.local`, …) tracked by the repo — not gitignored |
-| `CFG-SECRET-DETECTED` | high | auto | a committed provider credential in a config/data file (`.env`, `.yaml`, `.json`, …) |
+| `CFG-SECRET-DETECTED` | high | auto | a committed provider credential in any non-code file (`.env`, `.yaml`, `.json`, docs, dumps, …) |
 | `PY-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in Python source |
 | `SH-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in a shell script |
 | `TS-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in TS/JS source |
