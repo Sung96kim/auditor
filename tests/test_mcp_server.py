@@ -10,6 +10,7 @@ from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddlewa
 from mcp.types import ResourceLink
 
 import auditor.mcp
+import auditor.mcp.scan_tools as st
 import auditor.mcp_server
 from auditor.engine import audit_target
 from auditor.malware import tools as malware_tools
@@ -265,12 +266,40 @@ async def test_scan_tool_bad_config_errors(sample_repo):
 
 
 async def test_scan_malware_flag_requires_backend(monkeypatch):
-    import auditor.mcp.scan_tools as st
-
     monkeypatch.setattr(st, "resolve_tool", lambda name: None)  # no backends
     with pytest.raises(ToolError) as exc:
         await mcp.call_tool("scan", {"path": "auditor", "malware": True})
     assert "malware" in str(exc.value).lower()
+
+
+async def test_scan_malware_flag_merges_config(monkeypatch, sample_repo):
+    """When a backend is present, malware=True deep-merges malware_scan.enabled into the
+    config override passed to audit_target, preserving any unrelated caller-supplied keys.
+    """
+    monkeypatch.setattr(
+        st, "resolve_tool", lambda name: "/usr/bin/clamscan"
+    )  # backend present
+
+    captured = {}
+
+    async def fake_audit_target(*args, **kwargs):
+        captured["config_overrides"] = kwargs["config_overrides"]
+        return []
+
+    monkeypatch.setattr(st, "audit_target", fake_audit_target)
+
+    await mcp.call_tool(
+        "scan",
+        {
+            "path": str(sample_repo / "src"),
+            "malware": True,
+            "config": {"foo": "bar"},
+        },
+    )
+    assert captured["config_overrides"] == {
+        "foo": "bar",
+        "malware_scan": {"enabled": True},
+    }
 
 
 # --- new gap-fill tests -------------------------------------------------------------------
