@@ -65,6 +65,7 @@ from auditor.models import (
 from auditor.registry import REGISTRY
 from auditor.reporters import render
 from auditor.serve import ReportServer
+from auditor.status import write_status
 
 
 def _severity_set(values: list[str]) -> set[str]:
@@ -186,6 +187,7 @@ def scan(
     configure_logging(verbose)
 
     report_only = _diff_report_only(target, since, changed, vs_base, root)
+    root = root or find_root(target)
     if report_only is not None and not no_index:
         incremental = True  # whole-repo scan stays fast via the cache
 
@@ -236,6 +238,11 @@ def scan(
             f"[bold]Wrote baseline[/bold] {write_baseline} — {recorded} finding(s) recorded"
         )
         return
+
+    if target.is_dir():
+        write_status(
+            root, results, configured=(root / ".auditor" / "config.toml").exists()
+        )
 
     hidden = 0
     if baseline is not None:
