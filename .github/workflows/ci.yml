@@ -19,8 +19,6 @@ jobs:
       - run: uv run ruff check auditor tests
       - run: uv run ruff format --check auditor tests
       - run: uv run pytest -q
-      - name: Plugin tests
-        run: uv run pytest tests/plugin -v
       - name: Validate plugin
         run: |
           npm i -g @anthropic-ai/claude-code || true

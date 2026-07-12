@@ -14,29 +14,32 @@ RED, ORANGE, GREEN, DIM, RESET = (
     "\033[0m",
 )
 STALE_SECONDS = 900
+NOT_SET_UP = f"{DIM}○ auditor  not set up{RESET}"
 
 
 def _num(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _render(cwd: Path) -> str | None:
+def _render(cwd: Path) -> str:
     cache = cwd / ".auditor" / ".status.json"
     if not cache.exists():
-        return f"{DIM}○ auditor  not set up{RESET}"
+        return NOT_SET_UP
     try:
         data = json.loads(cache.read_text())
     except (json.JSONDecodeError, ValueError, OSError):
-        return None
+        # A present-but-corrupt cache degrades to the same sentinel as an absent one — it
+        # must not make the whole segment vanish.
+        return NOT_SET_UP
     if not isinstance(data, dict):
-        return None
+        return NOT_SET_UP
     sev = data.get("severity", {})
     if not isinstance(sev, dict):
         sev = {}
     blocking, high = _num(sev.get("blocking")), _num(sev.get("high"))
     lower = _num(sev.get("medium")) + _num(sev.get("low")) + _num(sev.get("suggestion"))
     if not data.get("configured", True) and not (blocking or high or lower):
-        return f"{DIM}○ auditor  not set up{RESET}"
+        return NOT_SET_UP
     if not (blocking or high or lower):
         return f"{GREEN}●{RESET} auditor  clean"
     dot = RED if blocking else (ORANGE if high else DIM)
@@ -68,9 +71,7 @@ def main() -> None:
         payload = {}
     cwd_raw = payload.get("cwd")
     cwd = Path(cwd_raw) if isinstance(cwd_raw, str) and cwd_raw else Path(".")
-    line = _render(cwd)
-    if line:
-        sys.stdout.write(line)
+    sys.stdout.write(_render(cwd))
 
 
 if __name__ == "__main__":

@@ -68,11 +68,31 @@ def test_stale_marker(tmp_path):
     [
         "not json at all",  # decode error
         "[]",  # valid JSON, non-dict payload
+    ],
+)
+def test_corrupt_cache_degrades_to_not_set_up(tmp_path, raw):
+    d = tmp_path / ".auditor"
+    d.mkdir(parents=True)
+    (d / ".status.json").write_text(raw)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        input=json.dumps({"cwd": str(tmp_path)}),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "Traceback" not in proc.stderr
+    assert "not set up" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
         '{"severity": 5, "configured": true, "written_at": 0}',  # non-dict severity
         '{"severity": {"blocking": "x"}, "written_at": "soon"}',  # non-numeric fields
     ],
 )
-def test_malformed_cache_degrades_without_crashing(tmp_path, raw):
+def test_malformed_fields_degrade_without_crashing(tmp_path, raw):
     d = tmp_path / ".auditor"
     d.mkdir(parents=True)
     (d / ".status.json").write_text(raw)
