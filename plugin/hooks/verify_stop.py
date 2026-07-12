@@ -29,7 +29,13 @@ def main() -> None:
         text=True,
     )
     try:
-        tripped = bool((json.loads(proc.stdout).get("gate") or {}).get("tripped"))
+        parsed = json.loads(proc.stdout)
+        gate = parsed.get("gate") if isinstance(parsed, dict) else None
+        tripped = (
+            bool(gate.get("tripped"))
+            if isinstance(gate, dict)
+            else (proc.returncode != 0)
+        )
     except (json.JSONDecodeError, ValueError):
         tripped = proc.returncode != 0
     if tripped:
