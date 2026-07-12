@@ -102,7 +102,11 @@ async def scan(
     rule = _as_list(rule)
     root = find_root(Path(path))
     if malware:
-        if not (resolve_tool("clamdscan") or resolve_tool("clamscan") or resolve_tool("osv-scanner")):
+        if not (
+            resolve_tool("clamdscan")
+            or resolve_tool("clamscan")
+            or resolve_tool("osv-scanner")
+        ):
             raise ToolError(
                 "malware scan requested but neither ClamAV nor osv-scanner is installed — "
                 "run malware_install (or `auditor malware install`)"
