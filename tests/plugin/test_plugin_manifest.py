@@ -24,4 +24,10 @@ def test_marketplace_points_at_plugin():
 def test_mcp_config_runs_auditr_mcp():
     mcp = _load("plugin/.mcp.json")["mcpServers"]["auditor"]
     assert mcp["command"] == "uvx"
-    assert "auditr-mcp" in mcp["args"]
+    assert "auditr[mcp]" in mcp["args"]  # the --from package spec (pulls the mcp extra)
+    assert "auditr-mcp" in mcp["args"]  # the entrypoint
+
+
+def test_settings_json_is_valid_and_enables_subagent_statusline():
+    settings = _load("plugin/settings.json")
+    assert settings["subagentStatusLine"] is True
