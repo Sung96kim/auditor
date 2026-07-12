@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: lint + test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --all-extras
+      - run: uv run ruff check auditor tests
+      - run: uv run ruff format --check auditor tests
+      - run: uv run pytest -q
+
+  integration:
+    name: integration (real clamscan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --extra dev
+      - name: Install ClamAV with a minimal custom signature
+        run: |
+          # A tiny signature matching the EICAR test string, dropped into clamscan's default
+          # database directory. This gives a real clamscan detection in milliseconds and skips
+          # the ~200MB freshclam download that the full virus database would need.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clamav
+          sudo mkdir -p /var/lib/clamav
+          hex=$(printf 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE' | xxd -p | tr -d '\n')
+          echo "Auditor.CI.Eicar:0:*:$hex" | sudo tee /var/lib/clamav/auditor-ci.ndb
+          clamscan --version
+      - name: Run integration tests against the real binary
+        run: uv run pytest tests/malware/test_integration.py -v
