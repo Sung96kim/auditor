@@ -13,7 +13,10 @@ from auditor.models import (
 
 def _result(*findings: Finding) -> ScanResult:
     return ScanResult(
-        file="x.py", language="python", role=FileRole.PRODUCTION, findings=list(findings)
+        file="x.py",
+        language="python",
+        role=FileRole.PRODUCTION,
+        findings=list(findings),
     )
 
 
