@@ -562,6 +562,22 @@ async def test_malware_status_tool(monkeypatch):
     assert result["osv_offline_db"]["present"] is False
 
 
+async def test_malware_tools_registered():
+    names = {t.name for t in await mcp.list_tools()}
+    assert {"malware_install", "malware_update_dbs"} <= names
+
+
+async def test_malware_update_dbs_returns_report(monkeypatch):
+    import auditor.mcp.malware_tools as mt
+    from auditor.malware.dbs import DbUpdateReport
+
+    monkeypatch.setattr(
+        mt, "update_databases", lambda path: DbUpdateReport(notes=["ok"])
+    )
+    data = _structured(await mcp.call_tool("malware_update_dbs", {"path": "."}))
+    assert "ok" in data["notes"]
+
+
 @pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
 async def test_graph_search_and_usages_tools(sample_repo):
     """graph_search locates symbols and graph_usages returns grouped connectivity with full
