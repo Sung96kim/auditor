@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / "plugin" / "hooks" / "audit_edit.py"
 
 REPORT = {
@@ -43,7 +45,9 @@ def _fake_auditr(tmp_path: Path, report: dict) -> Path:
     return bin_dir
 
 
-def _run(file_path: str, tmp_path: Path, env_extra: dict, report=REPORT) -> str:
+def _run_full(
+    file_path: str, tmp_path: Path, env_extra: dict, report=REPORT
+) -> subprocess.CompletedProcess:
     bin_dir = _fake_auditr(tmp_path, report)
     env = {"PATH": f"{bin_dir}:/usr/bin", **env_extra}
     payload = {
@@ -51,14 +55,17 @@ def _run(file_path: str, tmp_path: Path, env_extra: dict, report=REPORT) -> str:
         "tool_input": {"file_path": file_path},
         "cwd": str(tmp_path),
     }
-    proc = subprocess.run(
+    return subprocess.run(
         [sys.executable, str(SCRIPT)],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
         env=env,
     )
-    return proc.stdout
+
+
+def _run(file_path: str, tmp_path: Path, env_extra: dict, report=REPORT) -> str:
+    return _run_full(file_path, tmp_path, env_extra, report).stdout
 
 
 def test_surfaces_blocking_candidate_and_rolls_up(tmp_path):
@@ -84,3 +91,10 @@ def test_async_mode_emits_nothing(tmp_path):
         _run(str(tmp_path / "x.py"), tmp_path, {"AUDITOR_AUTOHOOK_ASYNC": "1"}).strip()
         == ""
     )
+
+
+@pytest.mark.parametrize("malformed_report", [[], {"files": None}])
+def test_malformed_report_json_is_silent(tmp_path, malformed_report):
+    proc = _run_full(str(tmp_path / "x.py"), tmp_path, {}, report=malformed_report)
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""

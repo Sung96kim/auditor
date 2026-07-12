@@ -45,16 +45,21 @@ def _report(file_path: Path) -> dict | None:
     if proc.returncode != 0:
         return None
     try:
-        return json.loads(proc.stdout)
+        data = json.loads(proc.stdout)
     except (json.JSONDecodeError, ValueError):
         return None
+    return data if isinstance(data, dict) else None
 
 
 def _summarize(report: dict, floor: int) -> str | None:
     detail: list[str] = []
     rolled: dict[str, int] = {}
-    for f in report.get("files", []):
-        for finding in f.get("findings", []):
+    for f in report.get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        for finding in f.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
             sev = finding.get("severity", "suggestion")
             is_auto = finding.get("verdict_kind") == "auto"
             shown = sev == "blocking" or (is_auto and RANK.get(sev, 0) >= floor)
@@ -90,7 +95,13 @@ def main() -> None:
         return
     if not isinstance(payload, dict):
         return  # valid JSON but not an object → nothing to do
-    file_path = Path((payload.get("tool_input") or {}).get("file_path", ""))
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return
+    raw_file_path = tool_input.get("file_path")
+    if not isinstance(raw_file_path, str) or not raw_file_path:
+        return
+    file_path = Path(raw_file_path)
     if file_path.suffix not in SUFFIXES:
         return
     if os.environ.get("AUDITOR_AUTOHOOK_ASYNC") == "1":
