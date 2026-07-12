@@ -304,6 +304,22 @@ async def test_scan_malware_flag_merges_config(monkeypatch, sample_repo):
     }
 
 
+async def test_scan_fail_on_reports_gate():
+    data = _structured(
+        await mcp.call_tool(
+            "scan", {"path": "auditor", "fail_on": "blocking", "detail": "summary"}
+        )
+    )
+    gate = data["gate"]
+    assert gate["fail_on"] == "blocking"
+    assert isinstance(gate["tripped"], bool)
+
+
+async def test_scan_fail_on_rejects_bad_severity():
+    with pytest.raises(ToolError):
+        await mcp.call_tool("scan", {"path": "auditor", "fail_on": "nope"})
+
+
 # --- new gap-fill tests -------------------------------------------------------------------
 
 

@@ -15,6 +15,7 @@ from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
+from auditor.gate import check_severity, gate_tripped
 from auditor.malware.tools import resolve_tool
 from auditor.mcp.artifacts import publish
 from auditor.mcp.helpers import READ_ONLY, validate_detail
@@ -70,6 +71,7 @@ async def scan(
     limit: int | None = 50,
     isolated: bool = False,
     malware: bool = False,
+    fail_on: str | None = None,
 ) -> dict | ResourceLink:
     """Audit a file or directory. Returns {files: [...], totals: {...}}. ``profile`` overrides
     the repo's profile for this run (base|strict|pydantic|all-strict). ``no_skips`` ignores
@@ -94,7 +96,9 @@ async def scan(
     shared index — if the repo was never indexed, the first such call warms it once (peers come from
     the index, not a re-audit). ``isolated`` skips that: audit only this file, no index, no
     cross-file — faster for a quick standalone check. ``malware=true`` also runs the opt-in
-    malware pass (requires a backend; see malware_status/malware_install)."""
+    malware pass (requires a backend; see malware_status/malware_install).
+    ``fail_on`` (blocking|high|medium|low|suggestion) adds ``gate: {fail_on, tripped}`` —
+    auto findings only, for CI."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
     validate_detail(detail)
@@ -133,6 +137,13 @@ async def scan(
         raise ToolError(
             f"invalid config: {loc + ': ' if loc else ''}{err['msg']}"
         ) from exc
+    gate = None
+    if fail_on is not None:
+        try:
+            check_severity(fail_on)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+        gate = {"fail_on": fail_on, "tripped": gate_tripped(results, fail_on)}
     if severity:
         wanted = {s.lower() for s in severity}
         for r in results:
@@ -147,9 +158,12 @@ async def scan(
         keep = set(rule)
         for r in results:
             r.findings = [f for f in r.findings if f.rule_id in keep]
-    return _report_or_link(
+    payload = _report_or_link(
         results, detail=detail, limit=limit, kind="scan", seed=str(root)
     )
+    if gate is not None and isinstance(payload, dict):
+        payload["gate"] = gate
+    return payload
 
 
 @mcp.tool(annotations=READ_ONLY)
