@@ -15,6 +15,15 @@ Codes are auditor ``rule_id``s; a code that isn't a known rule matches nothing (
 the directive is honored only on real comment lines (via ``tokenize``), so skip-looking text in a
 string/docstring — like the examples in this very module — is ignored. Languages without a
 tokenizer fall back to matching the raw line text.
+
+A finding anchors to a statement's first physical line, but a wrapped multi-line header (a
+parenthesized ``except (...)``, a wrapped ``def f(\n  a,\n):``, a multi-line call, ...) naturally
+takes its trailing ``# auditor: skip`` on the LAST physical line instead — right after the closing
+``)``/``:``. For Python, a line directive is honored anywhere within the flagged statement's
+*logical* line (the physical span joined by open brackets / backslash continuation), not just on
+the finding's exact anchor line: the directive is registered both on the physical line it's
+written on and on the logical line's start line. A comment on its own line, with no statement
+token before it, still maps only to itself and never bleeds into a following statement.
 """
 
 import io
@@ -44,22 +53,52 @@ def _split_codes(raw: str) -> set[str]:
     return {c.strip().upper() for c in re.split(r"[,\s]+", raw) if c.strip()}
 
 
-def _comment_lines(source: str, language: str | None) -> set[int] | None:
-    """Line numbers that are genuine comments. ``None`` means "every line is eligible" — the
-    raw-text fallback for languages without a tokenizer wired up here."""
+# Tokens that are structural, not "the start of a logical line's content" — seeing one of these
+# must not set the in-progress logical-line start (COMMENT and NEWLINE are handled separately).
+_NON_CONTENT_TOKENS = {
+    tokenize.NL,
+    tokenize.INDENT,
+    tokenize.DEDENT,
+    tokenize.ENCODING,
+    tokenize.ENDMARKER,
+}
+
+
+def _comment_lines(
+    source: str, language: str | None
+) -> tuple[set[int] | None, dict[int, int]]:
+    """Line numbers that are genuine comments, plus (Python only) a map from each comment's
+    physical line to the line where its enclosing *logical* line begins — the physical span
+    joined by open brackets or backslash continuation, per ``tokenize``'s NEWLINE/NL split.
+
+    ``None`` for the comment-lines set means "every line is eligible" — the raw-text fallback
+    for languages without a tokenizer wired up here; the logical-line map is empty in that case.
+    """
     if language != "python":
-        return None
+        return None, {}
     lines: set[int] = set()
+    logical_start_map: dict[int, int] = {}
+    logical_start: int | None = None
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):
             if tok.type == tokenize.COMMENT:
                 lines.add(tok.start[0])
+                # A comment before any content token of the in-progress logical line (i.e. a
+                # standalone comment line, or one before the file's first statement) has no
+                # enclosing statement yet — it maps to itself, never to a later statement.
+                logical_start_map[tok.start[0]] = (
+                    logical_start if logical_start is not None else tok.start[0]
+                )
+            elif tok.type == tokenize.NEWLINE:
+                logical_start = None  # the logical line just ended
+            elif tok.type not in _NON_CONTENT_TOKENS and logical_start is None:
+                logical_start = tok.start[0]
     except (tokenize.TokenError, IndentationError, SyntaxError):
         # unparseable Python: we can't tell comments from string content, so suppress nothing
         # (conservative). Returning None here would make raw text — incl. a directive inside a
         # docstring — eligible, wrongly suppressing. A broken file has no findings anyway.
-        return set()
-    return lines
+        return set(), {}
+    return lines, logical_start_map
 
 
 def _directive(pattern: re.Pattern[str], line: str) -> object:
@@ -76,9 +115,17 @@ def _directive(pattern: re.Pattern[str], line: str) -> object:
     return frozenset(codes)
 
 
-def _parse(source: str, allowed: set[int] | None) -> tuple[object, dict[int, object]]:
+def _parse(
+    source: str, allowed: set[int] | None, logical_start: dict[int, int]
+) -> tuple[object, dict[int, object]]:
     """Return the file-level directive (``None`` / ``_ALL`` / frozenset of codes) and the
-    per-line directives, honoring only ``allowed`` comment lines when given."""
+    per-line directives, honoring only ``allowed`` comment lines when given.
+
+    A line directive is registered under its own physical line (exact-line match, as before) and
+    — when ``logical_start`` maps it elsewhere (Python multi-line statements only) — also under
+    the line where its enclosing logical line begins, so a trailing comment on a wrapped header's
+    last physical line still suppresses a finding anchored to the statement's first line.
+    """
     file_codes: set[str] = set()
     file_all = False
     line_dirs: dict[int, object] = {}
@@ -94,6 +141,9 @@ def _parse(source: str, allowed: set[int] | None) -> tuple[object, dict[int, obj
             line_dir = _directive(_LINE_SKIP, line)
             if line_dir is not None:
                 line_dirs[lineno] = line_dir
+                target = logical_start.get(lineno)
+                if target is not None and target != lineno:
+                    line_dirs[target] = line_dir
     file_directive = (
         _ALL if file_all else (frozenset(file_codes) if file_codes else None)
     )
@@ -111,7 +161,8 @@ def filter_findings(
 ) -> tuple[list[Finding], int]:
     """Drop findings suppressed by a file- or line-level ``auditor: skip`` directive. Returns the
     kept findings plus the count suppressed."""
-    file_directive, line_directives = _parse(source, _comment_lines(source, language))
+    comment_lines, logical_start = _comment_lines(source, language)
+    file_directive, line_directives = _parse(source, comment_lines, logical_start)
     if file_directive is None and not line_directives:
         return list(findings), 0
     kept: list[Finding] = []
