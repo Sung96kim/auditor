@@ -24,6 +24,8 @@ def main() -> None:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return
+    if not isinstance(payload, dict):
+        return  # valid JSON but not an object → nothing to do
     if shutil.which("auditr") is None:
         return  # tool not installed → say nothing
     cwd = Path(payload.get("cwd") or ".")
