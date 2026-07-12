@@ -53,13 +53,13 @@ from auditor.cli.summary import print_summary
 from auditor.config import load_config
 from auditor.discovery import default_base_ref, find_root, git_changed_files
 from auditor.engine import audit_target
+from auditor.gate import check_severity as _check_severity
+from auditor.gate import gate_tripped as _gate_tripped
 from auditor.logconfig import configure as configure_logging
 from auditor.malware.tools import resolve_tool
 from auditor.models import (
     SEVERITIES_DESC,
     ScanResult,
-    Severity,
-    VerdictKind,
     severity_rank,
 )
 from auditor.registry import REGISTRY
@@ -78,23 +78,11 @@ def _severity_set(values: list[str]) -> set[str]:
     return chosen
 
 
-def _check_severity(value: str) -> Severity:
-    if value.lower() not in {s.value for s in SEVERITIES_DESC}:
-        fail(
-            f"unknown severity '{value}'; choose from {[s.value for s in SEVERITIES_DESC]}"
-        )
-    return Severity(value.lower())
-
-
-def _gate_tripped(results: list[ScanResult], fail_on: str) -> bool:
-    # gate on *confirmed* (auto) findings only — candidates are "the agent should judge this" and
-    # must not auto-break CI (otherwise a heuristic/candidate rule fails the build on benign code).
-    floor = severity_rank(_check_severity(fail_on))
-    return any(
-        f.verdict_kind == VerdictKind.AUTO and severity_rank(f.severity) >= floor
-        for r in results
-        for f in r.findings
-    )
+def _floor(value: str) -> int:
+    try:
+        return severity_rank(_check_severity(value))
+    except ValueError as exc:
+        fail(str(exc))
 
 
 def _rule_set(values: list[str]) -> set[str]:
@@ -116,7 +104,7 @@ def _filter_display(
     rule: list[str] | None,
 ) -> None:
     wanted = _severity_set(severity) if severity else None
-    floor = severity_rank(_check_severity(min_severity)) if min_severity else None
+    floor = _floor(min_severity) if min_severity else None
     rules = _rule_set(rule) if rule else None
     for r in results:
         if wanted is not None:
@@ -259,7 +247,10 @@ def scan(
         hidden = Baseline.load(baseline).filter(results)
 
     # baseline filtering runs before the gate, so a CI gate fails only on NEW findings
-    gate_tripped = _gate_tripped(results, fail_on) if fail_on else False
+    try:
+        gate_tripped = _gate_tripped(results, fail_on) if fail_on else False
+    except ValueError as exc:
+        fail(str(exc))
     _filter_display(results, severity, min_severity, rule)
 
     if serve:
