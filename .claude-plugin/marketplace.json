@@ -1,0 +1,12 @@
+{
+  "name": "auditor",
+  "owner": { "name": "Sung Kim" },
+  "plugins": [
+    {
+      "name": "auditor",
+      "source": "./plugin",
+      "description": "Deterministic code auditor for Claude Code — skills, subagent, hooks, statusline, and the auditor MCP server.",
+      "tags": ["audit", "code-quality", "security"]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "auditor": {
+      "command": "uvx",
+      "args": ["--from", "auditr[mcp]", "auditr-mcp"],
+      "env": {}
+    }
+  }
+}
