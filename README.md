@@ -6,29 +6,28 @@
 
 <p align="center"><em>A deterministic codebase auditor for coding agents (Claude Code, Codex, …) and CI.</em></p>
 
-It does the mechanical, deterministic part of a code audit — parsing, building the
-class/function manifest, running **129 anti-pattern detectors** across Python, TypeScript/React,
-shell, and package manifests, hashing for an incremental cache — so an agent spends tokens only
-on the genuine judgment calls. Findings are split into `auto` (the tool decided) and `candidate`
+It runs the mechanical part of a code audit: parsing, building the class/function manifest,
+running 158 anti-pattern detectors across Python, TypeScript/React, shell, and package
+manifests, and caching results incrementally. The agent then spends its tokens only on the
+genuine judgment calls. Findings are split into `auto` (the tool decided) and `candidate`
 (evidence only; you judge).
 
-Think of it as "like an MCP, but also a CLI": run it over `bash` in any harness, or expose
-it as an MCP server. Works on any repo, directory, or single file — and slots into a PR/CI
-loop with `--since main` (audit only what changed) and `--fail-on high` (gate the build).
+It works as both a CLI and an MCP server: run it over `bash` in any harness, or register it so
+the agent calls it directly. It scans any repo, directory, or single file, and fits a PR/CI loop
+with `--since main` (audit only what changed) and `--fail-on high` (gate the build).
 
 ## Why
 
-The checklist-style audit skills make the **agent** read every file, run ~15 greps, and
-hand-transcribe a manifest on every pass — expensive, and re-auditing re-pays the full cost
-even for unchanged files. `auditor` moves all of that into deterministic Python:
+Checklist-style audit skills make the agent read every file, run a dozen greps, and
+hand-transcribe a manifest on every pass. That is expensive, and re-auditing repays the full
+cost even for files that never changed. `auditor` moves all of it into deterministic Python:
 
-- **Manifest + detectors** run in-process from a single AST parse.
-- A **SQLite index** caches findings per `(file, rule)`; re-auditing 3 of 358 files
-  re-parses only those 3. Editing one rule's threshold re-runs only that rule. The index is
-  one shared db at `~/.auditor/index.db` (override with `$AUDITOR_HOME`), partitioned by repo —
-  not a file per repo. Repo-authored input (`.auditor/config.toml`, `.auditor/plugins/`,
-  `.auditor/baseline.json`) stays in the repo.
-- The agent reads the compact JSON, then looks at only the flagged sites.
+- Manifest and detectors run in-process from a single AST parse.
+- A SQLite index caches findings per `(file, rule)`. Re-auditing 3 of 358 files re-parses only
+  those 3; editing one rule's threshold re-runs only that rule. The index is one shared database
+  at `~/.auditor/index.db` (override with `$AUDITOR_HOME`), partitioned by repo. Repo-authored
+  input (`.auditor/config.toml`, `.auditor/plugins/`, `.auditor/baseline.json`) stays in the repo.
+- The agent reads the compact JSON and looks only at the flagged sites.
 
 ## Install
 
@@ -132,12 +131,12 @@ auditor scan . --baseline .auditor/baseline.json         # report only NEW findi
 auditor scan . --baseline .auditor/baseline.json --fail-on high   # CI gate fires only on new high+
 ```
 
-Each finding is fingerprinted by `(file, rule, hash(offending text))` — **line-independent**, so a
-finding survives edits elsewhere in the file, but genuinely new code is still reported. Fingerprints
-are counted, not just set-membership: if a file legitimately has three untyped `def __init__(`, all
-three are recorded and a **fourth** one you add later still surfaces. Filtering runs before
-`--fail-on`, so the gate trips only on findings absent from the baseline. (Baselines written before
-this counting change under-recorded shared snippets — regenerate with `--write-baseline`.)
+Each finding is fingerprinted by `(file, rule, hash(offending text))`, independent of line number,
+so a finding survives edits elsewhere in the file while genuinely new code is still reported.
+Fingerprints are counted, not deduplicated: if a file has three untyped `def __init__(`, all three
+are recorded, and a fourth one you add later still surfaces. Filtering runs before `--fail-on`, so
+the gate trips only on findings absent from the baseline. (Baselines written before this counting
+change under-recorded shared snippets; regenerate them with `--write-baseline`.)
 
 ### skip suppression
 
@@ -169,15 +168,11 @@ auditor ignore rm PY-SEC-WEAK-HASH --file src/legacy.py        # … or by selec
 auditor ignore clear                                          # drop all for this repo
 ```
 
-`ignore add` validates the `rule_id` against the registry — it loads the repo's config first, so
-plugin-contributed rules (entry-point/config, and trusted or `--allow-local-plugins` local plugins)
-are recognized like built-ins; `--force` skips the check entirely. A line-level add snapshots the
-offending text, so the ignore follows the code when
-lines shift and re-surfaces only if that code changes. Ignored findings are hidden from `scan`/`report`/
-`aggregate` (with an `(N ignored)` count) and don't trip `--fail-on`; `scan --show-ignored`
-reveals them. Same surface over MCP: `ignore_add` / `ignore_list` / `ignore_remove`, and
-`scan(show_ignored=…)`. Unlike `auditor: skip` (in-source, shared via git) and `--baseline` (a
-committed snapshot), ignores are local to your machine's index.
+- `ignore add` validates the `rule_id` against the registry, loading the repo's config first so plugin-contributed rules are recognized like built-ins (`--force` skips the check).
+- A line-level add snapshots the offending text, so the ignore follows the code as lines shift and re-surfaces only if that code changes.
+- Ignored findings are hidden from `scan`, `report`, and `aggregate` (with an `(N ignored)` count) and don't trip `--fail-on`. `scan --show-ignored` reveals them.
+- The same verbs exist over MCP: `ignore_add`, `ignore_list`, `ignore_remove`, plus `scan(show_ignored=...)`.
+- Ignores are local to your machine's index, unlike `auditor: skip` (in-source, shared via git) and `--baseline` (a committed snapshot).
 
 ## Standards & configuration
 
@@ -332,9 +327,8 @@ v2 keeps the inner class as a deprecated shim but silently ignores misspelled ke
 
 ### Malware scan (opt-in)
 
-Signature-based scanning via two widely adopted external scanners — auditor
-orchestrates, caches, and merges findings; it vendors no signatures and adds no
-Python dependencies:
+Signature-based scanning via two widely adopted external scanners. The auditor orchestrates,
+caches, and merges findings; it vendors no signatures and adds no Python dependencies.
 
 - **ClamAV** (content): every file — binaries and vendored dirs included — scanned
   through `clamdscan`/`clamscan`. `AV-MAL-MATCH` (auto/blocking, gates `--fail-on`),
@@ -355,29 +349,36 @@ only networked commands. `auditor malware status` shows tool + DB state.
 
 ## Detectors
 
-**96 Python rules** across `security` (Bandit/OWASP-mapped), `malware`, `secrets`,
-`supply-chain`, `correctness`, `typing`, `async`, `config`, `dead-code`, `testing`,
-`oop-composition`, and `style` (including the `sqlalchemy`/`pydantic` framework and graph rules) —
-including DRY/composition rules (cross-file duplicate model/function, within-file duplicate
-blocks, parallel siblings, field-by-field copying) and a `suggestion` tier of low-stakes nudges
-below the severity ladder. Each carries a stable `rule_id`, a category, a default severity, and
-(for security) `standard_refs` like `bandit:B602` / `owasp:A03`. `auditor rules list` enumerates
-them. The `correctness`, `async`, `config`, and `typing` categories are **Python-only** — they
-encode Python-specific semantics (event-loop blocking, `BaseSettings`, etc.); TypeScript and shell
-carry their own categories (below). `security`, `malware`, `secrets`, and `supply-chain` span
-languages where applicable.
+The Python detectors cover `security` (Bandit/OWASP-mapped), `malware`, `secrets`, `supply-chain`,
+`correctness`, `typing`, `async`, `config`, `dead-code`, `testing`, `oop-composition`, and `style`,
+plus the `sqlalchemy`/`pydantic` framework and graph rules.
 
-**Malware** (`malware`, 30 rules across Python, TypeScript, and Bash — on by default in `base`,
-for vetting dependencies, PR diffs, and untrusted repos): the patterns that turn a benign
-primitive into an attack, keyed on the *combination* so real decode/fetch/path use stays quiet —
-obfuscated exec (`eval`/`exec` of a base64/hex/zlib-decoded blob), remote exec (running a fetched
-response body), reverse shells (socket→`dup2`, `/dev/tcp`, `nc -e`, `socat exec:`), download-and-run
-(`curl … | sh`), in-memory shellcode loaders (executable-memory alloc **and** cast-to-function),
-`pickle`/`__reduce__` RCE gadgets, dynamic imports/`require` of a *decoded* name, computed
-`child_process` commands, crypto-miners (stratum / known miners), credential-path access, and
-exfil to anonymous webhook/paste/tunnel endpoints (common C2 sinks). AST/tree-sitter based for
-Python and TS, so a minified one-liner payload is caught the same as formatted code. Mostly
-`blocking`; the path/blob/destructive heuristics are `candidate`s you judge.
+- DRY/composition rules cover cross-file duplicate models and functions, within-file duplicate blocks, parallel siblings, and field-by-field copying. A `suggestion` tier holds low-stakes nudges below the severity ladder.
+- Each rule carries a stable `rule_id`, a category, a default severity, and (for security) `standard_refs` like `bandit:B602` or `owasp:A03`. `auditor rules list` enumerates them.
+- `correctness`, `async`, `config`, and `typing` are Python-only: they encode Python-specific semantics such as event-loop blocking and `BaseSettings`. TypeScript and shell have their own categories (below).
+- `security`, `malware`, `secrets`, and `supply-chain` span languages where applicable.
+
+**Malware** (`malware`, 32 rules across Python, TypeScript, and Bash; on by default in `base`,
+for vetting dependencies, PR diffs, and untrusted repos). These flag the patterns that turn a
+benign primitive into an attack, keyed on the *combination* so ordinary decode/fetch/path use
+stays quiet:
+
+- obfuscated exec (`eval`/`exec` of a base64/hex/zlib-decoded blob)
+- remote exec (running a fetched response body)
+- reverse shells (socket to `dup2`, `/dev/tcp`, `nc -e`, `socat exec:`)
+- download-and-run (`curl … | sh`)
+- in-memory shellcode loaders (executable-memory alloc plus cast-to-function)
+- `pickle`/`__reduce__` RCE gadgets
+- dynamic imports or `require` of a *decoded* name
+- computed `child_process` commands
+- crypto-miners (stratum or known miners)
+- credential-path access
+- exfil to anonymous webhook/paste/tunnel endpoints (common C2 sinks)
+
+Detection is AST/tree-sitter based for Python and TS, so a minified one-liner payload is caught
+the same as formatted code. Most rules are `blocking`; the path/blob/destructive heuristics are
+`candidate`s you judge. ClamAV content scanning and osv-scanner dependency checks add two more
+each (see [Malware scan](#malware-scan-opt-in)).
 
 **Secrets** (`secrets`, on by default): a committed-credential sweep for Python, TS, and shell
 (`PY-`/`TS-`/`SH-SECRET-DETECTED`) — high-confidence, format-validated provider patterns (AWS,
@@ -385,13 +386,15 @@ GitHub, Stripe, Slack, OpenAI, Google, JWTs, database URIs, PEM private keys, an
 newer-wave providers). Tuned against a 700+-file real-repo corpus for a near-zero false-positive
 rate; benign lookalikes (UUIDs, hashes, example URLs) are excluded.
 
-**Supply-chain** (`supply-chain`, on by default): the install-time *code-execution* vectors —
-npm lifecycle hooks (`preinstall`/`install`/`postinstall` in `package.json`, which auto-run on
-`npm install`) via `MF-SUPPLY-INSTALL-HOOK`, and `setup.py` running process/network/eval at
-module scope (executes on every `pip install`) via `PY-SUPPLY-SETUP-EXEC`. Manifests are
-dispatched by filename, not suffix. Dependency-graph scanning (typosquat, version pinning,
-transitive CVEs) is deliberately left to dedicated tools with live databases (Dependabot,
-OSV-Scanner) — the auditor stays offline and deterministic.
+**Supply-chain** (`supply-chain`, on by default). The install-time *code-execution* vectors:
+
+- npm lifecycle hooks (`preinstall`/`install`/`postinstall` in `package.json`, which auto-run on `npm install`) via `MF-SUPPLY-INSTALL-HOOK`.
+- `setup.py` running process/network/eval at module scope (executes on every `pip install`) via `PY-SUPPLY-SETUP-EXEC`.
+
+Manifests are dispatched by filename, not suffix. Native dependency-graph analysis (typosquat,
+version pinning, transitive CVEs) stays out of the built-in rules, which are offline and
+deterministic. For known-malicious and known-vulnerable dependencies, enable the opt-in
+osv-scanner integration (see [Malware scan](#malware-scan-opt-in)).
 
 **TypeScript / React** (`.ts/.tsx/.js/.jsx`, via the `ts` extra — tree-sitter): objective,
 **framework-agnostic** rules only —
@@ -412,20 +415,26 @@ OSV-Scanner) — the auditor stays offline and deterministic.
   shared one (`XFILE-DUP-COMPONENT`/`DUP-FUNCTION`); the same substantial hand-rolled JSX
   sub-tree inline in different components → extract a shared component (`XFILE-DUP-JSX-BLOCK`).
 
-The auditor deliberately does **not** encode a design system: it never says "this should be
-`<Badge>`" or "use the size prop" — that needs the project's primitive vocabulary, which is
-the agent + design-system skill's judgment layer. The auditor surfaces the structural fact
-(duplication, extractable unit, accessibility violation); you map it to your code.
+The auditor deliberately does not encode a design system. It never says "use `<Badge>`" or "use
+the size prop"; that needs the project's primitive vocabulary, which is the agent and
+design-system skill's judgment layer. The auditor surfaces the structural fact (duplication,
+extractable unit, accessibility violation) and you map it to your code.
 
-**Bash / shell** (`.sh/.bash`, no extra needed — line/regex based): the `malware` + `secrets`
-categories for install scripts and backdoors — `curl … | sh`, reverse shells (`/dev/tcp`,
-`nc -e`, `mkfifo|nc`, `socat exec:`), fork bombs, decode-and-run (`base64 -d | sh`),
-disk-destroyers (`rm -rf /`, `mkfs`, `dd of=/dev/…`), persistence implants (`authorized_keys`,
-cron, shell-rc files), anti-forensics (history wipe, `setenforce 0`, `iptables -F`, log
-truncation), credential exfil (a secret path piped to an outbound command), and exfil to
-anonymous webhook/paste/tunnel sinks. `search`-based, so an embedded pattern in a packed
-one-liner is still caught; full-line `#` comments are skipped so documentation describing an
-attack doesn't self-flag.
+**Bash / shell** (`.sh/.bash`, no extra needed; line/regex based). The `malware` and `secrets`
+categories for install scripts and backdoors:
+
+- `curl … | sh`
+- reverse shells (`/dev/tcp`, `nc -e`, `mkfifo|nc`, `socat exec:`)
+- fork bombs
+- decode-and-run (`base64 -d | sh`)
+- disk-destroyers (`rm -rf /`, `mkfs`, `dd of=/dev/sda`)
+- persistence implants (`authorized_keys`, cron, shell-rc files)
+- anti-forensics (history wipe, `setenforce 0`, `iptables -F`, log truncation)
+- credential exfil (a secret path piped to an outbound command)
+- exfil to anonymous webhook/paste/tunnel sinks
+
+Detection is search-based, so an embedded pattern in a packed one-liner is still caught.
+Full-line `#` comments are skipped so documentation describing an attack doesn't self-flag.
 
 ### Rule reference
 
@@ -433,7 +442,7 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 `auto` = the tool decided (gates CI); `candidate` = evidence for the agent to judge.
 
 <details>
-<summary><b>All 152 rules</b> (generated from <code>auditor rules list</code>)</summary>
+<summary><b>All 158 rules</b> (generated from <code>auditor rules list</code>)</summary>
 
 #### security (24)
 
@@ -464,10 +473,12 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `TS-SEC-JAVASCRIPT-URL` | high | auto | a `javascript:` URL in `href`/`src`/`to` — script injection |
 | `TS-SEC-TARGET-BLANK-NOOPENER` | medium | auto | `target="_blank"` without `rel="noopener"` — reverse tabnabbing |
 
-#### malware (30)
+#### malware (32)
 
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
+| `AV-MAL-MATCH` | blocking | auto | a ClamAV signature match (content scan) — gates `--fail-on` |
+| `AV-MAL-HEURISTIC` | high | candidate | a ClamAV PUA or heuristic match (content scan) |
 | `PY-MAL-CREDENTIAL-ACCESS` | high | candidate | a known credential path (`~/.ssh`, `.aws/credentials`, …) flowing into a read sink |
 | `PY-MAL-CRYPTO-MINER` | high | auto | a known crypto-miner / stratum-pool signature in a string literal |
 | `PY-MAL-DOWNLOAD-EXEC` | high | auto | a downloaded script piped straight to a shell (`curl … | sh`) |
@@ -507,10 +518,12 @@ The full registry (`auditor rules list` for JSON, `--category`/`--standard` to f
 | `SH-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in a shell script |
 | `TS-SECRET-DETECTED` | high | auto | a committed, format-validated provider credential in TS/JS source |
 
-#### supply-chain (2)
+#### supply-chain (4)
 
 | rule_id | severity | verdict | what it flags |
 |---|---|---|---|
+| `DEP-MAL-KNOWN` | blocking | auto | an osv-scanner OpenSSF `MAL-*` known-malicious dependency (dependency scan) |
+| `DEP-VULN-KNOWN` | high | candidate | an osv-scanner known vulnerability in a dependency (opt-in via `include_vulnerabilities`) |
 | `MF-SUPPLY-INSTALL-HOOK` | medium | candidate | an npm `preinstall`/`install`/`postinstall` script (runs on `npm install`) |
 | `PY-SUPPLY-SETUP-EXEC` | medium | candidate | `setup.py` running process/network/eval at module scope (runs on `pip install`) |
 
@@ -806,13 +819,12 @@ The image bundles the `mcp` + `ts` extras, and the incremental index persists in
 ## Development
 
 ```bash
-uv run pytest            # 1733 tests (use `uv run --extra graph pytest` for the graph suite)
+uv run --all-extras pytest    # full suite (graph + TypeScript included)
 uv run pytest --cov=auditor
 uv run ruff check auditor tests && uv run ruff format --check auditor tests
 ```
 
-The package is held to its own standard: registries and analyzers are classes, config is
-typed `pydantic-settings`, the index is async (in-house worker thread, no third-party
-driver), and `auditor scan auditor/` on its own source is clean apart from a few
-intentional, explainable findings (worker-thread `BaseException` propagation, plugin-load
-isolation).
+The package is held to its own standard:
+
+- Registries and analyzers are classes, config is typed `pydantic-settings`, and the index is async (an in-house worker thread, no third-party driver).
+- `auditor scan auditor/` on its own source is clean apart from a few intentional, explainable findings (worker-thread `BaseException` propagation, plugin-load isolation).
