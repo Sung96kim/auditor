@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
 """PostToolUse(Edit|Write) hook: audit the changed file and feed findings back to the agent.
 
-Default: sync, single-file `auditr report`, injects findings in-turn. AUDITOR_AUTOHOOK_ASYNC=1
-detaches an incremental repo scan (refreshes the status line) and returns immediately."""
+Default: sync — a single-file `auditr report`, findings injected in-turn. `AUDITOR_AUTOHOOK_ASYNC=1`
+detaches an incremental repo scan (refreshes the status line) and returns immediately.
+`AUDITOR_AUTOHOOK=0` disables the hook; `AUDITOR_AUTOHOOK_SEVERITY` sets the inline floor (default high)."""
 
 import json
 import os
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 
+from _common import SEVERITY_RANK, auditr_available, emit_context, read_event
+
 SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".sh", ".bash"}
-RANK = {"suggestion": 0, "low": 1, "medium": 2, "high": 3, "blocking": 4}
 
 
-def _emit(context: str) -> None:
-    json.dump(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PostToolUse",
-                "additionalContext": context,
-            }
-        },
-        sys.stdout,
-    )
+def changed_file(event: dict) -> Path | None:
+    """The auditable file the Edit/Write touched, or None if the payload lacks one or its
+    suffix isn't a language auditor scans."""
+    tool_input = event.get("tool_input")
+    path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    if not isinstance(path, str) or not path:
+        return None
+    file = Path(path)
+    return file if file.suffix in SUFFIXES else None
 
 
-def _detach_incremental_scan(root: Path) -> None:
+def detach_incremental_scan(root: Path) -> None:
+    """Fire-and-forget an incremental repo scan to refresh the status line, without blocking."""
     subprocess.Popen(
         ["auditr", "scan", str(root), "-i", "-f", "json"],
         stdout=subprocess.DEVNULL,
@@ -36,11 +36,10 @@ def _detach_incremental_scan(root: Path) -> None:
     )
 
 
-def _report(file_path: Path) -> dict | None:
+def report(file: Path) -> dict | None:
+    """`auditr report <file>` as a dict, or None on any failure / malformed output."""
     proc = subprocess.run(
-        ["auditr", "report", str(file_path), "-f", "json"],
-        capture_output=True,
-        text=True,
+        ["auditr", "report", str(file), "-f", "json"], capture_output=True, text=True
     )
     if proc.returncode != 0:
         return None
@@ -51,69 +50,61 @@ def _report(file_path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _summarize(report: dict, floor: int) -> str | None:
-    detail: list[str] = []
+def summarize(result: dict, floor: int) -> str | None:
+    """Agent-facing text for one file's findings: those at/above `floor` (or any `blocking`,
+    whatever the verdict) shown in detail, the rest rolled into a one-line count. None if empty."""
+    shown: list[str] = []
     rolled: dict[str, int] = {}
-    for f in report.get("files") or []:
-        if not isinstance(f, dict):
-            continue
-        for finding in f.get("findings") or []:
+    for file in result.get("files") or []:
+        findings = file.get("findings") if isinstance(file, dict) else None
+        for finding in findings or []:
             if not isinstance(finding, dict):
                 continue
             sev = finding.get("severity", "suggestion")
-            is_auto = finding.get("verdict_kind") == "auto"
-            shown = sev == "blocking" or (is_auto and RANK.get(sev, 0) >= floor)
-            if shown:
-                detail.append(
+            surfaced = sev == "blocking" or (
+                finding.get("verdict_kind") == "auto"
+                and SEVERITY_RANK.get(sev, 0) >= floor
+            )
+            if surfaced:
+                shown.append(
                     f"  [{sev}] {finding.get('rule_id')} L{finding.get('line')}: {finding.get('message')}"
                 )
             else:
                 rolled[sev] = rolled.get(sev, 0) + 1
-    if not detail and not rolled:
+    if not shown and not rolled:
         return None
     lines = []
-    if detail:
+    if shown:
         lines.append("auditor flagged the file you just changed:")
-        lines.extend(detail)
+        lines += shown
     if rolled:
-        parts = [
-            f"{n} {sev}"
-            for sev, n in sorted(rolled.items(), key=lambda kv: -RANK.get(kv[0], 0))
-        ]
-        lines.append("+" + ", ".join(parts) + " lower — run /auditor:judge-findings")
+        ordered = sorted(rolled.items(), key=lambda kv: -SEVERITY_RANK.get(kv[0], 0))
+        rollup = ", ".join(f"{n} {sev}" for sev, n in ordered)
+        lines.append(f"+{rollup} lower — run /auditor:judge-findings")
     return "\n".join(lines)
 
 
 def main() -> None:
-    if os.environ.get("AUDITOR_AUTOHOOK") == "0":
+    if os.environ.get("AUDITOR_AUTOHOOK") == "0" or not auditr_available():
         return
-    if shutil.which("auditr") is None:
+    event = read_event()
+    if event is None:
         return
-    try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        return
-    if not isinstance(payload, dict):
-        return  # valid JSON but not an object → nothing to do
-    tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
-        return
-    raw_file_path = tool_input.get("file_path")
-    if not isinstance(raw_file_path, str) or not raw_file_path:
-        return
-    file_path = Path(raw_file_path)
-    if file_path.suffix not in SUFFIXES:
+    file = changed_file(event)
+    if file is None:
         return
     if os.environ.get("AUDITOR_AUTOHOOK_ASYNC") == "1":
-        _detach_incremental_scan(Path(payload.get("cwd") or "."))
+        detach_incremental_scan(Path(event.get("cwd") or "."))
         return
-    report = _report(file_path)
-    if report is None:
+    result = report(file)
+    if result is None:
         return
-    floor = RANK.get(os.environ.get("AUDITOR_AUTOHOOK_SEVERITY", "high"), RANK["high"])
-    summary = _summarize(report, floor)
+    floor = SEVERITY_RANK.get(
+        os.environ.get("AUDITOR_AUTOHOOK_SEVERITY", "high"), SEVERITY_RANK["high"]
+    )
+    summary = summarize(result, floor)
     if summary:
-        _emit(summary)
+        emit_context("PostToolUse", summary)
 
 
 if __name__ == "__main__":

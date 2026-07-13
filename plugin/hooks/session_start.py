@@ -1,57 +1,39 @@
 #!/usr/bin/env python3
 """SessionStart hook: tell the agent whether auditor is available + configured for this repo."""
 
-import json
-import shutil
-import sys
 import tomllib
 from pathlib import Path
 
+from _common import auditr_available, emit_context, read_event
 
-def _is_configured(cwd: Path) -> bool:
-    """True if ``.auditor/config.toml`` exists or ``pyproject.toml`` has a
-    ``[tool.auditor]`` table. Mirrors ``auditor.config.is_configured`` in stdlib
-    only (this hook can't import the ``auditor`` package)."""
+
+def is_configured(cwd: Path) -> bool:
+    """True if `.auditor/config.toml` exists or `pyproject.toml` has a `[tool.auditor]` table.
+    Mirrors `auditor.config.is_configured` in stdlib only (this hook can't import auditor)."""
     if (cwd / ".auditor" / "config.toml").exists():
         return True
-    pp = cwd / "pyproject.toml"
-    if not pp.exists():
-        return False
     try:
-        data = tomllib.loads(pp.read_text())
+        data = tomllib.loads((cwd / "pyproject.toml").read_text())
     except (OSError, tomllib.TOMLDecodeError):
         return False
     return "auditor" in data.get("tool", {})
 
 
-def _emit(context: str) -> None:
-    json.dump(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": context,
-            }
-        },
-        sys.stdout,
-    )
-
-
 def main() -> None:
-    try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
+    event = read_event()
+    if event is None or not auditr_available():
         return
-    if not isinstance(payload, dict):
-        return  # valid JSON but not an object → nothing to do
-    if shutil.which("auditr") is None:
-        return  # tool not installed → say nothing
-    cwd = Path(payload.get("cwd") or ".")
-    configured = _is_configured(cwd)
-    state = "configured" if configured else "not yet configured (run /auditor:setup)"
-    _emit(
+    cwd = Path(event.get("cwd") or ".")
+    state = (
+        "configured"
+        if is_configured(cwd)
+        else "not yet configured (run /auditor:setup)"
+    )
+    emit_context(
+        "SessionStart",
         "auditor (deterministic code auditor) is available. "
         f"This repo is {state}. "
-        "Judge findings with /auditor:judge-findings, review a diff with /auditor:audit-changes."
+        "Judge findings with /auditor:judge-findings, review a diff with /auditor:audit-changes.",
     )
 
 
