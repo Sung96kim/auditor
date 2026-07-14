@@ -1,87 +1,87 @@
 name: release
 
-# Publishes to PyPI on a version tag (e.g. `v0.9.0`) via PyPI Trusted Publishing (OIDC) —
-# no API token stored anywhere. Cut a release by bumping the version, tagging `vX.Y.Z`, and
-# pushing the tag:  git tag -a vX.Y.Z -m "release vX.Y.Z" && git push origin vX.Y.Z
+# Auto-release on merge to main. Commitizen picks the next version from the conventional commits
+# since the last tag, commits the bump to main + tags it, then this same run builds, publishes to
+# PyPI (Trusted Publishing / OIDC — no token), and creates the GitHub Release. If the commits
+# since the last tag aren't release-worthy (only docs/ci/chore/…), it no-ops.
+#
+# No manual step: just merge conventional-commit work to main. (Preview locally with
+# `uv run cz bump --dry-run`.)
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  test:
-    name: lint + test suite
+  release:
+    # Don't let the workflow's own bump commit re-trigger it.
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
     runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write # push the bump commit + tag, create the GitHub Release
+      id-token: write # PyPI Trusted Publishing (OIDC)
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for commitizen
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - run: uv python install 3.13
       - run: uv sync --all-extras
+
+      # Gate: never release red code.
       - run: uv run ruff check auditor tests
       - run: uv run ruff format --check auditor tests
       - run: uv run pytest -q
 
-  build:
-    name: build distributions
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Verify the tag matches the package version
+      - name: Configure git identity
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          grep -q "^version = \"${tag}\"$" pyproject.toml \
-            || { echo "::error::tag ${GITHUB_REF_NAME} does not match pyproject version"; exit 1; }
-      - run: uv build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/*
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-  publish:
-    name: publish to PyPI
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write # OIDC — Trusted Publishing, no token needed
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-release:
-    name: github release
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # create the GitHub Release + upload assets
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # full history so commitizen can render the changelog
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - name: Render this version's changelog section
-        # Backtick-wrap @tokens (decorators like @abstractmethod, handles) so GitHub doesn't
-        # auto-link them as user mentions / phantom "contributors" in the release notes.
+      - name: Bump version (commitizen)
+        id: bump
         run: |
-          uvx --from commitizen cz changelog "${GITHUB_REF_NAME#v}" --dry-run \
-            | sed -E 's/(^|[[:space:](])@([A-Za-z0-9_-]+)/\1`@\2`/g' > release-notes.md
+          set +e
+          uv run cz bump --yes 2>&1 | tee bump.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 21 ] || grep -q "NO_COMMITS_TO_BUMP" bump.log; then
+            echo "No release-worthy commits since the last tag — nothing to release."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$code"
+          fi
+
+      - name: Push bump commit + tag
+        if: steps.bump.outputs.released == 'true'
+        run: git push origin main --follow-tags
+
+      - name: Build distributions
+        if: steps.bump.outputs.released == 'true'
+        run: uv build
+
+      - name: Publish to PyPI
+        if: steps.bump.outputs.released == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
       - name: Create the GitHub Release
+        if: steps.bump.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file release-notes.md dist/*
+        run: |
+          tag="${{ steps.bump.outputs.tag }}"
+          # Backtick-wrap @tokens (decorators like @abstractmethod, handles) so GitHub can't
+          # auto-link them as user mentions / phantom "contributors" in the notes.
+          uvx --from commitizen cz changelog "${tag#v}" --dry-run \
+            | sed -E 's/(^|[[:space:](])@([A-Za-z0-9_-]+)/\1`@\2`/g' > release-notes.md
+          gh release create "${tag}" --title "${tag}" --notes-file release-notes.md dist/*
