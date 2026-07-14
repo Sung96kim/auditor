@@ -70,6 +70,72 @@ uv sync --extra mcp     # + FastMCP server
 uv sync --extra dev     # + pytest/ruff
 ```
 
+## Claude Code plugin
+
+auditor ships as a Claude Code plugin: 7 skills, a subagent, 3 hooks, a status line, and an
+MCP server, all wired to the `auditr` CLI.
+
+```bash
+claude plugin marketplace add Sung96kim/auditor   # register the marketplace
+/plugin install auditor                            # enable in a session
+```
+
+For local development, point Claude at the checkout instead:
+
+```bash
+claude --plugin-dir ./plugin
+```
+
+The plugin drives the `auditr` CLI, which you install separately (see [Install](#install)
+above) — the plugin itself ships no Python dependencies. It also bundles an MCP server
+config (`plugin/.mcp.json`, `uvx --from auditr[mcp] auditr-mcp`), so enabling the plugin
+registers the server automatically — no separate `claude mcp add` needed.
+
+### Skills
+
+`/auditor:<name>`, also auto-invoked when the task matches:
+
+- `judge-findings` — judge `candidate` findings: fix, suppress with a skip directive, or dismiss
+- `audit-changes` — PR/CI-style review of a changeset against a base ref, gate included
+- `setup-auditor` — onboard a repo: install, scaffold config, pick a profile, write a baseline
+- `explore-graph` — query the semantic code graph (usages, neighbors, clusters)
+- `malware-scan` — run the opt-in ClamAV + osv-scanner malware/supply-chain pass
+- `aggregate-report` — roll the incremental index into a repo-wide `AUDIT.md`
+- `write-detector` — author a repo-local detector under `.auditor/plugins/`
+
+Each skill stays a thin, scannable workflow and carries deeper `references/` — per-category
+judgment heuristics, output-reading guides, and worked examples — that the agent loads on demand.
+
+### Subagent
+
+`@auditor-reviewer` runs a full or changeset scan in its own context and returns a triaged
+report — severity totals, worst findings per file, and judged `candidate` verdicts. Use it
+for deep audits that would otherwise flood the main conversation.
+
+### Hooks
+
+- `SessionStart` — announces whether auditor is installed and whether the repo is configured.
+- `PostToolUse` (`Edit`/`Write`) — audits the file you just changed and feeds `high`+ findings
+  back in-turn.
+  - `AUDITOR_AUTOHOOK=0` disables it.
+  - `AUDITOR_AUTOHOOK_SEVERITY` sets the floor for inline findings (default `high`).
+  - `AUDITOR_AUTOHOOK_ASYNC=1` detaches an incremental scan instead — non-blocking,
+    status-line-only.
+- `Stop` — verify-before-stop gate, **opt-in**. Set `AUDITOR_VERIFY_HOOK=1` to block finishing
+  while the changeset still trips the gate.
+  - `AUDITOR_VERIFY_SEVERITY` sets the gate floor (default `high`).
+
+### Status line
+
+Reads the last scan's cached posture, no subprocess:
+
+```
+● auditor  2 blocking  5 high  +17 lower
+```
+
+Dot color follows the worst severity present. Shows `auditor  clean` with nothing open, or
+`auditor  not set up` if the repo has no `.auditor/` cache yet.
+
 ## CLI
 
 By default `scan` prints a **concise human summary** (severity counts + worst files); an
@@ -154,6 +220,17 @@ risky()  # auditor: skip                          — suppress every finding on 
 risky()  # auditor: skip: PY-SEC-DANGEROUS-EVAL    — suppress just that rule (comma-separate more)
 # auditor: skip-file                              — suppress the whole file
 # auditor: skip-file: PY-SEC-HARDCODED-SECRET      — suppress one rule file-wide
+```
+
+On a multi-line Python statement (a wrapped `except (...)`, a `def(...)` signature, a multi-line
+call), the directive is honored **anywhere in the statement** — a natural trailing comment on the
+closing `):` works, not only the first line:
+
+```python
+except (
+    BrokenPipeError,
+    ConnectionResetError,
+):  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION   — suppresses the finding on the `except` line
 ```
 
 `scan --no-skips` ignores all directives (an un-silenceable sweep). Suppressed counts are surfaced,

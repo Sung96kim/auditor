@@ -1,0 +1,7 @@
+{
+  "subagentStatusLine": true,
+  "statusLine": {
+    "type": "command",
+    "command": "python3 ${CLAUDE_PLUGIN_ROOT}/statusline/auditor_status.py"
+  }
+}

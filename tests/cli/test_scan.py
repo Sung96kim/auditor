@@ -267,6 +267,60 @@ def test_profile_override_enables_oop(sample_repo):
     assert "PY-OOP-CONSTRUCTOR-WALL" in strict_rules
 
 
+# --- status-cache write (.auditor/.status.json) -------------------------------------------
+
+
+def test_scan_dir_writes_status_cache(sample_repo):
+    result = invoke("scan", str(sample_repo), "--no-index")
+    assert result.exit_code == 0, result.output
+
+    status_file = sample_repo / ".auditor" / ".status.json"
+    assert status_file.exists()
+    data = json.loads(status_file.read_text())
+    assert data["severity"]["blocking"] >= 1
+    # the fixture's pyproject.toml has a [tool.auditor] table — configured, even
+    # though there's no standalone .auditor/config.toml
+    assert data["configured"] is True
+
+
+def test_scan_dir_writes_status_cache_configured_false_without_pyproject_table(
+    sample_repo,
+):
+    # drop the fixture's [tool.auditor] table — neither config source is present
+    (sample_repo / "pyproject.toml").write_text(
+        '[project]\nname = "sample"\nversion = "0.0.0"\n'
+        'dependencies = ["pydantic", "requests", "pyyaml"]\n'
+    )
+
+    result = invoke("scan", str(sample_repo), "--no-index")
+    assert result.exit_code == 0, result.output
+
+    status_file = sample_repo / ".auditor" / ".status.json"
+    data = json.loads(status_file.read_text())
+    assert data["configured"] is False
+
+
+def test_scan_dir_writes_status_cache_configured_true(sample_repo):
+    auditor_dir = sample_repo / ".auditor"
+    auditor_dir.mkdir(parents=True, exist_ok=True)
+    (auditor_dir / "config.toml").write_text("")
+
+    invoke("scan", str(sample_repo), "--no-index")
+
+    status_file = sample_repo / ".auditor" / ".status.json"
+    assert status_file.exists()
+    data = json.loads(status_file.read_text())
+    assert data["configured"] is True
+
+
+def test_scan_file_target_does_not_write_status_cache(sample_repo):
+    clean = sample_repo / "src" / "clean.py"
+    result = invoke("scan", str(clean), "--no-index")
+    assert result.exit_code == 0, result.output
+
+    assert not (sample_repo / ".auditor" / ".status.json").exists()
+
+
 # --- gitignore + migration soft-skip -----------------------------------------------------
 
 
@@ -297,13 +351,21 @@ def test_include_gitignored_flag(tmp_path):
             "scan", str(tmp_path), "--no-index", "--include-gitignored", "-f", "json"
         )
     )
-    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py", "pyproject.toml"}
+    assert {r["file"] for r in payload["files"]} == {
+        "a.py",
+        "ignored.py",
+        "pyproject.toml",
+    }
 
 
 def test_respect_gitignore_config_toggle(tmp_path):
     _gitignore_repo(tmp_path, respect=False)  # [tool.auditor] respect_gitignore=false
     payload = cli_json(invoke("scan", str(tmp_path), "--no-index", "-f", "json"))
-    assert {r["file"] for r in payload["files"]} == {"a.py", "ignored.py", "pyproject.toml"}
+    assert {r["file"] for r in payload["files"]} == {
+        "a.py",
+        "ignored.py",
+        "pyproject.toml",
+    }
 
 
 def test_scan_soft_skips_migrations_until_targeted(tmp_path):

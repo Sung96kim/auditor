@@ -12,6 +12,7 @@ from auditor.config import (
     RolePolicy,
     RuleConfig,
     Threshold,
+    is_configured,
     load_config,
 )
 from auditor.models import FileRole, Severity, VerdictKind
@@ -379,3 +380,30 @@ def test_malware_scan_from_toml(tmp_path):
     assert settings.malware_scan.enabled is True
     assert settings.malware_scan.max_file_size_mb == 5
     assert settings.malware_scan.content is True  # unset keys keep defaults
+
+
+def test_is_configured_via_standalone_toml(tmp_path):
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text('extends = "base"\n')
+    assert is_configured(tmp_path) is True
+
+
+def test_is_configured_via_pyproject_tool_auditor(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="base"\n'
+    )
+    assert is_configured(tmp_path) is True
+
+
+def test_is_configured_false_when_neither_present(tmp_path):
+    assert is_configured(tmp_path) is False
+
+
+def test_is_configured_false_for_pyproject_without_tool_auditor(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    assert is_configured(tmp_path) is False
+
+
+def test_is_configured_false_on_malformed_pyproject(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("not valid toml [[[")
+    assert is_configured(tmp_path) is False

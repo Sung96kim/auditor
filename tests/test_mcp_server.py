@@ -10,13 +10,24 @@ from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddlewa
 from mcp.types import ResourceLink
 
 import auditor.mcp
+import auditor.mcp.malware_tools as mcp_malware_tools
+import auditor.mcp.scan_tools as st
 import auditor.mcp_server
 from auditor.engine import audit_target
 from auditor.malware import tools as malware_tools
+from auditor.malware.dbs import DbUpdateReport
 from auditor.mcp import code_mode
 from auditor.mcp.artifacts import publish
 from auditor.mcp.server import MAX_TOOL_RESPONSE_BYTES
 from auditor.mcp_server import _GRAPH_OK, mcp
+from auditor.models import (
+    Category,
+    FileRole,
+    Finding,
+    ScanResult,
+    Severity,
+    VerdictKind,
+)
 
 
 @pytest.mark.parametrize(
@@ -262,6 +273,91 @@ async def test_scan_tool_bad_config_errors(sample_repo):
         await mcp.call_tool(
             "scan", {"path": str(sample_repo / "src"), "config": {"nope": 1}}
         )
+
+
+async def test_scan_malware_flag_requires_backend(monkeypatch):
+    monkeypatch.setattr(st, "resolve_tool", lambda name: None)  # no backends
+    with pytest.raises(ToolError) as exc:
+        await mcp.call_tool("scan", {"path": "auditor", "malware": True})
+    assert "malware" in str(exc.value).lower()
+
+
+async def test_scan_malware_flag_merges_config(monkeypatch, sample_repo):
+    """When a backend is present, malware=True deep-merges malware_scan.enabled into the
+    config override passed to audit_target, preserving any unrelated caller-supplied keys.
+    """
+    monkeypatch.setattr(
+        st, "resolve_tool", lambda name: "/usr/bin/clamscan"
+    )  # backend present
+
+    captured = {}
+
+    async def fake_audit_target(*args, **kwargs):
+        captured["config_overrides"] = kwargs["config_overrides"]
+        return []
+
+    monkeypatch.setattr(st, "audit_target", fake_audit_target)
+
+    await mcp.call_tool(
+        "scan",
+        {
+            "path": str(sample_repo / "src"),
+            "malware": True,
+            "config": {"foo": "bar"},
+        },
+    )
+    assert captured["config_overrides"] == {
+        "foo": "bar",
+        "malware_scan": {"enabled": True},
+    }
+
+
+async def test_scan_fail_on_reports_gate():
+    data = _structured(
+        await mcp.call_tool(
+            "scan", {"path": "auditor", "fail_on": "blocking", "detail": "summary"}
+        )
+    )
+    gate = data["gate"]
+    assert gate["fail_on"] == "blocking"
+    assert isinstance(gate["tripped"], bool)
+
+
+async def test_scan_fail_on_rejects_bad_severity():
+    with pytest.raises(ToolError):
+        await mcp.call_tool("scan", {"path": "auditor", "fail_on": "nope"})
+
+
+async def test_scan_gate_reflects_unfiltered_scan(monkeypatch):
+    """The gate must trip on the pre-filter scan, even when a display filter (severity=/rule=)
+    hides the triggering finding from the returned `files`. Regression guard for the ordering:
+    the gate has to be computed from `audit_target`'s raw results, before severity/rule filters
+    mutate `r.findings` in place."""
+    triggering = Finding(
+        rule_id="PY-TEST",
+        category=Category.CORRECTNESS,
+        severity=Severity.HIGH,
+        verdict_kind=VerdictKind.AUTO,
+        line=1,
+        message="m",
+    )
+    result = ScanResult(
+        file="a.py", language="python", role=FileRole.PRODUCTION, findings=[triggering]
+    )
+
+    async def fake_audit_target(*args, **kwargs):
+        return [result]
+
+    monkeypatch.setattr(st, "audit_target", fake_audit_target)
+
+    data = _structured(
+        await mcp.call_tool(
+            "scan", {"path": "auditor", "fail_on": "high", "severity": "blocking"}
+        )
+    )
+    findings = [f for fl in data["files"] for f in fl["findings"]]
+    assert findings == []
+    assert data["gate"]["tripped"] is True
 
 
 # --- new gap-fill tests -------------------------------------------------------------------
@@ -524,6 +620,55 @@ async def test_malware_status_tool(monkeypatch):
     assert result["osv_offline_db"]["present"] is False
 
 
+async def test_malware_tools_registered():
+    names = {t.name for t in await mcp.list_tools()}
+    assert {"malware_install", "malware_update_dbs"} <= names
+
+
+async def test_malware_update_dbs_returns_report(monkeypatch):
+    monkeypatch.setattr(
+        mcp_malware_tools,
+        "update_databases",
+        lambda path: DbUpdateReport(notes=["ok"]),
+    )
+    data = _structured(await mcp.call_tool("malware_update_dbs", {"path": "."}))
+    assert "ok" in data["notes"]
+
+
+async def test_malware_install_backend_present_never_shells_out(monkeypatch):
+    """resolve_tool finds osv-scanner: install is a no-op, and download_osv is never called."""
+    monkeypatch.setattr(mcp_malware_tools, "resolve_tool", lambda name: "/fake/osv")
+
+    def _raise(*args, **kwargs):
+        raise AssertionError("malware_install must never shell out")
+
+    monkeypatch.setattr(mcp_malware_tools, "download_osv", lambda *a, **k: _raise())
+    monkeypatch.setattr("subprocess.run", _raise)
+    data = _structured(await mcp.call_tool("malware_install", {}))
+    assert data["osv"] == "already installed"
+
+
+async def test_malware_install_backend_absent_never_shells_out(monkeypatch):
+    """resolve_tool finds nothing: osv is downloaded (verified) and the ClamAV command is
+    only ever returned for a human to run — never executed."""
+    monkeypatch.setattr(mcp_malware_tools, "resolve_tool", lambda name: None)
+    monkeypatch.setattr(
+        mcp_malware_tools, "download_osv", lambda bin_dir: "/fake/bin/osv-scanner"
+    )
+    fake_command = ["sudo", "apt-get", "install", "-y", "clamav"]
+    monkeypatch.setattr(
+        mcp_malware_tools, "clamav_install_command", lambda: fake_command
+    )
+
+    def _raise(*args, **kwargs):
+        raise AssertionError("malware_install must never shell out")
+
+    monkeypatch.setattr("subprocess.run", _raise)
+    data = _structured(await mcp.call_tool("malware_install", {}))
+    assert "installed ->" in data["osv"]
+    assert data["clamav_command"] == fake_command
+
+
 @pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
 async def test_graph_search_and_usages_tools(sample_repo):
     """graph_search locates symbols and graph_usages returns grouped connectivity with full
@@ -571,6 +716,8 @@ async def test_tool_annotations_read_only_vs_mutating():
         assert tools[name].annotations.readOnlyHint is True, name
     assert tools["ignore_add"].annotations.readOnlyHint is False
     assert tools["ignore_remove"].annotations.destructiveHint is True
+    assert tools["malware_update_dbs"].annotations.readOnlyHint is False
+    assert tools["malware_install"].annotations.readOnlyHint is False
     if "graph_build" in tools:  # only when the graph extra is installed
         assert tools["graph_build"].annotations.readOnlyHint is False
 

@@ -153,6 +153,93 @@ def test_python_still_honors_real_comment_directive():
     assert n == 1 and kept == []
 
 
+def test_multiline_except_header_directive_on_closing_line_suppresses():
+    # the real auditor/serve.py shape: `except (` opens the finding's anchor line (67-equivalent
+    # here, line 1); the natural comment spot is the closing `):` line (line 4), which previously
+    # missed because filter_findings matched the finding's exact anchor line only.
+    src = (
+        "try:\n"
+        "    pass\n"
+        "except (  \n"
+        "    BrokenPipeError,\n"
+        "    ConnectionResetError,\n"
+        "):  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION\n"
+        "    pass\n"
+    )
+    kept, n = filter_findings(
+        src, [_f("PY-CORRECT-SWALLOWED-EXCEPTION", 3)], language="python"
+    )
+    assert n == 1 and kept == []
+
+
+def test_multiline_def_header_directive_on_closing_line_suppresses():
+    src = "def f(\n    a,\n    b,\n):  # auditor: skip: PY-OOP-GOD-CLASS\n    pass\n"
+    kept, n = filter_findings(src, [_f("PY-OOP-GOD-CLASS", 1)], language="python")
+    assert n == 1 and kept == []
+
+
+def test_multiline_call_directive_on_closing_line_suppresses():
+    src = "result = foo(\n    a,\n    b,\n)  # auditor: skip\n"
+    kept, n = filter_findings(src, [_f("PY-SEC-DANGEROUS-EVAL", 1)], language="python")
+    assert n == 1 and kept == []
+
+
+def test_multiline_directive_targeted_code_still_filters_by_rule():
+    src = "except (\n    ValueError,\n):  # auditor: skip: PY-OTHER-RULE\n    pass\n"
+    kept, n = filter_findings(
+        src, [_f("PY-CORRECT-SWALLOWED-EXCEPTION", 1)], language="python"
+    )
+    assert n == 0 and len(kept) == 1
+
+
+def test_multiline_directive_does_not_leak_to_next_statement():
+    # the closing-line directive suppresses the wrapped statement's own finding, but must not
+    # bleed forward into an unrelated statement that immediately follows.
+    src = "foo(\n    a,\n    b,\n)  # auditor: skip\neval(x)\n"
+    kept, n = filter_findings(
+        src,
+        [_f("PY-SEC-DANGEROUS-EVAL", 1), _f("PY-SEC-DANGEROUS-EVAL", 5)],
+        language="python",
+    )
+    assert n == 1
+    assert [f.line for f in kept] == [5]
+
+
+def test_standalone_comment_line_maps_only_to_itself_not_next_statement():
+    # a directive on its own line, with a preceding unrelated statement and a following one,
+    # must not suppress either neighbor — only an exact-line match on its own (empty) line.
+    src = "eval(a)\n# auditor: skip\neval(b)\n"
+    kept, n = filter_findings(
+        src,
+        [_f("PY-SEC-DANGEROUS-EVAL", 1), _f("PY-SEC-DANGEROUS-EVAL", 3)],
+        language="python",
+    )
+    assert n == 0
+    assert [f.line for f in kept] == [1, 3]
+
+
+def test_multiline_statement_single_line_still_works_as_before():
+    # sanity: a single-physical-line statement's trailing comment is unaffected by the new
+    # logical-line mapping (logical start == the finding's own line already).
+    src = "eval(x)  # auditor: skip\neval(y)\n"
+    kept, n = filter_findings(
+        src,
+        [_f("PY-SEC-DANGEROUS-EVAL", 1), _f("PY-SEC-DANGEROUS-EVAL", 2)],
+        language="python",
+    )
+    assert n == 1
+    assert [f.line for f in kept] == [2]
+
+
+def test_multiline_docstring_directive_text_still_ignored():
+    # a multi-line triple-quoted string that happens to contain directive-looking text, followed
+    # by a real trailing comment on the string-assignment's own line, must not be confused: only
+    # the genuine COMMENT token counts.
+    src = 'x = (\n    "line one # auditor: skip\\n"\n    "line two"\n)\neval(y)\n'
+    kept, n = filter_findings(src, [_f("PY-SEC-DANGEROUS-EVAL", 5)], language="python")
+    assert n == 0 and len(kept) == 1
+
+
 def _repo(tmp_path: Path, body: str) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "x"\nversion = "0"\n[tool.auditor]\nextends = "base"\n'
