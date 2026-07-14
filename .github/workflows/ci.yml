@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  # main is validated by release.yml (which tests the merged commit, then ships) — no need to
+  # also run CI here on push and double up the suite.
 
 jobs:
   test:
