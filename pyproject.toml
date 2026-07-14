@@ -58,6 +58,23 @@ exclude = [
 ]
 force-include = { "auditor/graph/ui/dist/index.html" = "auditor/graph/ui/dist/index.html" }
 
+[tool.hatch.build.targets.sdist]
+# Ship source, not the dev/session detritus that lives in the working tree — the default sdist
+# otherwise sweeps in node_modules (20MB+ native binaries), agent worktrees, and scratch dirs.
+exclude = [
+    ".claude",
+    ".superpowers",
+    ".github",
+    ".vscode",
+    "auditor/graph/ui/node_modules",
+    "**/node_modules",
+    "*.db",
+    ".coverage",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

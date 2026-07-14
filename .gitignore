@@ -32,6 +32,13 @@ htmlcov/
 AUDIT.md
 .audit/
 
+# Node (graph UI build deps — never committed or packaged)
+node_modules/
+
+# Agent / session scratch (worktrees, SDD ledgers) — not source, must not ship
+.claude/
+.superpowers/
+
 # Editors / OS
 .idea/
 .vscode/
