@@ -128,7 +128,7 @@
 - **graph**: disambiguate cross-module calls via the import graph (kills get/options/delete over-match), not a name list
 - **graph**: builtin names (dict/list/isinstance args) aren't call/callback edges — via dir(builtins), not a curated list
 - **graph**: only resolve unambiguous cross-module call/type names (kills false from_orm/get fan-in: 6802→2906 calls edges)
-- **graph**: decorator calls (e.g. @app.get) are no longer counted as function callees (false calls edges)
+- **graph**: decorator calls (e.g. `@app`.get) are no longer counted as function callees (false calls edges)
 - **graph-ui**: refit camera after view-transition morph so spread-out neighbors + labels stay on-screen
 - **serve**: swallow client disconnect (BrokenPipeError) instead of dumping a traceback
 - **graph-ui**: dim (not hide) on select + stop label flicker; O(n) overview & adjacency-BFS ego for large graphs
@@ -206,7 +206,7 @@
 - surface auditor warnings by default in the CLI (verbosity 0 = WARNING)
 - cut false positives across 10 detectors + configurable cli_frameworks
 - SA-GREENLET-ATTR-AFTER-COMMIT tracks reload/rebind (refresh, re-query, post-commit construction) + drops add_all collection FP
-- PY-ASYNC-NO-AWAIT-BODY exempts route handlers + @abstractmethod (DRY is_route_handler→_util)
+- PY-ASYNC-NO-AWAIT-BODY exempts route handlers + `@abstractmethod` (DRY is_route_handler→_util)
 - shapes.py FP precision — PY-DEAD-SYMBOL skips side-effect registrations (call/subclass/decorator), PY-XFILE-DUP-FUNCTION ignores leading docstring
 
 ### Refactor

@@ -76,7 +76,11 @@ jobs:
           name: dist
           path: dist/
       - name: Render this version's changelog section
-        run: uvx --from commitizen cz changelog "${GITHUB_REF_NAME#v}" --dry-run > release-notes.md
+        # Backtick-wrap @tokens (decorators like @abstractmethod, handles) so GitHub doesn't
+        # auto-link them as user mentions / phantom "contributors" in the release notes.
+        run: |
+          uvx --from commitizen cz changelog "${GITHUB_REF_NAME#v}" --dry-run \
+            | sed -E 's/(^|[[:space:](])@([A-Za-z0-9_-]+)/\1`@\2`/g' > release-notes.md
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
