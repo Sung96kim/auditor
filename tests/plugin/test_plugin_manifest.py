@@ -11,8 +11,16 @@ def _load(rel: str) -> dict:
 def test_plugin_manifest_names_components():
     m = _load("plugin/.claude-plugin/plugin.json")
     assert m["name"] == "auditor"
-    for key in ("skills", "agents", "hooks", "mcpServers"):
+    for key in ("skills", "agents", "mcpServers"):
         assert key in m
+
+
+def test_manifest_does_not_reregister_standard_hooks():
+    # hooks/hooks.json is auto-loaded by Claude Code from its standard location; listing it in
+    # the manifest too double-registers it and fails to load ("Duplicate hooks file detected").
+    m = _load("plugin/.claude-plugin/plugin.json")
+    assert "hooks" not in m
+    assert (ROOT / "plugin" / "hooks" / "hooks.json").exists()
 
 
 def test_marketplace_points_at_plugin():

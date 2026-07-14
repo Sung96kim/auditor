@@ -1,7 +1,7 @@
 {
   "name": "auditor",
   "displayName": "Auditor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drive the auditor code-audit CLI/MCP from Claude Code: judge findings, gate PRs, scan for malware, explore the code graph.",
   "author": { "name": "Sung Kim" },
   "homepage": "https://github.com/Sung96kim/auditor",
@@ -10,6 +10,5 @@
   "keywords": ["audit", "code-quality", "security", "static-analysis"],
   "skills": "./skills/",
   "agents": ["./agents/auditor-reviewer.md"],
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }
