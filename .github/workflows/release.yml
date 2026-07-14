@@ -1,0 +1,59 @@
+name: release
+
+# Publishes to PyPI on a version tag (e.g. `v0.9.0`) via PyPI Trusted Publishing (OIDC) —
+# no API token stored anywhere. Cut a release by bumping the version, tagging `vX.Y.Z`, and
+# pushing the tag:  git tag -a vX.Y.Z -m "release vX.Y.Z" && git push origin vX.Y.Z
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    name: lint + test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --all-extras
+      - run: uv run ruff check auditor tests
+      - run: uv run ruff format --check auditor tests
+      - run: uv run pytest -q
+
+  build:
+    name: build distributions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Verify the tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"${tag}\"$" pyproject.toml \
+            || { echo "::error::tag ${GITHUB_REF_NAME} does not match pyproject version"; exit 1; }
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # OIDC — Trusted Publishing, no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
