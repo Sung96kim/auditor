@@ -1,3 +1,9 @@
+## v0.9.2 (2026-07-14)
+
+### Fix
+
+- silence FastMCP startup banner on the MCP server (stdio log noise)
+
 ## v0.9.1 (2026-07-14)
 
 ### Fix
