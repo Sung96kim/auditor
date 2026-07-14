@@ -34,6 +34,9 @@ def test_mcp_config_runs_auditr_mcp():
     assert mcp["command"] == "uvx"
     assert "auditr[mcp]" in mcp["args"]  # the --from package spec (pulls the mcp extra)
     assert "auditr-mcp" in mcp["args"]  # the entrypoint
+    # auditr requires Python >=3.13; pin it so uvx doesn't fail to resolve on a 3.12 default
+    # (that failure surfaces as the MCP server erroring with -32000).
+    assert mcp["args"][mcp["args"].index("--python") + 1] == "3.13"
 
 
 def test_settings_json_is_valid_and_enables_subagent_statusline():

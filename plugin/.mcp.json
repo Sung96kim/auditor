@@ -2,7 +2,7 @@
   "mcpServers": {
     "auditor": {
       "command": "uvx",
-      "args": ["--from", "auditr[mcp]", "auditr-mcp"],
+      "args": ["--python", "3.13", "--from", "auditr[mcp]", "auditr-mcp"],
       "env": {}
     }
   }
