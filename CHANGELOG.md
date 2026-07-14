@@ -1,3 +1,9 @@
+## v0.9.3 (2026-07-14)
+
+### Fix
+
+- coerce raw rule-dicts on config serialization (no pydantic warning)
+
 ## v0.9.2 (2026-07-14)
 
 ### Fix
