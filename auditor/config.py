@@ -14,7 +14,14 @@ from importlib import resources
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FieldSerializationInfo,
+    field_serializer,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import auditor.builtins  # noqa: F401  (registers built-in detectors before validation)
@@ -374,6 +381,20 @@ class AuditorSettings(BaseSettings):
                         f"unknown rule_id {rid!r}; run `auditor rules list` to see available rules"
                     )
         return value
+
+    @field_serializer("rules")
+    def _ser_rules(
+        self, value: dict[RuleId, RuleConfig], info: FieldSerializationInfo
+    ) -> dict[RuleId, object]:
+        # Coerce any raw-dict rule value (e.g. from model_copy(update=...), which skips
+        # validation) into a RuleConfig before dumping, so serialization never emits a
+        # PydanticSerializationUnexpectedValue warning.
+        return {
+            rid: (
+                rc if isinstance(rc, RuleConfig) else RuleConfig.model_validate(rc)
+            ).model_dump(mode=info.mode)
+            for rid, rc in value.items()
+        }
 
     @field_validator("categories", mode="after")
     @classmethod
