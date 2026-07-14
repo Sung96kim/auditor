@@ -64,7 +64,11 @@ jobs:
 
       - name: Push bump commit + tag
         if: steps.bump.outputs.released == 'true'
-        run: git push origin main --follow-tags
+        # Push the tag explicitly — `--follow-tags` only pushes annotated tags, and would
+        # silently skip a lightweight one, leaving the release tagless.
+        run: |
+          git push origin main
+          git push origin "${{ steps.bump.outputs.tag }}"
 
       - name: Build distributions
         if: steps.bump.outputs.released == 'true'

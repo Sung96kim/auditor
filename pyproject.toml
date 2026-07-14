@@ -103,6 +103,7 @@ ignore = ["E501"]  # line length is not enforced
 version_provider = "pep621"                    # source of truth = [project] version
 version_files = ["auditor/__init__.py:__version__"]  # keep the runtime constant in lockstep
 tag_format = "v$version"
+annotated_tag = true                           # annotated tags (tagger + message), like the manual ones
 major_version_zero = true                      # while 0.x, a breaking change bumps the minor
 update_changelog_on_bump = true
 bump_message = "chore: bump version to $new_version"
