@@ -20,6 +20,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "ruff",
+    "commitizen",
     "fastmcp",
     "tree-sitter>=0.23",
     "tree-sitter-typescript>=0.23",
@@ -94,6 +95,18 @@ ignore = ["E501"]  # line length is not enforced
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # packages import submodules purely to register detectors/reporters
+
+[tool.commitizen]
+# `uv run cz bump` picks the next version from the conventional commits since the last tag,
+# updates the version everywhere, writes CHANGELOG.md, commits, and tags vX.Y.Z. Pushing that
+# tag triggers .github/workflows/release.yml (build + publish to PyPI).
+version_provider = "pep621"                    # source of truth = [project] version
+version_files = ["auditor/__init__.py:__version__"]  # keep the runtime constant in lockstep
+tag_format = "v$version"
+major_version_zero = true                      # while 0.x, a breaking change bumps the minor
+update_changelog_on_bump = true
+bump_message = "chore: bump version to $new_version"
+pre_bump_hooks = ["uv lock", "git add uv.lock"]  # fold the lockfile sync into the bump commit
 
 [build-system]
 requires = ["hatchling"]
