@@ -26,4 +26,6 @@ mcp.add_middleware(ResponseLimitingMiddleware(max_size=MAX_TOOL_RESPONSE_BYTES))
 
 
 def main() -> None:
-    mcp.run()
+    # Silence FastMCP's ASCII banner + "update available" notice — on a stdio server they're just
+    # noise in the client's MCP logs on every launch (stdout stays clean regardless).
+    mcp.run(show_banner=False)
