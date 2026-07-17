@@ -16,11 +16,8 @@ class StructuralResolver:
     """Resolves a node set's local facts into structural GraphEdges. Holds the derived
     indexes + edge accumulator as fields so each edge-type pass is its own method."""
 
-    def __init__(
-        self, nodes: list[GraphNode], *, follow_reexports: bool = False
-    ) -> None:
+    def __init__(self, nodes: list[GraphNode]) -> None:
         self.nodes = nodes
-        self.follow_reexports = follow_reexports
         self.fns = {n.id: n for n in nodes if n.kind in FUNCTION_KINDS}
         self.classes = {n.id: n for n in nodes if n.kind == "class"}
         self.modules = {n.id: n for n in nodes if n.kind == "module"}
@@ -47,15 +44,28 @@ class StructuralResolver:
                 if (dst := self.dotted_to_id.get(t)) is not None
             }
             self.imports_by_module[mid] = targets
-        if self.follow_reexports:
-            # opt-in: a caller that imports a package gains the leaf modules that package's
-            # __init__ re-exports, so a symbol imported via `from pkg import X` (X defined in a
-            # leaf submodule) still resolves. One level only (snapshot to avoid cascading).
-            base = {mid: set(imps) for mid, imps in self.imports_by_module.items()}
-            for imps in self.imports_by_module.values():
-                for imported in tuple(imps):
-                    if imported.endswith("/__init__.py"):
-                        imps |= base.get(imported, set())
+        # Reachability through re-export surfaces, so a symbol imported via an aggregator
+        # resolves to its DEFINING module (Finding 1). Always on: the len==1 gate in
+        # _resolve_name means extra reachability can only recover a true edge or drop a
+        # genuinely-ambiguous one — it never invents an edge to a module the caller can't reach.
+        #   • package __init__.py — one level, any import form (conventional re-export surface;
+        #     snapshot `base` avoids cascading through non-__init__ imports).
+        #   • star re-exports (`from X import *`) — transitive, any module: a star import puts
+        #     all of X's public names into this module's namespace, a sound namespace-inclusion
+        #     relation to follow to a fixpoint (a plain module's *explicit* imports are NOT
+        #     followed — that would close the whole graph into a hairball).
+        base = {mid: set(imps) for mid, imps in self.imports_by_module.items()}
+        star_map = self._star_reexport_map()
+        for imps in self.imports_by_module.values():
+            for imported in tuple(imps):
+                if imported.endswith("/__init__.py"):
+                    imps |= base.get(imported, set())
+            frontier = set(imps)
+            while frontier:
+                nxt = {t for x in frontier for t in star_map.get(x, ())}
+                new = nxt - imps
+                imps |= new
+                frontier = new
         self.edges: list[GraphEdge] = []
         self._seen: set[tuple[str, str, str]] = set()
 
@@ -63,6 +73,37 @@ class StructuralResolver:
         if src != dst and (src, dst, kind.value) not in self._seen:
             self._seen.add((src, dst, kind.value))
             self.edges.append(GraphEdge(src=src, dst=dst, kind=kind, weight=weight))
+
+    def _star_reexport_map(self) -> dict[str, set[str]]:
+        """module_id -> the repo module_ids it star-re-exports from (``from X import *``), read
+        from the ``("*", source)`` import bindings and resolved through ``dotted_to_id``."""
+        out: dict[str, set[str]] = {}
+        for mid, mod in self.modules.items():
+            targets = {
+                dst
+                for local, src in mod.import_bindings
+                if local == "*" and (dst := self.dotted_to_id.get(src)) is not None
+            }
+            if targets:
+                out[mid] = targets
+        return out
+
+    def _resolve_method(self, cls_id: str, method: str) -> str | None:
+        """The method node ``method`` reachable from class ``cls_id`` — own class first, then up
+        the resolvable inheritance chain. ``None`` if no such method node exists."""
+        seen: set[str] = set()
+        frontier = [cls_id]
+        while frontier:
+            cid = frontier.pop()
+            if cid in seen:
+                continue
+            seen.add(cid)
+            if (mid := f"{cid}.{method}") in self.fns:
+                return mid
+            if (cls := self.classes.get(cid)) is not None:
+                for bn in cls.bases:
+                    frontier += self._resolve_name(bn, cls, self.by_class_name)
+        return None
 
     def _resolve_name(
         self, name: str, caller: GraphNode, index: dict[str, list[str]]
@@ -105,11 +146,24 @@ class StructuralResolver:
             for callee in n.callees:
                 for dst in self._resolve_name(callee, n, self.by_fn_name):
                     self._add(n.id, dst, EdgeKind.CALLS)
+            # typed-receiver calls (Finding 2): `recv.method()` where recv has a declared type
+            # resolves to THAT class's method (up the inheritance chain), disambiguating
+            # same-named methods that the receiver-blind name+import gate above drops.
+            for recv_type, method in n.typed_calls:
+                for cls_id in self._resolve_name(recv_type, n, self.by_class_name):
+                    if (mid := self._resolve_method(cls_id, method)) is not None:
+                        self._add(n.id, mid, EdgeKind.CALLS)
             for cb in n.callback_names:
                 for dst in self._resolve_name(cb, n, self.by_fn_name):
                     self._add(n.id, dst, EdgeKind.CALLBACK_ARG)
             for t in n.param_types:
                 for dst in self._resolve_name(t, n, self.by_class_name):
+                    self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
+            # body class-as-value uses (Finding 3): a class instantiated/attr-accessed/passed
+            # in the body edges to it, same as an annotation would. Same class-name gate, so a
+            # body name resolving to a function (already a `calls` edge) never lands here.
+            for ref in n.class_refs:
+                for dst in self._resolve_name(ref, n, self.by_class_name):
                     self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
 
     def _registered_in(self) -> None:
@@ -159,7 +213,5 @@ class StructuralResolver:
         return self.edges
 
 
-def resolve_structural(
-    nodes: list[GraphNode], *, follow_reexports: bool = False
-) -> list[GraphEdge]:
-    return StructuralResolver(nodes, follow_reexports=follow_reexports).resolve()
+def resolve_structural(nodes: list[GraphNode]) -> list[GraphEdge]:
+    return StructuralResolver(nodes).resolve()

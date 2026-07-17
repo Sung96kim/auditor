@@ -277,10 +277,6 @@ class GraphConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    # cross-module calls resolve only to a symbol whose module the caller imports. Turn this on
-    # to also follow package __init__ re-exports (caller imports the package, symbol lives in a
-    # leaf module) — more recall, at some precision cost.
-    follow_reexports: bool = False
     name_similarity_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     knn_k: int = Field(default=8, ge=1)
     cluster_floor: float = Field(default=0.45, ge=0.0, le=1.0)

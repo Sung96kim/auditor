@@ -92,6 +92,37 @@ def test_builtin_names_are_not_callees_or_callbacks():
     assert "isinstance" not in f.callees  # builtin call itself isn't a callee
 
 
+def test_body_class_refs_capture_loaded_names_excluding_stores_and_builtins():
+    """class_refs holds body class-as-value candidates (Model(), Model.col, f(Model)) as loaded
+    Names — assignment targets (Store) and builtins are excluded. The class-name gate at resolve
+    time turns only the ones that are repo classes into references_type edges (Finding 3)."""
+    src = "def f(x):\n    w = Widget()\n    _ = Other.col\n    return len(Thing)\n"
+    f = _by_id(extract_file_facts("m.py", src, "production"))["m.py::f"]
+    assert {"Widget", "Other", "Thing"} <= set(
+        f.class_refs
+    )  # loaded class-as-value names
+    assert "w" not in f.class_refs  # Store assignment target excluded
+    assert "len" not in f.class_refs  # builtin excluded
+
+
+def test_typed_calls_capture_receiver_type_and_method():
+    """typed_calls pairs an annotated-receiver method call with the receiver's declared type
+    (`svc: FooService` → svc.do_thing() gives ("FooService", "do_thing")) and self-calls with
+    the enclosing class. Resolution uses these to disambiguate same-named methods (Finding 2)."""
+    src = (
+        "def handler(svc: FooService = Depends(FooService)):\n"
+        "    return svc.do_thing(1)\n"
+        "class A:\n"
+        "    def f(self):\n"
+        "        return self.g()\n"
+        "    def g(self):\n"
+        "        return 1\n"
+    )
+    ids = _by_id(extract_file_facts("m.py", src, "production"))
+    assert ("FooService", "do_thing") in ids["m.py::handler"].typed_calls
+    assert ("A", "g") in ids["m.py::A.f"].typed_calls
+
+
 def test_method_captures_param_types_callees_and_doc():
     run = _by_id(extract_file_facts("m.py", SRC, "production"))["m.py::Impl.run"]
     assert "Request" in run.param_types and "Response" in run.param_types

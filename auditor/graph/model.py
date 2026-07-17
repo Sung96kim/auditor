@@ -54,6 +54,12 @@ class GraphNode(BaseModel):
     bases: tuple[str, ...] = ()  # class nodes only: base short names
     method_names: tuple[str, ...] = ()  # class nodes only: own method names
     callback_names: tuple[str, ...] = ()  # short names this fn passes as a callback arg
+    class_refs: tuple[
+        str, ...
+    ] = ()  # body-loaded names (class-as-value uses: Model(), Model.col, f(Model))
+    typed_calls: tuple[
+        tuple[str, str], ...
+    ] = ()  # (receiver_type, method) for calls on an annotated receiver / self
     imports: tuple[str, ...] = ()  # module nodes: candidate dotted import targets
     import_bindings: tuple[
         tuple[str, str], ...

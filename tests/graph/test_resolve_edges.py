@@ -1,3 +1,5 @@
+import pytest
+
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.model import GraphEdge
 from auditor.graph.resolve_edges import resolve_structural
@@ -57,29 +59,134 @@ def test_cross_module_call_resolves_only_via_import():
     assert ("m0.py::use", "m3.py::other") not in calls  # not imported → no edge
 
 
-def test_follow_reexports_opt_in_resolves_through_package_init():
-    """Opt-in: a caller importing a package resolves a symbol the package __init__ re-exports
-    from a leaf module. Off by default (precision); on → recall through re-exports."""
-    caller = "from pkg import handle\ndef use():\n    return handle()\n"  # imports the package
-    init = "from pkg.leaf import handle\n"  # pkg/__init__ re-exports from the leaf
-    leaf = "def handle():\n    return 1\n"
+def _reexport_nodes(*files: tuple[str, str]) -> list:
+    out = []
+    for path, src in files:
+        out += extract_file_facts(path, src, "production").nodes
+    return out
 
-    def _nodes():
-        out = []
-        out += extract_file_facts("caller.py", caller, "production").nodes
-        out += extract_file_facts("pkg/__init__.py", init, "production").nodes
-        out += extract_file_facts("pkg/leaf.py", leaf, "production").nodes
-        return out
 
-    off = {(e.src, e.dst) for e in resolve_structural(_nodes()) if e.kind == "calls"}
-    assert ("caller.py::use", "pkg/leaf.py::handle") not in off  # default: not followed
+def test_reexport_resolves_through_package_init():
+    """A caller importing a package resolves a symbol the package __init__ re-exports from a
+    leaf module. Re-export following is always on: it can only recover a true edge or drop a
+    genuinely-ambiguous one (the len==1 gate never invents a wrong edge)."""
+    files = (
+        ("caller.py", "from pkg import handle\ndef use():\n    return handle()\n"),
+        (
+            "pkg/__init__.py",
+            "from pkg.leaf import handle\n",
+        ),  # __init__ re-exports the leaf
+        ("pkg/leaf.py", "def handle():\n    return 1\n"),
+    )
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    assert ("caller.py::use", "pkg/leaf.py::handle") in calls
 
-    on = {
-        (e.src, e.dst)
-        for e in resolve_structural(_nodes(), follow_reexports=True)
-        if e.kind == "calls"
-    }
-    assert ("caller.py::use", "pkg/leaf.py::handle") in on  # opt-in: followed
+
+def test_star_reexport_reference_edge():
+    """A class imported through a plain-module star aggregator (`from .real import *` in
+    schemas.py, then `from pkg.schemas import Widget` in the consumer) resolves to its DEFINING
+    module. Finding 1."""
+    files = (
+        ("pkg/real.py", "class Widget:\n    pass\n"),
+        ("pkg/schemas.py", "from .real import *\n"),
+        (
+            "pkg/consumer.py",
+            "from pkg.schemas import Widget\ndef q() -> int:\n    Widget()\n    return 0\n",
+        ),
+    )
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    assert ("pkg/consumer.py::q", "pkg/real.py::Widget") in refs
+
+
+def test_transitive_star_reexport_reference_edge():
+    """Two star hops (consumer → pkg/__init__ → schemas → real) resolve transitively — the
+    star relation is namespace inclusion, followed to a fixpoint."""
+    files = (
+        ("pkg/real.py", "class Widget:\n    pass\n"),
+        ("pkg/schemas.py", "from .real import *\n"),
+        ("pkg/__init__.py", "from .schemas import *\n"),
+        (
+            "pkg/consumer.py",
+            "from pkg import Widget\ndef q() -> int:\n    Widget()\n    return 0\n",
+        ),
+    )
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    assert ("pkg/consumer.py::q", "pkg/real.py::Widget") in refs
+
+
+def test_star_reexport_call_edge():
+    """The re-export fix threads through call resolution too (shared import gate): a function
+    reached via a star aggregator resolves to its defining module — relevant to the
+    Depends-injected-service call gap (Finding 2)."""
+    files = (
+        ("pkg/impl.py", "def handle():\n    return 1\n"),
+        ("pkg/api.py", "from .impl import *\n"),
+        (
+            "pkg/consumer.py",
+            "from pkg.api import handle\ndef use():\n    return handle()\n",
+        ),
+    )
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    assert ("pkg/consumer.py::use", "pkg/impl.py::handle") in calls
+
+
+def test_plain_module_explicit_import_not_followed_as_reexport():
+    """Precision boundary: a plain (non-__init__) module's *explicit* import is not treated as a
+    re-export surface — only star imports propagate reachability, so consumers of the plain
+    module do not transitively reach its internal dependency (guards the false hairball)."""
+    files = (
+        ("pkg/internal.py", "class Secret:\n    pass\n"),
+        ("pkg/svc.py", "from .internal import Secret\n"),  # explicit, NOT star
+        (
+            "pkg/consumer.py",
+            "from pkg.svc import Secret\ndef q() -> int:\n    Secret()\n    return 0\n",
+        ),
+    )
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    assert ("pkg/consumer.py::q", "pkg/internal.py::Secret") not in refs
+
+
+def test_typed_receiver_disambiguates_method_call():
+    """A method call on an annotated (Depends-injected) receiver resolves to THAT class's method
+    even when other reachable modules define the same method name. Receiver-blind name+import
+    gating drops it as ambiguous; the declared type `svc: FooService` disambiguates. Finding 2."""
+    files = (
+        (
+            "svc/foo.py",
+            "class FooService:\n    def do_thing(self, p):\n        return 1\n",
+        ),
+        (
+            "svc/bar.py",
+            "class BarService:\n    def do_thing(self, p):\n        return 2\n",
+        ),
+        ("svc/__init__.py", "from .foo import *\nfrom .bar import *\n"),
+        (
+            "routes.py",
+            "from svc import FooService\n"
+            "def handler(payload, svc: FooService = Depends(FooService)):\n"
+            "    return svc.do_thing(payload)\n",
+        ),
+    )
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    assert ("routes.py::handler", "svc/foo.py::FooService.do_thing") in calls
+    assert ("routes.py::handler", "svc/bar.py::BarService.do_thing") not in calls
+
+
+def test_typed_receiver_resolves_inherited_method():
+    """The receiver's type resolves the method up the inheritance chain (method defined on a base
+    class in another module)."""
+    files = (
+        ("base.py", "class BaseSvc:\n    def do_thing(self, p):\n        return 1\n"),
+        ("foo.py", "from base import BaseSvc\nclass FooService(BaseSvc):\n    pass\n"),
+        (
+            "routes.py",
+            "from foo import FooService\n"
+            "def handler(svc: FooService = Depends(FooService)):\n"
+            "    return svc.do_thing(1)\n",
+        ),
+    )
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    assert ("routes.py::handler", "base.py::BaseSvc.do_thing") in calls
 
 
 def test_references_type_edge():
@@ -89,6 +196,52 @@ def test_references_type_edge():
     assert ("m0.py::Impl.run", "m0.py::Request") in _pairs(
         _edges(src), "references_type"
     )
+
+
+_BODY_CLASS_USE_CASES = [
+    ("instantiation", "    w = Widget()\n"),
+    ("attribute_access", "    _ = Widget.id\n"),
+    ("call_argument", "    stmt = select(Widget)\n"),
+    ("bare_name_argument", "    consume(Widget)\n"),
+]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [c[1] for c in _BODY_CLASS_USE_CASES],
+    ids=[c[0] for c in _BODY_CLASS_USE_CASES],
+)
+def test_body_class_use_creates_references_type_edge(body):
+    """A class used as a *value* in a function body — instantiation, attribute access, or
+    passed as a call argument — must edge to that class, even when the class never appears in
+    the signature (the ORM `select(Model)` / `Model(**kw)` / `Model.col` case). Finding 3."""
+    src = "class Widget:\n    id = 1\n\ndef uses() -> int:\n" + body + "    return 0\n"
+    assert ("m0.py::uses", "m0.py::Widget") in _pairs(_edges(src), "references_type")
+
+
+def test_body_class_ref_cross_module_gated_by_import():
+    """Body class-refs resolve cross-module with the same import gate as annotations: only a
+    class whose module the caller actually imports (and unambiguously) is edged."""
+    caller = extract_file_facts(
+        "caller.py",
+        "from models import Widget\ndef uses() -> int:\n    Widget()\n    return 0\n",
+        "production",
+    )
+    models = extract_file_facts("models.py", "class Widget:\n    pass\n", "production")
+    other = extract_file_facts("other.py", "class Widget:\n    pass\n", "production")
+    edges = resolve_structural([*caller.nodes, *models.nodes, *other.nodes])
+    refs = {(e.src, e.dst) for e in edges if e.kind == "references_type"}
+    assert ("caller.py::uses", "models.py::Widget") in refs  # imported → edge
+    assert ("caller.py::uses", "other.py::Widget") not in refs  # not imported → no edge
+
+
+def test_body_name_matching_function_does_not_become_references_type():
+    """A body name that resolves to a *function* (not a class) stays a `calls` edge and does
+    not spuriously become a references_type edge."""
+    src = "def helper():\n    return 1\n\ndef uses():\n    return helper()\n"
+    edges = _edges(src)
+    assert ("m0.py::uses", "m0.py::helper") in _pairs(edges, "calls")
+    assert ("m0.py::uses", "m0.py::helper") not in _pairs(edges, "references_type")
 
 
 def test_contains_edges():
