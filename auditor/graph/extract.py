@@ -158,6 +158,89 @@ def _merge_same_id(nodes: list[GraphNode]) -> list[GraphNode]:
     return list(by_id.values())
 
 
+class _FnFactCollector:
+    """A function's referenced symbols, accumulated from its body and parameter defaults."""
+
+    def __init__(self, cls: str | None) -> None:
+        self.callees: list[str] = []
+        self.callback_names: list[str] = []
+        self.body_idents: list[str] = []
+        self.class_refs: list[
+            str
+        ] = []  # loaded Names — class-as-value uses (Model(), Model.col)
+        self.attr_calls: list[
+            tuple[str, str]
+        ] = []  # (receiver, method) for recv.method()
+        self.recv_types: dict[
+            str, str
+        ] = {}  # receiver var -> declared class, for typed calls
+        if cls is not None:
+            self.recv_types["self"] = self.recv_types["cls"] = cls.rsplit(".", 1)[-1]
+
+    def scan(self, fn: _FuncDefT) -> "_FnFactCollector":
+        for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs:
+            if (t := _receiver_type(a.annotation)) is not None:
+                self.recv_types[a.arg] = t
+        self._scan_body(fn.body)
+        self._scan_defaults(fn.args)
+        return self
+
+    def _add_call(self, call: ast.Call, *, track_receiver: bool) -> None:
+        f = call.func
+        if isinstance(f, ast.Name) and f.id not in _BUILTIN_NAMES:
+            self.callees.append(f.id)
+        elif isinstance(f, ast.Attribute) and f.attr not in _BUILTIN_NAMES:
+            self.callees.append(f.attr)
+            if track_receiver and isinstance(f.value, ast.Name):
+                self.attr_calls.append((f.value.id, f.attr))
+
+    def _scan_body(self, body: list[ast.stmt]) -> None:
+        # walk the body only — a decorator (`@app.get(...)`) is applied TO the fn, not called BY it
+        for stmt in body:
+            for n in ast.walk(stmt):
+                if isinstance(n, ast.Name):
+                    self.body_idents.append(n.id)
+                    if isinstance(n.ctx, ast.Load) and n.id not in _BUILTIN_NAMES:
+                        self.class_refs.append(n.id)
+                elif isinstance(n, ast.Attribute):
+                    self.body_idents.append(n.attr)
+                elif isinstance(n, ast.AnnAssign):
+                    if (
+                        isinstance(n.target, ast.Name)
+                        and (t := _receiver_type(n.annotation)) is not None
+                    ):
+                        self.recv_types[n.target.id] = t
+                elif isinstance(n, ast.Call):
+                    self._add_call(n, track_receiver=True)
+                    for a in n.args:  # bare Name positional arg (potential callback)
+                        if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
+                            self.callback_names.append(a.id)
+
+    def _scan_defaults(self, args: ast.arguments) -> None:
+        # a class/callable used only as a param default is still a reference (Finding C)
+        for d in (*args.defaults, *args.kw_defaults):
+            if d is None:  # kwonly arg with no default
+                continue
+            for n in ast.walk(d):
+                if (
+                    isinstance(n, ast.Name)
+                    and isinstance(n.ctx, ast.Load)
+                    and n.id not in _BUILTIN_NAMES
+                ):
+                    self.class_refs.append(n.id)
+                elif isinstance(n, ast.Call):
+                    self._add_call(n, track_receiver=False)
+
+    def typed_calls(self) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            dict.fromkeys(
+                (self.recv_types[r], m)
+                for r, m in dict.fromkeys(self.attr_calls)
+                if r in self.recv_types
+            )
+        )
+
+
 class FileExtractor:
     """Extracts one file's FileGraphFacts. Holds the per-file context (path, role,
     path tokens) and accumulates nodes, so the AST walk reads as methods, not closures."""
@@ -209,83 +292,15 @@ class FileExtractor:
         )
 
     def _fn_node(self, fn: _FuncDefT, cls: str | None) -> GraphNode:
+        facts = _FnFactCollector(cls).scan(fn)
         params = [a.arg for a in fn.args.posonlyargs + fn.args.args]
-        callees: list[str] = []
-        callback_names: list[str] = []
-        body_idents: list[str] = []
-        # class-as-value uses in the body: a loaded Name (Model(), Model.col, f(Model), = Model)
-        # resolved to a class at edge time. Store-context targets are excluded; the class-name
-        # gate in resolution keeps this precise (non-class names simply don't edge).
-        class_refs: list[str] = []
-        # typed method calls: receiver variable -> its declared class, so `recv.method()` can
-        # resolve to THAT class's method instead of the receiver-blind name match. Seeded with
-        # the param annotations + self/cls, extended by annotated body locals below.
-        recv_types: dict[str, str] = {}
-        if cls is not None:
-            recv_types["self"] = recv_types["cls"] = cls.rsplit(".", 1)[-1]
-        for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs:
-            if (t := _receiver_type(a.annotation)) is not None:
-                recv_types[a.arg] = t
-        attr_calls: list[
-            tuple[str, str]
-        ] = []  # (receiver_name, method) for recv.method()
-        # walk the body statements only — NOT fn.decorator_list: a decorator like
-        # @app.get("/ping") is applied TO the function, not called BY it, so it must not
-        # become one of its callees (param/return types are collected separately below).
-        for stmt in fn.body:
-            for n in ast.walk(stmt):
-                if isinstance(n, ast.Name):
-                    body_idents.append(n.id)
-                    if isinstance(n.ctx, ast.Load) and n.id not in _BUILTIN_NAMES:
-                        class_refs.append(n.id)
-                elif isinstance(n, ast.Attribute):
-                    body_idents.append(n.attr)
-                elif isinstance(n, ast.AnnAssign):
-                    if (
-                        isinstance(n.target, ast.Name)
-                        and (t := _receiver_type(n.annotation)) is not None
-                    ):
-                        recv_types[n.target.id] = t
-                elif isinstance(n, ast.Call):
-                    f = n.func
-                    if isinstance(f, ast.Name) and f.id not in _BUILTIN_NAMES:
-                        callees.append(f.id)
-                    elif isinstance(f, ast.Attribute) and f.attr not in _BUILTIN_NAMES:
-                        callees.append(f.attr)
-                        if isinstance(f.value, ast.Name):
-                            attr_calls.append((f.value.id, f.attr))
-                    for a in n.args:  # bare Name positional arg (potential callback)
-                        if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
-                            callback_names.append(a.id)
-        # Param defaults reference symbols too (Finding C): `def get(cls=Model)` uses Model with no
-        # body mention — collect their loads/calls (same gate as the body) so the edge isn't lost.
-        for d in (*fn.args.defaults, *fn.args.kw_defaults):
-            if d is None:  # kwonly arg with no default
-                continue
-            for n in ast.walk(d):
-                if isinstance(n, ast.Name):
-                    if isinstance(n.ctx, ast.Load) and n.id not in _BUILTIN_NAMES:
-                        class_refs.append(n.id)
-                elif isinstance(n, ast.Call):
-                    f = n.func
-                    if isinstance(f, ast.Name) and f.id not in _BUILTIN_NAMES:
-                        callees.append(f.id)
-                    elif isinstance(f, ast.Attribute) and f.attr not in _BUILTIN_NAMES:
-                        callees.append(f.attr)
-        typed_calls = tuple(
-            dict.fromkeys(
-                (recv_types[r], m)
-                for r, m in dict.fromkeys(attr_calls)
-                if r in recv_types
-            )
-        )
         ptypes: list[str] = []
         for a in _all_arg_nodes(fn.args):
             ptypes += _ann_type_names(a.annotation)
         ptypes += _ann_type_names(fn.returns)
         # HOF only on a bare-Name call of a parameter (spec §9c: avoid the 53% over-fire)
-        is_hof = any(c in params for c in callees) or any(
-            n in params for n in callback_names
+        is_hof = any(c in params for c in facts.callees) or any(
+            n in params for n in facts.callback_names
         )
         decorators = tuple(
             d.id if isinstance(d, ast.Name) else getattr(d, "attr", "")
@@ -296,7 +311,7 @@ class FileExtractor:
             name=fn.name,
             args=params,
             docstring=ast.get_docstring(fn) or "",
-            body_idents=body_idents,
+            body_idents=facts.body_idents,
             param_types=ptypes,
             path_tokens=self.path_tokens,
             class_name=cls,
@@ -308,14 +323,14 @@ class FileExtractor:
             module=self.rel_path,
             qualname=qual,
             doc_tokens=tuple(doc),
-            callees=tuple(dict.fromkeys(callees)),
+            callees=tuple(dict.fromkeys(facts.callees)),
             param_types=tuple(dict.fromkeys(ptypes)),
             decorators=decorators,
             registry_roots=_registry_roots(fn.decorator_list),
             semantic_profile=semantic_profile.compute(fn),
-            callback_names=tuple(dict.fromkeys(callback_names)),
-            class_refs=tuple(dict.fromkeys(class_refs)),
-            typed_calls=typed_calls,
+            callback_names=tuple(dict.fromkeys(facts.callback_names)),
+            class_refs=tuple(dict.fromkeys(facts.class_refs)),
+            typed_calls=facts.typed_calls(),
             is_hof=is_hof,
             is_stub=_is_stub(fn),
             line=fn.lineno,
