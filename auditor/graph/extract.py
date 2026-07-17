@@ -88,6 +88,20 @@ def _ann_type_names(node: ast.expr | None) -> list[str]:
     return names
 
 
+def _receiver_type(ann: ast.expr | None) -> str | None:
+    """The class short-name a receiver annotation denotes, for typed method-call resolution:
+    ``FooService`` (Name), ``mod.FooService`` (Attribute), or the primary side of an
+    ``X | None`` union. ``None`` for containers/forward-refs/anything else (kept deliberately
+    narrow — the common ``svc: FooService`` / ``svc: FooService | None`` shapes only)."""
+    if isinstance(ann, ast.Name):
+        return ann.id
+    if isinstance(ann, ast.Attribute):
+        return ann.attr
+    if isinstance(ann, ast.BinOp) and isinstance(ann.op, ast.BitOr):
+        return _receiver_type(ann.left) or _receiver_type(ann.right)
+    return None
+
+
 def _is_stub(fn: _FuncDefT) -> bool:
     body = [
         s
@@ -152,6 +166,22 @@ class FileExtractor:
         callees: list[str] = []
         callback_names: list[str] = []
         body_idents: list[str] = []
+        # class-as-value uses in the body: a loaded Name (Model(), Model.col, f(Model), = Model)
+        # resolved to a class at edge time. Store-context targets are excluded; the class-name
+        # gate in resolution keeps this precise (non-class names simply don't edge).
+        class_refs: list[str] = []
+        # typed method calls: receiver variable -> its declared class, so `recv.method()` can
+        # resolve to THAT class's method instead of the receiver-blind name match. Seeded with
+        # the param annotations + self/cls, extended by annotated body locals below.
+        recv_types: dict[str, str] = {}
+        if cls is not None:
+            recv_types["self"] = recv_types["cls"] = cls.rsplit(".", 1)[-1]
+        for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs:
+            if (t := _receiver_type(a.annotation)) is not None:
+                recv_types[a.arg] = t
+        attr_calls: list[
+            tuple[str, str]
+        ] = []  # (receiver_name, method) for recv.method()
         # walk the body statements only — NOT fn.decorator_list: a decorator like
         # @app.get("/ping") is applied TO the function, not called BY it, so it must not
         # become one of its callees (param/return types are collected separately below).
@@ -159,17 +189,34 @@ class FileExtractor:
             for n in ast.walk(stmt):
                 if isinstance(n, ast.Name):
                     body_idents.append(n.id)
+                    if isinstance(n.ctx, ast.Load) and n.id not in _BUILTIN_NAMES:
+                        class_refs.append(n.id)
                 elif isinstance(n, ast.Attribute):
                     body_idents.append(n.attr)
+                elif isinstance(n, ast.AnnAssign):
+                    if (
+                        isinstance(n.target, ast.Name)
+                        and (t := _receiver_type(n.annotation)) is not None
+                    ):
+                        recv_types[n.target.id] = t
                 elif isinstance(n, ast.Call):
                     f = n.func
                     if isinstance(f, ast.Name) and f.id not in _BUILTIN_NAMES:
                         callees.append(f.id)
                     elif isinstance(f, ast.Attribute) and f.attr not in _BUILTIN_NAMES:
                         callees.append(f.attr)
+                        if isinstance(f.value, ast.Name):
+                            attr_calls.append((f.value.id, f.attr))
                     for a in n.args:  # bare Name positional arg (potential callback)
                         if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
                             callback_names.append(a.id)
+        typed_calls = tuple(
+            dict.fromkeys(
+                (recv_types[r], m)
+                for r, m in dict.fromkeys(attr_calls)
+                if r in recv_types
+            )
+        )
         ptypes: list[str] = []
         for a in fn.args.posonlyargs + fn.args.args:
             ptypes += _ann_type_names(a.annotation)
@@ -205,6 +252,8 @@ class FileExtractor:
             registry_roots=_registry_roots(fn.decorator_list),
             semantic_profile=semantic_profile.compute(fn),
             callback_names=tuple(dict.fromkeys(callback_names)),
+            class_refs=tuple(dict.fromkeys(class_refs)),
+            typed_calls=typed_calls,
             is_hof=is_hof,
             is_stub=_is_stub(fn),
             line=fn.lineno,
