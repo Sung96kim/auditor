@@ -61,7 +61,7 @@ class StructuralResolver:
         #     relation to follow to a fixpoint (a plain module's *explicit* imports are NOT
         #     followed — that would close the whole graph into a hairball).
         base = {mid: set(imps) for mid, imps in self.imports_by_module.items()}
-        star_map = self._star_reexport_map()
+        star_map = self.star_reexports = self._star_reexport_map()
         for imps in self.imports_by_module.values():
             for imported in tuple(imps):
                 if imported.endswith("/__init__.py"):
@@ -117,6 +117,25 @@ class StructuralResolver:
         src = self.bindings_by_module.get(module_id, {}).get(name)
         return None if src is None else self.dotted_to_id.get(src)
 
+    def _namespace_defs(
+        self, module_id: str, definers: set[str], seen: set[str]
+    ) -> set[str]:
+        """Which of ``definers`` (modules that define the name) ``module_id`` actually exports the
+        name from: its own definition, else followed through its STAR re-exports (`from X import
+        *`) to a fixpoint. Named imports are NOT followed — `from m import WorkflowBlueprint`
+        doesn't put m's *other* same-named symbols into this namespace. Scopes a re-exported
+        binding (`from orion.database import ComponentBlueprint`) to the one definition the
+        aggregator really exports, not every same-named class the caller can transitively reach."""
+        if module_id in seen:
+            return set()
+        seen.add(module_id)
+        if module_id in definers:
+            return {module_id}  # a local definition shadows any star re-export
+        out: set[str] = set()
+        for star_src in self.star_reexports.get(module_id, ()):
+            out |= self._namespace_defs(star_src, definers, seen)
+        return out
+
     def _resolve_name(
         self, name: str, caller: GraphNode, index: dict[str, list[str]]
     ) -> list[str]:
@@ -126,11 +145,13 @@ class StructuralResolver:
         same = [h for h in hits if h.split("::")[0] == caller.module]
         if same:
             return same
-        # The caller's own import pins the source: `from a import Model` means Model here IS
-        # a.Model even when other reachable modules also define `Model`. Without this the extra
-        # candidates make `len(gated) > 1` and the edge drops as ambiguous (Finding B).
+        # The caller's import pins the source: `from orion.database import ComponentBlueprint` means
+        # the one class `orion.database` exports. Resolve through the source's namespace (own def +
+        # star re-exports) so same-named siblings don't make `len(gated) > 1` → drop (Finding B).
         if (src_mod := self._binding_target(caller.module, name)) is not None:
-            bound = [h for h in hits if h.split("::")[0] == src_mod]
+            definers = {h.split("::")[0] for h in hits}
+            exported = self._namespace_defs(src_mod, definers, set())
+            bound = [h for h in hits if h.split("::")[0] in exported]
             if len(bound) == 1:
                 return bound
         # Cross-module: a call site gives us only the name (`x.get()` → "get"), not the receiver
