@@ -1,3 +1,9 @@
+## v0.10.4 (2026-07-17)
+
+### Fix
+
+- **graph**: keyword-only param types + named __init__ re-exports (Finding B) (#9)
+
 ## v0.10.3 (2026-07-17)
 
 ### Fix
