@@ -282,6 +282,37 @@ def test_binding_disambiguates_name_defined_in_several_reachable_modules():
     assert ("caller.py::q", "b.py::helper") in calls  # unambiguous call still resolves
 
 
+def test_reexport_binding_resolves_through_star_not_named_sibling():
+    """Finding B, real case (orion `from orion.database import ComponentBlueprint`): a consumer
+    imports a name a package re-exports, where the package star-re-exports the real class AND
+    named-imports something else from a sibling module that *also* defines a same-named class.
+    The named import drags that sibling into the consumer's reachability, so both same-named
+    classes gate in (`len(gated) > 1`) and the edge is dropped as ambiguous. Resolving through the
+    binding source's namespace — its own def + STAR re-exports only, NOT named imports — pins it to
+    the one class the package actually exports."""
+    files = (
+        ("pkg/orm.py", "class Model:\n    id = 1\n"),  # the real (ORM) class
+        (
+            "pkg/other.py",
+            "class Helper:\n    pass\n\nclass Model:\n    id = 2\n",  # same-named sibling
+        ),
+        (
+            "pkg/__init__.py",
+            "from pkg.orm import *\nfrom pkg.other import Helper\n",  # star Model, named Helper
+        ),
+        (
+            "consumer.py",
+            "from pkg import Model\ndef q() -> int:\n    return select(Model.id) or 0\n",
+        ),
+    )
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    assert ("consumer.py::q", "pkg/orm.py::Model") in refs  # the star-exported class
+    assert (
+        "consumer.py::q",
+        "pkg/other.py::Model",
+    ) not in refs  # never the named sibling's
+
+
 def test_body_class_ref_cross_module_gated_by_import():
     """Body class-refs resolve cross-module with the same import gate as annotations: only a
     class whose module the caller actually imports (and unambiguously) is edged."""
