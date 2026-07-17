@@ -1,3 +1,9 @@
+## v0.10.0 (2026-07-17)
+
+### Feat
+
+- **graph**: recover edges lost to re-exports, body class-refs, and typed receivers (#5)
+
 ## v0.9.3 (2026-07-14)
 
 ### Fix
