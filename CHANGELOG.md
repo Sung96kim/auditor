@@ -1,3 +1,9 @@
+## v0.10.3 (2026-07-17)
+
+### Fix
+
+- **graph**: resolve a re-exported binding through its source namespace (Finding B) (#8)
+
 ## v0.10.2 (2026-07-17)
 
 ### Fix
