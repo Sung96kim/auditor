@@ -1,3 +1,9 @@
+## v0.10.5 (2026-07-17)
+
+### Refactor
+
+- **graph**: extract _FnFactCollector from _fn_node (#10)
+
 ## v0.10.4 (2026-07-17)
 
 ### Fix

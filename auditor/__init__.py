@@ -39,7 +39,7 @@ __all__ = [
     "render",
 ]
 
-__version__ = "0.10.4"
+__version__ = "0.10.5"
 
 # Stay silent when embedded / under MCP; the CLI's logconfig.configure() re-enables it.
 logger.disable("auditor")
