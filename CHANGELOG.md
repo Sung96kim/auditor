@@ -1,3 +1,9 @@
+## v0.10.1 (2026-07-17)
+
+### Fix
+
+- **self-update**: preserve install extras and upgrade uv-tool installs correctly (#6)
+
 ## v0.10.0 (2026-07-17)
 
 ### Feat
