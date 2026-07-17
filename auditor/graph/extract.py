@@ -88,6 +88,13 @@ def _ann_type_names(node: ast.expr | None) -> list[str]:
     return names
 
 
+def _all_arg_nodes(args: ast.arguments) -> list[ast.arg]:
+    """Every declared parameter — positional-only, normal, ``*args``, keyword-only, ``**kwargs`` —
+    so an annotation on a keyword-only param (behind a ``*,``) is still read (Finding B)."""
+    extra = [a for a in (args.vararg, args.kwarg) if a is not None]
+    return args.posonlyargs + args.args + args.kwonlyargs + extra
+
+
 def _receiver_type(ann: ast.expr | None) -> str | None:
     """The class short-name a receiver annotation denotes, for typed method-call resolution:
     ``FooService`` (Name), ``mod.FooService`` (Attribute), or the primary side of an
@@ -113,9 +120,7 @@ def _is_stub(fn: _FuncDefT) -> bool:
     return len(body) == 1 and isinstance(body[0], (ast.Pass, ast.Raise))
 
 
-# Fact tuples that carry edge/text signal and must survive a same-id merge (Finding A).
-# Identity/position scalars (id, kind, name, module, qualname, line, role) are kept from the
-# first definition; is_hof/is_stub are combined below.
+# Fact tuples unioned on a same-id merge; identity scalars kept from the first def (Finding A).
 _UNION_FACT_FIELDS = (
     "doc_tokens",
     "callees",
@@ -134,10 +139,8 @@ _UNION_FACT_FIELDS = (
 
 
 def _union_facts(a: GraphNode, b: GraphNode) -> GraphNode:
-    """Merge two nodes sharing an id into one, unioning their fact tuples (order-preserving).
-    Same-named methods in a class — `@hybrid_property` getter + `@<name>.expression`, or
-    `@property` + `@<name>.setter` — collapse to one id; without this the later definition's
-    edges (its `select(Model)` reference, its calls) would be silently dropped."""
+    """Merge two same-id nodes, unioning their fact tuples — so same-named methods
+    (`@hybrid_property` getter + `.expression`) don't lose the later def's edges (Finding A)."""
     update: dict[str, object] = {
         f: tuple(dict.fromkeys((*getattr(a, f), *getattr(b, f))))
         for f in _UNION_FACT_FIELDS
@@ -254,9 +257,8 @@ class FileExtractor:
                     for a in n.args:  # bare Name positional arg (potential callback)
                         if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
                             callback_names.append(a.id)
-        # Parameter default values reference symbols too (Finding C): `def get(cls=Model)` uses
-        # Model though it never appears in the body — collect class-as-value loads and calls from
-        # the default exprs (same gate as the body) so the reference/call edge isn't dropped.
+        # Param defaults reference symbols too (Finding C): `def get(cls=Model)` uses Model with no
+        # body mention — collect their loads/calls (same gate as the body) so the edge isn't lost.
         for d in (*fn.args.defaults, *fn.args.kw_defaults):
             if d is None:  # kwonly arg with no default
                 continue
@@ -278,7 +280,7 @@ class FileExtractor:
             )
         )
         ptypes: list[str] = []
-        for a in fn.args.posonlyargs + fn.args.args:
+        for a in _all_arg_nodes(fn.args):
             ptypes += _ann_type_names(a.annotation)
         ptypes += _ann_type_names(fn.returns)
         # HOF only on a bare-Name call of a parameter (spec §9c: avoid the 53% over-fire)
