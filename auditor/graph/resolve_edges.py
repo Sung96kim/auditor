@@ -28,6 +28,12 @@ class StructuralResolver:
         for c in self.classes.values():
             self.by_class_name[c.name].append(c.id)
         self.role_by_id = {n.id: n.role for n in nodes}
+        # module_id -> {local_name: source_dotted}: which module each name is imported FROM.
+        # `from a import Model` binds Model to module `a`, pinning its source even when several
+        # reachable modules define a same-named Model (Finding B).
+        self.bindings_by_module: dict[str, dict[str, str]] = {
+            mid: dict(mod.import_bindings) for mid, mod in self.modules.items()
+        }
         self.dotted_to_id: dict[str, str] = {}
         for mid in sorted(self.modules):
             stem = mid.removesuffix(".py")
@@ -105,6 +111,12 @@ class StructuralResolver:
                     frontier += self._resolve_name(bn, cls, self.by_class_name)
         return None
 
+    def _binding_target(self, module_id: str, name: str) -> str | None:
+        """The repo module id that ``module_id`` binds ``name`` from (``from a import Name`` → the
+        id of module ``a``), or ``None`` if there's no such explicit binding or it's external."""
+        src = self.bindings_by_module.get(module_id, {}).get(name)
+        return None if src is None else self.dotted_to_id.get(src)
+
     def _resolve_name(
         self, name: str, caller: GraphNode, index: dict[str, list[str]]
     ) -> list[str]:
@@ -114,6 +126,13 @@ class StructuralResolver:
         same = [h for h in hits if h.split("::")[0] == caller.module]
         if same:
             return same
+        # The caller's own import pins the source: `from a import Model` means Model here IS
+        # a.Model even when other reachable modules also define `Model`. Without this the extra
+        # candidates make `len(gated) > 1` and the edge drops as ambiguous (Finding B).
+        if (src_mod := self._binding_target(caller.module, name)) is not None:
+            bound = [h for h in hits if h.split("::")[0] == src_mod]
+            if len(bound) == 1:
+                return bound
         # Cross-module: a call site gives us only the name (`x.get()` → "get"), not the receiver
         # type, so a name defined elsewhere can't be attributed by name alone — that's what made
         # every `.get()`/`from_orm()` link to a same-named repo method (false hairball). Use the
@@ -167,13 +186,10 @@ class StructuralResolver:
                     self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
 
     def _registered_in(self) -> None:
-        bindings_by_module = {
-            mid: dict(self.modules[mid].import_bindings) for mid in sorted(self.modules)
-        }
         for sym in sorted(self.nodes, key=lambda s: s.id):
             if not sym.registry_roots:
                 continue
-            binds = bindings_by_module.get(sym.module, {})
+            binds = self.bindings_by_module.get(sym.module, {})
             for root in sym.registry_roots:
                 dotted = binds.get(root)
                 if dotted is None:

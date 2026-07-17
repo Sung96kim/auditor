@@ -184,8 +184,10 @@ async def test_build_runs_detectors_and_persists(tmp_path):
 
 async def test_dedup_property_getter_setter(tmp_path):
     facts = extract_file_facts("prop.py", PROP, "production")
+    # getter + setter share an id — the extractor now merges them into ONE node (Finding A),
+    # unioning their facts, rather than emitting two and lossily dropping one at build dedup.
     dup_nodes = [n for n in facts.nodes if n.id == "prop.py::Box.config"]
-    assert len(dup_nodes) == 2, "extractor must emit two nodes for getter+setter"
+    assert len(dup_nodes) == 1, "extractor merges getter+setter into one node"
 
     s = await IndexStore.connect(tmp_path / "i.db", repo="r")
     try:

@@ -219,6 +219,69 @@ def test_body_class_use_creates_references_type_edge(body):
     assert ("m0.py::uses", "m0.py::Widget") in _pairs(_edges(src), "references_type")
 
 
+def _dedupe_first_wins(nodes):
+    """Mirror build.py's repo-level dedup: the first node seen for an id wins, the rest are
+    dropped. Same-id nodes must therefore already carry the union of every definition's facts."""
+    seen, out = set(), []
+    for n in nodes:
+        if n.id not in seen:
+            seen.add(n.id)
+            out.append(n)
+    return out
+
+
+def test_same_named_method_edges_survive_build_dedup():
+    """Full-pipeline guard for Finding A: `build` dedups same-id nodes first-wins, so the
+    surviving node must already carry BOTH definitions' facts — else the `.expression` half's
+    `references_type -> Model` is lost (total_out=0 for the `@hybrid_property`)."""
+    src = (
+        "class Model:\n    id = 1\n\n"
+        "class Thing:\n"
+        "    def label(self):\n"  # getter half — no interesting refs
+        "        return 'x'\n"
+        "    def label(cls):\n"  # .expression half — reads Model
+        "        return select(Model.id)\n"
+    )
+    nodes = _dedupe_first_wins(extract_file_facts("m0.py", src, "production").nodes)
+    refs = _pairs(resolve_structural(nodes), "references_type")
+    assert ("m0.py::Thing.label", "m0.py::Model") in refs
+
+
+def test_param_default_class_creates_references_type_edge():
+    """Finding C end-to-end: a class used only as a parameter default edges to that class."""
+    src = (
+        "class Model:\n    id = 1\n\n"
+        "def by_ids(ids, cls=Model) -> int:\n"
+        "    return select(cls) or 0\n"
+    )
+    assert ("m0.py::by_ids", "m0.py::Model") in _pairs(_edges(src), "references_type")
+
+
+def test_binding_disambiguates_name_defined_in_several_reachable_modules():
+    """Finding B: `from a import Model` pins Model to module `a`, so the reference edge resolves
+    even when another reachable module (`b`, imported for an unrelated symbol) also defines a
+    same-named `Model`. Before, the two reachable `Model`s made `len(gated) > 1` and the edge was
+    dropped as ambiguous — zeroing out the edges of a function whose refs are all common names."""
+    files = (
+        ("a.py", "class Model:\n    id = 1\n"),
+        ("b.py", "class Model:\n    id = 2\n\ndef helper():\n    return 0\n"),
+        (
+            "caller.py",
+            "from a import Model\n"
+            "from b import helper\n"  # unrelated import that also drags in b.Model
+            "def q() -> int:\n"
+            "    helper()\n"
+            "    return select(Model.id) or 0\n",
+        ),
+    )
+    edges = resolve_structural(_reexport_nodes(*files))
+    refs = _pairs(edges, "references_type")
+    calls = _pairs(edges, "calls")
+    assert ("caller.py::q", "a.py::Model") in refs  # binding pins Model to a
+    assert ("caller.py::q", "b.py::Model") not in refs  # never the other module's Model
+    assert ("caller.py::q", "b.py::helper") in calls  # unambiguous call still resolves
+
+
 def test_body_class_ref_cross_module_gated_by_import():
     """Body class-refs resolve cross-module with the same import gate as annotations: only a
     class whose module the caller actually imports (and unambiguously) is edged."""
