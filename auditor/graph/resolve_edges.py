@@ -28,9 +28,7 @@ class StructuralResolver:
         for c in self.classes.values():
             self.by_class_name[c.name].append(c.id)
         self.role_by_id = {n.id: n.role for n in nodes}
-        # module_id -> {local_name: source_dotted}: which module each name is imported FROM.
-        # `from a import Model` binds Model to module `a`, pinning its source even when several
-        # reachable modules define a same-named Model (Finding B).
+        # module_id -> {local_name: source_dotted}: the module each name is imported FROM.
         self.bindings_by_module: dict[str, dict[str, str]] = {
             mid: dict(mod.import_bindings) for mid, mod in self.modules.items()
         }
@@ -118,22 +116,24 @@ class StructuralResolver:
         return None if src is None else self.dotted_to_id.get(src)
 
     def _namespace_defs(
-        self, module_id: str, definers: set[str], seen: set[str]
+        self, module_id: str, name: str, definers: set[str], seen: set[str]
     ) -> set[str]:
-        """Which of ``definers`` (modules that define the name) ``module_id`` actually exports the
-        name from: its own definition, else followed through its STAR re-exports (`from X import
-        *`) to a fixpoint. Named imports are NOT followed — `from m import WorkflowBlueprint`
-        doesn't put m's *other* same-named symbols into this namespace. Scopes a re-exported
-        binding (`from orion.database import ComponentBlueprint`) to the one definition the
-        aggregator really exports, not every same-named class the caller can transitively reach."""
+        """Which of ``definers`` ``module_id`` re-exports ``name`` from — its own def, star
+        re-exports (any module), or a named re-export of ``name`` in a package ``__init__`` (not a
+        plain module's named import). Pins a re-exported binding to the one def it exports (Finding B)."""
         if module_id in seen:
             return set()
         seen.add(module_id)
         if module_id in definers:
-            return {module_id}  # a local definition shadows any star re-export
+            return {module_id}  # a local definition shadows any re-export
         out: set[str] = set()
         for star_src in self.star_reexports.get(module_id, ()):
-            out |= self._namespace_defs(star_src, definers, seen)
+            out |= self._namespace_defs(star_src, name, definers, seen)
+        if (
+            module_id.endswith("/__init__.py")
+            and (tgt := self._binding_target(module_id, name)) is not None
+        ):
+            out |= self._namespace_defs(tgt, name, definers, seen)
         return out
 
     def _resolve_name(
@@ -145,12 +145,11 @@ class StructuralResolver:
         same = [h for h in hits if h.split("::")[0] == caller.module]
         if same:
             return same
-        # The caller's import pins the source: `from orion.database import ComponentBlueprint` means
-        # the one class `orion.database` exports. Resolve through the source's namespace (own def +
-        # star re-exports) so same-named siblings don't make `len(gated) > 1` → drop (Finding B).
+        # Pin the name through its import source's namespace, so a named `__init__` hop still
+        # reaches the definer and same-named siblings don't make `len(gated) != 1` → drop (Finding B).
         if (src_mod := self._binding_target(caller.module, name)) is not None:
             definers = {h.split("::")[0] for h in hits}
-            exported = self._namespace_defs(src_mod, definers, set())
+            exported = self._namespace_defs(src_mod, name, definers, set())
             bound = [h for h in hits if h.split("::")[0] in exported]
             if len(bound) == 1:
                 return bound

@@ -313,6 +313,28 @@ def test_reexport_binding_resolves_through_star_not_named_sibling():
     ) not in refs  # never the named sibling's
 
 
+def test_binding_resolves_through_named_init_reexport():
+    """Finding B (moonbow `Model`): the ONLY definition is reachable from the consumer only via a
+    NAMED re-export in a package `__init__` (`from .base import Model`), itself behind a star hop
+    (`from pkg.models import *`). The star closure stops at the named hop, so the definer is
+    unreachable → `len(gated) == 0` → drop. Following named `__init__` re-exports (a conventional
+    re-export surface — but NOT a plain module's named import) recovers the edge."""
+    files = (
+        ("pkg/models/base.py", "class Model:\n    id = 1\n"),
+        (
+            "pkg/models/__init__.py",
+            "from .base import Model\n",
+        ),  # NAMED re-export through __init__
+        ("pkg/__init__.py", "from pkg.models import *\n"),  # star hop
+        (
+            "consumer.py",
+            "from pkg import Model\ndef q() -> int:\n    return select(Model.id) or 0\n",
+        ),
+    )
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    assert ("consumer.py::q", "pkg/models/base.py::Model") in refs
+
+
 def test_body_class_ref_cross_module_gated_by_import():
     """Body class-refs resolve cross-module with the same import gate as annotations: only a
     class whose module the caller actually imports (and unambiguously) is edged."""

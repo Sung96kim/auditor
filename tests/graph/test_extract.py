@@ -158,6 +158,16 @@ def test_typed_calls_capture_receiver_type_and_method():
     assert ("A", "g") in ids["m.py::A.f"].typed_calls
 
 
+def test_param_types_cover_all_arg_kinds_including_keyword_only():
+    """param_types must read annotations on EVERY parameter kind — positional-only, normal,
+    *args, keyword-only (behind a `*,` separator), and **kwargs — not just positional. A method
+    like `async def check(*, obj: Component | ComponentLink)` (ubiquitous in these query layers)
+    otherwise records no type reference and drops its edge to the annotated classes (Finding B)."""
+    src = "def f(a: A, /, b: B, *args: C, d: D, e: Component | Link, **kw: E) -> R:\n    pass\n"
+    f = _by_id(extract_file_facts("m.py", src, "production"))["m.py::f"]
+    assert {"A", "B", "C", "D", "Component", "Link", "E", "R"} <= set(f.param_types)
+
+
 def test_method_captures_param_types_callees_and_doc():
     run = _by_id(extract_file_facts("m.py", SRC, "production"))["m.py::Impl.run"]
     assert "Request" in run.param_types and "Response" in run.param_types
