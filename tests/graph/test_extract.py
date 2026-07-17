@@ -105,6 +105,41 @@ def test_body_class_refs_capture_loaded_names_excluding_stores_and_builtins():
     assert "len" not in f.class_refs  # builtin excluded
 
 
+def test_same_named_methods_merge_into_one_node_unioning_facts():
+    """Finding A: two methods sharing a name in a class (the `@hybrid_property` getter +
+    `@<name>.expression`, or `@property` + `@<name>.setter`) share an id and must collapse to a
+    SINGLE node whose facts are the UNION of both definitions — otherwise the later definition's
+    references/calls (e.g. its `select(Model)`) are silently dropped at build-time dedup."""
+    src = (
+        "class Thing:\n"
+        "    def label(self):\n"
+        "        return Getter()\n"  # first def references Getter
+        "    def label(cls):\n"
+        "        return select(Expr.name)\n"  # second def references Expr
+    )
+    facts = extract_file_facts("m.py", src, "production")
+    label = [n for n in facts.nodes if n.id == "m.py::Thing.label"]
+    assert len(label) == 1  # collapsed to one node, not two
+    assert {"Getter", "Expr"} <= set(label[0].class_refs)  # BOTH defs' refs survive
+
+
+def test_param_default_reference_captured_in_class_refs():
+    """Finding C: a class used only as a parameter default value (`def get(cls=Model)`) is a
+    reference too — it must land in class_refs so it edges to the class, same as a body use."""
+    src = "def by_ids(ids, cls=Model, *, ordering=Order):\n    return select(cls)\n"
+    f = _by_id(extract_file_facts("m.py", src, "production"))["m.py::by_ids"]
+    assert "Model" in f.class_refs  # positional-arg default
+    assert "Order" in f.class_refs  # keyword-only default
+
+
+def test_param_default_call_captured_in_callees():
+    """A call inside a parameter default (`def f(x=make_default())`) is a real def-time
+    dependency and must be captured as a callee, mirroring body call handling."""
+    src = "def f(x=make_default()):\n    return x\n"
+    f = _by_id(extract_file_facts("m.py", src, "production"))["m.py::f"]
+    assert "make_default" in f.callees
+
+
 def test_typed_calls_capture_receiver_type_and_method():
     """typed_calls pairs an annotated-receiver method call with the receiver's declared type
     (`svc: FooService` → svc.do_thing() gives ("FooService", "do_thing")) and self-calls with

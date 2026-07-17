@@ -113,6 +113,48 @@ def _is_stub(fn: _FuncDefT) -> bool:
     return len(body) == 1 and isinstance(body[0], (ast.Pass, ast.Raise))
 
 
+# Fact tuples that carry edge/text signal and must survive a same-id merge (Finding A).
+# Identity/position scalars (id, kind, name, module, qualname, line, role) are kept from the
+# first definition; is_hof/is_stub are combined below.
+_UNION_FACT_FIELDS = (
+    "doc_tokens",
+    "callees",
+    "param_types",
+    "decorators",
+    "bases",
+    "method_names",
+    "callback_names",
+    "class_refs",
+    "typed_calls",
+    "imports",
+    "import_bindings",
+    "registry_roots",
+    "semantic_profile",
+)
+
+
+def _union_facts(a: GraphNode, b: GraphNode) -> GraphNode:
+    """Merge two nodes sharing an id into one, unioning their fact tuples (order-preserving).
+    Same-named methods in a class — `@hybrid_property` getter + `@<name>.expression`, or
+    `@property` + `@<name>.setter` — collapse to one id; without this the later definition's
+    edges (its `select(Model)` reference, its calls) would be silently dropped."""
+    update: dict[str, object] = {
+        f: tuple(dict.fromkeys((*getattr(a, f), *getattr(b, f))))
+        for f in _UNION_FACT_FIELDS
+    }
+    update["is_hof"] = a.is_hof or b.is_hof
+    update["is_stub"] = a.is_stub and b.is_stub
+    return a.model_copy(update=update)
+
+
+def _merge_same_id(nodes: list[GraphNode]) -> list[GraphNode]:
+    """Collapse same-id nodes to one merged node, preserving first-seen order and identity."""
+    by_id: dict[str, GraphNode] = {}
+    for n in nodes:
+        by_id[n.id] = _union_facts(by_id[n.id], n) if n.id in by_id else n
+    return list(by_id.values())
+
+
 class FileExtractor:
     """Extracts one file's FileGraphFacts. Holds the per-file context (path, role,
     path tokens) and accumulates nodes, so the AST walk reads as methods, not closures."""
@@ -133,7 +175,9 @@ class FileExtractor:
             return FileGraphFacts(path=self.rel_path, role=self.role, nodes=[])
         self._module_node(tree)
         self._walk(tree, None)
-        return FileGraphFacts(path=self.rel_path, role=self.role, nodes=self.nodes)
+        return FileGraphFacts(
+            path=self.rel_path, role=self.role, nodes=_merge_same_id(self.nodes)
+        )
 
     def _module_node(self, tree: ast.Module) -> None:
         imports, import_bindings = _module_imports(self.rel_path, tree)
@@ -210,6 +254,22 @@ class FileExtractor:
                     for a in n.args:  # bare Name positional arg (potential callback)
                         if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
                             callback_names.append(a.id)
+        # Parameter default values reference symbols too (Finding C): `def get(cls=Model)` uses
+        # Model though it never appears in the body — collect class-as-value loads and calls from
+        # the default exprs (same gate as the body) so the reference/call edge isn't dropped.
+        for d in (*fn.args.defaults, *fn.args.kw_defaults):
+            if d is None:  # kwonly arg with no default
+                continue
+            for n in ast.walk(d):
+                if isinstance(n, ast.Name):
+                    if isinstance(n.ctx, ast.Load) and n.id not in _BUILTIN_NAMES:
+                        class_refs.append(n.id)
+                elif isinstance(n, ast.Call):
+                    f = n.func
+                    if isinstance(f, ast.Name) and f.id not in _BUILTIN_NAMES:
+                        callees.append(f.id)
+                    elif isinstance(f, ast.Attribute) and f.attr not in _BUILTIN_NAMES:
+                        callees.append(f.attr)
         typed_calls = tuple(
             dict.fromkeys(
                 (recv_types[r], m)
