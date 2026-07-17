@@ -1,3 +1,9 @@
+## v0.10.2 (2026-07-17)
+
+### Fix
+
+- **graph**: recover edges lost to same-name methods, param defaults, and import-binding ambiguity (#7)
+
 ## v0.10.1 (2026-07-17)
 
 ### Fix
