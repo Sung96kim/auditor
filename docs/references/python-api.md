@@ -65,9 +65,28 @@ asyncio.run(main())
 
 ## `IndexStore`
 
-- `await IndexStore.connect(db_path, repo)` opens the shared SQLite database and binds the handle
-  to one repo's partition. It is an async context manager; `aclose()` stops the worker thread.
-- Per-table stores hang off the handle: `repos`, `ignores`, `files`, `findings`, `shapes`, `graph`.
+- `await IndexStore.connect(db_path, repo, partition=None)` opens the shared SQLite database and
+  binds the handle to one repo's partition. It is an async context manager; `aclose()` stops the
+  worker thread.
+- `partition` is a `Partition(identity, prefix)`, the checkout every worktree shares plus that
+  worktree's toplevel-relative prefix. Omitted, the repo key is the identity.
+  `paths.partition_for(root)` builds one (cached per process).
+- Per-table stores hang off the handle:
+  - repo-scoped: `repos`, `ignores`, `files`, `findings`, `shapes`, `graph`.
+  - identity-scoped: `runs`, `refinements`, `tuning`, `evals`.
+- `await index.transaction(fn)` runs `fn(conn)` on the live connection as one commit and rolls
+  back on any exception. It is what a build uses to land nodes, edges, the queue and the findings
+  together:
+
+```python
+# one commit: either every write lands or none does
+async with await IndexStore.connect(db_path, repo) as index:
+    await index.transaction(lambda conn: write.apply(conn, index))
+```
+
+- The `write_*` methods (`graph.write_graph`, `graph.write_unresolved`, `findings.write_add`,
+  `findings.write_clear_for_rules`, `refinements.write_outcomes`) are the halves a transaction
+  composes. They take the open connection and never commit.
 - Where the database lives and how it is partitioned is in [index.md](index.md).
 
 ## Models

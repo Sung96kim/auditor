@@ -263,6 +263,16 @@ flowchart TB
 - `build.GraphWrite` is that whole result as one frozen record: `nodes`, `edges`, `clusters`,
   `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
   counts, so the empty-graph build takes the same path and reports the same shape as any other.
+- The transaction idiom, and the rule that keeps it from growing dead halves:
+  - A store method that writes owns its own commit and is `async`.
+  - Its `write_*` half takes the open connection, writes, and never commits, so a caller can
+    compose several stores into one commit through `IndexStore.transaction`.
+  - A `write_*` half is added only when a transaction calls it. `refinements.write_outcomes` is
+    the one that exists ahead of its caller: the S4b overlay writes refinement verdicts inside the
+    build's transaction, so a graph and its provenance land together.
+- `BaseDB` carries two read helpers because the index has two scoping keys: `_fetch` / `_fetch_one`
+  bind `repo` (the partition), `_fetch_by_identity` / `_fetch_one_by_identity` bind
+  `partition.identity` (the checkout). A store binds one or the other, never both.
 - `resolve_edges._resolve_name` returns a frozen `Resolution` (`ids`, `gated`, `definers`, `path`,
   `reason`), which is both how an edge is chosen and the evidence a queue row carries.
 - `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to the
@@ -387,9 +397,16 @@ flowchart TB
   - `cache=False` (identity tables): never dropped. `repos`, `ignores` and the five `graph_*`
     refinement tables. On every connect `IndexStore._migrate_identity_tables` reconciles their
     declared columns against `PRAGMA table_info` and adds what is missing with `ALTER TABLE`.
-- A column added to an identity table after it ships must be nullable, must carry a default, and
-  must not carry `REFERENCES`. SQLite refuses to add the other shapes, so the migrator raises
-  `UnmigratableColumn` naming the table and column rather than failing every command.
+- A column added to an identity table after it ships must be nullable or carry a default, must
+  not be a `PRIMARY KEY`, and must not carry `REFERENCES`. `NOT NULL` with a default migrates.
+  SQLite refuses the other shapes, so the migrator raises `UnmigratableColumn` naming the table
+  and column, and the CLI turns that into a one-line repair instruction.
+- The bump is one `BEGIN IMMEDIATE` transaction in a fixed order: reconcile the identity tables,
+  drop the cache tables, create what is missing, stamp `user_version` last. A second connection
+  therefore never sees a dropped-and-not-yet-created table, and a declaration that cannot land
+  leaves the stored version and every cached row untouched.
+- A stored version of 0 on a database that already has cache tables is a lost stamp, not a fresh
+  database: it rebuilds like any other mismatch. Only an empty file skips the sweep.
 - A downgrade leaves identity tables intact but unreferenced; `graph build --rebuild` clears cached
   facts and never touches them.
 - Repo-local state: `<repo>/.auditor/` holds authored input only (`config.toml`, `plugins/`, a

@@ -94,12 +94,12 @@ class Evidence(BaseModel):
 
 
 class RefinementTarget(BaseModel):
-    """What a refinement points at, in toplevel-relative ids. One model for all five shapes in
-    spec 5.4; which fields a kind requires is validated by the service, not here.
+    """What a refinement points at, in toplevel-relative ids. One model for the eight kinds in
+    spec 5.4; `Refinement._REQUIRED_BY_KIND` is what each one must fill in.
 
-    ``name`` is spec 5.4's `{node_id, name}` shape, and the service must also set it on the edge
-    kinds: it is the only thing that lets a build retire the `graph_unresolved` row the refinement
-    answers (spec 5.7). ``resolve_ambiguous`` names its node in ``node_id`` and its chosen dst in
+    ``name`` is spec 5.4's `{node_id, name}` shape, and the edge kinds carry it too: it is the only
+    thing that lets a build retire the `graph_unresolved` row the refinement answers (spec 5.7).
+    ``resolve_ambiguous`` names its node in ``node_id`` and its chosen dst in
     ``RefinementPayload.candidate``, and still needs ``edge_kind`` set from the queue row's
     ``fact_kind``.
     """
