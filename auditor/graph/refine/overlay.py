@@ -62,6 +62,16 @@ def anchor_truth(
     return {nid: node_truth_sha(by_id[nid]) for nid in wanted if nid in by_id}
 
 
+def _refinable_kind(refinement: Refinement) -> EdgeKind | None:
+    """The relation the refinement may put in the graph, ``None`` for one no proposal may name.
+
+    `Refinement` refuses that at construction (spec 9.2), so this only ever answers ``None`` for a
+    row stored before the rule existed.
+    """
+    kind = refinement.target.edge_kind
+    return kind if kind in REFINABLE_EDGE_KINDS else None
+
+
 def _path_of(node_id: str) -> str:
     """The file a node id names: ``path::qualname`` for a symbol, the path itself for a module."""
     return node_id.split("::")[0]
@@ -84,6 +94,28 @@ def _named_ids(refinement: Refinement) -> tuple[str, ...]:
         refinement.payload.candidate,
     )
     return tuple(i for i in named if i is not None)
+
+
+def _this_build_can_see(
+    named: Sequence[str], prefix: str, facts_paths: AbstractSet[str] | None
+) -> bool:
+    """Whether every id the refinement names is this partition's and comes from a file this build
+    holds facts for. Either miss means silence: another partition's row, or a rescan in flight."""
+    if any(not in_scope(i, prefix) for i in named):
+        return False
+    if facts_paths is None:
+        return True
+    return all(_path_of(to_partition(i, prefix) or "") in facts_paths for i in named)
+
+
+def _anchors_hold(
+    rows: Sequence[Anchor], node_truth: Mapping[str, str], prefix: str
+) -> bool:
+    """Whether every anchored node still hashes to what it did when the refinement was made."""
+    return all(
+        node_truth.get(to_partition(row.node_id, prefix) or "") == row.truth_sha
+        for row in rows
+    )
 
 
 def _jaccard(left: AbstractSet[str], right: AbstractSet[str]) -> float:
@@ -281,21 +313,12 @@ class Overlay(BaseModel):
         for refinement in refinements:
             rows = anchors.get(refinement.refinement_id, ())
             named = (*_named_ids(refinement), *(a.node_id for a in rows))
-            if any(not in_scope(i, prefix) for i in named):
+            if not _this_build_can_see(named, prefix, facts_paths):
                 continue
-            local = [to_partition(i, prefix) or "" for i in named]
-            if facts_paths is not None and any(
-                _path_of(i) not in facts_paths for i in local
-            ):
-                continue
-            broken = any(
-                node_truth.get(to_partition(a.node_id, prefix) or "") != a.truth_sha
-                for a in rows
-            )
-            if broken and refinement.status is not RefinementStatus.PINNED:
-                expired.append(refinement)
-                continue
-            if broken:
+            if not _anchors_hold(rows, node_truth, prefix):
+                if refinement.status is not RefinementStatus.PINNED:
+                    expired.append(refinement)
+                    continue
                 drifted.add(refinement.refinement_id)
             kept.append(refinement)
         overlay = cls(
@@ -446,17 +469,14 @@ class Overlay(BaseModel):
         self, refinement: Refinement, merging: _EdgePass, node_ids: AbstractSet[str]
     ) -> None:
         """One edge-shaped refinement against the merged list, and the verdict it earns."""
-        kind = refinement.target.edge_kind
+        kind = _refinable_kind(refinement)
         src, dst = (self._local(i) for i in refinement.edge_pair())
-        if kind is None or kind not in REFINABLE_EDGE_KINDS:
+        if kind is None:
             # defensive: `Refinement` refuses an unnameable kind at construction (spec 9.2)
             self._record(refinement, status=RefinementStatus.STALE)
             return
         if refinement.kind is RefinementKind.CONFIRM_EDGE:
-            if merging.confirm((src, dst, kind)):
-                self._record(refinement, applied=True)
-            else:
-                self._noop(refinement)
+            self._confirm(refinement, merging, (src, dst, kind))
             return
         # both checks precede the retarget's tombstone: a `stale` or `redundant` verdict reached
         # after it would leave the graph missing a deterministic edge nothing replaced
@@ -476,6 +496,14 @@ class Overlay(BaseModel):
         merging.add((src, dst, kind))
         self._edges_changed = True
         self._record(refinement, applied=True)
+
+    def _confirm(
+        self, refinement: Refinement, merging: _EdgePass, key: EdgeKey
+    ) -> None:
+        if merging.confirm(key):
+            self._record(refinement, applied=True)
+        else:
+            self._noop(refinement)
 
     def _annotate(self, refinement: Refinement, merging: _NodePass) -> None:
         node_id = self._local(refinement.target.node_id)

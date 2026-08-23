@@ -108,24 +108,24 @@ class SimilarityPass(BaseModel):
     usage_edges: tuple[GraphEdge, ...] = ()
     sparse: frozenset[str] = frozenset()
 
-
-def _similarity_edges(
-    symbols: list[GraphNode], cfg: GraphConfig, report: Callable[[str], None]
-) -> SimilarityPass:
-    """Name and usage similarity over the symbol nodes, both driven by the same knobs."""
-    report("computing naming similarity")
-    name_edges, sparse = name_similar_edges(
-        symbols,
-        threshold=cfg.name_similarity_threshold,
-        knn_k=cfg.knn_k,
-        extra_stopwords=tuple(cfg.stopwords),
-    )
-    report("computing usage similarity")
-    return SimilarityPass(
-        name_edges=tuple(name_edges),
-        usage_edges=tuple(usage_similar_edges(symbols, knn_k=cfg.knn_k)),
-        sparse=frozenset(sparse),
-    )
+    @classmethod
+    def of(
+        cls, symbols: list[GraphNode], cfg: GraphConfig, report: Callable[[str], None]
+    ) -> "SimilarityPass":
+        """Name and usage similarity over the symbol nodes, both driven by the same knobs."""
+        report("computing naming similarity")
+        name_edges, sparse = name_similar_edges(
+            symbols,
+            threshold=cfg.name_similarity_threshold,
+            knn_k=cfg.knn_k,
+            extra_stopwords=tuple(cfg.stopwords),
+        )
+        report("computing usage similarity")
+        return cls(
+            name_edges=tuple(name_edges),
+            usage_edges=tuple(usage_similar_edges(symbols, knn_k=cfg.knn_k)),
+            sparse=frozenset(sparse),
+        )
 
 
 class ClusterPass(BaseModel):
@@ -136,6 +136,47 @@ class ClusterPass(BaseModel):
 
     nodes: tuple[GraphNode, ...] = ()
     clusters: tuple[GraphCluster, ...] = ()
+
+    @classmethod
+    def of(
+        cls,
+        nodes: list[GraphNode],
+        edges: Sequence[GraphEdge],
+        cfg: GraphConfig,
+        report: Callable[[str], None],
+        *,
+        sparse: frozenset[str],
+        proto: set[str],
+    ) -> "ClusterPass":
+        """Rank and cluster one edge list, stamping every node with what it produced.
+
+        ``sparse`` and ``proto`` are edge-independent, so a second pass over another edge list
+        reproduces them exactly (spec section 6 steps 4 and 7).
+        """
+        report("ranking (PageRank)")
+        ranks = pagerank(
+            [n.id for n in nodes],
+            edges,
+            personalization={n.id for n in nodes if n.role not in TEST_ROLES},
+        )
+        report("clustering concepts")
+        labels, label_names = cluster_concepts(
+            _concept_nodes(nodes), edges, floor=cfg.cluster_floor
+        )
+        return cls(
+            nodes=tuple(
+                n.model_copy(
+                    update={
+                        "abstractness": compute_abstractness(n, proto),
+                        "rank": ranks.get(n.id, 0.0),
+                        "cluster_id": labels.get(n.id),
+                        "text_sparse": n.id in sparse,
+                    }
+                )
+                for n in nodes
+            ),
+            clusters=tuple(_clusters_for(labels, label_names)),
+        )
 
     @property
     def labels(self) -> dict[int, str]:
@@ -177,46 +218,6 @@ class ClusterPass(BaseModel):
                     )
                 )
         return rows
-
-
-def _clustered(
-    nodes: list[GraphNode],
-    edges: Sequence[GraphEdge],
-    cfg: GraphConfig,
-    report: Callable[[str], None],
-    *,
-    sparse: frozenset[str],
-    proto: set[str],
-) -> ClusterPass:
-    """Rank and cluster one edge list, stamping every node with what it produced.
-
-    ``sparse`` and ``proto`` are edge-independent, so a second pass over another edge list
-    reproduces them exactly (spec section 6 steps 4 and 7).
-    """
-    report("ranking (PageRank)")
-    ranks = pagerank(
-        [n.id for n in nodes],
-        edges,
-        personalization={n.id for n in nodes if n.role not in TEST_ROLES},
-    )
-    report("clustering concepts")
-    labels, label_names = cluster_concepts(
-        _concept_nodes(nodes), edges, floor=cfg.cluster_floor
-    )
-    return ClusterPass(
-        nodes=tuple(
-            n.model_copy(
-                update={
-                    "abstractness": compute_abstractness(n, proto),
-                    "rank": ranks.get(n.id, 0.0),
-                    "cluster_id": labels.get(n.id),
-                    "text_sparse": n.id in sparse,
-                }
-            )
-            for n in nodes
-        ),
-        clusters=tuple(_clusters_for(labels, label_names)),
-    )
 
 
 class GraphWrite(BaseModel):
@@ -304,8 +305,8 @@ class GraphBuilder:
         report("resolving structural edges")
         structural = resolve_structural(nodes)
         report("applying refinements")
-        overlay = await self._overlay(index, cfg, nodes, {f.path for f in facts})
-        similar = _similarity_edges(_symbol_nodes(nodes), cfg, report)
+        overlay = await _overlay_for(index, cfg, nodes, {f.path for f in facts})
+        similar = SimilarityPass.of(_symbol_nodes(nodes), cfg, report)
         # captured before the merge: `retarget_edge` deletes from the merged list, so a filter
         # over `all_edges` would hand the detectors a graph missing an edge nothing replaced
         deterministic_edges = [
@@ -320,7 +321,7 @@ class GraphBuilder:
         ]
 
         proto = _protocol_method_ids(nodes)
-        merged = _clustered(
+        merged = ClusterPass.of(
             nodes, all_edges, cfg, report, sparse=similar.sparse, proto=proto
         )
         # the queue's cluster rows describe the graph that ships, so a relabelled cluster stops
@@ -334,12 +335,11 @@ class GraphBuilder:
         per_file: dict[str, list[Finding]] = {}
         if cfg.detect:
             report("running detectors on the deterministic graph")
-            # the detectors read a graph no refinement touched: the pre-overlay edge list, and
-            # the nodes and clusters a second pass over it produces (spec section 6 step 7).
-            # Exact, not an approximation: when the overlay placed no edge and moved no node,
-            # that pass reads the same arguments the merged one did and returns the same result
+            # a graph no refinement touched: the pre-overlay edge list and a second pass over
+            # it (spec section 6 step 7). Skipping that pass when the overlay placed no edge and
+            # moved no node is exact, because it would read the arguments the merged one did
             det = (
-                _clustered(
+                ClusterPass.of(
                     nodes,
                     deterministic_edges,
                     cfg,
@@ -386,26 +386,26 @@ class GraphBuilder:
         ):
             return await self.run(index, settings, progress=progress, snapshot=snapshot)
 
-    @staticmethod
-    async def _overlay(
-        index: IndexStore,
-        cfg: GraphConfig,
-        nodes: list[GraphNode],
-        facts_paths: set[str],
-    ) -> Overlay:
-        """This build's refinement pass, triaged against the anchors it can still check and the
-        files it actually holds facts for."""
-        prefix = index.partition.prefix
-        active = await index.refinements.active()
-        anchors = await index.refinements.anchors([r.refinement_id for r in active])
-        return Overlay.for_build(
-            active,
-            anchors,
-            anchor_truth(nodes, anchors, prefix),
-            prefix,
-            facts_paths=facts_paths,
-            config=cfg,
-        )
+
+async def _overlay_for(
+    index: IndexStore,
+    cfg: GraphConfig,
+    nodes: list[GraphNode],
+    facts_paths: set[str],
+) -> Overlay:
+    """This build's refinement pass, triaged against the anchors it can still check and the files
+    it actually holds facts for."""
+    prefix = index.partition.prefix
+    active = await index.refinements.active()
+    anchors = await index.refinements.anchors([r.refinement_id for r in active])
+    return Overlay.for_build(
+        active,
+        anchors,
+        anchor_truth(nodes, anchors, prefix),
+        prefix,
+        facts_paths=facts_paths,
+        config=cfg,
+    )
 
 
 def _deduped(facts: list[FileGraphFacts]) -> list[GraphNode]:
