@@ -301,6 +301,9 @@ class GraphConfig(BaseModel):
     naming_object_jaccard: float = Field(default=0.6, ge=0.0, le=1.0)
     naming_min_verb_count: int = Field(default=20, ge=1)
     flow_hub_fan_in: int = Field(default=40, ge=1)
+    refine_cluster_jaccard: float = Field(default=0.5, ge=0.0, le=1.0)
+    refine_max_noop_builds: int = Field(default=3, ge=1)
+    rebuild_lock_poll_seconds: float = Field(default=0.25, gt=0.0)
 
 
 class MalwareScanConfig(BaseModel):

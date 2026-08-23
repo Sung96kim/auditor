@@ -352,6 +352,7 @@ class GraphBuilder:
             index.partition.identity,
             held=lock_held,
             waiting=lambda: report("waiting for the observer's rebuild"),
+            poll=settings.graph.rebuild_lock_poll_seconds,
         ):
             return await self.run(index, settings, progress=progress, snapshot=snapshot)
 

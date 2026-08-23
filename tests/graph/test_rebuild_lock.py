@@ -9,9 +9,10 @@ import time
 
 import pytest
 
-from auditor.config import AuditorSettings
+from auditor.config import AuditorSettings, GraphConfig
 from auditor.graph.build import GraphBuilder
 from auditor.graph.refine.lock import (
+    DEFAULT_POLL_SECONDS,
     RebuildLockTimeout,
     rebuild_lock,
     rebuild_lock_path,
@@ -29,6 +30,11 @@ print("held", flush=True)
 time.sleep(float(sys.argv[2]))
 os.close(fd)
 """
+
+
+def test_the_poll_interval_default_has_one_home():
+    """The interval is a `GraphConfig` knob; the lock's default reads the field, never a copy."""
+    assert GraphConfig().rebuild_lock_poll_seconds == DEFAULT_POLL_SECONDS
 
 
 def test_the_lock_path_is_per_identity_under_the_auditor_home(_isolated_auditor_home):

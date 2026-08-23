@@ -13,9 +13,13 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from auditor.config import GraphConfig
 from auditor.paths import auditor_home, identity_key
 
-POLL_SECONDS = 0.25
+#: read off the field so the interval has one home; every real caller passes its repo's value
+DEFAULT_POLL_SECONDS = float(
+    GraphConfig.model_fields["rebuild_lock_poll_seconds"].default
+)
 
 
 class RebuildLockTimeout(RuntimeError):
@@ -32,7 +36,11 @@ def rebuild_lock_path(identity: str) -> Path:
 
 
 async def _acquire(
-    fd: int, path: Path, waiting: Callable[[], None] | None, timeout: float | None
+    fd: int,
+    path: Path,
+    waiting: Callable[[], None] | None,
+    timeout: float | None,
+    poll: float,
 ) -> None:
     """Poll for the lock so the wait stays cancellable, saying so once if anyone is listening."""
     deadline = None if timeout is None else time.monotonic() + timeout
@@ -47,7 +55,7 @@ async def _acquire(
                 said = True
             if deadline is not None and time.monotonic() >= deadline:
                 raise RebuildLockTimeout(path, timeout or 0.0) from None
-            await asyncio.sleep(POLL_SECONDS)
+            await asyncio.sleep(poll)
 
 
 @asynccontextmanager
@@ -57,6 +65,7 @@ async def rebuild_lock(
     held: bool = False,
     waiting: Callable[[], None] | None = None,
     timeout: float | None = None,
+    poll: float = DEFAULT_POLL_SECONDS,
 ) -> AsyncIterator[None]:
     """Hold this identity's rebuild lock for the block.
 
@@ -72,7 +81,7 @@ async def rebuild_lock(
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        await _acquire(fd, path, waiting, timeout)
+        await _acquire(fd, path, waiting, timeout, poll)
         yield
     finally:
         os.close(fd)  # closing the descriptor releases the flock
