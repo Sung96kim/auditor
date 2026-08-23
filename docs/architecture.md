@@ -108,10 +108,11 @@ Paths are relative to the repo root.
   index, `_apply_crossfile_in_memory` recomputes shapes in memory so a stateless directory scan
   still reports them.
 - `engine._apply_ignores` filters persistent ignores before results leave `audit_target`.
-- Back in `cli/scan.py`: `--write-baseline` writes and exits; a directory scan writes
-  `.auditor/.status.json` through `status.write_status`; `--baseline` hides recorded findings;
-  `gate.gate_tripped` decides the exit code; `--severity`, `--min-severity` and `--rule` filter the
-  display only; then `cli/summary.print_summary`, `reporters.render`, or `ReportServer`.
+- Back in `cli/scan.py`: `--write-baseline` writes and exits; a directory scan writes the `scan`
+  block of `$AUDITOR_HOME/repos/<key>/status.json` through `status.write_status`; `--baseline`
+  hides recorded findings; `gate.gate_tripped` decides the exit code; `--severity`,
+  `--min-severity` and `--rule` filter the display only; then `cli/summary.print_summary`,
+  `reporters.render`, or `ReportServer`.
 
 ```mermaid
 flowchart TB
@@ -302,9 +303,10 @@ flowchart TB
   rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`; on a version
   change the derived cache tables are dropped and rebuilt on the next scan, while the `repos` and
   `ignores` tables (user state) survive.
-- Repo-local state: `<repo>/.auditor/` holds authored input (`config.toml`, `plugins/`, a baseline
-  file if you point `--baseline` there) plus the generated `.status.json`. Nothing else is written
-  into the repo.
+- Repo-local state: `<repo>/.auditor/` holds authored input only (`config.toml`, `plugins/`, a
+  baseline file if you point `--baseline` there). Nothing is written into the repo: generated
+  state is the shared index plus `$AUDITOR_HOME/repos/<repo_dir_key>/`, which holds `status.json`,
+  its lock, and the user's per-repo settings.
 - Verdict kinds: a detector emits `auto` (the tool decided deterministically) or `candidate`
   (evidence only, an agent must judge). `gate.gate_tripped` counts `auto` findings at or above
   `--fail-on`, so a candidate never breaks CI on its own.

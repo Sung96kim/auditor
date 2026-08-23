@@ -10,7 +10,7 @@ Roll the whole-repo index into `AUDIT.md` — a whole-repo posture snapshot, not
 1. Refresh the index: `auditr scan . -i` (incremental — only files whose content actually
    changed re-parse; unchanged files are served from cache). Directory-scoped only — a
    single-file or `--isolated` scan never touches the shared index. This also updates the status
-   line's `.auditor/.status.json`.
+   line's cache at `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`.
 2. Aggregate: MCP `aggregate(path=".")` or `auditr aggregate -o AUDIT.md`. This is a pure cache
    read — no re-scan — so skipping step 1 doesn't error, it just means the rollup reflects
    whatever was cached from each file's *last* scan (arbitrarily stale, or empty for a

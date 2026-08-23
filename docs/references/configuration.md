@@ -267,8 +267,8 @@ resolved before any repo file is read; a cycle is an error.
   repo.
 - `baseline.json`: the conventional path for `scan --write-baseline` and `--baseline`. Nothing
   reads it unless the path is passed. Commit it to adopt the tool on a legacy repo.
-- `.status.json`: severity counts written on every directory scan and read by the plugin status
-  line. Generated and git-ignored; nothing else reads it.
+- Nothing else. The status cache moved to `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`; an
+  older `.auditor/.status.json` is ignored, and `auditr init --clean-status` deletes it.
 
 Generated state does not live here. The incremental index, persistent ignores and graph share one
 database under `$AUDITOR_HOME`.

@@ -6,6 +6,8 @@ import json
 import pytest
 from _support import cli_json, git, invoke
 
+from auditor.status import status_path
+
 # --- output formats ----------------------------------------------------------------------
 
 
@@ -267,16 +269,16 @@ def test_profile_override_enables_oop(sample_repo):
     assert "PY-OOP-CONSTRUCTOR-WALL" in strict_rules
 
 
-# --- status-cache write (.auditor/.status.json) -------------------------------------------
+# --- status-cache write ($AUDITOR_HOME/repos/<key>/status.json) ---------------------------
 
 
 def test_scan_dir_writes_status_cache(sample_repo):
     result = invoke("scan", str(sample_repo), "--no-index")
     assert result.exit_code == 0, result.output
 
-    status_file = sample_repo / ".auditor" / ".status.json"
+    status_file = status_path(sample_repo)
     assert status_file.exists()
-    data = json.loads(status_file.read_text())
+    data = json.loads(status_file.read_text())["scan"]
     assert data["severity"]["blocking"] >= 1
     # the fixture's pyproject.toml has a [tool.auditor] table — configured, even
     # though there's no standalone .auditor/config.toml
@@ -295,8 +297,7 @@ def test_scan_dir_writes_status_cache_configured_false_without_pyproject_table(
     result = invoke("scan", str(sample_repo), "--no-index")
     assert result.exit_code == 0, result.output
 
-    status_file = sample_repo / ".auditor" / ".status.json"
-    data = json.loads(status_file.read_text())
+    data = json.loads(status_path(sample_repo).read_text())["scan"]
     assert data["configured"] is False
 
 
@@ -307,9 +308,9 @@ def test_scan_dir_writes_status_cache_configured_true(sample_repo):
 
     invoke("scan", str(sample_repo), "--no-index")
 
-    status_file = sample_repo / ".auditor" / ".status.json"
+    status_file = status_path(sample_repo)
     assert status_file.exists()
-    data = json.loads(status_file.read_text())
+    data = json.loads(status_file.read_text())["scan"]
     assert data["configured"] is True
 
 
@@ -318,7 +319,15 @@ def test_scan_file_target_does_not_write_status_cache(sample_repo):
     result = invoke("scan", str(clean), "--no-index")
     assert result.exit_code == 0, result.output
 
-    assert not (sample_repo / ".auditor" / ".status.json").exists()
+    assert not status_path(sample_repo).exists()
+
+
+def test_scan_dir_writes_nothing_into_the_repo(sample_repo):
+    """Invariant 6: a scan leaves the repository byte-identical."""
+    before = set(sample_repo.rglob("*"))
+    result = invoke("scan", str(sample_repo), "--no-index")
+    assert result.exit_code == 0, result.output
+    assert set(sample_repo.rglob("*")) == before
 
 
 # --- gitignore + migration soft-skip -----------------------------------------------------
