@@ -29,6 +29,7 @@ from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import audit_target
+from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.query import GraphQuery
 from auditor.graph.viz import build_payload, render_app, to_dot
@@ -38,9 +39,6 @@ from auditor.serve import ReportServer
 graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
 
 _Target = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
-
-
-GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
 
 async def _autoscan(root: Path) -> None:

@@ -9,13 +9,12 @@ from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import audit_target
+from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.query import GraphQuery
 from auditor.mcp.helpers import MUTATING, READ_ONLY
 from auditor.mcp.server import mcp
 from auditor.paths import index_db_path, repo_key
-
-GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
 
 @mcp.tool(annotations=MUTATING)
