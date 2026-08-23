@@ -378,10 +378,7 @@ class ScanEngine:
             # incremental `graph build` auto-scan would skip it and build an empty graph.
             # Extract facts here when they are missing or stale for this content.
             if self.settings.graph.enabled and await index.graph.facts_hash(rel) != sha:
-                facts = extract_file_facts(rel, source, role.value)
-                await index.graph.set_facts(
-                    rel, facts.model_dump_json(), sha, file_hashes(facts.nodes)
-                )
+                await self._store_facts(index, rel, source, role, sha)
             cached_map = await index.findings.cached_by_rule(
                 rel
             )  # one query for all rules
@@ -432,10 +429,7 @@ class ScanEngine:
             )
 
         if self.settings.graph.enabled:
-            facts = extract_file_facts(rel, source, role.value)
-            await index.graph.set_facts(
-                rel, facts.model_dump_json(), sha, file_hashes(facts.nodes)
-            )
+            await self._store_facts(index, rel, source, role, sha)
 
         hit = [rid for rid in enabled if rid not in missed]
         cached_map = await index.findings.cached_by_rule(rel) if hit else {}
@@ -452,6 +446,19 @@ class ScanEngine:
             cached=False,
             skipped_rules=skipped + res.skipped_rules,
             suppressed=res.suppressed,
+        )
+
+    @staticmethod
+    async def _store_facts(
+        index: IndexStore, rel: str, source: str, role: FileRole, sha: str
+    ) -> None:
+        """Extract and cache one file's graph facts with the hash pair a refinement anchors on.
+
+        Both scan paths land here, so a new argument cannot reach one and miss the other.
+        """
+        facts = extract_file_facts(rel, source, role.value)
+        await index.graph.set_facts(
+            rel, facts.model_dump_json(), sha, file_hashes(facts.nodes)
         )
 
     async def _apply_crossfile(self, results: list[ScanResult]) -> None:

@@ -7,6 +7,7 @@ and clusters, and the unresolved queue."""
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from typing import Any, ClassVar
 
 from auditor.database.base import BaseDB, Column, Index, Table
@@ -137,7 +138,8 @@ class GraphDB(BaseDB):
         hashes: FileHashes | None = None,
     ) -> None:
         """Cache one file's facts. ``hashes`` is the spec 5.5 pair, which the assessment compares
-        against a re-extraction; callers without parsed facts leave it out and store NULLs."""
+        against a re-extraction; a caller without parsed facts leaves it out, which keeps whatever
+        pair is already stored rather than erasing it."""
 
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
@@ -145,7 +147,8 @@ class GraphDB(BaseDB):
                 "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
                 "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
                 "facts_json=excluded.facts_json, content_hash=excluded.content_hash, "
-                "truth_sha=excluded.truth_sha, facts_sha=excluded.facts_sha",
+                "truth_sha=COALESCE(excluded.truth_sha, graph_facts.truth_sha), "
+                "facts_sha=COALESCE(excluded.facts_sha, graph_facts.facts_sha)",
                 (
                     self.repo,
                     path,
@@ -189,21 +192,25 @@ class GraphDB(BaseDB):
         return row["facts_json"] if row else None
 
     async def hashes(self, path: str) -> FileHashes | None:
-        """The cached spec 5.5 pair for one file, or ``None`` when it was written without them."""
+        """The cached spec 5.5 pair for one file, or ``None`` unless both halves are stored.
+
+        A half-written pair degrades to a miss, the way every other read here does, rather than
+        raising a ValidationError out of a cache lookup.
+        """
         row = await self._fetch_one(
             "SELECT truth_sha, facts_sha FROM graph_facts WHERE repo = ? AND path = ?",
             (path,),
         )
-        if row is None or row["truth_sha"] is None:
+        if row is None or row["truth_sha"] is None or row["facts_sha"] is None:
             return None
         return FileHashes(truth=row["truth_sha"], facts=row["facts_sha"])
 
     def write_graph(
         self,
         conn: sqlite3.Connection,
-        nodes: list[GraphNode],
-        edges: list[GraphEdge],
-        clusters: list[GraphCluster],
+        nodes: Sequence[GraphNode],
+        edges: Sequence[GraphEdge],
+        clusters: Sequence[GraphCluster],
     ) -> None:
         """Swap this repo's graph on an open connection, without committing."""
         node_rows = [
@@ -263,9 +270,9 @@ class GraphDB(BaseDB):
 
     async def replace(
         self,
-        nodes: list[GraphNode],
-        edges: list[GraphEdge],
-        clusters: list[GraphCluster],
+        nodes: Sequence[GraphNode],
+        edges: Sequence[GraphEdge],
+        clusters: Sequence[GraphCluster],
     ) -> None:
         def op(conn: sqlite3.Connection) -> None:
             self.write_graph(conn, nodes, edges, clusters)
@@ -331,7 +338,7 @@ class GraphDB(BaseDB):
         ]
 
     def write_unresolved(
-        self, conn: sqlite3.Connection, rows: list[UnresolvedRow]
+        self, conn: sqlite3.Connection, rows: Sequence[UnresolvedRow]
     ) -> None:
         """Swap this repo's whole unresolved queue on an open connection, without committing."""
         values = [
@@ -361,7 +368,7 @@ class GraphDB(BaseDB):
             values,
         )
 
-    async def replace_unresolved(self, rows: list[UnresolvedRow]) -> None:
+    async def replace_unresolved(self, rows: Sequence[UnresolvedRow]) -> None:
         """Swap this repo's whole unresolved queue for ``rows``; every build rebuilds it."""
 
         def op(conn: sqlite3.Connection) -> None:

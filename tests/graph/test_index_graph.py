@@ -300,6 +300,30 @@ async def test_set_facts_without_hashes_stores_nothing_to_compare(graph_store):
     )  # content hash still there
 
 
+async def test_a_later_write_without_hashes_keeps_the_stored_pair(graph_store):
+    """The three-argument call is the one an ad-hoc writer makes; it must not erase the anchors
+    every refinement for that file is pinned to."""
+    hashes = FileHashes(truth="t1", facts="f1")
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc", hashes)
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "def")
+    assert await graph_store.graph.hashes("m.py") == hashes
+    assert await graph_store.graph.facts_hash("m.py") == "def"
+
+
+async def test_a_half_written_hash_pair_reads_as_absent(graph_store):
+    """A read degrades to a miss rather than raising a ValidationError, the way every other
+    cache read here does."""
+    await graph_store.graph.set_facts(
+        "m.py", "{}", "abc", FileHashes(truth="t1", facts="f1")
+    )
+    await graph_store._worker.run(
+        lambda c: c.execute(
+            "UPDATE graph_facts SET facts_sha = NULL WHERE path = 'm.py'"
+        )
+    )
+    assert await graph_store.graph.hashes("m.py") is None
+
+
 async def test_edges_round_trip_their_provenance(graph_store):
     edges = [
         GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS),

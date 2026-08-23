@@ -258,6 +258,9 @@ flowchart TB
   beside the previous queue or the previous run's findings. `IndexStore.transaction(fn)` runs `fn`
   on the live connection and rolls back on any exception; the `write_*` halves of `graph.replace`,
   `graph.replace_unresolved`, `findings.add` and `findings.clear_for_rules` are what it composes.
+- `build.GraphWrite` is that whole result as one frozen record: `nodes`, `edges`, `clusters`,
+  `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
+  counts, so the empty-graph build takes the same path and reports the same shape as any other.
 - `resolve_edges._resolve_name` returns a frozen `Resolution` (`ids`, `gated`, `definers`, `path`,
   `reason`), which is both how an edge is chosen and the evidence a queue row carries.
 - `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to the
