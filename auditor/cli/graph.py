@@ -47,7 +47,6 @@ from auditor.cli.render import (
     render_graph_usages,
 )
 from auditor.config import AuditorSettings, load_config, unknown_repo_keys
-from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
@@ -57,7 +56,6 @@ from auditor.graph.model import DEFAULT_FLOW_LIMIT, EdgeKind
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.viz import build_payload, render_app, to_dot
-from auditor.paths import index_db_path, repo_key
 from auditor.serve import ReportServer
 
 graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
@@ -137,7 +135,7 @@ def _query_cmd(
     fn_name: str,
 ) -> Callable[..., Coroutine[Any, Any, Any]]:
     async def runner(root: Path, **kw: Any) -> Any:
-        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        async with await open_index(root) as index:
             return await getattr(GraphQuery(index), fn_name)(**kw)
 
     return runner
@@ -286,7 +284,7 @@ async def _serve_html(
 ) -> str:
     """Render the graph UI HTML. Reuses the already-built graph (fast) unless it's missing or
     ``rebuild`` is set — only then does it pay the scan + build cost."""
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         has_graph = bool(await index.graph.nodes())
     if rebuild or not has_graph:
         report("scanning repository…")
@@ -294,7 +292,7 @@ async def _serve_html(
         report("building graph…")
         await _build(root, load_config(root), report)
     report("preparing UI…")
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return render_app(await build_payload(index))
 
 
@@ -345,7 +343,7 @@ def graph_export(
 
     async def do_export() -> str | None:
         """``None`` when --flow named a symbol the graph does not hold."""
-        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        async with await open_index(root) as index:
             payload = await build_payload(index)
             if flow is None:
                 return to_dot(

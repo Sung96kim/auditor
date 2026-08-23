@@ -7,7 +7,7 @@ import asyncio
 import difflib
 import json
 import time
-from collections.abc import Callable, Coroutine, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
@@ -17,10 +17,9 @@ from rich.console import Console
 from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
-from auditor.database import IndexStore
+from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
-from auditor.models import Partition
-from auditor.paths import index_db_path, partition_for, repo_key
+from auditor.paths import index_db_path
 from auditor.registry import REGISTRY
 
 _T = TypeVar("_T")
@@ -183,31 +182,29 @@ def run_live(
 
 
 async def open_index(root: Path) -> IndexStore:
-    """Connect to the shared global index, scoped to ``root``'s partition.
+    """``open_repo_index`` with a repair instruction instead of a raw schema error.
 
-    Binds the checkout identity as well as the partition key, so every worktree of one checkout
-    shares the refinement tables. Use as ``async with await open_index(root)``.
+    Use as ``async with await open_index(root)``.
     """
-    return await _connect(index_db_path(), repo_key(root), partition_for(root))
+    return await _repaired(open_repo_index(root))
 
 
 async def open_shared_index() -> IndexStore:
     """Connect to the shared global index for cross-repo operations (listing/forgetting repos),
     not bound to any one repo's partition."""
-    return await _connect(index_db_path(), DEFAULT_REPO)
+    return await _repaired(IndexStore.connect(index_db_path(), DEFAULT_REPO))
 
 
-async def _connect(
-    db_path: Path, repo: str, partition: Partition | None = None
-) -> IndexStore:
-    """Open the index, turning an unmigratable schema into a one-line repair instruction.
+async def _repaired(opening: Awaitable[IndexStore]) -> IndexStore:
+    """Await an index connect, turning an unmigratable schema into a one-line repair instruction.
 
     A declaration SQLite cannot add to an existing identity table would otherwise raise on every
     command, with no command left that could repair it.
     """
     try:
-        return await IndexStore.connect(db_path, repo, partition)
+        return await opening
     except UnmigratableColumn as exc:
+        db_path = index_db_path()
         fail(
             f"the index cannot be upgraded: {exc}. Delete it and re-scan: rm {db_path}"
         )

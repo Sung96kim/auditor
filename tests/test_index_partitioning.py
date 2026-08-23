@@ -2,10 +2,14 @@
 ``repo``, so two repos sharing one db (and even identical relative paths / shape hashes) never
 see or clobber each other's rows. One test per method/behaviour that gained the repo dimension."""
 
+import ast
 import time
+from pathlib import Path
 
 import pytest
 
+import auditor.cli.graph
+import auditor.mcp.graph_tools
 from auditor.database import IndexStore
 from auditor.models import (
     Category,
@@ -234,3 +238,22 @@ async def test_register_and_forget_roundtrip(tmp_path, repo):
         assert {
             e.path for e in await s.files.list()
         } == set()  # cascade removed file rows
+
+
+@pytest.mark.parametrize(
+    "module",
+    [auditor.cli.graph, auditor.mcp.graph_tools],
+    ids=["cli.graph", "mcp.graph_tools"],
+)
+def test_every_repo_scoped_connect_binds_the_partition(module):
+    """F4: `IndexStore.connect(db, repo)` falls back to `Partition(identity=repo)`, the worktree
+    path, while the refinement tables key on the resolved git common dir. A handle bound the wrong
+    way returns zero rows and writes nothing, with no error. `open_repo_index` is the one recipe."""
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    bypassing = [
+        call.lineno
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and ast.unparse(call.func).endswith("IndexStore.connect")
+    ]
+    assert bypassing == [], f"{module.__name__}:{bypassing} bypasses open_repo_index"

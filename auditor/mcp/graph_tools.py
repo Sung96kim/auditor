@@ -7,7 +7,6 @@ from enum import StrEnum
 from pathlib import Path
 
 from auditor.config import load_config
-from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
@@ -23,9 +22,8 @@ from auditor.graph.model import (
     capped_row,
 )
 from auditor.graph.query import GraphQuery
-from auditor.mcp.helpers import MUTATING, READ_ONLY
+from auditor.mcp.helpers import MUTATING, READ_ONLY, open_index
 from auditor.mcp.server import mcp
-from auditor.paths import index_db_path, partition_for, repo_key
 
 
 @mcp.tool(annotations=MUTATING)
@@ -38,9 +36,7 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     if scan:
         await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
     settings = load_config(root)
-    async with await IndexStore.connect(
-        index_db_path(), repo_key(root), partition_for(root)
-    ) as index:
+    async with await open_index(root) as index:
         await index.repos.register(time.time())
         return await GraphBuilder().rebuild(index, settings)
 
@@ -49,7 +45,7 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
 async def graph_related(symbol: str, path: str = ".", limit: int = 10) -> list[dict]:
     """Top semantic neighbors (name + usage) of a symbol, ranked."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return await GraphQuery(index).related(symbol, limit=limit)
 
 
@@ -60,7 +56,7 @@ async def graph_neighbors(
     """Structural neighbors (calls/overrides/inherits/...) up to a depth. Capped at ``limit``
     (closest hops first) to keep responses small."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         hits = await GraphQuery(index).neighbors(symbol, depth=depth)
     return hits[:limit]
 
@@ -71,7 +67,7 @@ async def graph_concept(term: str, path: str = ".", limit: int = 25) -> dict:
     ``limit``; ``member_count`` is the true total. Returns {cluster_id, label, member_count,
     members, shown}."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         concept = await GraphQuery(index).concept(term)
     if not concept:
         return {}
@@ -90,7 +86,7 @@ async def graph_concept(term: str, path: str = ".", limit: int = 25) -> dict:
 async def graph_clusters(path: str = ".") -> list[dict]:
     """List concept clusters (label + size), largest first."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return await GraphQuery(index).clusters()
 
 
@@ -100,7 +96,7 @@ async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict
     first. Use to locate the exact symbol name before graph_usages/graph_neighbors.
     """
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return await GraphQuery(index).search(term, limit=limit)
 
 
@@ -112,7 +108,7 @@ async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
     highest-rank match is used). Returns {} if not found. Prefer this over graph_neighbors
     for 'how is X used' — neighbors truncates silently with no totals."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return await GraphQuery(index).usages(symbol, sample=sample)
 
 
@@ -160,7 +156,7 @@ async def graph_flow(
     extra edge kinds on top of calls/callback_arg and is validated, ``include_tests`` keeps test
     symbols, ``expand_hubs`` opens the nodes the hub rule collapsed."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return await GraphQuery(index).flow(
             symbol,
             FlowOptions(
@@ -185,7 +181,7 @@ async def graph_overview(path: str = ".") -> dict:
     no error.
     """
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         nodes = await index.graph.nodes()
         edges = await index.graph.all_edges()
         clusters = await index.graph.clusters()
@@ -231,7 +227,7 @@ async def graph_unresolved(
     ``candidates`` are capped, with the true totals in ``definers_count`` /
     ``candidates_count``. Empty until graph_build has run."""
     root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         rows = await index.graph.unresolved(
             reasons=_filter_values(reason, UnresolvedReason, "reason"),
             call_forms=_filter_values(call_form, CallForm, "call_form"),

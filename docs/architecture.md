@@ -296,6 +296,11 @@ flowchart TB
   - A `write_*` half is added only when a transaction calls it. `refinements.write_outcomes` is
     the one that exists ahead of its caller: the S4b overlay writes refinement verdicts inside the
     build's transaction, so a graph and its provenance land together.
+- `database.open_repo_index(root)` is the one place "connect scoped to this repo's partition and
+  bound to this checkout's identity" is written. `cli.helpers.open_index` and
+  `mcp.helpers.open_index` wrap it with their layer's repair message; nothing else calls
+  `IndexStore.connect` with a repo key alone, because that binds the worktree path as the identity
+  and every identity-scoped query then returns nothing.
 - `BaseDB` carries two read helpers because the index has two scoping keys: `_fetch` / `_fetch_one`
   bind `repo` (the partition), `_fetch_by_identity` / `_fetch_one_by_identity` bind
   `partition.identity` (the checkout). A store binds one or the other, never both.
