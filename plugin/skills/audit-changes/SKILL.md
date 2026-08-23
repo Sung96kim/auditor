@@ -22,12 +22,15 @@ left, and hand off depth instead of drowning the conversation in findings.
      is clean" without also checking `totals`. Unfamiliar with this, or need the triage order and
      the background-vs-foreground call on the auditor-reviewer subagent? Read
      `references/triage.md`.
-3. Triage findings: `auto` first (already decided), then `candidate`s worst-severity-first. For
-   depth on a large batch of candidates, dispatch the **auditor-reviewer** subagent rather than
-   judging inline — background if this is a "keep working" check, foreground if you need the
-   verdict now (e.g. blocking a merge). `references/triage.md` covers the decision and how
-   `--since` still scans the whole repo (for cross-file rule correctness) while only reporting
-   the diff.
+3. Triage findings: `auto` first (already decided), then risk-category candidates
+   (`security`, `malware`, `secrets`, `supply-chain`, `correctness`, `async`, `a11y`) at
+   `blocking`/`high`, then the promoted maintainability categories (`oop-composition`,
+   `dead-code`, `typing`, `testing`, `config`, `style`, `design-system`, `react`) in full, then
+   everything else worst-severity-first. For depth on a large batch of candidates, dispatch the
+   **auditor-reviewer** subagent rather than judging inline — background if this is a "keep
+   working" check, foreground if you need the verdict now (e.g. blocking a merge).
+   `references/triage.md` covers the decision and how `--since` still scans the whole repo (for
+   cross-file rule correctness) while only reporting the diff.
 4. Emit an `AUDIT.md` or a PR review body: gate result first, then findings worst-severity-first,
    grouped by file, with `rule_id` + line + a one-line verdict for each candidate
    (`fix-recommended` / `suppress-recommended` / `dismiss` — this skill reports the changeset, it
