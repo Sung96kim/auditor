@@ -100,7 +100,7 @@ class CrossFileInputs(BaseModel):
             entry_point_names=self.entry_points,
         )
 
-    def recompute_in_memory(
+    def recompute_in_memory(  # auditor: skip: PY-TYPING-UNTYPED-DICT  (index shape rows)
         self, shape_rows: list[dict], roles: dict[str, str]
     ) -> dict[str, list[Finding]]:
         """Run the pass over shapes computed in memory, for a scan with no index."""

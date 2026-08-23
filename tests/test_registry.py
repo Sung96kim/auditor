@@ -35,6 +35,12 @@ def _register(reg: Registry, kind: str, **overrides: object) -> None:
     getattr(reg, f"register_{kind}")(_fake(kind, **overrides))
 
 
+@pytest.fixture
+def reg() -> Registry:
+    """An isolated registry, so a test never registers into the process-wide one."""
+    return Registry()
+
+
 def test_builtin_registry_populated():
     assert "PY-SEC-DANGEROUS-EVAL" in REGISTRY.rule_ids()
     assert "python" in REGISTRY.languages()
@@ -54,9 +60,7 @@ def test_detectors_for_language():
     assert REGISTRY.detectors_for_language("rust") == []
 
 
-def test_isolated_registry_register_and_duplicate():
-    reg = Registry()
-
+def test_isolated_registry_register_and_duplicate(reg):
     class _D:
         rule_id = "X-CUSTOM-RULE"
         category = "custom"
@@ -81,9 +85,7 @@ def test_snapshot_shape():
     assert snap["detectors"]["PY-SEC-DANGEROUS-EVAL"]["source"] == "built-in"
 
 
-def test_framework_tag_and_query():
-    reg = Registry()
-
+def test_framework_tag_and_query(reg):
     class _D:
         rule_id = "X-FW-RULE"
         category = "testing"
@@ -106,9 +108,8 @@ def test_dead_symbol_rule_registered():
 
 
 @pytest.mark.parametrize("kind", ["detector", "language", "reporter"])
-def test_state_restores_every_registry_table(kind):
+def test_state_restores_every_registry_table(reg, kind):
     """Restore undoes a registration of any plugin type, not just detectors."""
-    reg = Registry()
     before = reg.state()
     _register(reg, kind)
     assert reg.sources.source_of(kind, _name(kind)) == "built-in"
@@ -118,9 +119,8 @@ def test_state_restores_every_registry_table(kind):
     assert _name(kind) not in {*reg.rule_ids(), *reg.languages(), *reg.formats()}
 
 
-def test_sourcing_nests_and_restores_after_a_raise():
+def test_sourcing_nests_and_restores_after_a_raise(reg):
     """A nested block restores the outer source, and a plugin that raises leaves nothing behind."""
-    reg = Registry()
     with reg.sources.sourcing("outer.py"):
         with reg.sources.sourcing("inner.py"):
             _register(reg, "detector", rule_id="X-NEST-INNER")
@@ -136,9 +136,9 @@ def test_sourcing_nests_and_restores_after_a_raise():
     assert reg.sources.source_of("detector", "X-NEST-OUTSIDE") == "built-in"
 
 
-def test_sourcing_is_isolated_per_thread():
+def test_sourcing_is_isolated_per_thread(reg):
     """Two threads loading different plugins at once each record their own source."""
-    reg, ready = Registry(), threading.Barrier(2)
+    ready = threading.Barrier(2)
 
     def load(source: str, rule_id: str) -> None:
         with reg.sources.sourcing(source):
@@ -158,9 +158,8 @@ def test_sourcing_is_isolated_per_thread():
     assert reg.sources.source_of("detector", "X-THREAD-B") == "b.py"
 
 
-def test_a_listed_plugin_module_keeps_its_own_source():
+def test_a_listed_plugin_module_keeps_its_own_source(reg):
     """A class a plugin imports belongs to that plugin, unless its own module is a plugin too."""
-    reg = Registry()
     with reg.sources.sourcing("moda", listed=["moda", "modb"]):
         _register(reg, "detector", rule_id="X-LISTED", module="modb")
         _register(reg, "detector", rule_id="X-HELPER", module="moda.util")

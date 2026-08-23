@@ -1,6 +1,8 @@
 """Cross-command clean-error behavior: a bad target or a bad --format exits non-zero with a
 one-line message, never a raw traceback."""
 
+from pathlib import Path
+
 import pytest
 from _support import invoke
 
@@ -31,18 +33,29 @@ def test_invalid_format_errors_cleanly(sample_repo, cmd):
     assert "Traceback" not in result.output  # clean error, not a raw stack trace
 
 
-@pytest.mark.parametrize("command", ["scan", "aggregate"])
-@pytest.mark.parametrize("case", ["parent_is_a_file", "output_is_a_directory"])
-def test_unwritable_output_path_fails_cleanly(sample_repo, tmp_path, command, case):
-    """A `-o` path that cannot be written exits 1 with one line, never a traceback."""
-    if case == "parent_is_a_file":
-        (tmp_path / "notadir").write_text("")
-        out = tmp_path / "notadir" / "sub" / "report.json"
-    else:
-        out = tmp_path / "adir"
-        out.mkdir()
+def _under_a_file(tmp_path: Path) -> Path:
+    """A report path whose parent is a regular file."""
+    (tmp_path / "notadir").write_text("")
+    return tmp_path / "notadir" / "sub" / "report.json"
 
-    result = invoke(command, str(sample_repo / "src"), "-o", str(out))
+
+def _an_existing_directory(tmp_path: Path) -> Path:
+    """A report path that is itself a directory."""
+    (tmp_path / "adir").mkdir()
+    return tmp_path / "adir"
+
+
+@pytest.mark.parametrize("command", ["scan", "aggregate"])
+@pytest.mark.parametrize(
+    "make_output",
+    [_under_a_file, _an_existing_directory],
+    ids=["parent_is_a_file", "output_is_a_directory"],
+)
+def test_unwritable_output_path_fails_cleanly(
+    sample_repo, tmp_path, command, make_output
+):
+    """A `-o` path that cannot be written exits 1 with one line, never a traceback."""
+    result = invoke(command, str(sample_repo / "src"), "-o", str(make_output(tmp_path)))
 
     assert result.exit_code == 1
     assert "cannot write" in result.output
