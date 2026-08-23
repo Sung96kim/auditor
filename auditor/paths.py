@@ -11,10 +11,11 @@ import hashlib
 import json
 import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from auditor.config import GlobalPaths
 from auditor.discovery import git_output
+from auditor.partition import Partition
 
 
 def read_json_dict(path: Path) -> dict[str, object]:
@@ -109,6 +110,22 @@ def repo_identity(root: Path) -> str:
     if relative is not None:
         return str((root / relative).resolve())
     return repo_key(root)
+
+
+def partition_for(root: Path) -> Partition:
+    """The identity and toplevel-relative prefix that bind an index handle to one checkout.
+
+    Costs two git calls. Outside git, and for a root that is not under its own toplevel, the
+    prefix is empty and the identity falls back to the partition key.
+    """
+    identity = repo_identity(root)
+    toplevel = git_output(root, "rev-parse", "--show-toplevel")
+    if toplevel is None:
+        return Partition(identity=identity)
+    rel = os.path.relpath(root.resolve(), Path(toplevel).resolve()).replace(os.sep, "/")
+    if rel == "." or rel.startswith(".."):
+        return Partition(identity=identity)
+    return Partition(identity=identity, prefix=f"{PurePosixPath(rel)}/")
 
 
 def _key_for(identity: str) -> str:

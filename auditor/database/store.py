@@ -18,6 +18,7 @@ from auditor.database.files import FilesDB
 from auditor.database.findings import FindingsDB
 from auditor.database.shapes import ShapesDB
 from auditor.database.graph import GraphDB
+from auditor.partition import Partition
 
 
 class IndexStore(BaseDB):
@@ -41,22 +42,27 @@ class IndexStore(BaseDB):
     shapes: ShapesDB
     graph: GraphDB
 
-    def __init__(self, worker: "SqliteWorker", repo: str) -> None:
-        super().__init__(worker, repo)
+    def __init__(
+        self, worker: "SqliteWorker", repo: str, partition: Partition | None = None
+    ) -> None:
+        super().__init__(worker, repo, partition)
         self.db_path: Path  # set by connect()
 
     @classmethod
-    async def connect(cls, db_path: Path, repo: str = DEFAULT_REPO) -> "IndexStore":
+    async def connect(
+        cls, db_path: Path, repo: str = DEFAULT_REPO, partition: Partition | None = None
+    ) -> "IndexStore":
         """Open (creating if needed) the shared index and bind this handle to ``repo``'s
-        partition — every read/write through it is scoped to that repo."""
+        partition — every read/write through it is scoped to that repo. ``partition`` additionally
+        binds the identity the refinement tables key on; omitted, the repo key is the identity."""
         db_path.parent.mkdir(parents=True, exist_ok=True)
         worker = SqliteWorker(db_path)
         await worker.start()
-        store = cls(worker, repo)
+        store = cls(worker, repo, partition)
         store.db_path = db_path
         await worker.run(store._init_schema)
         for sub in BaseDB._registry:
-            setattr(store, sub.attr, sub(worker, repo))
+            setattr(store, sub.attr, sub(worker, repo, store.partition))
         return store
 
     @staticmethod

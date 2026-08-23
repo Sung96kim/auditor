@@ -11,6 +11,7 @@ from auditor.paths import (
     ensure_repo_dir,
     index_db_path,
     models_dir,
+    partition_for,
     read_json_dict,
     read_json_dict_strict,
     repo_dir,
@@ -152,3 +153,32 @@ def test_write_json_dict_replaces_in_one_step(tmp_path):
     write_json_dict(path, {"a": 1})
     assert json.loads(path.read_text()) == {"a": 1}
     assert list(tmp_path.iterdir()) == [path]  # the temp file is gone
+
+
+def test_partition_for_a_repo_root_has_no_prefix(git_repo):
+    part = partition_for(git_repo)
+    assert part.identity == repo_identity(git_repo)
+    assert part.prefix == ""
+
+
+def test_partition_for_a_subdirectory_carries_a_posix_prefix(git_repo):
+    nested = git_repo / "apps" / "backend"
+    nested.mkdir(parents=True)
+    part = partition_for(nested)
+    assert part.identity == repo_identity(git_repo)  # one identity, two partitions
+    assert part.prefix == "apps/backend/"
+
+
+def test_partition_for_a_worktree_shares_the_identity(git_repo, tmp_path):
+    linked = tmp_path / "wt"
+    git(git_repo, "worktree", "add", "-q", str(linked))
+    assert partition_for(linked).identity == partition_for(git_repo).identity
+    assert partition_for(linked).prefix == ""
+
+
+def test_partition_for_outside_git_falls_back_to_the_partition_key(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    part = partition_for(plain)
+    assert part.identity == repo_key(plain)
+    assert part.prefix == ""

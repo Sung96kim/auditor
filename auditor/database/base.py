@@ -17,6 +17,8 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
+from auditor.partition import Partition
+
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05
 
@@ -196,9 +198,15 @@ class BaseDB:
         if not cls.__dict__.get("facade"):
             BaseDB._registry.append(cls)
 
-    def __init__(self, worker: "SqliteWorker", repo: str) -> None:
+    def __init__(
+        self, worker: "SqliteWorker", repo: str, partition: Partition | None = None
+    ) -> None:
         self._worker = worker
         self.repo = repo
+        # outside git the identity is the partition key itself (spec 5.2)
+        self.partition = (
+            partition if partition is not None else Partition(identity=repo)
+        )
 
     def _ensure_repo(self, conn: sqlite3.Connection) -> None:
         name = Path(self.repo).name or self.repo
@@ -221,4 +229,21 @@ class BaseDB:
         """:meth:`_fetch` for a single row (or ``None``); binds ``self.repo`` first, as above."""
         return await self._worker.run(
             lambda c: c.execute(sql, (self.repo, *params)).fetchone()
+        )
+
+    async def _fetch_by_identity(
+        self, sql: str, params: tuple[Any, ...] = ()
+    ) -> list[sqlite3.Row]:
+        """:meth:`_fetch` for the identity tables: binds ``self.partition.identity`` as the first
+        ``?``, so ``sql`` must lead with ``WHERE repo_identity = ?``."""
+        return await self._worker.run(
+            lambda c: c.execute(sql, (self.partition.identity, *params)).fetchall()
+        )
+
+    async def _fetch_one_by_identity(
+        self, sql: str, params: tuple[Any, ...] = ()
+    ) -> sqlite3.Row | None:
+        """:meth:`_fetch_by_identity` for a single row (or ``None``)."""
+        return await self._worker.run(
+            lambda c: c.execute(sql, (self.partition.identity, *params)).fetchone()
         )

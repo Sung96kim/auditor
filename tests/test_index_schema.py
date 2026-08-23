@@ -17,6 +17,7 @@ from auditor.models import (
     Severity,
     VerdictKind,
 )
+from auditor.partition import Partition
 
 _WORKING_TABLES = ["files", "file_rules", "findings", "shapes"]
 
@@ -230,3 +231,19 @@ async def test_findings_grouped_empty(tmp_path):
     async with await IndexStore.connect(db, "/r") as store:
         grouped = await store.findings.grouped()
     assert grouped == {}
+
+
+async def test_connect_defaults_the_identity_to_the_repo_key(tmp_path):
+    async with await IndexStore.connect(tmp_path / "index.db", "/repos/alpha") as store:
+        assert store.partition == Partition(identity="/repos/alpha", prefix="")
+        assert store.findings.partition == store.partition  # every sub-store shares it
+
+
+async def test_connect_binds_an_explicit_partition_to_every_store(tmp_path):
+    part = Partition(identity="/checkout/.git", prefix="apps/backend/")
+    async with await IndexStore.connect(
+        tmp_path / "index.db", "/checkout/apps/backend", part
+    ) as store:
+        assert store.graph.partition == part
+        assert store.repos.partition.prefix == "apps/backend/"
+        assert store.repo == "/checkout/apps/backend"  # the partition key is unchanged
