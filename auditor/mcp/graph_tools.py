@@ -3,8 +3,11 @@
 tools register unconditionally."""
 
 import time
+from collections import defaultdict
 from enum import StrEnum
 from pathlib import Path
+
+from loguru import logger
 
 from auditor.config import load_config
 from auditor.discovery import find_root
@@ -187,13 +190,16 @@ async def graph_overview(path: str = ".") -> dict:
         edges = await index.graph.all_edges()
         clusters = await index.graph.clusters()
         findings = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
-    god_concepts: list[str] = []
-    bottlenecks: list[str] = []
+    by_kind: dict[str, list[str]] = defaultdict(list)
     for f in findings:
-        if f.subkind == GodConceptKind.BOTTLENECK:
-            bottlenecks.append(f.evidence)
-        elif f.subkind == GodConceptKind.FAN_OUT:
-            god_concepts.append(f.evidence)
+        by_kind[f.subkind or ""].append(f.evidence)
+    unclassified = sorted(set(by_kind) - {k.value for k in GodConceptKind})
+    if unclassified:
+        logger.warning(
+            "graph_overview: unclassified GRAPH-GOD-CONCEPT subkinds {}", unclassified
+        )
+    god_concepts = by_kind[GodConceptKind.FAN_OUT]
+    bottlenecks = by_kind[GodConceptKind.BOTTLENECK]
     return {
         "nodes": len(nodes),
         "edges": len(edges),

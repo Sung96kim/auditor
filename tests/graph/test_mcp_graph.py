@@ -3,12 +3,15 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from loguru import logger
 
 from auditor.database import open_repo_index
 from auditor.engine import audit_target
 from auditor.graph.detectors import GodConceptKind
 from auditor.graph.model import MAX_FLOW_LIMIT, QUEUE_ID_CAP
+from auditor.languages.python.detectors.graph_rules import GOD_CONCEPT_RULE
 from auditor.mcp_server import mcp
+from auditor.models import Category, Finding, Severity, VerdictKind
 
 
 def _data(result):
@@ -121,6 +124,42 @@ async def test_graph_overview_splits_the_hub_lists_by_subkind(
     assert ov["bottlenecks"] == bottleneck[:5] and ov["bottleneck_count"] == len(
         bottleneck
     )
+
+
+async def test_an_unknown_subkind_is_not_silently_dropped(
+    graph_repo_god_concepts: Path,
+):
+    """The two hub lists are a partition, so a subkind neither of them names has to be reported
+    rather than vanish between graph_build's finding count and graph_overview's."""
+    unknown = Finding(
+        rule_id=GOD_CONCEPT_RULE,
+        category=Category.OOP_COMPOSITION,
+        severity=Severity.SUGGESTION,
+        verdict_kind=VerdictKind.CANDIDATE,
+        line=1,
+        message="m.py::loop participates in a cycle",
+        evidence="m.py::loop",
+        subkind="cycle",
+    )
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": str(graph_repo_god_concepts)})
+        async with await open_repo_index(graph_repo_god_concepts) as index:
+            await index.findings.add("m.py", [unknown])
+            rows = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
+        warnings: list[str] = []
+        sink_id = logger.add(warnings.append, level="WARNING", format="{message}")
+        logger.enable("auditor")
+        try:
+            ov = _data(
+                await c.call_tool(
+                    "graph_overview", {"path": str(graph_repo_god_concepts)}
+                )
+            )
+        finally:
+            logger.disable("auditor")
+            logger.remove(sink_id)
+    assert ov["god_concept_count"] + ov["bottleneck_count"] < len(rows)
+    assert any("cycle" in m for m in warnings)
 
 
 async def test_graph_unresolved_lists_the_queue(graph_repo: Path):
