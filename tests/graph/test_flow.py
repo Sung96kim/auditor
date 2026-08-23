@@ -298,3 +298,87 @@ def test_flow_on_an_unknown_start_id_is_a_bare_root(cache):
     result = build_flow(cache, "nope.py::gone", options=FlowOptions(depth=3))
     assert result.root.id == "nope.py::gone" and result.root.kind == "?"
     assert result.root.children == () and result.modules == ("nope.py",)
+
+
+def test_dispatch_expansion_outward_lists_overriders(cache):
+    result = build_flow(
+        cache, "app/base.py::Handler.handle", options=FlowOptions(depth=1)
+    )
+    kids = _kids(result.root)
+    assert kids["app/impl_a.py::AlphaHandler.handle"].edge == "dispatches_to"
+    assert kids["app/impl_b.py::BetaHandler.handle"].edge == "dispatches_to"
+    assert kids["app/util.py::helper"].edge == "calls"
+
+
+def test_dispatch_expansion_inward_walks_to_the_base(cache):
+    result = build_flow(
+        cache,
+        "app/impl_a.py::AlphaHandler.handle",
+        options=FlowOptions(direction=FlowDirection.IN, depth=1),
+    )
+    assert _kids(result.root)["app/base.py::Handler.handle"].edge == "dispatches_to"
+
+
+def test_registered_in_is_a_leaf_outward(cache):
+    """app/reg.py calls helper, so only the _LEAF_EDGES guard keeps the registry a leaf."""
+    result = build_flow(cache, "app/plug.py::plugin", options=FlowOptions(depth=3))
+    registry = _kids(result.root)["app/reg.py"]
+    assert registry.edge == "registered_in"
+    assert registry.children == ()
+    assert registry.kind == "module"
+
+
+def test_registered_in_expands_as_dispatch_inward(cache):
+    result = build_flow(
+        cache, "app/reg.py", options=FlowOptions(direction=FlowDirection.IN, depth=2)
+    )
+    plugin = _kids(result.root)["app/plug.py::plugin"]
+    assert plugin.edge == "dispatches_to"
+    assert _kids(plugin)["app/engine.py::run"].edge == "calls"
+
+
+def test_children_are_deduped_to_one_edge_per_child(cache):
+    """--in --kinds registered_in reaches plugin twice: as a registrant and as its own dispatch."""
+    result = build_flow(
+        cache,
+        "app/reg.py",
+        options=FlowOptions(
+            direction=FlowDirection.IN, depth=1, kinds=("registered_in",)
+        ),
+    )
+    assert [(c.edge, c.id) for c in result.root.children] == [
+        ("dispatches_to", "app/plug.py::plugin")
+    ]
+
+
+def test_in_direction_reverses_the_walk(cache):
+    result = build_flow(
+        cache,
+        "app/util.py::helper",
+        options=FlowOptions(direction=FlowDirection.IN, depth=2),
+    )
+    assert result.direction is FlowDirection.IN
+    kids = _kids(result.root)
+    assert set(kids) == {
+        "app/engine.py::run",
+        "app/base.py::Handler.handle",
+        "app/reg.py",
+    }
+    assert _kids(kids["app/engine.py::run"])["app/cli.py::main"].edge == "calls"
+
+
+def test_extra_kinds_are_followed(cache):
+    """--kinds adds to the base set; it never replaces calls/callback_arg."""
+    without = build_flow(
+        cache, "app/impl_a.py::AlphaHandler.handle", options=FlowOptions(depth=1)
+    )
+    with_overrides = build_flow(
+        cache,
+        "app/impl_a.py::AlphaHandler.handle",
+        options=FlowOptions(depth=1, kinds=("overrides",)),
+    )
+    assert without.root.children == ()
+    assert [c.id for c in with_overrides.root.children] == [
+        "app/base.py::Handler.handle"
+    ]
+    assert with_overrides.root.children[0].edge == "overrides"

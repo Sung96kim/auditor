@@ -201,14 +201,35 @@ def _children(
     kinds: frozenset[str],
     include_tests: bool,
 ) -> list[tuple[str, str, str]]:
-    """``(child_id, edge, source)`` one hop from ``node_id``, one row per child, ordered."""
+    """``(child_id, edge, source)`` one hop from ``node_id``, deduped and ordered.
+
+    Outward adds each overrider as ``dispatches_to`` and each registry as a leaf; inward walks to
+    the base method and expands a registry module's registrants (spec §7).
+    """
     if direction is FlowDirection.OUT:
         triples = [
             (e["dst"], e["kind"], _source(e)) for e in cache.outgoing(node_id, kinds)
         ]
+        triples += [
+            (e["src"], _DISPATCH, _source(e))
+            for e in cache.incoming(node_id, _OVERRIDES)
+        ]
+        triples += [
+            (e["dst"], EdgeKind.REGISTERED_IN.value, _source(e))
+            for e in cache.outgoing(node_id, _REGISTERED)
+        ]
     else:
         triples = [
             (e["src"], e["kind"], _source(e)) for e in cache.incoming(node_id, kinds)
+        ]
+        triples += [
+            (e["dst"], _DISPATCH, _source(e))
+            for e in cache.outgoing(node_id, _OVERRIDES)
+        ]
+        # only a registry module has incoming registered_in edges, so no kind check is needed
+        triples += [
+            (e["src"], _DISPATCH, _source(e))
+            for e in cache.incoming(node_id, _REGISTERED)
         ]
     if not include_tests:
         triples = [t for t in triples if cache.role(t[0]) not in TEST_ROLES]
@@ -279,7 +300,8 @@ def build_flow(
                 if module not in module_seen:
                     module_seen.add(module)
                     modules.append(module)
-                if not records[index].seen_ref and not cycle:
+                child = records[index]
+                if not child.seen_ref and not cycle and edge not in _LEAF_EDGES:
                     nxt.append(index)
         if truncated or not nxt:
             break
