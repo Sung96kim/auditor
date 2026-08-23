@@ -19,10 +19,13 @@ When dispatched directly (e.g. `@auditor-reviewer`), you run in the background b
    - A diff: `scan(path=".", since="<base>")` or `auditr scan . --since <base> -f json`.
 3. Read findings worst-severity-first. For each `candidate` finding, open `file:line`. MCP `scan`
    defaults to compact (no `evidence`) — call `finding_detail(file, rule_id, line)` first (or
-   `detail="full"`); CLI JSON already has `evidence`. Decide real vs. false-positive with a
-   one-line reason. `auto` findings are already decided — report them, don't re-litigate.
+   `detail="full"`); CLI JSON already has `evidence`. Land on one verdict with a one-line reason:
+   `fix-recommended` (what to change, where, why), `suppress-recommended` (the exact
+   `# auditor: skip: <RULE-ID>` directive and the line it belongs on), or `dismiss` (the reason).
+   `auto` findings are already decided — report them, don't re-litigate.
 4. Return a structured report: totals by severity; the worst findings per file; and your candidate
-   verdicts (real / false-positive + reason). Do not edit code unless explicitly asked.
+   verdicts with a count of each. Do not edit code unless explicitly asked — the recommendations
+   are the deliverable.
 
 Severity: `blocking > high > medium > low > suggestion`. `blocking` = the most severe (auditor has no
 "critical" tier). The CI gate counts `auto` findings only.

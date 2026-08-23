@@ -33,6 +33,7 @@ POLICY_DOCS = (
     "skills/aggregate-report/references/reading-audit-md.md",
     "skills/audit-changes/SKILL.md",
     "skills/audit-changes/references/output-formats.md",
+    "agents/auditor-reviewer.md",
 )
 
 #: shipped markdown that must spell all three verdicts out by name
@@ -41,6 +42,7 @@ VERDICT_DOCS = (
     "skills/judge-findings/references/judging.md",
     "skills/aggregate-report/SKILL.md",
     "skills/audit-changes/SKILL.md",
+    "agents/auditor-reviewer.md",
 )
 
 
