@@ -4,11 +4,22 @@
 # delegation to the shared _fetch helper differing only in its SQL — parallel shape is the query
 # surface, not duplication; the substantive body was already extracted, clearing TWIN-METHODS)
 
+import json
 import sqlite3
 from typing import Any, ClassVar
 
 from auditor.database.base import BaseDB, Column, Index, Table
-from auditor.graph.model import GraphCluster, GraphEdge, GraphNode
+from auditor.graph.model import GraphCluster, GraphEdge, GraphNode, UnresolvedRow
+
+
+def _decode_unresolved(row: sqlite3.Row) -> dict[str, Any]:
+    """One queue row as a payload dict: JSON columns decoded, the flag a bool, ``repo`` dropped."""
+    out = dict(row)
+    out.pop("repo", None)
+    for col in ("candidates", "definers", "resolution_path"):
+        out[col] = json.loads(out.pop(f"{col}_json"))
+    out["externally_bound"] = bool(out["externally_bound"])
+    return out
 
 
 class GraphDB(BaseDB):
@@ -62,6 +73,36 @@ class GraphDB(BaseDB):
                 Column(name="member_count", type="INTEGER", not_null=True),
             ),
         ),
+        "graph_unresolved": Table(
+            cols=(
+                Column(name="node_id", type="TEXT", not_null=True, primary_key=True),
+                Column(name="name", type="TEXT", not_null=True, primary_key=True),
+                Column(name="reason", type="TEXT", not_null=True, primary_key=True),
+                Column(name="fact_kind", type="TEXT", not_null=True),
+                Column(name="receiver_root", type="TEXT"),
+                Column(name="call_form", type="TEXT", not_null=True, default="'bare'"),
+                Column(
+                    name="candidates_json", type="TEXT", not_null=True, default="'[]'"
+                ),
+                Column(
+                    name="definers_json", type="TEXT", not_null=True, default="'[]'"
+                ),
+                Column(
+                    name="resolution_path_json",
+                    type="TEXT",
+                    not_null=True,
+                    default="'[]'",
+                ),
+                Column(name="priority", type="INTEGER", not_null=True, default="4"),
+                Column(
+                    name="externally_bound", type="INTEGER", not_null=True, default="0"
+                ),
+            ),
+            indexes=(
+                Index(name="graph_unresolved_priority", columns=("repo", "priority")),
+                Index(name="graph_unresolved_reason", columns=("repo", "reason")),
+            ),
+        ),
     }
 
     async def set_facts(self, path: str, facts_json: str, content_hash: str) -> None:
@@ -104,6 +145,13 @@ class GraphDB(BaseDB):
             ).fetchall()
         )
         return [r["facts_json"] for r in rows]
+
+    async def facts(self, path: str) -> str | None:
+        """The cached ``FileGraphFacts`` JSON for one file, or ``None`` when it isn't indexed."""
+        row = await self._fetch_one(
+            "SELECT facts_json FROM graph_facts WHERE repo = ? AND path = ?", (path,)
+        )
+        return row["facts_json"] if row else None
 
     async def replace(
         self,
@@ -205,3 +253,58 @@ class GraphDB(BaseDB):
                 "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? ORDER BY src, dst, kind"
             )
         ]
+
+    async def replace_unresolved(self, rows: list[UnresolvedRow]) -> None:
+        """Swap this repo's whole unresolved queue for ``rows``; every build rebuilds it."""
+        values = [
+            (
+                self.repo,
+                r.node_id,
+                r.name,
+                r.reason.value,
+                r.fact_kind.value,
+                r.receiver_root,
+                r.call_form.value,
+                json.dumps(list(r.candidates)),
+                json.dumps(list(r.definers)),
+                json.dumps(list(r.resolution_path)),
+                r.priority,
+                int(r.externally_bound),
+            )
+            for r in rows
+        ]
+
+        def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
+            conn.execute("DELETE FROM graph_unresolved WHERE repo = ?", (self.repo,))
+            conn.executemany(
+                "INSERT INTO graph_unresolved (repo, node_id, name, reason, fact_kind, "
+                "receiver_root, call_form, candidates_json, definers_json, "
+                "resolution_path_json, priority, externally_bound) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+    async def unresolved(
+        self,
+        node_ids: list[str] | None = None,
+        reasons: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Queue rows in drain order: priority first, then node id and name."""
+        sql = "SELECT * FROM graph_unresolved WHERE repo = ?"
+        params: list[Any] = []
+        if node_ids:
+            sql += f" AND node_id IN ({','.join('?' for _ in node_ids)})"
+            params += node_ids
+        if reasons:
+            sql += f" AND reason IN ({','.join('?' for _ in reasons)})"
+            params += reasons
+        sql += " ORDER BY priority, node_id, name"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [_decode_unresolved(r) for r in await self._fetch(sql, tuple(params))]
