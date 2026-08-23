@@ -170,20 +170,14 @@ class GraphDB(BaseDB):
         await self._worker.run(op)
 
     async def facts_hash(self, path: str) -> str | None:
-        row = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?",
-                (self.repo, path),
-            ).fetchone()
+        row = await self._fetch_one(
+            "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?", (path,)
         )
         return row["content_hash"] if row else None
 
     async def all_facts(self) -> list[str]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT facts_json FROM graph_facts WHERE repo = ? ORDER BY path",
-                (self.repo,),
-            ).fetchall()
+        rows = await self._fetch(
+            "SELECT facts_json FROM graph_facts WHERE repo = ? ORDER BY path"
         )
         return [r["facts_json"] for r in rows]
 

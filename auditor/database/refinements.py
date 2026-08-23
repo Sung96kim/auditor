@@ -1,7 +1,9 @@
-"""RefinementsDB: the identity-keyed ``graph_runs`` / ``graph_refinements`` /
-``graph_refinement_anchors`` tables. Keyed by ``repo_identity`` rather than by the repo partition,
-so a forgotten partition never takes another worktree's work with it, and preserved across a
-``SCHEMA_VERSION`` bump."""
+"""The identity-keyed stores: ``RunsDB``, ``RefinementsDB``, ``TuningDB`` and ``EvalsDB``.
+
+Keyed by ``repo_identity`` rather than by the repo partition, so a forgotten partition never takes
+another worktree's work with it, and preserved across a ``SCHEMA_VERSION`` bump. They share this
+module because they share the row decoders and the ``IN`` clause helper below.
+"""
 
 import json
 import sqlite3
@@ -20,6 +22,7 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     Run,
     RunnerKind,
+    RunOutcome,
     RunStatus,
     TuningRow,
     TuningStatus,
@@ -42,15 +45,84 @@ def _refinement_from_row(row: sqlite3.Row) -> Refinement:
     return Refinement.model_validate(data)
 
 
+def _run_values(run: Run) -> dict[str, Any]:
+    """One run as a column name -> value mapping, so the insert cannot transpose two columns."""
+    return {
+        "run_id": run.run_id,
+        "repo_identity": run.repo_identity,
+        "origin_partition": run.origin_partition,
+        "partition_prefix": run.partition_prefix,
+        "client": run.client.value,
+        "producer": run.producer.value,
+        "runner": run.runner.value,
+        "trigger_kind": run.trigger_kind.value,
+        "trigger_detail": json.dumps(run.trigger_detail),
+        "session_id": run.session_id,
+        "agent_name": run.agent_name,
+        "branch": run.branch,
+        "commit_sha": run.commit_sha,
+        "dirty": int(run.dirty),
+        "model": run.model,
+        "prompt": run.prompt,
+        "system_prompt_sha": run.system_prompt_sha,
+        "tool_trace": json.dumps(run.tool_trace),
+        "cost_usd": run.cost_usd,
+        "cost_estimated": int(run.cost_estimated),
+        "input_tokens": run.input_tokens,
+        "output_tokens": run.output_tokens,
+        "num_turns": run.num_turns,
+        "sdk_session_id": run.sdk_session_id,
+        "status": run.status.value,
+        "summary": run.summary,
+        "error": run.error,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
+
+
+def _outcome_values(outcome: RunOutcome, *, now: float) -> dict[str, Any]:
+    """A terminal state as a column name -> value mapping, one key per ``RunOutcome`` field."""
+    values = {field: getattr(outcome, field) for field in RunOutcome.model_fields}
+    values["status"] = outcome.status.value
+    values["cost_estimated"] = int(outcome.cost_estimated)
+    values["tool_trace"] = json.dumps(list(outcome.tool_trace))
+    values["finished_at"] = outcome.finished_at if outcome.finished_at else now
+    return values
+
+
+def _refinement_values(refinement: Refinement) -> dict[str, Any]:
+    return {
+        "run_id": refinement.run_id,
+        "repo_identity": refinement.repo_identity,
+        "kind": refinement.kind.value,
+        "target": refinement.target.model_dump_json(exclude_defaults=True),
+        "payload": refinement.payload.model_dump_json(exclude_defaults=True),
+        "reason": refinement.reason,
+        "evidence": json.dumps([e.model_dump() for e in refinement.evidence]),
+        "confidence": refinement.confidence,
+        "tier": refinement.tier.value,
+        "status": refinement.status.value,
+        "drifted": int(refinement.drifted),
+        "noop_builds": refinement.noop_builds,
+        "supersedes": refinement.supersedes,
+        "attempts": refinement.attempts,
+        "created_at": refinement.created_at,
+        "status_at": refinement.status_at,
+    }
+
+
 def _in_clause(column: str, values: Sequence[object]) -> str:
     return f" AND {column} IN ({','.join('?' for _ in values)})"
 
 
-class RefinementsDB(BaseDB):
-    """Table store for the run, refinement and anchor tables. Reads bind the handle's identity,
-    never its repo key."""
+class RunsDB(BaseDB):
+    """Table store for ``graph_runs``: one row per decision, model call or not (spec 5.3).
 
-    attr: ClassVar[str] = "refinements"
+    Reads bind the handle's identity; writes address a globally unique id and bind the identity
+    too, so neither can reach another checkout's rows.
+    """
+
+    attr: ClassVar[str] = "runs"
     TABLES: ClassVar[dict[str, Table]] = {
         "graph_runs": Table(
             repo_fk=False,
@@ -104,6 +176,95 @@ class RefinementsDB(BaseDB):
                 ),
             ),
         ),
+    }
+
+    async def add_run(self, run: Run) -> str:
+        sql, binds = self.insert_sql("graph_runs", _run_values(run))
+
+        def op(conn: sqlite3.Connection) -> str:
+            conn.execute(sql, binds)
+            conn.commit()
+            return run.run_id
+
+        return await self._worker.run(op)
+
+    async def finish_run(self, run_id: str, outcome: RunOutcome) -> None:
+        """Stamp a run's terminal state. Cost is recorded even for `aborted` (spec 5.3)."""
+        values = _outcome_values(outcome, now=time.time())
+        assignments = ", ".join(f"{column}=?" for column in values)
+        sql = (
+            f"UPDATE graph_runs SET {assignments} "  # noqa: S608  (columns come from RunOutcome)
+            "WHERE run_id=? AND repo_identity=?"
+        )
+        binds = (*values.values(), run_id, self.partition.identity)
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(sql, binds)
+            conn.commit()
+
+        await self._worker.run(op)
+
+    async def run(self, run_id: str) -> Run | None:
+        row = await self._fetch_one_by_identity(
+            "SELECT * FROM graph_runs WHERE repo_identity = ? AND run_id = ?", (run_id,)
+        )
+        return _run_from_row(row) if row else None
+
+    async def runs(
+        self,
+        *,
+        statuses: Sequence[RunStatus] | None = None,
+        limit: int | None = None,
+    ) -> list[Run]:
+        """Runs newest first. Both filters run in SQL, so ``limit`` counts rows the caller sees."""
+        sql = "SELECT * FROM graph_runs WHERE repo_identity = ?"
+        params: list[Any] = []
+        if statuses:
+            sql += _in_clause("status", statuses)
+            params += [s.value for s in statuses]
+        sql += " ORDER BY started_at DESC, run_id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [
+            _run_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
+        ]
+
+    async def prune_skipped_runs(
+        self, retention_days: int, *, now: float | None = None
+    ) -> int:
+        """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
+
+        ``retention_days`` is the daemon's ``ObserverConfig.skipped_retention_days``. Real runs are
+        kept forever, and so is a skipped run owning a refinement or a tuning row: the guard reads
+        both child tables, which belong to the two stores below.
+        """
+        cutoff = (time.time() if now is None else now) - retention_days * _DAY_SECONDS
+        identity = self.partition.identity
+
+        def op(conn: sqlite3.Connection) -> int:
+            cur = conn.execute(
+                "DELETE FROM graph_runs WHERE repo_identity = ? AND status = ? "
+                "AND started_at < ? "
+                "AND run_id NOT IN (SELECT run_id FROM graph_refinements WHERE repo_identity = ?) "
+                "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?)",
+                (identity, RunStatus.SKIPPED.value, cutoff, identity, identity),
+            )
+            conn.commit()
+            return cur.rowcount
+
+        return await self._worker.run(op)
+
+
+class RefinementsDB(BaseDB):
+    """Table store for ``graph_refinements`` and ``graph_refinement_anchors`` (spec 5.4, 5.5).
+
+    Reads bind the handle's identity; writes address a globally unique id and bind the identity
+    too, so neither can reach another checkout's rows.
+    """
+
+    attr: ClassVar[str] = "refinements"
+    TABLES: ClassVar[dict[str, Table]] = {
         "graph_refinements": Table(
             repo_fk=False,
             cache=False,
@@ -163,221 +324,34 @@ class RefinementsDB(BaseDB):
                 Index(name="graph_anchors_refinement", columns=("refinement_id",)),
             ),
         ),
-        "graph_tuning": Table(
-            repo_fk=False,
-            cache=False,
-            cols=(
-                Column(
-                    name="tuning_id",
-                    type="INTEGER",
-                    primary_key=True,
-                    autoincrement=True,
-                ),
-                Column(name="repo_identity", type="TEXT", not_null=True),
-                Column(name="key", type="TEXT", not_null=True),
-                Column(name="value_json", type="TEXT", not_null=True),
-                Column(name="token", type="TEXT", not_null=True, default="''"),
-                Column(
-                    name="run_id",
-                    type="TEXT",
-                    not_null=True,
-                    references="graph_runs (run_id)",
-                ),
-                Column(name="reason", type="TEXT", not_null=True, default="''"),
-                Column(name="status", type="TEXT", not_null=True, default="'pending'"),
-                Column(name="metrics", type="TEXT", not_null=True, default="'{}'"),
-                Column(name="created_at", type="REAL", not_null=True, default="0"),
-            ),
-            indexes=(
-                Index(
-                    name="graph_tuning_identity", columns=("repo_identity", "status")
-                ),
-            ),
-        ),
-        "graph_evals": Table(
-            repo_fk=False,
-            cache=False,
-            cols=(
-                Column(
-                    name="eval_id", type="INTEGER", primary_key=True, autoincrement=True
-                ),
-                Column(name="repo_identity", type="TEXT", not_null=True),
-                Column(name="runner", type="TEXT", not_null=True),
-                Column(name="model", type="TEXT", not_null=True),
-                Column(name="suite", type="TEXT", not_null=True),
-                Column(name="stratum", type="TEXT", not_null=True),
-                Column(name="n", type="INTEGER", not_null=True, default="0"),
-                Column(name="correct", type="INTEGER", not_null=True, default="0"),
-                Column(name="precision", type="REAL", not_null=True, default="0"),
-                Column(name="recall", type="REAL", not_null=True, default="0"),
-                Column(name="false_add_rate", type="REAL", not_null=True, default="0"),
-                Column(
-                    name="false_removal_rate", type="REAL", not_null=True, default="0"
-                ),
-                Column(name="lower_bound_95", type="REAL", not_null=True, default="0"),
-                Column(name="cost_usd", type="REAL", not_null=True, default="0"),
-                Column(name="num_turns", type="INTEGER", not_null=True, default="0"),
-                Column(name="created_at", type="REAL", not_null=True, default="0"),
-            ),
-            indexes=(
-                Index(
-                    name="graph_evals_identity",
-                    columns=("repo_identity", "runner", "model"),
-                ),
-            ),
-        ),
     }
-
-    async def add_run(self, run: Run) -> str:
-        table = self.TABLES["graph_runs"]
-        columns = ", ".join(table.insert_columns())
-        values = (
-            run.run_id,
-            run.repo_identity,
-            run.origin_partition,
-            run.partition_prefix,
-            run.client.value,
-            run.producer.value,
-            run.runner.value,
-            run.trigger_kind.value,
-            json.dumps(run.trigger_detail),
-            run.session_id,
-            run.agent_name,
-            run.branch,
-            run.commit_sha,
-            int(run.dirty),
-            run.model,
-            run.prompt,
-            run.system_prompt_sha,
-            json.dumps(run.tool_trace),
-            run.cost_usd,
-            int(run.cost_estimated),
-            run.input_tokens,
-            run.output_tokens,
-            run.num_turns,
-            run.sdk_session_id,
-            run.status.value,
-            run.summary,
-            run.error,
-            run.started_at,
-            run.finished_at,
-        )
-
-        def op(conn: sqlite3.Connection) -> str:
-            conn.execute(
-                f"INSERT INTO graph_runs ({columns}) VALUES ({table.placeholders()})",  # noqa: S608
-                values,
-            )
-            conn.commit()
-            return run.run_id
-
-        return await self._worker.run(op)
-
-    async def finish_run(
-        self,
-        run_id: str,
-        *,
-        status: RunStatus,
-        summary: str | None = None,
-        error: str | None = None,
-        cost_usd: float = 0.0,
-        cost_estimated: bool = False,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        num_turns: int = 0,
-        tool_trace: Sequence[dict[str, Any]] = (),
-        sdk_session_id: str | None = None,
-        finished_at: float | None = None,
-    ) -> None:
-        """Stamp a run's terminal state. Cost is recorded even for `aborted` (spec 5.3)."""
-        values = (
-            status.value,
-            summary,
-            error,
-            cost_usd,
-            int(cost_estimated),
-            input_tokens,
-            output_tokens,
-            num_turns,
-            json.dumps(list(tool_trace)),
-            sdk_session_id,
-            finished_at if finished_at is not None else time.time(),
-            run_id,
-        )
-
-        def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "UPDATE graph_runs SET status=?, summary=?, error=?, cost_usd=?, "
-                "cost_estimated=?, input_tokens=?, output_tokens=?, num_turns=?, "
-                "tool_trace=?, sdk_session_id=?, finished_at=? WHERE run_id=?",
-                values,
-            )
-            conn.commit()
-
-        await self._worker.run(op)
-
-    async def run(self, run_id: str) -> Run | None:
-        row = await self._fetch_one_by_identity(
-            "SELECT * FROM graph_runs WHERE repo_identity = ? AND run_id = ?", (run_id,)
-        )
-        return _run_from_row(row) if row else None
-
-    async def runs(
-        self,
-        *,
-        statuses: Sequence[RunStatus] | None = None,
-        limit: int | None = None,
-    ) -> list[Run]:
-        """Runs newest first. Both filters run in SQL, so ``limit`` counts rows the caller sees."""
-        sql = "SELECT * FROM graph_runs WHERE repo_identity = ?"
-        params: list[Any] = []
-        if statuses:
-            sql += _in_clause("status", statuses)
-            params += [s.value for s in statuses]
-        sql += " ORDER BY started_at DESC, run_id"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        return [
-            _run_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
-        ]
 
     async def add_refinement(
         self, refinement: Refinement, anchors: Sequence[Anchor] = ()
     ) -> int:
         """Insert one refinement and its anchors together; returns the assigned id."""
-        table = self.TABLES["graph_refinements"]
-        columns = ", ".join(table.insert_columns())
-        values = (
-            refinement.run_id,
-            refinement.repo_identity,
-            refinement.kind.value,
-            refinement.target.model_dump_json(exclude_defaults=True),
-            refinement.payload.model_dump_json(exclude_defaults=True),
-            refinement.reason,
-            json.dumps([e.model_dump() for e in refinement.evidence]),
-            refinement.confidence,
-            refinement.tier.value,
-            refinement.status.value,
-            int(refinement.drifted),
-            refinement.noop_builds,
-            refinement.supersedes,
-            refinement.attempts,
-            refinement.created_at,
-            refinement.status_at,
+        sql, binds = self.insert_sql(
+            "graph_refinements", _refinement_values(refinement)
         )
 
         def op(conn: sqlite3.Connection) -> int:
-            cur = conn.execute(
-                f"INSERT INTO graph_refinements ({columns}) VALUES ({table.placeholders()})",  # noqa: S608
-                values,
-            )
+            cur = conn.execute(sql, binds)
             new_id = int(cur.lastrowid)
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_refinement_anchors "
-                "(refinement_id, node_id, path, truth_sha, file_sha) VALUES (?, ?, ?, ?, ?)",
-                [(new_id, a.node_id, a.path, a.truth_sha, a.file_sha) for a in anchors],
+            anchor_sql, anchor_binds = self.insert_many_sql(
+                "graph_refinement_anchors",
+                [
+                    {
+                        "refinement_id": new_id,
+                        "node_id": a.node_id,
+                        "path": a.path,
+                        "truth_sha": a.truth_sha,
+                        "file_sha": a.file_sha,
+                    }
+                    for a in anchors
+                ],
+                or_replace=True,
             )
+            conn.executemany(anchor_sql, anchor_binds)
             conn.commit()
             return new_id
 
@@ -414,15 +388,17 @@ class RefinementsDB(BaseDB):
     async def anchors(
         self, refinement_ids: Sequence[int]
     ) -> dict[int, tuple[Anchor, ...]]:
+        """The anchors of ``refinement_ids`` that belong to this identity, by refinement id."""
         if not refinement_ids:
             return {}
         placeholders = ",".join("?" for _ in refinement_ids)
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                f"SELECT * FROM graph_refinement_anchors WHERE refinement_id IN ({placeholders}) "  # noqa: S608
-                "ORDER BY refinement_id, node_id",
-                tuple(refinement_ids),
-            ).fetchall()
+        # the anchor rows carry no identity of their own, so they are scoped through their parent
+        rows = await self._fetch_by_identity(
+            "SELECT * FROM graph_refinement_anchors WHERE refinement_id IN "
+            "(SELECT refinement_id FROM graph_refinements WHERE repo_identity = ?) "
+            f"AND refinement_id IN ({placeholders}) "  # noqa: S608  (placeholders only)
+            "ORDER BY refinement_id, node_id",
+            tuple(refinement_ids),
         )
         out: dict[int, list[Anchor]] = {}
         for row in rows:
@@ -434,11 +410,13 @@ class RefinementsDB(BaseDB):
         self, refinement_id: int, status: RefinementStatus, *, now: float | None = None
     ) -> None:
         stamp = time.time() if now is None else now
+        identity = self.partition.identity
 
         def op(conn: sqlite3.Connection) -> None:
             conn.execute(
-                "UPDATE graph_refinements SET status=?, status_at=? WHERE refinement_id=?",
-                (status.value, stamp, refinement_id),
+                "UPDATE graph_refinements SET status=?, status_at=? "
+                "WHERE refinement_id=? AND repo_identity=?",
+                (status.value, stamp, refinement_id, identity),
             )
             conn.commit()
 
@@ -450,17 +428,28 @@ class RefinementsDB(BaseDB):
         outcomes: Sequence[RefinementOutcome],
         now: float,
     ) -> None:
-        """Apply one build's verdicts on the open connection, without committing — the build's
-        transaction owns the commit, so a graph and its provenance land together."""
+        """Apply one build's verdicts on the open connection, without committing.
+
+        The build's transaction owns the commit, so a graph and its provenance land together;
+        S4b's ``_persist`` is the caller that needs it.
+        """
+        identity = self.partition.identity
         for outcome in outcomes:
             conn.execute(
-                "UPDATE graph_refinements SET noop_builds=?, drifted=? WHERE refinement_id=?",
-                (outcome.noop_builds, int(outcome.drifted), outcome.refinement_id),
+                "UPDATE graph_refinements SET noop_builds=?, drifted=? "
+                "WHERE refinement_id=? AND repo_identity=?",
+                (
+                    outcome.noop_builds,
+                    int(outcome.drifted),
+                    outcome.refinement_id,
+                    identity,
+                ),
             )
             if outcome.status is not None:
                 conn.execute(
-                    "UPDATE graph_refinements SET status=?, status_at=? WHERE refinement_id=?",
-                    (outcome.status.value, now, outcome.refinement_id),
+                    "UPDATE graph_refinements SET status=?, status_at=? "
+                    "WHERE refinement_id=? AND repo_identity=?",
+                    (outcome.status.value, now, outcome.refinement_id, identity),
                 )
 
     async def apply_outcomes(
@@ -474,26 +463,63 @@ class RefinementsDB(BaseDB):
 
         await self._worker.run(op)
 
+
+class TuningDB(BaseDB):
+    """Table store for ``graph_tuning``: the proposed knob changes (spec 5.8)."""
+
+    attr: ClassVar[str] = "tuning"
+    TABLES: ClassVar[dict[str, Table]] = {
+        "graph_tuning": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="tuning_id",
+                    type="INTEGER",
+                    primary_key=True,
+                    autoincrement=True,
+                ),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(name="key", type="TEXT", not_null=True),
+                Column(name="value_json", type="TEXT", not_null=True),
+                Column(name="token", type="TEXT", not_null=True, default="''"),
+                Column(
+                    name="run_id",
+                    type="TEXT",
+                    not_null=True,
+                    references="graph_runs (run_id)",
+                ),
+                Column(name="reason", type="TEXT", not_null=True, default="''"),
+                Column(name="status", type="TEXT", not_null=True, default="'pending'"),
+                Column(name="metrics", type="TEXT", not_null=True, default="'{}'"),
+                Column(name="created_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_tuning_identity", columns=("repo_identity", "status")
+                ),
+            ),
+        ),
+    }
+
     async def add_tuning(self, row: TuningRow) -> int:
-        table = self.TABLES["graph_tuning"]
-        columns = ", ".join(table.insert_columns())
-        values = (
-            row.repo_identity,
-            row.key,
-            row.value_json,
-            row.token,
-            row.run_id,
-            row.reason,
-            row.status.value,
-            json.dumps(row.metrics),
-            row.created_at,
+        sql, binds = self.insert_sql(
+            "graph_tuning",
+            {
+                "repo_identity": row.repo_identity,
+                "key": row.key,
+                "value_json": row.value_json,
+                "token": row.token,
+                "run_id": row.run_id,
+                "reason": row.reason,
+                "status": row.status.value,
+                "metrics": json.dumps(row.metrics),
+                "created_at": row.created_at,
+            },
         )
 
         def op(conn: sqlite3.Connection) -> int:
-            cur = conn.execute(
-                f"INSERT INTO graph_tuning ({columns}) VALUES ({table.placeholders()})",  # noqa: S608
-                values,
-            )
+            cur = conn.execute(sql, binds)
             conn.commit()
             return int(cur.lastrowid)
 
@@ -514,41 +540,81 @@ class RefinementsDB(BaseDB):
         ]
 
     async def set_tuning_status(self, tuning_id: int, status: TuningStatus) -> None:
+        identity = self.partition.identity
+
         def op(conn: sqlite3.Connection) -> None:
             conn.execute(
-                "UPDATE graph_tuning SET status=? WHERE tuning_id=?",
-                (status.value, tuning_id),
+                "UPDATE graph_tuning SET status=? WHERE tuning_id=? AND repo_identity=?",
+                (status.value, tuning_id, identity),
             )
             conn.commit()
 
         await self._worker.run(op)
 
+
+class EvalsDB(BaseDB):
+    """Table store for ``graph_evals``: one suite stratum's measured accuracy (spec 5.8, 10.2)."""
+
+    attr: ClassVar[str] = "evals"
+    TABLES: ClassVar[dict[str, Table]] = {
+        "graph_evals": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="eval_id", type="INTEGER", primary_key=True, autoincrement=True
+                ),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(name="runner", type="TEXT", not_null=True),
+                Column(name="model", type="TEXT", not_null=True),
+                Column(name="suite", type="TEXT", not_null=True),
+                Column(name="stratum", type="TEXT", not_null=True),
+                Column(name="n", type="INTEGER", not_null=True, default="0"),
+                Column(name="correct", type="INTEGER", not_null=True, default="0"),
+                Column(name="precision", type="REAL", not_null=True, default="0"),
+                Column(name="recall", type="REAL", not_null=True, default="0"),
+                Column(name="false_add_rate", type="REAL", not_null=True, default="0"),
+                Column(
+                    name="false_removal_rate", type="REAL", not_null=True, default="0"
+                ),
+                Column(name="lower_bound_95", type="REAL", not_null=True, default="0"),
+                Column(name="cost_usd", type="REAL", not_null=True, default="0"),
+                Column(name="num_turns", type="INTEGER", not_null=True, default="0"),
+                Column(name="created_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_evals_identity",
+                    columns=("repo_identity", "runner", "model"),
+                ),
+            ),
+        ),
+    }
+
     async def add_eval(self, row: EvalRow) -> int:
-        table = self.TABLES["graph_evals"]
-        columns = ", ".join(table.insert_columns())
-        values = (
-            row.repo_identity,
-            row.runner.value,
-            row.model,
-            row.suite,
-            row.stratum,
-            row.n,
-            row.correct,
-            row.precision,
-            row.recall,
-            row.false_add_rate,
-            row.false_removal_rate,
-            row.lower_bound_95,
-            row.cost_usd,
-            row.num_turns,
-            row.created_at,
+        sql, binds = self.insert_sql(
+            "graph_evals",
+            {
+                "repo_identity": row.repo_identity,
+                "runner": row.runner.value,
+                "model": row.model,
+                "suite": row.suite,
+                "stratum": row.stratum,
+                "n": row.n,
+                "correct": row.correct,
+                "precision": row.precision,
+                "recall": row.recall,
+                "false_add_rate": row.false_add_rate,
+                "false_removal_rate": row.false_removal_rate,
+                "lower_bound_95": row.lower_bound_95,
+                "cost_usd": row.cost_usd,
+                "num_turns": row.num_turns,
+                "created_at": row.created_at,
+            },
         )
 
         def op(conn: sqlite3.Connection) -> int:
-            cur = conn.execute(
-                f"INSERT INTO graph_evals ({columns}) VALUES ({table.placeholders()})",  # noqa: S608
-                values,
-            )
+            cur = conn.execute(sql, binds)
             conn.commit()
             return int(cur.lastrowid)
 
@@ -571,27 +637,3 @@ class RefinementsDB(BaseDB):
             EvalRow.model_validate(dict(r))
             for r in await self._fetch_by_identity(sql, tuple(params))
         ]
-
-    async def prune_skipped_runs(
-        self, retention_days: int, *, now: float | None = None
-    ) -> int:
-        """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
-
-        Real runs are kept forever. A skipped run that somehow owns a refinement or a tuning row is
-        kept too, so the sweep can never trip a foreign key or orphan provenance.
-        """
-        cutoff = (time.time() if now is None else now) - retention_days * _DAY_SECONDS
-        identity = self.partition.identity
-
-        def op(conn: sqlite3.Connection) -> int:
-            cur = conn.execute(
-                "DELETE FROM graph_runs WHERE repo_identity = ? AND status = ? "
-                "AND started_at < ? "
-                "AND run_id NOT IN (SELECT run_id FROM graph_refinements WHERE repo_identity = ?) "
-                "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?)",
-                (identity, RunStatus.SKIPPED.value, cutoff, identity, identity),
-            )
-            conn.commit()
-            return cur.rowcount
-
-        return await self._worker.run(op)

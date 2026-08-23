@@ -21,7 +21,7 @@ from auditor.database.files import FilesDB
 from auditor.database.findings import FindingsDB
 from auditor.database.shapes import ShapesDB
 from auditor.database.graph import GraphDB
-from auditor.database.refinements import RefinementsDB
+from auditor.database.refinements import EvalsDB, RefinementsDB, RunsDB, TuningDB
 from auditor.partition import Partition
 
 _T = TypeVar("_T")
@@ -30,14 +30,17 @@ _T = TypeVar("_T")
 class IndexStore(BaseDB):
     """Async wrapper over a worker-owned sqlite3 connection; callers never touch SQL.
 
-    The seven per-table stores are available as attributes:
+    The per-table stores are available as attributes:
       - ``repos``       — ReposDB
       - ``ignores``     — IgnoresDB
       - ``files``       — FilesDB
       - ``findings``    — FindingsDB
       - ``shapes``      — ShapesDB
       - ``graph``       — GraphDB
+      - ``runs``        — RunsDB
       - ``refinements`` — RefinementsDB
+      - ``tuning``      — TuningDB
+      - ``evals``       — EvalsDB
     """
 
     facade = True
@@ -48,7 +51,10 @@ class IndexStore(BaseDB):
     findings: FindingsDB
     shapes: ShapesDB
     graph: GraphDB
+    runs: RunsDB
     refinements: RefinementsDB
+    tuning: TuningDB
+    evals: EvalsDB
 
     def __init__(
         self, worker: "SqliteWorker", repo: str, partition: Partition | None = None

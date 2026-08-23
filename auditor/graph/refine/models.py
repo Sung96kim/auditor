@@ -165,6 +165,28 @@ class Run(BaseModel):
     finished_at: float | None = None
 
 
+class RunOutcome(BaseModel):
+    """A run's terminal state: what it produced, what it cost, and when it stopped (spec 5.3).
+
+    One field per column ``finish_run`` updates, so the UPDATE's set list is derived rather than
+    hand-ordered. ``finished_at`` of ``None`` means "stamp it now".
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: RunStatus
+    summary: str | None = None
+    error: str | None = None
+    cost_usd: float = 0.0
+    cost_estimated: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
+    num_turns: int = 0
+    tool_trace: tuple[dict[str, Any], ...] = ()
+    sdk_session_id: str | None = None
+    finished_at: float | None = None
+
+
 class Refinement(BaseModel):
     """One correction to the graph, owned by a run and expiring on its own (spec 5.4)."""
 

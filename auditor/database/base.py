@@ -10,7 +10,7 @@ import queue
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, ClassVar
@@ -237,6 +237,39 @@ class BaseDB:
             partition if partition is not None else Partition(identity=repo)
         )
 
+    def insert_sql(
+        self, table_name: str, values: Mapping[str, Any]
+    ) -> tuple[str, tuple[Any, ...]]:
+        """SQL and binds for one row, ordered by the table declaration rather than by the caller.
+
+        Raises KeyError naming the columns when ``values`` and the declaration disagree, so a
+        column added to or reordered in TABLES cannot silently write a transposed row.
+        """
+        sql, binds = self.insert_many_sql(table_name, (values,))
+        return sql, binds[0]
+
+    def insert_many_sql(
+        self,
+        table_name: str,
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        or_replace: bool = False,
+    ) -> tuple[str, list[tuple[Any, ...]]]:
+        """:meth:`insert_sql` for an ``executemany``: one statement and one bind tuple per row."""
+        table = self.TABLES[table_name]
+        cols = table.insert_columns()
+        binds = []
+        for values in rows:
+            if set(cols) != values.keys():
+                raise KeyError(
+                    f"{table_name}: missing {sorted(set(cols) - values.keys())}, "
+                    f"unknown {sorted(values.keys() - set(cols))}"
+                )
+            binds.append(tuple(values[c] for c in cols))
+        verb = "INSERT OR REPLACE INTO" if or_replace else "INSERT INTO"
+        sql = f"{verb} {table_name} ({', '.join(cols)}) VALUES ({table.placeholders()})"  # noqa: S608  (table and column names come from the Table declaration)
+        return sql, binds
+
     def _ensure_repo(self, conn: sqlite3.Connection) -> None:
         name = Path(self.repo).name or self.repo
         conn.execute(
@@ -264,7 +297,7 @@ class BaseDB:
         self, sql: str, params: tuple[Any, ...] = ()
     ) -> list[sqlite3.Row]:
         """:meth:`_fetch` for the identity tables: binds ``self.partition.identity`` as the first
-        ``?``, so ``sql`` must lead with ``WHERE repo_identity = ?``."""
+        ``?``, so the first placeholder in ``sql`` must be the identity."""
         return await self._worker.run(
             lambda c: c.execute(sql, (self.partition.identity, *params)).fetchall()
         )

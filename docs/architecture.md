@@ -266,15 +266,23 @@ flowchart TB
   `ambiguous_name` and `unimportable_name` rows; the build pass adds `text_sparse`, `generic_label`
   and `singleton_cluster` rows after clustering. It is node-keyed, so `IndexStore.prune` never
   touches it. See [graph.md](references/graph.md).
-- `database/refinements.py` holds the identity tables: `graph_runs` (one row per decision, model
-  call or not), `graph_refinements` (one row per correction), and `graph_refinement_anchors` (the
-  nodes a correction is pinned to, with the `truth_sha` they had when it was made). They key on
-  `repo_identity` (the resolved git common dir), not on the repo partition, so every worktree of a
-  checkout shares them and `repos.forget()` cannot cascade into them.
+- `database/refinements.py` holds the four identity stores, one concern each:
+  - `RunsDB` (`index.runs`) owns `graph_runs`, one row per decision, model call or not.
+  - `RefinementsDB` (`index.refinements`) owns `graph_refinements` and
+    `graph_refinement_anchors`: one row per correction, plus the nodes it is pinned to with the
+    `truth_sha` they had when it was made.
+  - `TuningDB` (`index.tuning`) owns `graph_tuning`, the proposed knob changes.
+  - `EvalsDB` (`index.evals`) owns `graph_evals`, one measured accuracy per suite stratum.
+  - They key on `repo_identity` (the resolved git common dir), not on the repo partition, so every
+    worktree of a checkout shares them and `repos.forget()` cannot cascade into them. Reads bind
+    the identity; writes address a globally unique id and bind the identity too.
+- Every insert binds its columns by name through `BaseDB.insert_sql` / `insert_many_sql`, which
+  order the binds by the `Table` declaration and raise `KeyError` on a mapping that does not match
+  it. Reordering two same-typed columns can no longer transpose a row.
 - Ids inside those tables are toplevel-relative: `partition_prefix` plus the partition-relative id,
   so a repo scanned both at its root and at a subdirectory keeps one namespace.
 - `graph_runs` rows with `status='skipped'` are the assessment-only records; the observer sweeps
-  them with `RefinementsDB.prune_skipped_runs` after `observer.skipped_retention_days`. Real runs
+  them with `RunsDB.prune_skipped_runs` after `observer.skipped_retention_days`. Real runs
   are never swept, and neither is a skipped run that owns a `graph_refinements` or `graph_tuning`
   row: both reference `graph_runs.run_id` with no `ON DELETE`.
 - `graph/hashes.py` derives two hashes per node from the extracted facts: `truth_sha` over the fact

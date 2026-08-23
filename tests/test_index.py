@@ -2,11 +2,13 @@
 worker under concurrency + high load (direct unit tests)."""
 
 import asyncio
+import re
 import time
 
 import pytest
 
 from auditor.database import IndexStore
+from auditor.database.base import BaseDB
 from auditor.models import (
     Category,
     FileRole,
@@ -341,3 +343,11 @@ async def test_transaction_rolls_back_on_failure(tmp_path):
 async def test_transaction_returns_what_the_callable_returns(tmp_path):
     async with await IndexStore.connect(tmp_path / "i.db", "/r") as store:
         assert await store.transaction(lambda conn: 7) == 7
+
+
+def test_the_facade_exposes_every_registered_store():
+    """The class docstring's list is the contract: a new store has to appear in the annotations
+    and in the list a reader sees, so neither can drift from the registry."""
+    registered = {store.attr for store in BaseDB._registry}
+    listed = set(re.findall(r"``(\w+)``\s+—", IndexStore.__doc__))
+    assert registered == set(IndexStore.__annotations__) == listed
