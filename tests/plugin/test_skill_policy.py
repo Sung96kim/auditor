@@ -23,10 +23,16 @@ BANNED = (
 )
 
 #: shipped markdown that carries the verdict vocabulary, relative to plugin/
-POLICY_DOCS = ("skills/judge-findings/SKILL.md",)
+POLICY_DOCS = (
+    "skills/judge-findings/SKILL.md",
+    "skills/judge-findings/references/judging.md",
+)
 
 #: shipped markdown that must spell all three verdicts out by name
-VERDICT_DOCS = ("skills/judge-findings/SKILL.md",)
+VERDICT_DOCS = (
+    "skills/judge-findings/SKILL.md",
+    "skills/judge-findings/references/judging.md",
+)
 
 
 @pytest.mark.parametrize("rel", POLICY_DOCS)
