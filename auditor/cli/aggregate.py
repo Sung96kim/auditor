@@ -5,7 +5,7 @@ from pathlib import Path
 from auditor.aggregate import AuditAggregator
 from auditor.cli.apps import app
 from auditor.cli.console import err_console
-from auditor.cli.helpers import open_index, run
+from auditor.cli.helpers import fail, open_index, run
 from auditor.cli.options import AggregateOut, DirTarget
 from auditor.discovery import find_root
 
@@ -17,7 +17,10 @@ def aggregate(
 ) -> None:
     """Roll up the index into AUDIT.md (run `scan --incremental` first)."""
     root = find_root(target)
-    path = run(_aggregate(root, out), "aggregating…")
+    try:
+        path = run(_aggregate(root, out), "aggregating…")
+    except OSError as exc:
+        fail(f"cannot write {out}: {exc.strerror}")
     err_console.print(f"[green]✓[/green] wrote [bold]{path}[/bold]")
 
 

@@ -29,3 +29,21 @@ def test_invalid_format_errors_cleanly(sample_repo, cmd):
     assert result.exit_code == 1
     assert "unknown format" in result.output
     assert "Traceback" not in result.output  # clean error, not a raw stack trace
+
+
+@pytest.mark.parametrize("command", ["scan", "aggregate"])
+@pytest.mark.parametrize("case", ["parent_is_a_file", "output_is_a_directory"])
+def test_unwritable_output_path_fails_cleanly(sample_repo, tmp_path, command, case):
+    """A `-o` path that cannot be written exits 1 with one line, never a traceback."""
+    if case == "parent_is_a_file":
+        (tmp_path / "notadir").write_text("")
+        out = tmp_path / "notadir" / "sub" / "report.json"
+    else:
+        out = tmp_path / "adir"
+        out.mkdir()
+
+    result = invoke(command, str(sample_repo / "src"), "-o", str(out))
+
+    assert result.exit_code == 1
+    assert "cannot write" in result.output
+    assert "Traceback" not in result.output
