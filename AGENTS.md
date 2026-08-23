@@ -12,8 +12,8 @@ restructuring anything.
 ```bash
 uv python install 3.13                      # the version CI pins
 uv sync --extra dev --extra mcp --extra ts   # what CI installs
-uv run ruff check auditor auditr_observer.py tests   # lint (CI)
-uv run ruff format --check auditor auditr_observer.py tests   # format check (CI); drop --check to rewrite
+uv run ruff check auditor plugin auditr_observer.py tests   # lint (CI)
+uv run ruff format --check auditor plugin auditr_observer.py tests   # format check (CI); drop --check to rewrite
 uv run pytest -q                            # full suite (CI)
 uv run pytest tests/malware/test_integration.py -v   # CI integration job; needs clamscan on PATH
 uv run auditr scan .                        # run the working tree, not an installed build
@@ -46,8 +46,12 @@ pnpm build            # rebuild the committed dist/index.html that `graph serve`
   daemon side; the two share only the `OBSERVER_API_VERSION` literal, pinned by a test.
 - Shared seams stay at the `auditor/` top level (`engine.py`, `config.py`, `models.py`,
   `registry.py`); never bury one inside a feature package.
-- `plugin/` is the Claude Code plugin (skills, agents, hooks, statusline). It ships no Python and
-  drives the installed `auditr` CLI.
+- `plugin/` is the Claude Code plugin (skills, agents, hooks, statusline). Its Python is
+  stdlib-only and imports nothing from `auditor`; it drives the installed `auditr` CLI.
+- `plugin/statusline/auditor_status.py` re-implements four package helpers by hand, so it must
+  stay in sync with `discovery.find_root`, `paths.repo_identity`, `paths.repo_dir_key` and
+  `paths.auditor_home`. `tests/plugin/test_statusline.py` pins each pair; change one side and
+  change the other.
 - `tests/` mirrors the package; shared helpers live in `tests/_support.py`, fixture repos in
   `tests/fixtures/`, which ruff and pytest collection both exclude because its anti-patterns are
   intentional.

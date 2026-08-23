@@ -7,8 +7,11 @@ import yaml
 
 _WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 _SUITE_SYNC = "uv sync --extra dev --extra mcp --extra ts"
-_LINT = "uv run ruff check auditor auditr_observer.py tests"
-_FORMAT = "uv run ruff format --check auditor auditr_observer.py tests"
+# Every tree ruff must see. `plugin` is here because its stdlib scripts ship to users and were
+# outside CI's scope long enough for an unformatted file to merge.
+_LINT_PATHS = "auditor plugin auditr_observer.py tests"
+_LINT = f"uv run ruff check {_LINT_PATHS}"
+_FORMAT = f"uv run ruff format --check {_LINT_PATHS}"
 _BANNED = (
     "--all-extras",
     "--extra observer",
@@ -46,10 +49,10 @@ def test_no_run_step_pulls_the_opt_in_extras(workflow: str, banned: str):
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
-def test_lint_covers_the_top_level_observer_client(workflow: str):
+def test_lint_covers_every_shipped_tree(workflow: str):
     assert _LINT in _run_steps(workflow)
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
-def test_format_check_covers_the_top_level_observer_client(workflow: str):
+def test_format_check_covers_every_shipped_tree(workflow: str):
     assert _FORMAT in _run_steps(workflow)
