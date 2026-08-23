@@ -278,9 +278,17 @@ flowchart TB
   are never swept, and neither is a skipped run that owns a `graph_refinements` or `graph_tuning`
   row: both reference `graph_runs.run_id` with no `ON DELETE`.
 - `graph/hashes.py` derives two hashes per node from the extracted facts: `truth_sha` over the fact
-  tuples structural edges read, and `facts_sha` over those plus `doc_tokens`. Neither covers `line`,
-  `role`, the identity strings the node id already carries, the build-pass fields, or `local_names`,
-  so a refinement survives a comment, a reformat and a renamed local in its own file.
+  tuples structural edges read, and `facts_sha` over those plus `doc_tokens`.
+  - `truth_sha` decides run gating and anchor drift; `facts_sha` decides whether similarity edges
+    rebuild.
+  - Neither covers `line`, `role`, the identity strings the node id already carries, the build-pass
+    fields, the overlay fields (`refined`, `annotation`), or `local_names`.
+  - Every name a node binds is also subtracted from the fact tuples before hashing, because a local
+    identifier reaches `callees`, `class_refs`, `callback_names`, `bare_callees` and the receiver
+    slot of `attr_callees` / `typed_calls`. So a refinement survives a comment, a reformat, a
+    renamed local and a renamed parameter in its own file.
+  - `doc_tokens` keep their local identifiers, so `facts_sha` still moves on a rename. That is the
+    intent: similarity edges read the tokens.
 - `file_hashes` rolls them over the sorted `(node_id, hash)` set, so an added or deleted node moves
   a file's hash even when every surviving node is unchanged. The scan stores that pair in
   `graph_facts.truth_sha` / `facts_sha` next to the content hash.
