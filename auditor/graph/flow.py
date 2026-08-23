@@ -19,6 +19,13 @@ _BASE_KINDS = frozenset({EdgeKind.CALLS.value, EdgeKind.CALLBACK_ARG.value})
 _OVERRIDES = frozenset({EdgeKind.OVERRIDES.value})
 _REGISTERED = frozenset({EdgeKind.REGISTERED_IN.value})
 _LEAF_EDGES = frozenset({EdgeKind.REGISTERED_IN.value})
+# which label survives when one child is reachable by several relations, strongest first
+_EDGE_PRECEDENCE = (
+    EdgeKind.CALLS.value,
+    _DISPATCH,
+    EdgeKind.CALLBACK_ARG.value,
+    EdgeKind.REGISTERED_IN.value,
+)
 
 
 class FlowDirection(StrEnum):
@@ -163,15 +170,26 @@ def _source(edge: EdgeRow) -> str:
     return edge.get("source") or _DETERMINISTIC
 
 
+def _edge_rank(edge: str) -> tuple[int, str]:
+    return (
+        _EDGE_PRECEDENCE.index(edge)
+        if edge in _EDGE_PRECEDENCE
+        else len(_EDGE_PRECEDENCE),
+        edge,
+    )
+
+
 def _dedupe(triples: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
-    """One row per child id, ordered by ``(edge, child_id)``; the first edge label wins."""
-    out: list[tuple[str, str, str]] = []
-    seen: set[str] = set()
-    for triple in sorted(set(triples), key=lambda t: (t[1], t[0])):
-        if triple[0] not in seen:
-            seen.add(triple[0])
-            out.append(triple)
-    return out
+    """One row per child id, the strongest relation surviving, ordered by ``(edge, child_id)``.
+
+    Alphabetical order would let ``callback_arg`` mask a direct ``calls`` to the same child.
+    """
+    best: dict[str, tuple[str, str, str]] = {}
+    for triple in sorted(set(triples)):
+        current = best.get(triple[0])
+        if current is None or _edge_rank(triple[1]) < _edge_rank(current[1]):
+            best[triple[0]] = triple
+    return sorted(best.values(), key=lambda t: (t[1], t[0]))
 
 
 def _children(
@@ -224,15 +242,17 @@ def _stopped(module: str, globs: Sequence[str]) -> bool:
 def _fan_in(
     cache: GraphCache, node_id: str, *, kinds: frozenset[str], options: FlowOptions
 ) -> int:
-    """Distinct symbols pointing at the node over the followed kinds, plus its dispatch children.
+    """Distinct production symbols pointing at the node over the followed kinds, plus its
+    dispatch children.
 
     Direction independent on the incoming side, which is what makes a widely called helper a hub
-    in an outward tree even though it expands to almost nothing.
+    in an outward tree even though it expands to almost nothing. Test callers never count, so
+    ``--include-tests`` can only add children, never collapse a node that was open without it.
     """
     incoming = {
         e["src"]
         for e in cache.incoming(node_id, kinds)
-        if options.include_tests or cache.role(e["src"]) not in TEST_ROLES
+        if cache.role(e["src"]) not in TEST_ROLES
     }
     dispatch = {
         child
@@ -241,7 +261,7 @@ def _fan_in(
             node_id,
             direction=options.direction,
             kinds=frozenset(),
-            include_tests=options.include_tests,
+            include_tests=False,
         )
         if edge == _DISPATCH
     }
@@ -253,8 +273,9 @@ def _hub(
 ) -> HubMark | None:
     """The node's fan when it crosses ``hub_fan_in``, else ``None`` (spec §7).
 
-    ``collapsed`` stays false here: whether the walk acted on the mark is decided in
-    ``build_flow``, not by the fan itself.
+    Both fans count production symbols only, whatever ``--include-tests`` says, so the mark is a
+    property of the node rather than of the query. ``collapsed`` stays false here: whether the
+    walk acted on the mark is decided in ``build_flow``.
     """
     fan_in = _fan_in(cache, node_id, kinds=kinds, options=options)
     if fan_in >= options.hub_fan_in:
@@ -265,7 +286,7 @@ def _hub(
             node_id,
             direction=options.direction,
             kinds=kinds,
-            include_tests=options.include_tests,
+            include_tests=False,
         )
     )
     if expansion >= options.hub_fan_in:
@@ -332,6 +353,8 @@ def build_flow(
     for level in range(1, options.depth + 1):
         nxt: list[int] = []
         for parent in frontier:
+            if truncated:
+                break
             record = records[parent]
             if record.stopped:
                 continue

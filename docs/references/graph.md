@@ -115,6 +115,8 @@ queries. It walks the graph breadth-first from one symbol and prints a tree.
     `graph.flow_hub_fan_in` (default 40): the symbols that reach it, dispatch children included,
     or the children it would emit. `⊕ N hub` is the same fan on a node that expanded anyway: the
     start symbol, any node under `--expand-hubs`, and a hub on the last level `--depth` reached.
+    Both counts are over production symbols only, whatever `--include-tests` says, so the mark
+    describes the symbol and not the query: `--include-tests` can only widen the tree.
   - In the JSON payload that pair is one `hub` object, `{"count": N, "kind": "fan_in", "collapsed":
     true}`, or `null` on a node whose fan stayed under the floor.
   - `↺ seen` is a node already shown elsewhere in the tree, `↺ cycle` a node that is its own

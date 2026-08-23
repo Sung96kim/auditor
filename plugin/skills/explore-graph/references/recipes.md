@@ -153,7 +153,8 @@ Reading the markers:
   `graph.flow_hub_fan_in` (40 by default): the symbols that reach it, dispatch children included,
   or the children it would emit. `--expand-hubs` opens it. `⊕ N hub` is the same fan on a node
   that expanded anyway: the start symbol, anything under `--expand-hubs`, and a hub sitting on the
-  last level `--depth` reached. In JSON the mark is one `hub` object,
+  last level `--depth` reached. Both counts skip test callers, so `--include-tests` only ever
+  widens the tree. In JSON the mark is one `hub` object,
   `{"count": N, "kind": "fan_in", "collapsed": true}`.
 - `↺ seen`: already shown elsewhere in this tree. `↺ cycle`: the node is its own ancestor.
 - `⊣ stop`: a `--stop-at` glob matched this module. The path reached it; the tree stops there.

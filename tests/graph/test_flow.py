@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from auditor.config import GraphConfig
 from auditor.database import IndexStore
+from auditor.graph import flow as flow_module
 from auditor.graph.cache import GraphCache, resolve_ids
 from auditor.graph.flow import (
     DEFAULT_FLOW_LIMIT,
@@ -81,7 +82,10 @@ NODES: list[dict[str, Any]] = [
     _node("app/loop.py::ping"),
     _node("app/loop.py::pong"),
     _node("app/hub.py::hub"),
+    _node("app/cb.py::on_plug"),
     _node("tests/test_cli.py::test_main", role="test"),
+    _node("tests/test_util.py::test_helper_a", role="test"),
+    _node("tests/test_util.py::test_helper_b", role="test"),
     *[_node(nid) for nid in LEAVES],
 ]
 
@@ -113,6 +117,12 @@ EDGES: list[dict[str, Any]] = sorted(
         _edge("app/loop.py::ping", "app/loop.py::pong", "calls"),
         _edge("app/loop.py::pong", "app/loop.py::ping", "calls"),
         _edge("tests/test_cli.py::test_main", "app/cli.py::main", "calls"),
+        # helper is called from three production sites and two tests: only the three count
+        _edge("tests/test_util.py::test_helper_a", "app/util.py::helper", "calls"),
+        _edge("tests/test_util.py::test_helper_b", "app/util.py::helper", "calls"),
+        # on_plug is both called and passed as a callback, so dedupe has to pick a label
+        _edge("app/plug.py::plugin", "app/cb.py::on_plug", "calls"),
+        _edge("app/plug.py::plugin", "app/cb.py::on_plug", "callback_arg"),
         *[_edge("app/hub.py::hub", nid, "calls") for nid in LEAVES],
         # settings is called from seven places and calls one: a fan-in hub, never an expansion one
         *[_edge(nid, "app/conf.py::settings", "calls") for nid in LEAVES],
@@ -566,6 +576,68 @@ def test_record_is_mutable_because_the_walk_mutates_it():
     record.children.append(1)
     record.hub = record.hub.model_copy(update={"collapsed": True})
     assert record.children == [1] and record.hub.collapsed is True
+
+
+def _hub_marks(result) -> dict[str, tuple[int, str]]:
+    out: dict[str, tuple[int, str]] = {}
+    stack = [result.root]
+    while stack:
+        node = stack.pop()
+        if node.hub is not None:
+            out[node.id] = (node.hub.count, node.hub.kind)
+        stack.extend(node.children)
+    return out
+
+
+def test_the_hub_floor_ignores_test_callers(cache):
+    """Counting test callers pushed `helper` past the floor, so asking for more code showed
+    less: the whole production subtree under it disappeared."""
+    options = FlowOptions(depth=3, hub_fan_in=5)
+    without = build_flow(cache, "app/cli.py::main", options=options)
+    shown = build_flow(
+        cache,
+        "app/cli.py::main",
+        options=options.model_copy(update={"include_tests": True}),
+    )
+    assert _hub_marks(without) == _hub_marks(shown)
+    assert without.node_ids() == shown.node_ids()
+    assert "app/conf.py::settings" in without.node_ids()
+
+
+def test_include_tests_only_adds_children(cache):
+    """The mark is a property of the node, so the flag may widen the tree and nothing else."""
+    options = FlowOptions(direction=FlowDirection.IN, depth=1, hub_fan_in=3)
+    without = build_flow(cache, "app/util.py::helper", options=options)
+    shown = build_flow(
+        cache,
+        "app/util.py::helper",
+        options=options.model_copy(update={"include_tests": True}),
+    )
+    assert without.root.hub == shown.root.hub == HubMark(count=3, kind="fan_in")
+    assert {c.id for c in without.root.children} < {c.id for c in shown.root.children}
+
+
+def test_dedupe_keeps_the_stronger_relation(cache):
+    """on_plug is called and passed as a callback; sorting by the raw label hid the call."""
+    result = build_flow(cache, "app/plug.py::plugin", options=FlowOptions(depth=1))
+    assert _kids(result.root)["app/cb.py::on_plug"].edge == "calls"
+
+
+def test_a_hit_limit_stops_visiting_the_rest_of_the_level(cache, monkeypatch):
+    """Every remaining parent used to walk its children just to break on the first one."""
+    visited: list[int] = []
+    real = flow_module._ancestors
+
+    def counted(records, index):
+        visited.append(index)
+        return real(records, index)
+
+    monkeypatch.setattr(flow_module, "_ancestors", counted)
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=3, limit=4)
+    )
+    assert result.truncated is True
+    assert visited == [0, 1]
 
 
 def test_limit_completes_shallow_levels_first_and_flags_truncation(cache):
