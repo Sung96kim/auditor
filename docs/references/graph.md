@@ -60,12 +60,16 @@ auditr graph export . --format dot > graph.dot
 - `--no-scan` builds from cached facts only. Use it when a scan just ran and nothing changed since.
 - `--rebuild` discards the cached graph facts and re-extracts from scratch. Facts are keyed by file
   content, so an extractor change does not invalidate facts already cached under the same hash; run
-  `--rebuild` after upgrading auditor.
+  `--rebuild` after upgrading auditor. It is refused with `--no-scan`, which would leave nothing to
+  build from.
+- `--rebuild` holds the rebuild lock across the clear, the rescan and the build, so no other build
+  can see the half-rescanned graph.
 - Routine staleness needs neither flag: the default auto-scan already picks up edited files.
 - Setting `enabled = true` under `[tool.auditor.graph]` also makes a plain `auditr scan -i` populate
   graph facts. See [configuration.md](configuration.md).
 - The build runs the `GRAPH-*` detectors, described below.
-- The build reports five counts: `nodes`, `edges`, `clusters`, `unresolved` and `findings`.
+- The build reports `nodes`, `edges`, `clusters`, `unresolved`, `findings`, `refined` (the
+  refinements it applied) and `expired` (the ones it wrote a new status for).
 - A build takes a lock at `$AUDITOR_HOME/observer/locks/<key>.lock`, one per checkout, so two
   builds of the same repo never interleave and builds of different repos never wait on each other.
   If another process is mid-build, `graph build` prints `waiting for the observer's rebuild` and

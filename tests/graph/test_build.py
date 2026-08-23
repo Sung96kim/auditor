@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from auditor.config import AuditorSettings, GraphConfig
@@ -25,6 +27,7 @@ from auditor.graph.refine.models import (
     Anchor,
     Refinement,
     RefinementKind,
+    RefinementOutcome,
     RefinementPayload,
     RefinementStatus,
     RefinementTarget,
@@ -262,6 +265,8 @@ async def test_build_with_no_facts_reports_an_empty_queue(graph_store):
         "clusters": 0,
         "unresolved": 0,
         "findings": 0,
+        "refined": 0,
+        "expired": 0,
     }
     assert await graph_store.graph.unresolved() == []
 
@@ -343,6 +348,8 @@ async def test_an_emptied_repo_clears_the_previous_graph_findings(facts_store):
         "clusters": 0,
         "unresolved": 0,
         "findings": 0,
+        "refined": 0,
+        "expired": 0,
     }
     stored = await facts_store.findings.all()
     assert [f for f in stored if f.rule_id in _GRAPH_RULE_IDS] == []
@@ -375,6 +382,8 @@ def test_the_summary_counts_what_the_write_carries():
         "clusters": 0,
         "unresolved": 0,
         "findings": 2,
+        "refined": 0,
+        "expired": 0,
     }
 
 
@@ -477,6 +486,34 @@ async def test_a_build_with_a_file_s_facts_missing_does_not_stale_its_refinement
     assert not [
         e for e in await store.graph.all_edges() if e["provenance"] == "refined"
     ]
+
+
+async def test_the_build_summary_reports_what_the_overlay_did(refined_facts_store):
+    """F7: a refinement applied or expired is a thing the user has to be able to see."""
+    store, rid = refined_facts_store.store, refined_facts_store.refinement_id
+    settings = AuditorSettings()
+    settings.graph.enabled = True
+    assert (await GraphBuilder().run(store, settings))["refined"] == 1
+    await store.refinements.set_status(rid, RefinementStatus.REVERTED)
+    assert (await GraphBuilder().run(store, settings))["refined"] == 0
+
+
+def test_the_docs_list_every_summary_key():
+    """The keys are named in the reference, never counted, so adding one cannot leave it stale."""
+    prose = Path("docs/references/graph.md").read_text(encoding="utf-8")
+    assert all(f"`{key}`" in prose for key in GraphWrite().summary())
+
+
+async def test_the_outcome_timestamp_is_the_builds_not_the_writers(refined_facts_store):
+    """F15: `status_at` is when the build decided, not when the sqlite thread reached the row."""
+    store, rid = refined_facts_store.store, refined_facts_store.refinement_id
+    write = GraphWrite(
+        outcomes=(RefinementOutcome(refinement_id=rid, status=RefinementStatus.STALE),),
+        decided_at=1234.0,
+    )
+    await store.transaction(lambda conn: write.apply(conn, store))
+    (stored,) = await store.refinements.refinements()
+    assert stored.status_at == 1234.0
 
 
 async def test_a_refinement_anchored_to_a_changed_node_goes_stale(facts_store):

@@ -122,6 +122,21 @@ async def test_rebuild_calls_the_snapshot_hook_around_the_persist(facts_store):
     assert seen[1][1] > 0  # after it there is
 
 
+async def test_the_empty_build_takes_the_same_write_path(graph_store):
+    """A3: an index with no cached facts still clears the last build's graph, queue and findings,
+    so the snapshot hook has to bracket that write like any other."""
+    seen: list[SnapshotPhase] = []
+
+    async def snapshot(phase: SnapshotPhase) -> None:
+        seen.append(phase)
+
+    settings = AuditorSettings()
+    settings.graph.enabled = True
+    summary = await GraphBuilder().rebuild(graph_store, settings, snapshot=snapshot)
+    assert seen == [SnapshotPhase.BEFORE, SnapshotPhase.AFTER]
+    assert summary["nodes"] == 0
+
+
 async def test_rebuild_returns_the_same_summary_as_run(facts_store):
     settings = AuditorSettings()
     settings.graph.enabled = True

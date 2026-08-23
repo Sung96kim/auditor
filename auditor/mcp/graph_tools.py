@@ -33,7 +33,7 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     """Build the semantic graph. By default it first runs a forced incremental scan (graph
     extraction on) so it works even if the repo never enabled the [graph] config — pass
     scan=False to build from existing cached facts only. Returns {nodes, edges, clusters,
-    unresolved, findings}."""
+    unresolved, findings, refined, expired}."""
     root = find_root(Path(path))
     if scan:
         await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)

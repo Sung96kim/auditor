@@ -225,7 +225,8 @@ class GraphWrite(BaseModel):
 
     ``detect`` distinguishes "the detectors ran and found nothing" from "leave the findings
     alone": only the first clears the previous build's `GRAPH-*` rows. ``outcomes`` is what the
-    build decided about each refinement it looked at, written beside the graph it describes.
+    build decided about each refinement it looked at, written beside the graph it describes, and
+    ``decided_at`` is when the build decided it rather than when the writer thread got to the row.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -237,12 +238,13 @@ class GraphWrite(BaseModel):
     findings: dict[str, list[Finding]] = Field(default_factory=dict)
     detect: bool = False
     outcomes: tuple[RefinementOutcome, ...] = ()
+    decided_at: float = Field(default_factory=time.time)
 
     def apply(self, conn: sqlite3.Connection, index: IndexStore) -> None:
         """The whole build write, on one open connection (spec section 6 step 8)."""
         index.graph.write_graph(conn, self.nodes, self.edges, self.clusters)
         index.graph.write_unresolved(conn, self.unresolved)
-        index.refinements.write_outcomes(conn, self.outcomes, time.time())
+        index.refinements.write_outcomes(conn, self.outcomes, self.decided_at)
         if not self.detect:
             return
         index.findings.write_clear_for_rules(conn, _GRAPH_RULE_IDS)
@@ -272,6 +274,8 @@ class GraphWrite(BaseModel):
             "clusters": len(self.clusters),
             "unresolved": len(self.unresolved),
             "findings": sum(len(f) for f in self.findings.values()),
+            "refined": sum(1 for o in self.outcomes if o.applied),
+            "expired": sum(1 for o in self.outcomes if o.status is not None),
         }
 
 

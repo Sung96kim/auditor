@@ -12,6 +12,8 @@ from auditor.cli.graph import _split_kinds, graph_flow
 from auditor.cli.render import render_graph_flow
 from auditor.graph.flow import FlowNode
 from auditor.graph.model import DEFAULT_FLOW_LIMIT
+from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
+from auditor.paths import partition_for
 
 runner = CliRunner()
 
@@ -345,3 +347,32 @@ def test_render_graph_flow_on_an_empty_payload():
     buf = io.StringIO()
     render_graph_flow(Console(file=buf, width=140), {})
     assert "no such symbol" in buf.getvalue()
+
+
+def test_rebuild_with_no_scan_is_refused(graph_repo: Path):
+    """F8: the pair has no meaning and its result is a wiped graph and an emptied queue."""
+    result = runner.invoke(
+        app, ["graph", "build", str(graph_repo), "--rebuild", "--no-scan"]
+    )
+    assert result.exit_code != 0
+    assert "--no-scan" in result.output
+
+
+def test_rebuild_holds_the_lock_across_the_clear_and_the_scan(
+    graph_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """F1: another build landing between `--rebuild`'s clear and the rescan would see a partial
+    node set and stale every refinement into a file still being re-extracted."""
+    seen: list[str] = []
+
+    async def probing_scan(root: Path) -> None:
+        try:
+            async with rebuild_lock(partition_for(root).identity, timeout=1.0):
+                seen.append("acquired")
+        except RebuildLockTimeout:
+            seen.append("blocked")
+
+    monkeypatch.setattr("auditor.cli.graph._autoscan", probing_scan)
+    result = runner.invoke(app, ["graph", "build", str(graph_repo), "--rebuild"])
+    assert result.exit_code == 0, result.stdout
+    assert seen == ["blocked"]
