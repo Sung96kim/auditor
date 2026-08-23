@@ -51,6 +51,8 @@ class GraphDB(BaseDB):
                 Column(name="cluster_id", type="INTEGER"),
                 Column(name="abstractness", type="REAL", not_null=True, default="0"),
                 Column(name="text_sparse", type="INTEGER", not_null=True, default="0"),
+                Column(name="refined", type="INTEGER", not_null=True, default="0"),
+                Column(name="annotation", type="TEXT"),
             ),
             indexes=(
                 Index(name="graph_nodes_cluster", columns=("repo", "cluster_id")),
@@ -62,10 +64,22 @@ class GraphDB(BaseDB):
                 Column(name="dst", type="TEXT", not_null=True),
                 Column(name="kind", type="TEXT", not_null=True),
                 Column(name="weight", type="REAL", not_null=True, default="1"),
+                Column(
+                    name="source",
+                    type="TEXT",
+                    not_null=True,
+                    default="'deterministic'",
+                ),
+                Column(name="confirmed", type="INTEGER", not_null=True, default="0"),
             ),
             indexes=(
                 Index(name="graph_edges_src", columns=("repo", "src")),
                 Index(name="graph_edges_dst", columns=("repo", "dst")),
+                Index(
+                    name="graph_edges_key",
+                    columns=("repo", "src", "dst", "kind"),
+                    unique=True,
+                ),
             ),
         ),
         "graph_clusters": Table(
@@ -75,6 +89,12 @@ class GraphDB(BaseDB):
                 ),
                 Column(name="label", type="TEXT", not_null=True),
                 Column(name="member_count", type="INTEGER", not_null=True),
+                Column(
+                    name="label_source",
+                    type="TEXT",
+                    not_null=True,
+                    default="'deterministic'",
+                ),
             ),
         ),
         "graph_unresolved": Table(
@@ -203,12 +223,26 @@ class GraphDB(BaseDB):
                 n.cluster_id,
                 n.abstractness,
                 int(n.text_sparse),
+                int(n.refined),
+                n.annotation,
             )
             for n in nodes
         ]
-        edge_rows = [(self.repo, e.src, e.dst, e.kind.value, e.weight) for e in edges]
+        edge_rows = [
+            (
+                self.repo,
+                e.src,
+                e.dst,
+                e.kind.value,
+                e.weight,
+                e.source.value,
+                int(e.confirmed),
+            )
+            for e in edges
+        ]
         clu_rows = [
-            (self.repo, c.cluster_id, c.label, c.member_count) for c in clusters
+            (self.repo, c.cluster_id, c.label, c.member_count, c.label_source.value)
+            for c in clusters
         ]
 
         def op(conn: sqlite3.Connection) -> None:
@@ -217,18 +251,18 @@ class GraphDB(BaseDB):
                 conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608
             conn.executemany(
                 "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
-                "role, line, rank, cluster_id, abstractness, text_sparse) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "role, line, rank, cluster_id, abstractness, text_sparse, refined, annotation) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 node_rows,
             )
             conn.executemany(
-                "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight, source, confirmed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 edge_rows,
             )
             conn.executemany(
-                "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count, label_source) "
+                "VALUES (?, ?, ?, ?, ?)",
                 clu_rows,
             )
             conn.commit()
@@ -252,7 +286,10 @@ class GraphDB(BaseDB):
     async def edges_of(
         self, node_id: str, kinds: list[str] | None
     ) -> list[dict[str, Any]]:
-        sql = "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? AND (src = ? OR dst = ?)"
+        sql = (
+            "SELECT src, dst, kind, weight, source, confirmed FROM graph_edges "
+            "WHERE repo = ? AND (src = ? OR dst = ?)"
+        )
         params: list[Any] = [node_id, node_id]
         if kinds:
             sql += f" AND kind IN ({','.join('?' for _ in kinds)})"
@@ -265,7 +302,7 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT node_id AS id, name, module, rank FROM graph_nodes "
+                "SELECT node_id AS id, name, module, rank, refined, annotation FROM graph_nodes "
                 "WHERE repo = ? AND cluster_id = ? ORDER BY rank DESC, node_id",
                 (cluster_id,),
             )
@@ -275,7 +312,7 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT cluster_id, label, member_count FROM graph_clusters "
+                "SELECT cluster_id, label, member_count, label_source FROM graph_clusters "
                 "WHERE repo = ? ORDER BY member_count DESC, cluster_id"
             )
         ]
@@ -284,7 +321,8 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? ORDER BY src, dst, kind"
+                "SELECT src, dst, kind, weight, source, confirmed FROM graph_edges "
+                "WHERE repo = ? ORDER BY src, dst, kind"
             )
         ]
 

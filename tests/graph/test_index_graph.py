@@ -8,6 +8,7 @@ from auditor.graph.hashes import FileHashes
 from auditor.graph.model import (
     CallForm,
     EdgeKind,
+    EdgeSource,
     FactKind,
     GraphCluster,
     GraphEdge,
@@ -297,3 +298,61 @@ async def test_set_facts_without_hashes_stores_nothing_to_compare(graph_store):
     assert (
         await graph_store.graph.facts_hash("m.py") == "abc"
     )  # content hash still there
+
+
+async def test_edges_round_trip_their_provenance(graph_store):
+    edges = [
+        GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS),
+        GraphEdge(
+            src="a",
+            dst="c",
+            kind=EdgeKind.CALLS,
+            source=EdgeSource.REFINED,
+            confirmed=True,
+        ),
+    ]
+    await graph_store.graph.replace([_n("a"), _n("b"), _n("c")], edges, [])
+    by_dst = {e["dst"]: e for e in await graph_store.graph.all_edges()}
+    assert by_dst["b"]["source"] == "deterministic"
+    assert by_dst["b"]["confirmed"] == 0
+    assert by_dst["c"]["source"] == "refined"
+    assert by_dst["c"]["confirmed"] == 1
+    # edges_of has to carry it too: `graph neighbors` and the flow tree both read that shape
+    hop = {e["dst"]: e["source"] for e in await graph_store.graph.edges_of("a", None)}
+    assert hop == {"b": "deterministic", "c": "refined"}
+
+
+async def test_a_repeated_edge_key_collapses_to_one_row(graph_store):
+    """The unique index is what lets a refinement overwrite a deterministic edge in place."""
+    await graph_store.graph.replace(
+        [_n("a"), _n("b")],
+        [
+            GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS),
+            GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS, source=EdgeSource.REFINED),
+        ],
+        [],
+    )
+    rows = await graph_store.graph.all_edges()
+    assert len(rows) == 1
+    assert rows[0]["source"] == "refined"  # last write wins
+
+
+async def test_node_and_cluster_provenance_round_trip(graph_store):
+    await graph_store.graph.replace(
+        [_n("a", cluster_id=1, refined=True, annotation="the retry path")],
+        [],
+        [
+            GraphCluster(
+                cluster_id=1,
+                label="retry",
+                member_count=1,
+                label_source=EdgeSource.REFINED,
+            )
+        ],
+    )
+    node = await graph_store.graph.node("a")
+    assert (node["refined"], node["annotation"]) == (1, "the retry path")
+    (cluster,) = await graph_store.graph.clusters()
+    assert cluster["label_source"] == "refined"
+    (member,) = await graph_store.graph.cluster_members(1)
+    assert (member["refined"], member["annotation"]) == (1, "the retry path")

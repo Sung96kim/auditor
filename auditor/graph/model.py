@@ -32,6 +32,13 @@ class EdgeKind(StrEnum):
     USAGE_SIMILAR = "usage_similar"
 
 
+class EdgeSource(StrEnum):
+    """Where a merged graph row came from. The detectors only ever see ``DETERMINISTIC``."""
+
+    DETERMINISTIC = "deterministic"
+    REFINED = "refined"
+
+
 TEST_ROLES = ("test", "test_support")  # roles grouped as "test code" across the graph
 
 
@@ -86,6 +93,8 @@ class GraphNode(BaseModel):
     rank: float = 0.0
     cluster_id: int | None = None
     text_sparse: bool = False
+    refined: bool = False
+    annotation: str | None = None
 
 
 class GraphEdge(BaseModel):
@@ -95,6 +104,8 @@ class GraphEdge(BaseModel):
     dst: str
     kind: EdgeKind
     weight: float = 1.0
+    source: EdgeSource = EdgeSource.DETERMINISTIC
+    confirmed: bool = False
 
 
 class GraphCluster(BaseModel):
@@ -103,6 +114,7 @@ class GraphCluster(BaseModel):
     cluster_id: int
     label: str
     member_count: int
+    label_source: EdgeSource = EdgeSource.DETERMINISTIC
 
 
 class FileGraphFacts(BaseModel):
