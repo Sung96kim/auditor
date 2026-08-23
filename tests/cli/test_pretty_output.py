@@ -29,6 +29,7 @@ from auditor.cli.render import (
     render_index_forget,
     render_index_list,
     render_index_repos,
+    render_init,
     render_manifest_list,
     render_plugins_list,
     render_rules_list,
@@ -365,3 +366,43 @@ def test_render_crossfile_shows_count():
     con, buf = _console()
     render_crossfile(con, {"cross_file_findings": 7})
     assert "7" in buf.getvalue()
+
+
+def _init_payload(**over) -> dict:
+    payload = {
+        "home": "/home/u/.auditor",
+        "config": "/home/u/.auditor/config.json",
+        "schema": "/home/u/.auditor/config.schema.json",
+        "repo_dir": None,
+        "written": [],
+        "checked": False,
+        "unknown_keys": [],
+        "moved_from": None,
+        "migrated": False,
+        "legacy_status": None,
+    }
+    payload.update(over)
+    return payload
+
+
+def test_render_init_marks_a_check_run_as_not_written():
+    """--check attempts nothing, so reusing the up-to-date wording claimed files exist that
+    a fresh machine has never had."""
+    con, buf = _console()
+    render_init(con, _init_payload(checked=True))
+    assert "not written (--check)" in buf.getvalue()
+    assert "up to date" not in buf.getvalue()
+
+
+def test_render_init_reports_a_completed_migration():
+    con, buf = _console()
+    render_init(con, _init_payload(moved_from="/old/root", migrated=True))
+    out = " ".join(buf.getvalue().split())
+    assert "the breadcrumb now points here" in out
+    assert "re-run with --migrate" not in out
+
+
+def test_render_init_still_asks_for_migrate_when_not_migrated():
+    con, buf = _console()
+    render_init(con, _init_payload(moved_from="/old/root"))
+    assert "re-run with --migrate" in " ".join(buf.getvalue().split())

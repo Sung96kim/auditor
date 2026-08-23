@@ -41,18 +41,22 @@ auditr init --json
   untouched, in both write and `--check` mode. Fix or delete it, then re-run.
 - Writes go through a temp file and a rename, so an interrupted run never truncates a
   settings file.
-- Migration starts at the first `config_version` bump. The version is 1 today, so a re-run has
-  nothing to migrate; the seam that a bump fills in is `_migrate` in `auditor/cli/init.py`.
+- `config_version` is written from `UserSettings.config_version`'s default, so the marker and the
+  model cannot disagree. Migration starts at the first bump; there is nothing to migrate at 1.
 - The full layout and every settings key is in [configuration.md](configuration.md).
 
 ## Checks
 
 - `--check` writes nothing. It lists unknown keys with their dotted path, reports a moved
-  checkout, and reports a leftover `.auditor/.status.json`.
+  checkout, and reports a leftover `.auditor/.status.json`. Its report says `not written
+  (--check)`, never `up to date`.
+- `--migrate` and `--clean-status` both write, so combining either with `--check` exits non-zero
+  rather than doing nothing.
 - A moved checkout is one whose breadcrumb names a root that no longer exists. Two live worktrees
   share one identity by design, so a sibling root that still exists is not a move.
 - `--migrate` rewrites that breadcrumb to the current root. It requires `--repo`, since the
-  breadcrumb only exists alongside the per-repo file; on its own it exits non-zero.
+  breadcrumb only exists alongside the per-repo file; on its own it exits non-zero. Once it has
+  run, the report says the breadcrumb now points here instead of asking for `--migrate` again.
 - `root.json` records one root, and every worktree of a checkout shares the directory, so the
   breadcrumb names whichever worktree last ran `auditr init --repo --migrate`. It is a hint for
   the moved-checkout check, never an identity.
@@ -60,3 +64,4 @@ auditr init --json
   reads any more. Without the flag its presence is only reported.
 - `auditr config check` runs the unknown-key half against both the repo policy and the user
   settings. See [config.md](config.md).
+- An unwritable or file-occupied `$AUDITOR_HOME` exits 1 with a one-line message, no traceback.

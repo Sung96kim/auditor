@@ -29,12 +29,15 @@ def read_json_dict(path: Path) -> dict[str, object]:
 
 
 def read_json_dict_strict(path: Path) -> dict[str, object] | None:
-    """The JSON object at ``path``, an empty dict when it is absent, or ``None`` when it exists
-    but is unreadable or is not a JSON object. Callers that rewrite a file take ``None`` as a
-    refusal: replacing an unparseable file would throw away whatever the user typed."""
+    """The JSON object at ``path``, an empty dict when nothing is there, or ``None`` when
+    something is there that cannot be read as a JSON object. Callers that rewrite a file take
+    ``None`` as a refusal: replacing an unparseable file would throw away whatever the user typed.
+
+    A missing parent counts as absent, not unreadable: there is no content to preserve.
+    """
     try:
         data = json.loads(path.read_text())
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         return {}
     except (OSError, json.JSONDecodeError):
         return None
@@ -68,6 +71,14 @@ def user_config_path() -> Path:
 def user_schema_path() -> Path:
     """The generated JSON Schema the settings files point at with ``$schema``."""
     return auditor_home() / "config.schema.json"
+
+
+def schema_ref_from(directory: Path) -> str:
+    """The ``$schema`` value a settings file in ``directory`` should carry: a relative path to the
+    generated schema, forward-slashed so the written JSON is identical on every platform. Lives
+    here because the ``repos/<key>`` depth it has to walk out of is this module's layout."""
+    ref = os.path.relpath(user_schema_path(), directory).replace(os.sep, "/")
+    return ref if ref.startswith(".") else f"./{ref}"
 
 
 def models_dir() -> Path:
@@ -110,16 +121,23 @@ def repo_dir_key(root: Path) -> str:
     return _key_for(repo_identity(root))
 
 
+def repo_dir_for_identity(identity: str) -> Path:
+    """Where an already-resolved identity's per-user state lives. The one owner of the
+    ``repos/<key>`` layout, for callers holding an identity that cost a git subprocess."""
+    return auditor_home() / "repos" / _key_for(identity)
+
+
 def repo_dir(root: Path) -> Path:
     """Where this repo's per-user state lives. Pure; :func:`ensure_repo_dir` creates it."""
-    return auditor_home() / "repos" / repo_dir_key(root)
+    return repo_dir_for_identity(repo_identity(root))
 
 
-def ensure_repo_dir(root: Path) -> Path:
+def ensure_repo_dir(root: Path, *, identity: str | None = None) -> Path:
     """Create the repo's user-state dir and its ``root.json`` breadcrumb, which ``auditr init
-    --check`` reads to spot a checkout that has moved. Raises OSError on an unwritable home."""
-    identity = repo_identity(root)
-    out = auditor_home() / "repos" / _key_for(identity)
+    --check`` reads to spot a checkout that has moved. Pass ``identity`` when the caller already
+    resolved it, to save a git subprocess. Raises OSError on an unwritable home."""
+    identity = repo_identity(root) if identity is None else identity
+    out = repo_dir_for_identity(identity)
     out.mkdir(parents=True, exist_ok=True)
     crumb = out / "root.json"
     if not crumb.exists():

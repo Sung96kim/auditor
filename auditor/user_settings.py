@@ -167,11 +167,14 @@ def _read_layer(path: Path) -> dict[str, object]:
     }
 
 
-def user_json_layers(root: Path) -> dict[str, object]:
-    """The global settings file deep-merged with this repo's overlay (repo wins), before env."""
-    return deep_merge(
-        _read_layer(user_config_path()), _read_layer(repo_dir(root) / "config.json")
-    )
+def user_json_layers(root: Path, *, directory: Path | None = None) -> dict[str, object]:
+    """The global settings file deep-merged with this repo's overlay (repo wins), before env.
+
+    Pass ``directory`` when the caller already resolved the repo's state dir: deriving it costs a
+    ``git rev-parse``.
+    """
+    overlay = (repo_dir(root) if directory is None else directory) / "config.json"
+    return deep_merge(_read_layer(user_config_path()), _read_layer(overlay))
 
 
 def load_user_settings(root: Path) -> UserSettings:
@@ -182,6 +185,8 @@ def load_user_settings(root: Path) -> UserSettings:
     return UserSettings.model_validate(merged)
 
 
-def unknown_user_keys(root: Path) -> list[str]:
+def unknown_user_keys(root: Path, *, directory: Path | None = None) -> list[str]:
     """Dotted paths in the two JSON layers that ``UserSettings`` does not declare."""
-    return unknown_config_keys(user_json_layers(root), UserSettings)
+    return unknown_config_keys(
+        user_json_layers(root, directory=directory), UserSettings
+    )

@@ -2,9 +2,13 @@
 
 import json
 
+import pytest
 from _support import cli_json, invoke
 
-from auditor.paths import ensure_repo_dir, repo_dir
+from auditor import paths
+from auditor.cli.init import CONFIG_VERSION
+from auditor.paths import ensure_repo_dir, repo_dir, schema_ref_from
+from auditor.user_settings import UserSettings
 
 
 def test_init_writes_only_the_marker_keys(_isolated_auditor_home):
@@ -160,3 +164,81 @@ def test_init_refuses_to_overwrite_a_torn_repo_overlay(
     result = invoke("init", "--repo", "--root", str(project))
     assert result.exit_code == 1
     assert overlay.read_text() == "[]"
+
+
+@pytest.mark.parametrize("flag", ["--migrate", "--clean-status"])
+def test_init_write_flags_reject_check(tmp_path, _isolated_auditor_home, flag):
+    """--check writes nothing, so pairing it with a flag whose whole job is a write is the same
+    mistake --migrate without --repo already refuses, not a silent no-op."""
+    result = invoke("init", "--repo", flag, "--check", "--root", str(tmp_path))
+    assert result.exit_code == 1
+    assert f"{flag} writes" in " ".join(result.output.split())
+
+
+def test_init_check_payload_says_nothing_was_attempted(
+    tmp_path, _isolated_auditor_home
+):
+    payload = cli_json(invoke("init", "--check", "--root", str(tmp_path), "--json"))
+    assert payload["checked"] is True
+    assert payload["written"] == []
+
+
+def test_init_migrate_marks_the_breadcrumb_as_repointed(
+    tmp_path, _isolated_auditor_home
+):
+    """After a successful --migrate the payload has to say so, or the renderer keeps telling the
+    user to re-run the flag that just worked."""
+    project = tmp_path / "project"
+    project.mkdir()
+    crumb = ensure_repo_dir(project) / "root.json"
+    crumb.write_text(
+        json.dumps({"root": str(tmp_path / "gone"), "identity": "x", "created_at": 1})
+    )
+    payload = cli_json(
+        invoke("init", "--repo", "--migrate", "--root", str(project), "--json")
+    )
+    assert payload["migrated"] is True
+    assert (
+        cli_json(invoke("init", "--check", "--root", str(project), "--json"))[
+            "migrated"
+        ]
+        is False
+    )
+
+
+def test_init_repo_resolves_the_git_identity_once(git_repo, monkeypatch):
+    """Each identity lookup shells out to git, and init used to do four of them: the moved-repo
+    check, ensure_repo_dir, the payload path, and the unknown-key scan."""
+    calls = []
+    real = paths.git_output
+
+    def counted(root, *args):
+        calls.append(args)
+        return real(root, *args)
+
+    monkeypatch.setattr(paths, "git_output", counted)
+    result = invoke("init", "--repo", "--root", str(git_repo), "--json")
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+
+
+def test_init_schema_refs_come_from_the_layout_helper(tmp_path, _isolated_auditor_home):
+    """Asserting the literal pinned the geometry in the wrong module: a change to repos/<key>
+    depth would leave both files pointing at nothing, with every test still green."""
+    project = tmp_path / "project"
+    project.mkdir()
+    invoke("init", "--repo", "--root", str(project), "--json")
+    overlay = repo_dir(project) / "config.json"
+    assert json.loads((_isolated_auditor_home / "config.json").read_text())[
+        "$schema"
+    ] == schema_ref_from(_isolated_auditor_home)
+    assert json.loads(overlay.read_text())["$schema"] == schema_ref_from(overlay.parent)
+    assert (overlay.parent / json.loads(overlay.read_text())["$schema"]).resolve() == (
+        _isolated_auditor_home / "config.schema.json"
+    )
+
+
+def test_config_version_marker_tracks_the_model_default():
+    """Two sources of truth for one number: a bump on either side alone writes a marker the
+    model rejects."""
+    assert UserSettings.model_fields["config_version"].default == CONFIG_VERSION

@@ -136,6 +136,8 @@ def test_read_json_dict_strict_separates_absent_from_unusable(tmp_path):
     """The write path needs the distinction the lossy reader erases: `{}` means nothing is there
     to keep, None means there is something it must not replace."""
     assert read_json_dict_strict(tmp_path / "missing.json") == {}
+    (tmp_path / "notadir").write_text("")
+    assert read_json_dict_strict(tmp_path / "notadir" / "config.json") == {}
     (tmp_path / "torn.json").write_text('{"a": 1,}')
     assert read_json_dict_strict(tmp_path / "torn.json") is None
     (tmp_path / "list.json").write_text("[]")

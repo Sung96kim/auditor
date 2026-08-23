@@ -19,24 +19,16 @@ from auditor.paths import (
     ensure_repo_dir,
     read_json_dict,
     read_json_dict_strict,
-    repo_dir,
+    repo_dir_for_identity,
+    repo_identity,
+    schema_ref_from,
     user_config_path,
     user_schema_path,
     write_json_dict,
 )
 from auditor.user_settings import UserSettings, unknown_user_keys
 
-CONFIG_VERSION = 1
-_GLOBAL_SCHEMA_REF = "./config.schema.json"
-_REPO_SCHEMA_REF = "../../config.schema.json"
-
-
-def _migrate(current_version: int) -> None:
-    """Bring a settings file written by an older ``config_version`` up to the current one.
-
-    A no-op while ``CONFIG_VERSION`` is 1: there is no older version to come from. The seam exists
-    so the first bump has exactly one place to add its step.
-    """
+CONFIG_VERSION: int = UserSettings.model_fields["config_version"].default
 
 
 def _read_settings(path: Path) -> dict[str, object]:
@@ -62,10 +54,10 @@ def _write_markers(path: Path, schema_ref: str) -> bool:
     return True
 
 
-def _moved_from(root: Path) -> str | None:
+def _moved_from(root: Path, directory: Path) -> str | None:
     """The root a breadcrumb was written for, when that directory is gone. A sibling worktree
     keeps its own root alive, so it shares the settings rather than counting as a move."""
-    recorded = read_json_dict(repo_dir(root) / "root.json").get("root")
+    recorded = read_json_dict(directory / "root.json").get("root")
     if not isinstance(recorded, str) or recorded == str(root.resolve()):
         return None
     return None if Path(recorded).exists() else recorded
@@ -83,48 +75,64 @@ def init(
     """Create or refresh the user config home ($AUDITOR_HOME)."""
     if migrate and not repo:
         fail("--migrate requires --repo")
+    for flag, name in ((migrate, "--migrate"), (clean_status, "--clean-status")):
+        if flag and check:
+            fail(f"{name} writes; it cannot be combined with --check")
     root = find_root(target)
     home = auditor_home()
+    identity = repo_identity(root)
+    directory = repo_dir_for_identity(identity)
     written: list[str] = []
-    moved = _moved_from(root)
+    moved = _moved_from(root, directory)
+    migrated = False
     legacy = root / ".auditor" / ".status.json"
     had_legacy = legacy.exists()
     # Both modes stop on a torn settings file: --check would otherwise report it as empty.
     _read_settings(user_config_path())
-    _read_settings(repo_dir(root) / "config.json")
+    _read_settings(directory / "config.json")
 
     if not check:
-        home.mkdir(parents=True, exist_ok=True)
-        found = read_json_dict(user_config_path()).get("config_version")
-        _migrate(found if isinstance(found, int) else CONFIG_VERSION)
-        schema = json.dumps(UserSettings.model_json_schema(), indent=2) + "\n"
-        if not user_schema_path().exists() or user_schema_path().read_text() != schema:
-            user_schema_path().write_text(schema)
-            written.append(str(user_schema_path()))
-        if _write_markers(user_config_path(), _GLOBAL_SCHEMA_REF):
-            written.append(str(user_config_path()))
-        if repo:
-            target_dir = ensure_repo_dir(root)
-            if _write_markers(target_dir / "config.json", _REPO_SCHEMA_REF):
-                written.append(str(target_dir / "config.json"))
-            if migrate and moved is not None:
-                crumb = target_dir / "root.json"
-                crumb.write_text(
-                    json.dumps({**read_json_dict(crumb), "root": str(root.resolve())})
-                )
-                written.append(str(crumb))
-        if clean_status and had_legacy:
-            legacy.unlink()
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+            schema = json.dumps(UserSettings.model_json_schema(), indent=2) + "\n"
+            if (
+                not user_schema_path().exists()
+                or user_schema_path().read_text() != schema
+            ):
+                user_schema_path().write_text(schema)
+                written.append(str(user_schema_path()))
+            if _write_markers(user_config_path(), schema_ref_from(home)):
+                written.append(str(user_config_path()))
+            if repo:
+                ensure_repo_dir(root, identity=identity)
+                overlay = directory / "config.json"
+                if _write_markers(overlay, schema_ref_from(directory)):
+                    written.append(str(overlay))
+                if migrate and moved is not None:
+                    crumb = directory / "root.json"
+                    crumb.write_text(
+                        json.dumps(
+                            {**read_json_dict(crumb), "root": str(root.resolve())}
+                        )
+                    )
+                    written.append(str(crumb))
+                    migrated = True
+            if clean_status and had_legacy:
+                legacy.unlink()
+        except OSError as exc:
+            fail(f"cannot write the auditor home at {home}: {exc}")
 
     present(
         {
             "home": str(home),
             "config": str(user_config_path()),
             "schema": str(user_schema_path()),
-            "repo_dir": str(repo_dir(root)) if repo else None,
+            "repo_dir": str(directory) if repo else None,
             "written": written,
-            "unknown_keys": unknown_user_keys(root),
+            "checked": check,
+            "unknown_keys": unknown_user_keys(root, directory=directory),
             "moved_from": moved,
+            "migrated": migrated,
             "legacy_status": str(legacy) if had_legacy else None,
         },
         render_init,

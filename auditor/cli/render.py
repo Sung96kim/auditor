@@ -382,11 +382,20 @@ def render_init(out: Console, payload: dict[str, Any]) -> None:
         if payload.get(key):
             t.add_row(label, str(payload[key]))
     written = payload.get("written") or []
-    t.add_row("written", ", ".join(written) if written else "nothing (up to date)")
+    if payload.get("checked"):
+        state = "not written (--check)"
+    else:
+        state = ", ".join(written) if written else "nothing (up to date)"
+    t.add_row("written", state)
     out.print(Panel(t, title="auditor init", border_style=_BORDER))
     for key in payload.get("unknown_keys") or []:
         out.print(f"[yellow]unknown key[/yellow] {key}")
-    if payload.get("moved_from"):
+    if payload.get("migrated"):
+        out.print(
+            f"[{_ACCENT}]moved repo:[/] settings were created for "
+            f"{payload['moved_from']}; the breadcrumb now points here"
+        )
+    elif payload.get("moved_from"):
         out.print(
             f"[yellow]moved repo:[/yellow] settings were created for {payload['moved_from']}; "
             "re-run with --migrate to point them here"
