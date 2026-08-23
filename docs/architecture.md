@@ -34,7 +34,8 @@ Paths are relative to the repo root.
 - `discovery.py`: `find_root` walks up for `.git` / `pyproject.toml` / `.auditor`. `FileDiscovery`
   lists auditable files through `git ls-files` (exact `.gitignore` handling) or an `rglob` walk
   outside a repo, minus hard-excluded dirs, default generated-file globs, and the configured
-  `exclude`. `default_base_ref` and `git_changed_files` back the diff flags.
+  `exclude`. `default_base_ref` and `git_changed_files` back the diff flags, and `git_output` is
+  the shared one-shot git call `paths.repo_identity` uses.
 - `config.py`: `AuditorSettings` (pydantic-settings) is the merged repo config. `load_config`
   layers profile, `pyproject [tool.auditor]`, `.auditor/config.toml`, then injected overrides,
   loading plugins between the raw read and validation so a config may name plugin-contributed
@@ -52,7 +53,12 @@ Paths are relative to the repo root.
 - `database/store.py`: `IndexStore.connect(db_path, repo_key)` opens the shared db and binds the
   handle to one repo's partition. `database/base.py`'s `SqliteWorker` owns the one thread-bound
   connection; every store awaits through it, so writes serialize safely.
-- `paths.py`: `auditor_home()`, `index_db_path()`, `repo_key()`.
+- `paths.py`: `auditor_home()`, `index_db_path()`, `repo_key()` (the index partition key),
+  `read_json_dict()` (the one tolerant JSON-object reader the home's files share), and the
+  user-home layout: `user_config_path()`, `user_schema_path()`, `models_dir()`, plus
+  `repo_identity()` / `repo_dir_key()` / `repo_dir()` / `ensure_repo_dir()`. The repo dir is keyed
+  by sha1 of the resolved git common dir, so worktrees of one checkout share it and a symlinked or
+  moved path does not mint a second one.
 - `skips.py`, `ignores.py`, `baseline.py`: the three suppression seams; `gate.py` is the gate they
   feed (see Cross-cutting behavior).
 - `reporters/base.py`: the `Reporter` ABC and `render(results, fmt)`. `serve.py` (`ReportServer`)

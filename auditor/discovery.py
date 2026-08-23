@@ -86,6 +86,15 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
         return None
 
 
+def git_output(root: Path, *args: str) -> str | None:
+    """Stripped stdout of a git subcommand under ``root``; ``None`` when git is missing or the
+    command fails."""
+    done = _git(root, *args)
+    if done is None or done.returncode != 0:
+        return None
+    return done.stdout.strip()
+
+
 def default_base_ref(root: Path) -> str | None:
     """The repo's likely base branch — the first of main/master/develop/development that exists
     (local or ``origin/``). ``None`` if none resolve or ``root`` isn't a git repo."""
