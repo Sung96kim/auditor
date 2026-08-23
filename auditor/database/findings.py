@@ -7,6 +7,8 @@
 import sqlite3
 from typing import Any, ClassVar
 
+from pydantic import BaseModel, ConfigDict
+
 from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.models import Finding
 
@@ -48,6 +50,17 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
             tuple(row["standard_refs"].split(",")) if row["standard_refs"] else ()
         ),
     )
+
+
+class FindingRow(BaseModel):
+    """One finding as the rule-prefix reader sees it: the fields a cross-cutting consumer needs
+    without materialising the whole record."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_id: str
+    subkind: str | None = None
+    evidence: str = ""
 
 
 class FindingsDB(BaseDB):
@@ -233,11 +246,13 @@ class FindingsDB(BaseDB):
 
         await self._worker.run(op)
 
-    async def by_rule_prefix(self, prefix: str) -> list[dict]:
+    async def by_rule_prefix(self, prefix: str) -> list[FindingRow]:
+        """Every finding whose rule id starts with ``prefix``, narrowed to the columns a
+        cross-cutting reader needs."""
         return [
-            dict(r)
+            FindingRow.model_validate(dict(r))
             for r in await self._fetch(
-                "SELECT rule_id, subkind, message, evidence FROM findings "
+                "SELECT rule_id, subkind, evidence FROM findings "
                 "WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
                 (f"{prefix}%",),
             )

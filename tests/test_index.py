@@ -9,6 +9,7 @@ import pytest
 
 from auditor.database import IndexStore
 from auditor.database.base import BaseDB
+from auditor.database.findings import FindingRow
 from auditor.models import (
     Category,
     FileRole,
@@ -233,9 +234,11 @@ async def test_by_rule_prefix(tmp_path):
         await index.findings.add("m.py", [graph_finding, other_finding])
         rows = await index.findings.by_rule_prefix("GRAPH-")
         assert len(rows) == 1
-        assert rows[0]["rule_id"] == "GRAPH-COUPLING-HIGH"
-        assert rows[0]["evidence"] == "m.py::Foo"
+        assert rows[0].rule_id == "GRAPH-COUPLING-HIGH"
+        assert rows[0].evidence == "m.py::Foo"
         assert await index.findings.by_rule_prefix("MISSING-") == []
+    # the row is the auditor's own shape, so a column no reader uses is dead weight
+    assert set(FindingRow.model_fields) == {"rule_id", "subkind", "evidence"}
 
 
 # --- concurrency + high load on the async SQLite worker -----------------------
@@ -392,4 +395,4 @@ async def test_by_rule_prefix_carries_the_subkind(tmp_path):
     async with await IndexStore.connect(tmp_path / "index.db", "/repo") as index:
         await index.findings.add("m.py", [_saturated_finding()])
         rows = await index.findings.by_rule_prefix("GRAPH-")
-    assert rows[0]["subkind"] == "fan_out"
+    assert rows[0].subkind == "fan_out"

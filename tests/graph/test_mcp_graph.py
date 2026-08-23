@@ -99,10 +99,8 @@ async def test_graph_overview_shape(graph_repo: Path):
     assert isinstance(ov["bottlenecks"], list) and len(ov["bottlenecks"]) <= 5
     async with await open_repo_index(graph_repo) as index:
         rows = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
-    fan_out = [r["evidence"] for r in rows if r["subkind"] == GodConceptKind.FAN_OUT]
-    bottleneck = [
-        r["evidence"] for r in rows if r["subkind"] == GodConceptKind.BOTTLENECK
-    ]
+    fan_out = [r.evidence for r in rows if r.subkind == GodConceptKind.FAN_OUT]
+    bottleneck = [r.evidence for r in rows if r.subkind == GodConceptKind.BOTTLENECK]
     assert len(fan_out) + len(bottleneck) == len(rows)
     assert ov["god_concept_count"] == len(fan_out)
     assert ov["bottleneck_count"] == len(bottleneck)

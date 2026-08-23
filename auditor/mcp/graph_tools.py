@@ -190,10 +190,10 @@ async def graph_overview(path: str = ".") -> dict:
     god_concepts: list[str] = []
     bottlenecks: list[str] = []
     for f in findings:
-        if f["subkind"] == GodConceptKind.BOTTLENECK:
-            bottlenecks.append(f["evidence"])
-        elif f["subkind"] == GodConceptKind.FAN_OUT:
-            god_concepts.append(f["evidence"])
+        if f.subkind == GodConceptKind.BOTTLENECK:
+            bottlenecks.append(f.evidence)
+        elif f.subkind == GodConceptKind.FAN_OUT:
+            god_concepts.append(f.evidence)
     return {
         "nodes": len(nodes),
         "edges": len(edges),
