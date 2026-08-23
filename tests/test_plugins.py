@@ -3,12 +3,14 @@ two-phase load (a config can reference a plugin-contributed rule)."""
 
 import shutil
 import sys
+from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from _support import PLUGIN_FILE
 
+import auditor.plugins
 from auditor.config import load_config
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
@@ -148,3 +150,53 @@ def test_a_transitively_imported_plugin_is_credited_to_itself(tmp_path, monkeypa
     assert loader.warnings == []
     assert REGISTRY.sources.source_of("detector", "PROBE-A") == "auditor_probe_plugin_a"
     assert REGISTRY.sources.source_of("detector", "PROBE-B") == "auditor_probe_plugin_b"
+
+
+def test_entry_point_groups_match_the_registries():
+    """Every advertised group corresponds to a registry a plugin can actually add to."""
+    assert set(auditor.plugins._ENTRY_POINT_GROUPS) == {
+        "auditor.detectors",
+        "auditor.languages",
+        "auditor.reporters",
+    }
+
+
+def test_entry_point_plugin_is_imported_and_credited_to_its_module(
+    tmp_path, monkeypatch
+):
+    """An advertised entry point imports its module, and the rule it registers names that
+    module as its source."""
+    (tmp_path / "auditor_probe_plugin_ep.py").write_text(
+        _PROBE_PLUGIN.format(rule="PROBE-EP", imports="")
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    ep = metadata.EntryPoint(
+        name="probe", value="auditor_probe_plugin_ep", group="auditor.detectors"
+    )
+    monkeypatch.setattr(
+        auditor.plugins,
+        "_entry_points",
+        lambda group: [ep] if group == "auditor.detectors" else [],
+    )
+
+    loader = PluginLoader()
+    loader.load_entry_points()
+
+    assert loader.warnings == []
+    assert loader.loaded == ["auditor_probe_plugin_ep"]
+    assert "PROBE-EP" in REGISTRY.rule_ids()
+    assert (
+        REGISTRY.sources.source_of("detector", "PROBE-EP") == "auditor_probe_plugin_ep"
+    )
+
+
+def test_local_plugin_loads_idempotently(tmp_path):
+    """A second load in the same process is a cache hit, not a duplicate-rule failure."""
+    root = _repo_with_plugin(tmp_path, trust=True)
+    plugin_file = str(root / ".auditor" / "plugins" / "house_rules.py")
+    for _ in range(2):
+        loader = PluginLoader()
+        loader.load_local(root, trusted=True)
+        assert loader.warnings == []
+        assert loader.loaded == [plugin_file]
+    assert "HOUSE-NO-PRINT" in REGISTRY.rule_ids()

@@ -20,8 +20,9 @@ auditr plugins list --json
 
 ## What gets loaded, and from where
 
-- Entry points: a distribution advertising `auditor.detectors`, `auditor.languages`,
-  `auditor.reporters`, or `auditor.profiles` is imported whenever it is installed.
+- Entry points: a distribution advertising `auditor.detectors`, `auditor.languages`, or
+  `auditor.reporters` is imported whenever it is installed. There is no profiles group; profiles
+  are TOML, not registered classes.
 - Config-named modules: `plugins = ["acme.rules"]` in the repo's config imports those modules.
 - Local files: `.auditor/plugins/*.py` in the repo, sorted by name.
 - Entry points and config-named modules load unconditionally. Local files do not; see below.
