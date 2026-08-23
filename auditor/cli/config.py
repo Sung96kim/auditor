@@ -10,10 +10,11 @@ from auditor.cli.helpers import (
     format_config_error,
     parse_config_json,
     present,
+    warn_unknown_config,
 )
 from auditor.cli.options import ConfigJson, RootArg
 from auditor.cli.render import render_config_show
-from auditor.config import load_config
+from auditor.config import load_config_report
 from auditor.discovery import find_root
 
 config_app = typer.Typer(no_args_is_help=True, help="Inspect resolved configuration.")
@@ -27,9 +28,10 @@ def config_show(
 ) -> None:
     """Print the resolved configuration."""
     try:
-        settings = load_config(
+        loaded = load_config_report(
             find_root(target), overrides=parse_config_json(config_json)
         )
     except ValidationError as exc:
         fail(f"invalid config — {format_config_error(exc)}")
-    present(settings.model_dump(mode="json"), render_config_show, as_json=json_)
+    warn_unknown_config(loaded.unknown_keys)
+    present(loaded.settings.model_dump(mode="json"), render_config_show, as_json=json_)

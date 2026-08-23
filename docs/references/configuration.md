@@ -6,8 +6,11 @@ env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus `AUDITOR_*` 
 
 - How a value is resolved across those sources is in [config.md](config.md), which is also the
   command that prints the merged result.
-- Every config model sets `extra="forbid"`, so an unknown key fails the load instead of being
-  silently ignored.
+- An unknown key is ignored instead of failing the load, so a key a newer auditor understands does
+  not break an older install on the same repo. Each command prints the ignored keys once, on
+  stderr, so machine output on stdout stays parseable; `auditr config check` lists them with their
+  dotted path.
+- A key with an invalid value still fails: the command prints one line and exits non-zero.
 
 ## `[tool.auditor]` in `pyproject.toml`
 

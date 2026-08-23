@@ -1,7 +1,10 @@
 """Config layering + resolution: profile extends chain, pyproject vs .auditor precedence,
 threshold merge, per-rule/category/role resolution, and validation."""
 
+import warnings
+
 import pytest
+from pydantic import ValidationError
 
 from auditor.config import (
     AuditorSettings,
@@ -14,6 +17,9 @@ from auditor.config import (
     Threshold,
     is_configured,
     load_config,
+    load_config_report,
+    unknown_config_keys,
+    unknown_repo_keys,
 )
 from auditor.models import FileRole, Severity, VerdictKind
 
@@ -167,23 +173,70 @@ def test_respect_gitignore_defaults_true_and_is_configurable(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "config_path, content, match",
+    "config_path, content, expected",
     [
-        # `include` was a dead config field; it's removed, so setting it now errors
-        # (extra=forbid) rather than silently no-op-ing.
+        # `include` was a dead config field; it's removed, so setting it is now reported
+        # (extra=ignore, D8) rather than failing every command on the repo.
         (
             "pyproject.toml",
             '[project]\nname="x"\nversion="0"\n[tool.auditor]\ninclude = ["src/**"]\n',
-            "include",
+            ["include"],
         ),
-        (".auditor/config.toml", "[malware_scan]\nbogus = 1\n", "bogus"),
+        (".auditor/config.toml", "[malware_scan]\nbogus = 1\n", ["malware_scan.bogus"]),
     ],
 )
-def test_unknown_config_keys_rejected(tmp_path, config_path, content, match):
+def test_unknown_config_keys_are_reported_not_raised(
+    tmp_path, config_path, content, expected
+):
     path = tmp_path / config_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
-    with pytest.raises(Exception, match=match):
+    report = load_config_report(tmp_path)
+    assert report.unknown_keys == tuple(expected)
+    assert report.settings.extends == "base"  # the load still succeeds
+    assert unknown_repo_keys(tmp_path) == expected  # same list without a plugin load
+
+
+def test_unknown_config_keys_reports_dotted_paths():
+    raw = {
+        "extends": "base",
+        "include": ["src/**"],
+        "malware_scan": {"bogus": 1, "enabled": True},
+        "rules": {"PY-SEC-SSRF": {"severty": "high"}},
+        "overrides": [{"path": "a/*", "rulez": {}}],
+        "threshold": {"size": {"file_max_linez": 3}},
+    }
+    assert unknown_config_keys(raw, AuditorSettings) == [
+        "include",
+        "malware_scan.bogus",
+        "overrides[0].rulez",
+        "rules.PY-SEC-SSRF.severty",
+        "threshold.size.file_max_linez",
+    ]
+
+
+def test_valid_config_reports_nothing(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="base"\n'
+    )
+    assert load_config_report(tmp_path).unknown_keys == ()
+
+
+def test_load_config_never_warns(tmp_path):
+    """Regression: unknown keys are a value on the report, never a `warnings.warn` from the
+    loader. A warning here would land on stdout-adjacent output and corrupt `-f json`."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        settings = load_config(tmp_path)
+    assert settings.extends == "base"
+
+
+def test_invalid_config_still_raises(tmp_path):
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text('respect_skips = "yes-please"\n')
+    with pytest.raises(ValidationError, match="respect_skips"):
         load_config(tmp_path)
 
 
@@ -235,10 +288,9 @@ def test_overrides_merge_as_highest_layer(tmp_path):
     assert base.sqlalchemy.expire_on_commit is False  # no override -> unchanged
 
 
-def test_overrides_unknown_key_rejected(tmp_path):
+def test_overrides_unknown_key_is_reported(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    with pytest.raises(Exception, match="nope"):
-        load_config(tmp_path, overrides={"nope": 1})
+    assert load_config_report(tmp_path, overrides={"nope": 1}).unknown_keys == ("nope",)
 
 
 # ---------------------------------------------------------------------------

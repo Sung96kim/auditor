@@ -420,11 +420,40 @@ def test_scan_config_json_bad_json_errors(tmp_path):
     assert "invalid --config-json" in res.output
 
 
-def test_scan_config_json_unknown_key_errors(tmp_path):
+def test_scan_config_json_invalid_value_errors(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    res = invoke("scan", str(tmp_path), "--config-json", '{"nope": 1}')
+    res = invoke(
+        "scan", str(tmp_path), "--config-json", '{"respect_gitignore": "nope"}'
+    )
     assert res.exit_code == 1
     assert "invalid config" in " ".join(res.output.split())
+
+
+def test_scan_invalid_repo_config_exits_non_zero(tmp_path):
+    """Regression: `scan` on a repo with an invalid config exits 1, never 0 (D8)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nrespect_skips = "yes-please"\n'
+    )
+    (tmp_path / "a.py").write_text("x = 1\n")
+    res = invoke("scan", str(tmp_path), "--no-index")
+    assert res.exit_code == 1
+    assert "invalid config" in " ".join(res.output.split())
+    assert "Traceback" not in res.output
+
+
+def test_scan_json_stays_pure_with_an_unknown_config_key(tmp_path):
+    """Regression: the unknown-key warning goes to stderr only, so `-f json` on stdout still
+    parses. A `warnings.warn` in the loader, or a print on stdout, would break every agent."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nbogus = 1\n'
+    )
+    (tmp_path / "a.py").write_text("x = 1\n")
+    res = invoke("scan", str(tmp_path), "-f", "json", "--no-index")
+    payload = cli_json(res)  # parses => stdout is pure JSON
+    assert "files" in payload
+    assert "bogus" not in res.stdout
+    assert "unknown config key: bogus" in res.stderr
+    assert res.stderr.count("unknown config key") == 1  # one block per run
 
 
 def test_scan_config_json_activates_greenlet_rule(tmp_path):

@@ -13,6 +13,7 @@ from auditor.cli.helpers import (
     parse_config_json,
     require_file,
     run,
+    warn_unknown_config,
 )
 from auditor.cli.options import (
     ConfigJson,
@@ -22,6 +23,8 @@ from auditor.cli.options import (
     ReportFile,
     ShowIgnored,
 )
+from auditor.config import unknown_repo_keys
+from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.reporters import render
 
@@ -39,6 +42,9 @@ def report(
     require_file(file)
     check_format(fmt)
     overrides = parse_config_json(config_json)
+    warn_unknown_config(
+        unknown_repo_keys(find_root(file), profile=profile, overrides=overrides)
+    )
     try:
         results = run(
             audit_target(
