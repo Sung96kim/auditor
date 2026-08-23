@@ -142,10 +142,11 @@ def test_param_default_call_captured_in_callees():
     assert "make_default" in f.callees
 
 
-def test_typed_calls_capture_receiver_type_and_method():
-    """typed_calls pairs an annotated-receiver method call with the receiver's declared type
-    (`svc: FooService` → svc.do_thing() gives ("FooService", "do_thing")) and self-calls with
-    the enclosing class. Resolution uses these to disambiguate same-named methods (Finding 2)."""
+def test_typed_calls_capture_receiver_var_type_and_method():
+    """typed_calls pairs an annotated-receiver method call with the receiver variable and its
+    declared type (`svc: FooService` → svc.do_thing() gives ("svc", "FooService", "do_thing"))
+    and self-calls with the enclosing class. Resolution uses these to disambiguate same-named
+    methods (Finding 2); the variable is what a settled non-repo receiver is keyed by."""
     src = (
         "def handler(svc: FooService = Depends(FooService)):\n"
         "    return svc.do_thing(1)\n"
@@ -156,8 +157,8 @@ def test_typed_calls_capture_receiver_type_and_method():
         "        return 1\n"
     )
     ids = _by_id(extract_file_facts("m.py", src, "production"))
-    assert ("FooService", "do_thing") in ids["m.py::handler"].typed_calls
-    assert ("A", "g") in ids["m.py::A.f"].typed_calls
+    assert ("svc", "FooService", "do_thing") in ids["m.py::handler"].typed_calls
+    assert ("self", "A", "g") in ids["m.py::A.f"].typed_calls
 
 
 def test_param_types_cover_all_arg_kinds_including_keyword_only():

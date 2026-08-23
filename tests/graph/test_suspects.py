@@ -6,8 +6,17 @@ S8 extends this file with the idle-drain tests; S2 owns the gating half.
 import pytest
 
 from auditor.graph.extract import extract_file_facts
-from auditor.graph.model import CallForm, FactKind, UnresolvedReason
-from auditor.graph.resolve_edges import resolve_structural
+from auditor.graph.model import (
+    CallForm,
+    EdgeKind,
+    FactKind,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+    Resolution,
+    UnresolvedReason,
+)
+from auditor.graph.resolve_edges import UnresolvedCollector, resolve_structural
 
 
 def _rows(*files: tuple[str, str]):
@@ -313,3 +322,108 @@ def test_a_typed_call_row_replaces_the_attribute_row_for_the_same_name():
     row = _row(rows, "m.py::f", "do_thing")
     assert row.fact_kind is FactKind.TYPED_CALL
     assert row.receiver_root == "Svc"
+
+
+def test_a_settled_receiver_does_not_silence_the_same_call_on_another_receiver():
+    """The suppression is keyed by receiver, not by method name: `p: Path` settling `p.run()`
+    must leave the genuine `job.run()` miss in the queue (`run`, `get`, `load` are exactly the
+    names a stdlib type and a repo class share)."""
+    rows = _rows(
+        ("a.py", "class A:\n    def run(self):\n        return 1\n"),
+        ("b.py", "class B:\n    def run(self):\n        return 2\n"),
+        (
+            "m.py",
+            "from pathlib import Path\n"
+            "def f(p: Path, job):\n"
+            "    p.run()\n"
+            "    return job.run()\n",
+        ),
+    )
+    row = _row(rows, "m.py::f", "run")
+    assert row.call_form is CallForm.ATTR
+    assert row.receiver_root == "job"
+
+
+def test_a_bound_bare_name_falls_back_to_the_attribute_form():
+    """`handle()` names the parameter, but `job.handle()` beside it is still a real miss: the
+    form choice skips the bound form instead of dropping the row."""
+    rows = _rows(
+        ("a.py", "class A:\n    def handle(self):\n        return 1\n"),
+        ("m.py", "def f(job, handle):\n    handle()\n    return job.handle()\n"),
+    )
+    row = _row(rows, "m.py::f", "handle")
+    assert row.call_form is CallForm.ATTR
+    assert row.receiver_root == "job"
+
+
+def _collector() -> UnresolvedCollector:
+    return UnresolvedCollector(
+        bindings_by_module={}, aliases_by_module={}, dotted_to_id={}
+    )
+
+
+def _caller(**kw) -> GraphNode:
+    return GraphNode(
+        id="m.py::f",
+        kind=NodeKind.FUNCTION,
+        name="f",
+        module="m.py",
+        qualname="f",
+        role="production",
+        **kw,
+    )
+
+
+def _resolution() -> Resolution:
+    return Resolution(
+        definers=("helper.py::handle",), reason=UnresolvedReason.UNIMPORTABLE_NAME
+    )
+
+
+def test_collector_drops_a_row_the_node_already_has_an_edge_for():
+    """The collector applies the post-pass gates on its own: no resolver needed to state that a
+    row duplicating an edge the node already has is noise."""
+    c = _collector()
+    c.note(
+        _caller(),
+        _resolution(),
+        fact_kind=FactKind.CALLEE,
+        name="handle",
+        receiver_roots=(None,),
+        call_form=CallForm.BARE,
+    )
+    edges = [
+        GraphEdge(src="m.py::f", dst="helper.py::handle", kind=EdgeKind.CALLS),
+    ]
+    assert c.drain(edges) == []
+    assert len(c.drain([])) == 1
+
+
+def test_collector_drops_only_the_settled_receiver():
+    """The second gate, keyed by receiver: settling `p.run` leaves `job.run` alone."""
+    c = _collector()
+    for root in ("p", "job"):
+        c.note(
+            _caller(),
+            _resolution(),
+            fact_kind=FactKind.ATTR_CALLEE,
+            name="run",
+            receiver_roots=(root,),
+            call_form=CallForm.ATTR,
+        )
+    c.settle("m.py::f", "p", "run")
+    (row,) = c.drain([])
+    assert row.receiver_root == "job"
+
+
+def test_collector_skips_a_bare_name_the_node_binds():
+    c = _collector()
+    c.note(
+        _caller(local_names=("handle",)),
+        _resolution(),
+        fact_kind=FactKind.CALLEE,
+        name="handle",
+        receiver_roots=(None,),
+        call_form=CallForm.BARE,
+    )
+    assert c.drain([]) == []

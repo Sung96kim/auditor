@@ -280,10 +280,10 @@ class _FnFactCollector:
                 elif isinstance(n, ast.Call):
                     self._add_call(n, track_receiver=False)
 
-    def typed_calls(self) -> tuple[tuple[str, str], ...]:
+    def typed_calls(self) -> tuple[tuple[str, str, str], ...]:
         return tuple(
             dict.fromkeys(
-                (self.recv_types[r], m)
+                (r, self.recv_types[r], m)
                 for r, m in dict.fromkeys(self.attr_calls)
                 if r in self.recv_types
             )

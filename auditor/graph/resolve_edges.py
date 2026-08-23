@@ -1,6 +1,9 @@
-"""Resolve a node set's local facts into structural GraphEdges (spec §5). Stdlib only."""
+"""Resolve a node set's local facts into structural GraphEdges and the facts it could not
+place (spec §5.6). Needs pydantic; no other third-party import."""
 
 from collections import defaultdict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from auditor.graph.model import (
     FUNCTION_KINDS,
@@ -35,9 +38,162 @@ def _short_name(node_id: str) -> str:
     return node_id.split("::")[-1].rsplit(".", 1)[-1]
 
 
+def _edged_names(edges: list[GraphEdge]) -> dict[tuple[str, str], set[str]]:
+    """(src, edge kind) -> the dst short names already leaving that node."""
+    out: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for e in edges:
+        out[(e.src, e.kind.value)].add(_short_name(e.dst))
+    return out
+
+
+def call_forms(node: GraphNode) -> dict[tuple[str, CallForm], tuple[str | None, ...]]:
+    """(name, call form) -> every receiver root the node called that name on. A name called both
+    bare and on a receiver keeps an entry per form; `self` needs a direct `self`/`cls` receiver,
+    so a chained `self.a.b.m()` is an attribute call."""
+    out: dict[tuple[str, CallForm], list[str | None]] = {}
+    for name in node.bare_callees:
+        out.setdefault((name, CallForm.BARE), [None])
+    for root, method, direct in node.attr_callees:
+        form = CallForm.SELF if direct and root in _SELF_RECEIVERS else CallForm.ATTR
+        roots = out.setdefault((method, form), [])
+        if root not in roots:
+            roots.append(root)
+    return {key: tuple(roots) for key, roots in out.items()}
+
+
+def form_for(
+    forms: dict[tuple[str, CallForm], tuple[str | None, ...]],
+    name: str,
+    local_names: tuple[str, ...],
+) -> tuple[CallForm, tuple[str | None, ...]]:
+    """The form a row records for ``name``: the most tractable form it was called in that the
+    node does not itself bind, so `handle()` beside `job.handle()` reports the bare call unless
+    `handle` is a parameter, in which case the attribute call is the miss worth reporting."""
+    for form in _FORM_PREFERENCE:
+        if (name, form) in forms and not (
+            form is CallForm.BARE and name in local_names
+        ):
+            return form, forms[(name, form)]
+    return CallForm.BARE, (None,)
+
+
+class _NotedFact(BaseModel):
+    """One fact a pass could not place, with every receiver root it was called on: which root
+    survives is only known after the whole pass has settled the non-repo receivers."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node: GraphNode
+    resolution: Resolution
+    fact_kind: FactKind
+    name: str
+    receiver_roots: tuple[str | None, ...]
+    call_form: CallForm
+
+
+class UnresolvedCollector(BaseModel):
+    """Collects the facts a resolver pass could not place and applies the post-pass gates: a
+    receiver a known non-repo type already settled, and a row the node already has an edge for."""
+
+    bindings_by_module: dict[str, dict[str, str]]
+    aliases_by_module: dict[str, dict[str, str]]
+    dotted_to_id: dict[str, str]
+    noted: list[_NotedFact] = Field(default_factory=list)
+    settled: set[tuple[str, str | None, str]] = Field(default_factory=set)
+
+    def note(
+        self,
+        node: GraphNode,
+        res: Resolution,
+        *,
+        fact_kind: FactKind,
+        name: str,
+        receiver_roots: tuple[str | None, ...],
+        call_form: CallForm,
+    ) -> None:
+        """Queue one unplaced fact, unless the caller is test code, the name has no role-filtered
+        repo definer, or a bare name is one of the node's own bindings."""
+        if node.role in TEST_ROLES or res.reason is None or not res.definers:
+            return
+        if call_form is CallForm.BARE and name in node.local_names:
+            return
+        self.noted.append(
+            _NotedFact(
+                node=node,
+                resolution=res,
+                fact_kind=fact_kind,
+                name=name,
+                receiver_roots=receiver_roots,
+                call_form=call_form,
+            )
+        )
+
+    def settle(self, node_id: str, receiver_root: str, method: str) -> None:
+        """Record that ``receiver_root``'s declared type is known and is not a repo class, so any
+        call of ``method`` on that receiver is answered."""
+        self.settled.add((node_id, receiver_root, method))
+
+    def externally_bound(self, module_id: str, *names: str | None) -> bool:
+        """Whether the caller's module binds any of ``names`` from a non-repo import (``re``,
+        ``subprocess``), directly or through a module-level alias (``_RX = re.compile(...)``).
+        Such a row is kept for display and never briefed."""
+        binds = self.bindings_by_module.get(module_id, {})
+        aliases = self.aliases_by_module.get(module_id, {})
+        return any(
+            (src := binds.get(aliases.get(n, n))) is not None
+            and src not in self.dotted_to_id
+            for n in names
+            if n is not None
+        )
+
+    def _row(self, fact: _NotedFact) -> UnresolvedRow | None:
+        """The row a noted fact earns, on the first receiver root no non-repo type settled, or
+        ``None`` when every root it was called on is settled."""
+        roots = fact.receiver_roots
+        if fact.fact_kind in _CALL_FACTS:
+            roots = tuple(
+                r for r in roots if (fact.node.id, r, fact.name) not in self.settled
+            )
+            if not roots:
+                return None
+        root = roots[0] if roots else None
+        return UnresolvedRow(
+            node_id=fact.node.id,
+            fact_kind=fact.fact_kind,
+            name=fact.name,
+            reason=fact.resolution.reason,
+            receiver_root=root,
+            call_form=fact.call_form,
+            candidates=fact.resolution.gated,
+            definers=fact.resolution.definers,
+            resolution_path=fact.resolution.path,
+            priority=unresolved_priority(fact.resolution.reason, fact.call_form),
+            externally_bound=self.externally_bound(fact.node.module, fact.name, root),
+        )
+
+    def drain(self, edges: list[GraphEdge]) -> list[UnresolvedRow]:
+        """The surviving rows, one per ``(node_id, name, reason)``: settled receivers dropped,
+        names the node already has an edge of that kind to dropped, typed rows winning a tie."""
+        edged = _edged_names(edges)
+        kept: dict[tuple[str, str, UnresolvedReason], UnresolvedRow] = {}
+        for fact in self.noted:
+            row = self._row(fact)
+            if row is None:
+                continue
+            kind = _EDGE_KIND_BY_FACT[row.fact_kind]
+            if row.name in edged.get((row.node_id, kind.value), frozenset()):
+                continue
+            key = (row.node_id, row.name, row.reason)
+            # the typed row wins a tie: it names the receiver's class, not the local variable
+            if key not in kept or row.fact_kind is FactKind.TYPED_CALL:
+                kept[key] = row
+        return list(kept.values())
+
+
 class StructuralResolver:
     """Resolves a node set's local facts into structural GraphEdges. Holds the derived
-    indexes + edge accumulator as fields so each edge-type pass is its own method."""
+    indexes + edge accumulator as fields so each edge-type pass is its own method; the facts no
+    pass could place go to an :class:`UnresolvedCollector` it owns."""
 
     def __init__(self, nodes: list[GraphNode]) -> None:
         self.nodes = nodes
@@ -98,8 +254,11 @@ class StructuralResolver:
                 imps |= new
                 frontier = new
         self.edges: list[GraphEdge] = []
-        self.unresolved: list[UnresolvedRow] = []
-        self._typed_out_of_repo: set[tuple[str, str]] = set()
+        self.collector = UnresolvedCollector(
+            bindings_by_module=self.bindings_by_module,
+            aliases_by_module=self.aliases_by_module,
+            dotted_to_id=self.dotted_to_id,
+        )
         self._seen: set[tuple[str, str, str]] = set()
 
     def _add(self, src: str, dst: str, kind: EdgeKind, weight: float = 1.0) -> None:
@@ -209,19 +368,6 @@ class StructuralResolver:
         )
         return Resolution(gated=gated, definers=definers, path=path, reason=reason)
 
-    def _externally_bound(self, module_id: str, *names: str | None) -> bool:
-        """Whether the caller's module binds any of ``names`` from a non-repo import (``re``,
-        ``subprocess``), directly or through a module-level alias (``_RX = re.compile(...)``).
-        Such a row is kept for display and never briefed."""
-        binds = self.bindings_by_module.get(module_id, {})
-        aliases = self.aliases_by_module.get(module_id, {})
-        return any(
-            (src := binds.get(aliases.get(n, n))) is not None
-            and src not in self.dotted_to_id
-            for n in names
-            if n is not None
-        )
-
     def _chain_in_repo(self, cls_id: str, seen: set[str]) -> bool:
         """Whether ``cls_id`` and every base above it is a repo class. This is the typed-call
         gate: it drops `str.lower`, `Path.mkdir` and every pydantic receiver."""
@@ -236,40 +382,6 @@ class StructuralResolver:
             if not ids or not all(self._chain_in_repo(b, seen) for b in ids):
                 return False
         return True
-
-    def _note(
-        self,
-        node: GraphNode,
-        res: Resolution,
-        *,
-        fact_kind: FactKind,
-        name: str,
-        receiver_root: str | None,
-        call_form: CallForm,
-    ) -> None:
-        """Queue one unplaced fact, unless the caller is test code, the name has no role-filtered
-        repo definer, or a bare name is the node's own parameter or local."""
-        if node.role in TEST_ROLES or res.reason is None or not res.definers:
-            return
-        if call_form is CallForm.BARE and name in node.local_names:
-            return
-        self.unresolved.append(
-            UnresolvedRow(
-                node_id=node.id,
-                fact_kind=fact_kind,
-                name=name,
-                reason=res.reason,
-                receiver_root=receiver_root,
-                call_form=call_form,
-                candidates=res.gated,
-                definers=res.definers,
-                resolution_path=res.path,
-                priority=unresolved_priority(res.reason, call_form),
-                externally_bound=self._externally_bound(
-                    node.module, name, receiver_root
-                ),
-            )
-        )
 
     def _module_contains(self) -> None:
         top_level = [
@@ -291,13 +403,13 @@ class StructuralResolver:
 
     def _call_edges(self) -> None:
         for n in self.fns.values():
-            forms = self._call_forms(n)
+            forms = call_forms(n)
             for callee in n.callees:
                 res = self._resolve_name(callee, n, self.by_fn_name)
                 for dst in res.ids:
                     self._add(n.id, dst, EdgeKind.CALLS)
-                form, root = self._form_for(forms, callee)
-                self._note(
+                form, roots = form_for(forms, callee, n.local_names)
+                self.collector.note(
                     n,
                     res,
                     fact_kind=(
@@ -306,13 +418,13 @@ class StructuralResolver:
                         else FactKind.ATTR_CALLEE
                     ),
                     name=callee,
-                    receiver_root=root,
+                    receiver_roots=roots,
                     call_form=form,
                 )
             # typed-receiver calls (Finding 2): `recv.method()` where recv has a declared type
             # resolves to THAT class's method (up the inheritance chain), disambiguating
             # same-named methods that the receiver-blind name+import gate above drops.
-            for recv_type, method in n.typed_calls:
+            for recv_var, recv_type, method in n.typed_calls:
                 cls_ids = self._resolve_name(recv_type, n, self.by_class_name).ids
                 edged = False
                 for cls_id in cls_ids:
@@ -325,17 +437,17 @@ class StructuralResolver:
                 if edged:
                     continue
                 if self._typed_call_is_in_repo(cls_ids):
-                    self._note(
+                    self.collector.note(
                         n,
                         self._resolve_name(method, n, self.by_fn_name),
                         fact_kind=FactKind.TYPED_CALL,
                         name=method,
-                        receiver_root=recv_type,
+                        receiver_roots=(recv_type,),
                         call_form=CallForm.ATTR,
                     )
                 elif cls_ids or not self.by_class_name.get(recv_type):
                     # the receiver's class is settled and is not a repo class: so is the call
-                    self._typed_out_of_repo.add((n.id, method))
+                    self.collector.settle(n.id, recv_var, method)
             for cb in n.callback_names:
                 for dst in self._resolve_name(cb, n, self.by_fn_name).ids:
                     self._add(n.id, dst, EdgeKind.CALLBACK_ARG)
@@ -343,12 +455,12 @@ class StructuralResolver:
                 res = self._resolve_name(t, n, self.by_class_name)
                 for dst in res.ids:
                     self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
-                self._note(
+                self.collector.note(
                     n,
                     res,
                     fact_kind=FactKind.CLASS_REF,
                     name=t,
-                    receiver_root=None,
+                    receiver_roots=(None,),
                     call_form=CallForm.BARE,
                 )
             # body class-as-value uses (Finding 3): a class instantiated/attr-accessed/passed
@@ -358,40 +470,14 @@ class StructuralResolver:
                 res = self._resolve_name(ref, n, self.by_class_name)
                 for dst in res.ids:
                     self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
-                self._note(
+                self.collector.note(
                     n,
                     res,
                     fact_kind=FactKind.CLASS_REF,
                     name=ref,
-                    receiver_root=None,
+                    receiver_roots=(None,),
                     call_form=CallForm.BARE,
                 )
-
-    @staticmethod
-    def _call_forms(node: GraphNode) -> dict[tuple[str, CallForm], str | None]:
-        """(name, call form) -> receiver root for every call this node makes. A name called both
-        bare and on a receiver keeps an entry per form; `self` needs a direct `self`/`cls`
-        receiver, so a chained `self.a.b.m()` is an attribute call."""
-        out: dict[tuple[str, CallForm], str | None] = {}
-        for name in node.bare_callees:
-            out.setdefault((name, CallForm.BARE), None)
-        for root, method, direct in node.attr_callees:
-            form = (
-                CallForm.SELF if direct and root in _SELF_RECEIVERS else CallForm.ATTR
-            )
-            out.setdefault((method, form), root)
-        return out
-
-    @staticmethod
-    def _form_for(
-        forms: dict[tuple[str, CallForm], str | None], name: str
-    ) -> tuple[CallForm, str | None]:
-        """The one form a row records for ``name``: the most tractable of the forms it was called
-        in, so `handle()` beside `job.handle()` reports the bare call."""
-        for form in _FORM_PREFERENCE:
-            if (name, form) in forms:
-                return form, forms[(name, form)]
-        return CallForm.BARE, None
 
     def _typed_call_is_in_repo(self, cls_ids: tuple[str, ...]) -> bool:
         """The typed-call gate: at least one receiver class, every one of them fully in-repo."""
@@ -432,40 +518,15 @@ class StructuralResolver:
                     if base_method in self.fns:
                         self._add(mid, base_method, EdgeKind.OVERRIDES)
 
-    def _edged_names(self) -> dict[tuple[str, str], set[str]]:
-        """(src, edge kind) -> the dst short names already leaving that node."""
-        out: dict[tuple[str, str], set[str]] = defaultdict(set)
-        for e in self.edges:
-            out[(e.src, e.kind.value)].add(_short_name(e.dst))
-        return out
-
-    def _keep(self, row: UnresolvedRow, edged: dict[tuple[str, str], set[str]]) -> bool:
-        """Whether a collected row survives the two post-pass gates: the node already has an edge
-        of that kind to that short name, or a known non-repo receiver settled the call."""
-        if (
-            row.fact_kind in _CALL_FACTS
-            and (row.node_id, row.name) in self._typed_out_of_repo
-        ):
-            return False
-        kind = _EDGE_KIND_BY_FACT[row.fact_kind]
-        return row.name not in edged.get((row.node_id, kind.value), frozenset())
-
     def resolve(self) -> StructuralResult:
         self._module_contains()
         self._imports()
         self._call_edges()
         self._registered_in()
         self._class_edges()
-        edged = self._edged_names()
-        kept: dict[tuple[str, str, UnresolvedReason], UnresolvedRow] = {}
-        for row in self.unresolved:
-            if not self._keep(row, edged):
-                continue
-            key = (row.node_id, row.name, row.reason)
-            # the typed row wins a tie: it names the receiver's class, not the local variable
-            if key not in kept or row.fact_kind is FactKind.TYPED_CALL:
-                kept[key] = row
-        return StructuralResult(edges=self.edges, unresolved=list(kept.values()))
+        return StructuralResult(
+            edges=self.edges, unresolved=self.collector.drain(self.edges)
+        )
 
 
 def resolve_structural(nodes: list[GraphNode]) -> StructuralResult:
