@@ -29,9 +29,11 @@ left, and hand off depth instead of drowning the conversation in findings.
    `--since` still scans the whole repo (for cross-file rule correctness) while only reporting
    the diff.
 4. Emit an `AUDIT.md` or a PR review body: gate result first, then findings worst-severity-first,
-   grouped by file, with `rule_id` + line + a one-line judgment for each candidate. `AUDIT.md` is
-   a real reporter output (`-f md`) — don't hand-assemble it. A PR review body isn't a built-in
-   format — assemble it from the JSON payload per the template in `references/output-formats.md`.
+   grouped by file, with `rule_id` + line + a one-line verdict for each candidate
+   (`fix-recommended` / `suppress-recommended` / `dismiss` — this skill reports the changeset, it
+   doesn't edit it). `AUDIT.md` is a real reporter output (`-f md`) — don't hand-assemble it. A PR
+   review body isn't a built-in format — assemble it from the JSON payload per the template in
+   `references/output-formats.md`.
 
 Severity: `blocking > high > medium > low > suggestion` (`blocking` is the top tier).
 
