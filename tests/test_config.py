@@ -459,3 +459,44 @@ def test_is_configured_false_for_pyproject_without_tool_auditor(tmp_path):
 def test_is_configured_false_on_malformed_pyproject(tmp_path):
     (tmp_path / "pyproject.toml").write_text("not valid toml [[[")
     assert is_configured(tmp_path) is False
+
+
+def test_observer_allowed_defaults_true_and_is_configurable(tmp_path):
+    assert AuditorSettings().observer_allowed is True
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nobserver_allowed = false\n'
+    )
+    assert load_config(tmp_path).observer_allowed is False
+
+
+@pytest.mark.parametrize(
+    "var, value",
+    [
+        ("AUDITOR_RULES", '{"PY-SEC-DANGEROUS-EVAL": {"enabled": false}}'),
+        ("AUDITOR_EXCLUDE", '["vendor/**"]'),
+        ("AUDITOR_RESPECT_SKIPS", "false"),
+        ("AUDITOR_DIFF_BASE", "origin/nope"),
+        ("AUDITOR_THRESHOLD", '{"size": {"max_params": 1}}'),
+        ("AUDITOR_ROLE_GLOBS", '{"test": ["*.py"]}'),
+    ],
+)
+def test_env_cannot_set_repo_policy_keys(tmp_path, monkeypatch, var, value):
+    """Env must not change policy the repo shares through git; it could disable a rule the
+    repo never mentions (measured before this fix). The values below are the base profile's."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="base"\n'
+    )
+    monkeypatch.setenv(var, value)
+    settings = load_config(tmp_path)
+    assert settings.exclude == []
+    assert settings.respect_skips is True
+    assert settings.diff_base is None
+    assert settings.threshold.size.max_params == 6
+    assert settings.role_globs == {}
+    assert settings.rules.get("PY-SEC-DANGEROUS-EVAL") is None
+
+
+def test_env_still_sets_non_policy_keys(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    monkeypatch.setenv("AUDITOR_RESPECT_GITIGNORE", "false")
+    assert load_config(tmp_path).respect_gitignore is False

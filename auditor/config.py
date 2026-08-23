@@ -24,7 +24,12 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 import auditor.builtins  # noqa: F401  (registers built-in detectors before validation)
 from auditor.models import FileRole, RuleId, Severity, VerdictKind, severity_rank
@@ -324,6 +329,34 @@ class GlobalPaths(BaseSettings):
     code_mode: bool = False
 
 
+# Repo policy is shared through git and drives CI, so the environment must not be able to reach
+# it; without this an AUDITOR_* var can disable a rule the repo never mentions.
+_POLICY_ONLY_KEYS = frozenset(
+    {
+        "rules",
+        "categories",
+        "threshold",
+        "exclude",
+        "overrides",
+        "roles",
+        "role_globs",
+        "respect_skips",
+        "diff_base",
+    }
+)
+
+
+class _NonPolicyEnvSource(EnvSettingsSource):
+    """The ``AUDITOR_`` env source with the repo-policy keys removed."""
+
+    def __call__(self) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in super().__call__().items()
+            if key not in _POLICY_ONLY_KEYS
+        }
+
+
 class AuditorSettings(BaseSettings):
     """The merged repo configuration."""
 
@@ -350,6 +383,9 @@ class AuditorSettings(BaseSettings):
     trust_local_plugins: bool = False
     lint_overlap: bool = False
     respect_skips: bool = True
+    observer_allowed: bool = (
+        True  # repo's hard opt-out for the graph observer; never under graph.*
+    )
     # PY-CONFIG-SCATTERED-SETTINGS: modules that may hold BaseSettings, and whether to also bless
     # the de-facto home (the module where settings classes already cluster).
     settings_modules: list[str] = Field(default_factory=lambda: ["config", "settings"])
@@ -365,6 +401,22 @@ class AuditorSettings(BaseSettings):
     sqlalchemy: SqlAlchemyConfig = Field(default_factory=SqlAlchemyConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
     malware_scan: MalwareScanConfig = Field(default_factory=MalwareScanConfig)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            _NonPolicyEnvSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     @field_validator("rules", mode="after")
     @classmethod

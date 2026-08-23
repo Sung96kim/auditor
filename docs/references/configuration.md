@@ -56,6 +56,10 @@ security = { min_severity = "high" }
   reference plugin-contributed rules. No trust gate ([plugins.md](plugins.md)).
 - `trust_local_plugins` (default `false`): load `.auditor/plugins/*.py`, which execute code.
 - `respect_skips` (default `true`): honor in-file `auditor: skip` directives.
+- `observer_allowed` (default `true`): the repo's hard opt-out for the graph observer. Set `false`
+  and no observer attaches to this checkout, whatever the user's own settings say. Today it is
+  only a field: the gate that ANDs it with the user's `observer.enabled` ships with the observer
+  daemon, so setting it now has no effect until then.
 - `settings_modules` (default `["config", "settings"]`): module stems or directory names that are a
   blessed home for `BaseSettings` subclasses (`PY-CONFIG-SCATTERED-SETTINGS`).
 - `settings_cohesion` (default `true`): also bless the de-facto home, the module where settings
@@ -285,14 +289,18 @@ Every field above is also settable from the environment under the same `AUDITOR_
 | Form | Example | Notes |
 | --- | --- | --- |
 | Scalar field | `AUDITOR_RESPECT_GITIGNORE=false` | Field name uppercased. |
-| List or model field | `AUDITOR_THRESHOLD='{"size":{"max_params":1}}'` | JSON value, parsed and validated like a TOML table. |
+| List or model field | `AUDITOR_SQLALCHEMY='{"expire_on_commit":true}'` | JSON value, parsed and validated like a TOML table. |
 
 - The environment is the lowest layer. It is deep-merged under the TOML layers, so an `AUDITOR_*`
   value only reaches keys no profile or repo file sets.
+- Policy keys are not settable from the environment at all: `rules`, `categories`, `threshold`,
+  `exclude`, `overrides`, `roles`, `role_globs`, `respect_skips` and `diff_base` are stripped from
+  the env source, so a shell variable cannot disable a rule the repo leaves unmentioned. Put them
+  in TOML, or pass `--config-json` for one run.
 - `AUDITOR_EXTENDS` never applies: the loader always writes `extends` into the merged config. Use
   `extends` in TOML or `scan --profile`.
-- Because every profile sets `categories`, `rules` and `roles`, the matching env vars only add keys
-  those tables leave untouched.
+- Personal settings live under a different prefix entirely, `AUDITOR_USER_*`. See
+  [User settings](#user-settings-auditor_home).
 
 ### Claude Code plugin hooks
 
