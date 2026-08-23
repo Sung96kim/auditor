@@ -67,17 +67,32 @@ class GraphQuery:
         return out[:limit]
 
     async def neighbors(self, symbol: str, depth: int = 1) -> list[dict]:
+        """Structural neighbours within ``depth`` hops of ``symbol``, breadth-first.
+
+        The whole-partition ``GraphCache`` is loaded only past depth 1: one hop visits a single
+        node, which one indexed ``edges_of`` read serves for a fraction of the load's cost.
+        """
         nid = await self._resolve(symbol)
         if nid is None:
             return []
-        cache = await GraphCache.load(self.index)
+        cache = await GraphCache.load(self.index) if depth > 1 else None
+        kind_of = (
+            {n: row["kind"] for n, row in cache.nodes.items()}
+            if cache is not None
+            else {n["node_id"]: n["kind"] for n in await self.index.graph.nodes()}
+        )
         seen = {nid}
         frontier = [nid]
         out: list[dict] = []
         for hop in range(1, depth + 1):
             nxt: list[str] = []
             for cur in frontier:
-                for e in cache.incident(cur, _STRUCTURAL_KINDS):
+                edges = (
+                    cache.incident(cur, _STRUCTURAL_KINDS)
+                    if cache is not None
+                    else await self.index.graph.edges_of(cur, _STRUCTURAL)
+                )
+                for e in edges:
                     other, direction = (
                         (e["dst"], "out") if e["src"] == cur else (e["src"], "in")
                     )
@@ -87,7 +102,7 @@ class GraphQuery:
                         out.append(
                             {
                                 "id": other,
-                                "kind": cache.kind(other),
+                                "kind": kind_of.get(other, "?"),
                                 "edge": e["kind"],
                                 "direction": direction,
                                 "hops": hop,

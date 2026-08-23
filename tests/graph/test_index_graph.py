@@ -50,6 +50,25 @@ async def test_replace_graph_and_query(graph_store):
     assert await graph_store.graph.node("b") is None
 
 
+async def test_edges_of_is_ordered_like_all_edges(graph_store):
+    """`neighbors` reads one node at depth 1 and the whole partition above it; unordered rows
+    made the reported ``edge``/``direction`` depend on which path was taken."""
+    nodes = [_n("a"), _n("b"), _n("c")]
+    edges = [
+        GraphEdge(src="a", dst="c", kind=EdgeKind.CALLS, weight=1.0),
+        GraphEdge(src="a", dst="b", kind=EdgeKind.IMPORTS, weight=1.0),
+        GraphEdge(src="b", dst="a", kind=EdgeKind.CALLS, weight=1.0),
+    ]
+    await graph_store.graph.replace(nodes, edges, [])
+    rows = await graph_store.graph.edges_of("a", None)
+    assert [(r["src"], r["dst"], r["kind"]) for r in rows] == [
+        ("a", "b", "imports"),
+        ("a", "c", "calls"),
+        ("b", "a", "calls"),
+    ]
+    assert rows == await graph_store.graph.edges_of("a", None)
+
+
 async def test_all_edges(graph_store):
     nodes = [_n("x"), _n("y"), _n("z")]
     edges = [

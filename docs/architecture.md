@@ -283,8 +283,9 @@ flowchart TB
   and `resolve_ids`, the shared bare-name resolver. It is a leaf: `graph/flow.py` and
   `graph/query.py` both import it and nothing imports back. `GraphQuery.neighbors` and the flow
   traversal load it once instead of issuing one `GraphDB.edges_of` round trip per visited node.
-  The full load pays for itself from about five visited nodes up, which `neighbors` passes at its
-  default depth of 1 on any real repo.
+  The full load reads the whole partition, so it pays for itself from about six visited nodes up,
+  which `neighbors` reaches from depth 2. At its default depth of 1 `neighbors` visits one node
+  and stays on `edges_of`, as `related` and `usages` do.
 
 ## self
 

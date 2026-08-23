@@ -238,22 +238,50 @@ def test_cache_attribute_lookups_degrade_for_unknown_ids(cache):
     assert cache.rank("nope.py::gone") == 0.0
 
 
-async def test_neighbors_uses_the_cache_not_edges_of(flow_store, monkeypatch):
+_ONE_HOP_FROM_MAIN = {
+    "app/engine.py::run",
+    "app/loop.py::ping",
+    "app/hub.py::hub",
+    "tests/test_cli.py::test_main",
+}
+
+
+async def test_neighbors_uses_the_cache_past_depth_one(flow_store, monkeypatch):
     """The refactor's whole point: one load per query, no per-node ``edges_of`` round trip."""
 
     async def boom(*_args, **_kw):
-        raise AssertionError("neighbors must not call edges_of")
+        raise AssertionError("neighbors must not call edges_of past depth 1")
 
     monkeypatch.setattr(flow_store.graph, "edges_of", boom)
-    hits = await GraphQuery(flow_store).neighbors("main", depth=1)
-    assert {h["id"] for h in hits} == {
-        "app/engine.py::run",
-        "app/loop.py::ping",
-        "app/hub.py::hub",
-        "tests/test_cli.py::test_main",
+    hits = await GraphQuery(flow_store).neighbors("main", depth=2)
+    hops = {h["id"]: h["hops"] for h in hits}
+    assert {nid for nid, hop in hops.items() if hop == 1} == _ONE_HOP_FROM_MAIN
+    assert {nid for nid, hop in hops.items() if hop == 2} == {
+        "app/base.py::Handler.handle",
+        "app/plug.py::plugin",
+        "app/util.py::helper",
+        "app/cb.py::on_done",
+        "app/loop.py::pong",
+        *LEAVES,
     }
+    assert {h["direction"] for h in hits} == {"out", "in"}
+
+
+async def test_neighbors_at_depth_one_does_not_load_the_whole_partition(
+    flow_store, monkeypatch
+):
+    """depth=1 visits one node, so a full all_edges() scan costs more than the single edges_of
+    it replaces."""
+
+    async def boom(*_args, **_kw):
+        raise AssertionError("depth=1 must not load every edge")
+
+    monkeypatch.setattr(flow_store.graph, "all_edges", boom)
+    hits = await GraphQuery(flow_store).neighbors("main", depth=1)
+    assert {h["id"] for h in hits} == _ONE_HOP_FROM_MAIN
     assert all(h["hops"] == 1 for h in hits)
     assert {h["direction"] for h in hits} == {"out", "in"}
+    assert {h["kind"] for h in hits} == {"function"}
 
 
 def _kids(node: FlowNode) -> dict[str, FlowNode]:

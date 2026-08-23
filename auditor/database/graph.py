@@ -227,6 +227,8 @@ class GraphDB(BaseDB):
         if kinds:
             sql += f" AND kind IN ({','.join('?' for _ in kinds)})"
             params += kinds
+        # same ORDER BY as all_edges, so a caller reading one node sees the whole-partition order
+        sql += " ORDER BY src, dst, kind"
         return [dict(r) for r in await self._fetch(sql, tuple(params))]
 
     async def cluster_members(self, cluster_id: int) -> list[dict[str, Any]]:

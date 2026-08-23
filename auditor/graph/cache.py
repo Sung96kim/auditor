@@ -1,7 +1,8 @@
 """The read-side index over one repo partition, shared by the flow walk and ``GraphQuery``.
 
-``GraphCache`` is loaded once per query. The one-shot load pays for itself from roughly five
-visited nodes up; below that it is a wash with per-node ``GraphDB.edges_of`` round trips.
+``GraphCache`` is loaded once per query. It reads the whole partition, so it pays for itself from
+roughly six visited nodes up, which ``build_flow`` passes immediately and ``neighbors`` reaches
+from depth 2; a single-node read stays cheaper on one ``GraphDB.edges_of`` round trip.
 """
 
 from collections.abc import Collection
