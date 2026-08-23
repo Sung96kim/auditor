@@ -10,6 +10,7 @@ from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     Anchor,
     ClientKind,
+    EvalMetrics,
     EvalRow,
     ProducerKind,
     Refinement,
@@ -21,7 +22,10 @@ from auditor.graph.refine.models import (
     RunnerKind,
     RunOutcome,
     RunStatus,
+    RunUsage,
     Tier,
+    ToolCall,
+    TriggerDetail,
     TriggerKind,
     TuningRow,
     TuningStatus,
@@ -67,7 +71,7 @@ def _saturated_run() -> Run:
         producer=ProducerKind.OBSERVER,
         runner=RunnerKind.CLAUDE,
         trigger_kind=TriggerKind.EDIT,
-        trigger_detail={"files": ["m.py"]},
+        trigger_detail=TriggerDetail(files=("m.py",), reason="edited"),
         session_id="s1",
         agent_name="refiner",
         branch="main",
@@ -76,12 +80,14 @@ def _saturated_run() -> Run:
         model="haiku",
         prompt="look at m.py",
         system_prompt_sha="sha-1",
-        tool_trace=[{"tool": "Read", "ts": 1.0}],
-        cost_usd=0.25,
-        cost_estimated=True,
-        input_tokens=11,
-        output_tokens=22,
-        num_turns=3,
+        tool_trace=(ToolCall(tool="Read", ts=1.0, detail="m.py"),),
+        usage=RunUsage(
+            cost_usd=0.25,
+            cost_estimated=True,
+            input_tokens=11,
+            output_tokens=22,
+            num_turns=3,
+        ),
         sdk_session_id="sdk-1",
         status=RunStatus.SUCCEEDED,
         summary="added one edge",
@@ -156,8 +162,21 @@ def _saturated_tuning(run_id: str) -> TuningRow:
         token="tok-1",
         reason="recall is low on bare calls",
         status=TuningStatus.ACTIVE,
-        metrics={"precision": 0.9},
+        metrics=_metrics(),
         created_at=100.0,
+    )
+
+
+def _metrics() -> EvalMetrics:
+    """Every metric at a distinct non-default value."""
+    return EvalMetrics(
+        n=20,
+        correct=19,
+        precision=0.95,
+        recall=0.8,
+        false_add_rate=0.05,
+        false_removal_rate=0.02,
+        lower_bound_95=0.78,
     )
 
 
@@ -168,11 +187,7 @@ def _eval(**kw) -> EvalRow:
         model="haiku",
         suite=kw.pop("suite", "add"),
         stratum=kw.pop("stratum", "bare"),
-        n=20,
-        correct=19,
-        precision=0.95,
-        recall=0.8,
-        lower_bound_95=0.78,
+        metrics=_metrics(),
         created_at=100.0,
         **kw,
     )
@@ -185,13 +200,7 @@ def _saturated_eval() -> EvalRow:
         model="haiku",
         suite="add",
         stratum="bare",
-        n=20,
-        correct=19,
-        precision=0.95,
-        recall=0.8,
-        false_add_rate=0.05,
-        false_removal_rate=0.02,
-        lower_bound_95=0.78,
+        metrics=_metrics(),
         cost_usd=0.5,
         num_turns=4,
         created_at=100.0,
@@ -345,18 +354,17 @@ async def test_finish_run_records_the_terminal_state(refine_store):
         RunOutcome(
             status=RunStatus.SUCCEEDED,
             summary="added one edge",
-            cost_usd=0.004,
-            num_turns=3,
+            usage=RunUsage(cost_usd=0.004, num_turns=3),
             finished_at=150.0,
         ),
     )
     stored = await refine_store.runs.run(run_id)
-    assert (stored.status, stored.summary, stored.num_turns) == (
+    assert (stored.status, stored.summary, stored.usage.num_turns) == (
         RunStatus.SUCCEEDED,
         "added one edge",
         3,
     )
-    assert stored.cost_usd == pytest.approx(0.004)
+    assert stored.usage.cost_usd == pytest.approx(0.004)
     assert stored.finished_at == 150.0
 
 

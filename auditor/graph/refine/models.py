@@ -6,7 +6,7 @@ import uuid
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from auditor.graph.model import CallForm, EdgeKind
 
@@ -129,6 +129,52 @@ class RefinementPayload(BaseModel):
     call_form: CallForm | None = None
 
 
+class ToolCall(BaseModel):
+    """One tool the runner used, as the run's trace records it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    tool: str
+    ts: float = 0.0
+    detail: str = ""
+
+
+class TriggerDetail(BaseModel):
+    """What the trigger carried: the files it named and, for a gate decision, why."""
+
+    model_config = ConfigDict(frozen=True)
+
+    files: tuple[str, ...] = ()
+    reason: str = ""
+
+
+class RunUsage(BaseModel):
+    """What one run cost. ``cost_estimated`` marks a price the runner did not report."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cost_usd: float = 0.0
+    cost_estimated: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
+    num_turns: int = 0
+
+
+class EvalMetrics(BaseModel):
+    """One suite stratum's measured accuracy (spec 10.2). ``lower_bound_95`` is what a tier gate
+    reads, not the point estimate."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n: int = 0
+    correct: int = 0
+    precision: float = 0.0
+    recall: float = 0.0
+    false_add_rate: float = 0.0
+    false_removal_rate: float = 0.0
+    lower_bound_95: float = 0.0
+
+
 class Run(BaseModel):
     """One decision the observer or an agent made, model call or not (spec 5.3)."""
 
@@ -142,7 +188,7 @@ class Run(BaseModel):
     producer: ProducerKind = ProducerKind.CLI
     runner: RunnerKind = RunnerKind.NONE
     trigger_kind: TriggerKind = TriggerKind.MANUAL
-    trigger_detail: dict[str, Any] = Field(default_factory=dict)
+    trigger_detail: TriggerDetail = TriggerDetail()
     session_id: str | None = None
     agent_name: str | None = None
     branch: str | None = None
@@ -151,12 +197,8 @@ class Run(BaseModel):
     model: str | None = None
     prompt: str | None = None
     system_prompt_sha: str | None = None
-    tool_trace: list[dict[str, Any]] = Field(default_factory=list)
-    cost_usd: float = 0.0
-    cost_estimated: bool = False
-    input_tokens: int = 0
-    output_tokens: int = 0
-    num_turns: int = 0
+    tool_trace: tuple[ToolCall, ...] = ()
+    usage: RunUsage = RunUsage()
     sdk_session_id: str | None = None
     status: RunStatus = RunStatus.QUEUED
     summary: str | None = None
@@ -177,14 +219,29 @@ class RunOutcome(BaseModel):
     status: RunStatus
     summary: str | None = None
     error: str | None = None
-    cost_usd: float = 0.0
-    cost_estimated: bool = False
-    input_tokens: int = 0
-    output_tokens: int = 0
-    num_turns: int = 0
-    tool_trace: tuple[dict[str, Any], ...] = ()
+    usage: RunUsage = RunUsage()
+    tool_trace: tuple[ToolCall, ...] = ()
     sdk_session_id: str | None = None
     finished_at: float | None = None
+
+
+#: what each kind must name to be applicable at all, `payload.` for the payload half (spec 5.4).
+#: The edge kinds carry `name` too: without it a build cannot retire the queue row they answer.
+_REQUIRED_BY_KIND: dict[RefinementKind, tuple[str, ...]] = {
+    RefinementKind.ADD_EDGE: ("src", "dst", "edge_kind", "name"),
+    RefinementKind.RETARGET_EDGE: ("src", "from_dst", "to_dst", "edge_kind", "name"),
+    RefinementKind.CONFIRM_EDGE: ("src", "dst", "edge_kind", "name"),
+    RefinementKind.RESOLVE_AMBIGUOUS: (
+        "node_id",
+        "name",
+        "edge_kind",
+        "payload.candidate",
+    ),
+    RefinementKind.RELABEL_CLUSTER: ("members", "payload.label"),
+    RefinementKind.MOVE_NODE: ("node_id", "members"),
+    RefinementKind.ANNOTATE_NODE: ("node_id", "payload.annotation"),
+    RefinementKind.UNRESOLVABLE: ("node_id", "name"),
+}
 
 
 class Refinement(BaseModel):
@@ -207,8 +264,41 @@ class Refinement(BaseModel):
     noop_builds: int = 0
     supersedes: int | None = None
     attempts: int = 0
-    created_at: float = Field(default_factory=time.time)
-    status_at: float = Field(default_factory=time.time)
+    created_at: float = 0.0  # both stamped by the validator below when absent
+    status_at: float = 0.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _one_timestamp_until_it_moves(cls, data: Any) -> Any:
+        """Stamp `created_at` and default `status_at` to it, rather than calling the clock twice.
+
+        Two independent defaults disagreed about one construction in six, and `status_at` is what
+        the staleness sweep reads as "has this moved since it was made?".
+        """
+        if not isinstance(data, dict):
+            return data
+        created = data.get("created_at") or time.time()
+        return {
+            **data,
+            "created_at": created,
+            "status_at": data.get("status_at") or created,
+        }
+
+    @model_validator(mode="after")
+    def _the_target_matches_the_kind(self) -> "Refinement":
+        """Refuse a target no build could apply: an `add_edge` with no destination is worse
+        stored than rejected, and nothing downstream would ever report it."""
+        missing = [
+            field for field in _REQUIRED_BY_KIND[self.kind] if not self._required(field)
+        ]
+        if missing:
+            raise ValueError(f"{self.kind.value} target is missing {missing}")
+        return self
+
+    def _required(self, path: str) -> object:
+        """One required field, read from the target unless ``path`` names the payload half."""
+        owner, _, name = path.rpartition(".")
+        return getattr(self.payload if owner == "payload" else self.target, name)
 
 
 class Anchor(BaseModel):
@@ -237,6 +327,9 @@ class RefinementOutcome(BaseModel):
 
 
 class TuningStatus(StrEnum):
+    """The refinement statuses minus the anchor-driven ones: a tuning row is not pinned to a node,
+    so it has nothing to drift against and never goes `stale`, `redundant` or `pinned`."""
+
     PENDING = "pending"
     ACTIVE = "active"
     SUPERSEDED = "superseded"
@@ -258,7 +351,7 @@ class TuningRow(BaseModel):
     run_id: str
     reason: str = ""
     status: TuningStatus = TuningStatus.PENDING
-    metrics: dict[str, float] = Field(default_factory=dict)
+    metrics: EvalMetrics = EvalMetrics()
     created_at: float = Field(default_factory=time.time)
 
 
@@ -273,13 +366,7 @@ class EvalRow(BaseModel):
     model: str
     suite: str
     stratum: str
-    n: int = 0
-    correct: int = 0
-    precision: float = 0.0
-    recall: float = 0.0
-    false_add_rate: float = 0.0
-    false_removal_rate: float = 0.0
-    lower_bound_95: float = 0.0
+    metrics: EvalMetrics = EvalMetrics()
     cost_usd: float = 0.0
     num_turns: int = 0
     created_at: float = Field(default_factory=time.time)

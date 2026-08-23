@@ -15,6 +15,7 @@ from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.graph.refine.models import (
     ACTIVE_STATUSES,
     Anchor,
+    EvalMetrics,
     EvalRow,
     Refinement,
     RefinementKind,
@@ -24,6 +25,7 @@ from auditor.graph.refine.models import (
     RunnerKind,
     RunOutcome,
     RunStatus,
+    RunUsage,
     TuningRow,
     TuningStatus,
 )
@@ -32,9 +34,11 @@ _DAY_SECONDS = 86_400
 
 
 def _run_from_row(row: sqlite3.Row) -> Run:
+    """One row as a `Run`, rebuilding the sub-models the insert spread into flat columns."""
     data = dict(row)
     data["trigger_detail"] = json.loads(data["trigger_detail"])
     data["tool_trace"] = json.loads(data["tool_trace"])
+    data["usage"] = {field: data.pop(field) for field in RunUsage.model_fields}
     return Run.model_validate(data)
 
 
@@ -43,6 +47,11 @@ def _refinement_from_row(row: sqlite3.Row) -> Refinement:
     for column in ("target", "payload", "evidence"):
         data[column] = json.loads(data[column])
     return Refinement.model_validate(data)
+
+
+def _usage_values(usage: RunUsage) -> dict[str, Any]:
+    """The usage columns; SQLite has no boolean, so the estimated flag lands as 0 or 1."""
+    return {**usage.model_dump(), "cost_estimated": int(usage.cost_estimated)}
 
 
 def _run_values(run: Run) -> dict[str, Any]:
@@ -56,7 +65,7 @@ def _run_values(run: Run) -> dict[str, Any]:
         "producer": run.producer.value,
         "runner": run.runner.value,
         "trigger_kind": run.trigger_kind.value,
-        "trigger_detail": json.dumps(run.trigger_detail),
+        "trigger_detail": run.trigger_detail.model_dump_json(),
         "session_id": run.session_id,
         "agent_name": run.agent_name,
         "branch": run.branch,
@@ -65,12 +74,8 @@ def _run_values(run: Run) -> dict[str, Any]:
         "model": run.model,
         "prompt": run.prompt,
         "system_prompt_sha": run.system_prompt_sha,
-        "tool_trace": json.dumps(run.tool_trace),
-        "cost_usd": run.cost_usd,
-        "cost_estimated": int(run.cost_estimated),
-        "input_tokens": run.input_tokens,
-        "output_tokens": run.output_tokens,
-        "num_turns": run.num_turns,
+        "tool_trace": json.dumps([call.model_dump() for call in run.tool_trace]),
+        **_usage_values(run.usage),
         "sdk_session_id": run.sdk_session_id,
         "status": run.status.value,
         "summary": run.summary,
@@ -83,11 +88,13 @@ def _run_values(run: Run) -> dict[str, Any]:
 def _outcome_values(outcome: RunOutcome, *, now: float) -> dict[str, Any]:
     """A terminal state as a column name -> value mapping, one key per ``RunOutcome`` field."""
     values = {field: getattr(outcome, field) for field in RunOutcome.model_fields}
+    values.pop("usage")
     values["status"] = outcome.status.value
-    values["cost_estimated"] = int(outcome.cost_estimated)
-    values["tool_trace"] = json.dumps(list(outcome.tool_trace))
+    values["tool_trace"] = json.dumps(
+        [call.model_dump() for call in outcome.tool_trace]
+    )
     values["finished_at"] = outcome.finished_at if outcome.finished_at else now
-    return values
+    return values | _usage_values(outcome.usage)
 
 
 def _refinement_values(refinement: Refinement) -> dict[str, Any]:
@@ -109,6 +116,13 @@ def _refinement_values(refinement: Refinement) -> dict[str, Any]:
         "created_at": refinement.created_at,
         "status_at": refinement.status_at,
     }
+
+
+def _eval_from_row(row: sqlite3.Row) -> EvalRow:
+    """One row as an `EvalRow`, rebuilding the metrics block from its flat columns."""
+    data = dict(row)
+    data["metrics"] = {field: data.pop(field) for field in EvalMetrics.model_fields}
+    return EvalRow.model_validate(data)
 
 
 def _in_clause(column: str, values: Sequence[object]) -> str:
@@ -513,7 +527,7 @@ class TuningDB(BaseDB):
                 "run_id": row.run_id,
                 "reason": row.reason,
                 "status": row.status.value,
-                "metrics": json.dumps(row.metrics),
+                "metrics": row.metrics.model_dump_json(),
                 "created_at": row.created_at,
             },
         )
@@ -600,13 +614,7 @@ class EvalsDB(BaseDB):
                 "model": row.model,
                 "suite": row.suite,
                 "stratum": row.stratum,
-                "n": row.n,
-                "correct": row.correct,
-                "precision": row.precision,
-                "recall": row.recall,
-                "false_add_rate": row.false_add_rate,
-                "false_removal_rate": row.false_removal_rate,
-                "lower_bound_95": row.lower_bound_95,
+                **row.metrics.model_dump(),
                 "cost_usd": row.cost_usd,
                 "num_turns": row.num_turns,
                 "created_at": row.created_at,
@@ -634,6 +642,5 @@ class EvalsDB(BaseDB):
             params.append(model)
         sql += " ORDER BY eval_id"
         return [
-            EvalRow.model_validate(dict(r))
-            for r in await self._fetch_by_identity(sql, tuple(params))
+            _eval_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
         ]
