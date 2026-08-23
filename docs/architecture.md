@@ -338,9 +338,17 @@ flowchart TB
   effective config, so editing one threshold invalidates exactly that rule instead of the whole
   cache.
 - Index location: one SQLite database at `$AUDITOR_HOME/index.db`, partitioned by `paths.repo_key`
-  rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`; on a version
-  change the derived cache tables are dropped and rebuilt on the next scan, while the `repos` and
-  `ignores` tables (user state) survive.
+  rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`.
+- Two table classes, declared by `Table.cache`:
+  - `cache=True` (partition tables): dropped and rebuilt by the next scan on a version change.
+  - `cache=False` (identity tables): never dropped. `repos`, `ignores` and the five `graph_*`
+    refinement tables. On every connect `IndexStore._migrate_identity_tables` reconciles their
+    declared columns against `PRAGMA table_info` and adds what is missing with `ALTER TABLE`.
+- A column added to an identity table after it ships must be nullable, must carry a default, and
+  must not carry `REFERENCES`. SQLite refuses to add the other shapes, so the migrator raises
+  `UnmigratableColumn` naming the table and column rather than failing every command.
+- A downgrade leaves identity tables intact but unreferenced; `graph build --rebuild` clears cached
+  facts and never touches them.
 - Repo-local state: `<repo>/.auditor/` holds authored input only (`config.toml`, `plugins/`, a
   baseline file if you point `--baseline` there). Nothing is written into the repo: generated
   state is the shared index plus `$AUDITOR_HOME/repos/<repo_dir_key>/`, which holds `status.json`,

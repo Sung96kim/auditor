@@ -8,7 +8,9 @@ import sqlite3
 import pytest
 
 from auditor.database import IndexStore
-from auditor.database.base import SCHEMA_VERSION
+from auditor.database.base import SCHEMA_VERSION, Column, UnmigratableColumn
+from auditor.database.files import FilesDB
+from auditor.database.ignores import IgnoresDB
 from auditor.models import (
     Category,
     FileRole,
@@ -247,3 +249,74 @@ async def test_connect_binds_an_explicit_partition_to_every_store(tmp_path):
         assert store.graph.partition == part
         assert store.repos.partition.prefix == "apps/backend/"
         assert store.repo == "/checkout/apps/backend"  # the partition key is unchanged
+
+
+async def test_a_missing_identity_column_is_added_not_dropped(tmp_path):
+    """The reconcile pass is what lets an identity table gain a column across a version bump."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as s:
+        await s.ignores.add("PY-X", "a.py", 5, "ev", "keep me", 1.0)
+
+    raw = _raw(db)
+    raw.execute("ALTER TABLE ignores DROP COLUMN reason")  # simulate an older layout
+    raw.execute("PRAGMA user_version=1")
+    raw.commit()
+    raw.close()
+
+    async with await IndexStore.connect(db, "/r") as s:
+        rows = await s.ignores.list()
+    assert len(rows) == 1  # the row survived
+    assert rows[0]["reason"] is None  # the re-added column is NULL, not missing
+
+
+async def test_the_migrator_leaves_cache_tables_to_the_drop_sweep(tmp_path):
+    """A cache table with a stale layout is dropped and recreated, never ALTERed."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as s:
+        await s.findings.add("x.py", [_finding()])
+
+    raw = _raw(db)
+    raw.execute("ALTER TABLE findings DROP COLUMN message")
+    raw.execute("PRAGMA user_version=1")
+    raw.commit()
+    raw.close()
+
+    async with await IndexStore.connect(db, "/r") as s:
+        assert await s.findings.all() == []  # dropped and rebuilt, not migrated
+    raw = _raw(db)
+    cols = {r["name"] for r in raw.execute("PRAGMA table_info(findings)")}
+    raw.close()
+    assert "message" in cols
+
+
+@pytest.mark.parametrize(
+    "bad, why",
+    [
+        (Column(name="added", type="TEXT", not_null=True), "NOT NULL"),
+        (Column(name="added", type="TEXT", references="repos (repo)"), "REFERENCES"),
+    ],
+)
+async def test_a_column_sqlite_cannot_add_names_itself(tmp_path, monkeypatch, bad, why):
+    """SQLite rejects both shapes on an existing table. The migrator runs on every connect for
+    every repo, so it has to fail with the table and column rather than a bare OperationalError."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r"):
+        pass
+    table = IgnoresDB.TABLES["ignores"]
+    monkeypatch.setitem(
+        IgnoresDB.TABLES,
+        "ignores",
+        table.model_copy(update={"cols": (*table.cols, bad)}),
+    )
+    with pytest.raises(UnmigratableColumn, match="ignores.added") as excinfo:
+        await IndexStore.connect(db, "/r")
+    assert why in str(excinfo.value)
+    assert (excinfo.value.table, excinfo.value.column) == ("ignores", "added")
+
+
+def test_column_names_include_the_repo_foreign_key():
+    """`files` and `ignores` are the two shapes: repo_fk prepends the FK, repo_fk=False does not.
+    Neither table is touched by this slice, so this assertion cannot go stale under it."""
+    names = FilesDB.TABLES["files"].column_names()
+    assert names[:3] == ("repo", "path", "sha256")
+    assert IgnoresDB.TABLES["ignores"].column_names()[0] == "id"

@@ -55,6 +55,19 @@ REPO_FK = Column(
 )
 
 
+class UnmigratableColumn(RuntimeError):
+    """A ``cache=False`` table declares a column SQLite cannot add to an existing table.
+
+    Raised by ``IndexStore._migrate_identity_tables``, which runs on every connect for every repo,
+    so the fix is always to change the declaration rather than the database.
+    """
+
+    def __init__(self, table: str, column: str, why: str) -> None:
+        super().__init__(f"{table}.{column} cannot be added by ALTER TABLE: {why}")
+        self.table = table
+        self.column = column
+
+
 class Index(BaseModel):
     """Declarative index on a table."""
 
@@ -88,6 +101,11 @@ class Table(BaseModel):
         """Column names for an INSERT — repo prepended when repo_fk; autoincrement cols excluded."""
         cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
         return tuple(c.name for c in cols if not c.autoincrement)
+
+    def column_names(self) -> tuple[str, ...]:
+        """Every declared column, in DDL order — the repo FK first when ``repo_fk``."""
+        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
+        return tuple(c.name for c in cols)
 
     def placeholders(self) -> str:
         return ", ".join("?" * len(self.insert_columns()))
@@ -128,7 +146,7 @@ def retry_on_locked(fn: Any) -> Any:
     return wrapper
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 DEFAULT_REPO = (
     "."  # single-partition fallback when no repo is given (unit tests, ad-hoc dbs)
 )

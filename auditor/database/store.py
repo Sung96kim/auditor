@@ -5,9 +5,11 @@ from pathlib import Path
 
 from auditor.database.base import (
     DEFAULT_REPO,
+    REPO_FK,
     SCHEMA_VERSION,
     BaseDB,
     SqliteWorker,
+    UnmigratableColumn,
     retry_on_locked,
 )
 
@@ -91,7 +93,42 @@ class IndexStore(BaseDB):
                 conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.executescript(schema)
+        IndexStore._migrate_identity_tables(conn)
         conn.commit()
+
+    @staticmethod
+    def _migrate_identity_tables(conn: sqlite3.Connection) -> None:
+        """Add columns an already-created ``cache=False`` table is missing.
+
+        Cache tables are dropped and recreated on a version bump, so only the preserved ones need
+        this. SQLite refuses ``ADD COLUMN`` for a `NOT NULL` column without a default and for any
+        column carrying `REFERENCES`, so those two shapes raise instead of reaching sqlite3.
+        """
+        for store in BaseDB._registry:
+            for name, table in store.TABLES.items():
+                if table.cache:
+                    continue
+                present = {
+                    r["name"]
+                    for r in conn.execute(f"PRAGMA table_info({name})")  # noqa: S608
+                }
+                if not present:
+                    continue  # created by this run's executescript, already current
+                cols = [REPO_FK, *table.cols] if table.repo_fk else list(table.cols)
+                for col in cols:
+                    if col.name in present or col.primary_key:
+                        continue
+                    if col.not_null and col.default is None:
+                        raise UnmigratableColumn(
+                            name, col.name, "NOT NULL without a default"
+                        )
+                    if col.references is not None:
+                        raise UnmigratableColumn(
+                            name, col.name, "REFERENCES on an added column"
+                        )
+                    conn.execute(
+                        f"ALTER TABLE {name} ADD COLUMN {col.render()}"  # noqa: S608
+                    )
 
     async def __aenter__(self) -> "IndexStore":
         return self
