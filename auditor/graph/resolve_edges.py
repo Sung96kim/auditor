@@ -132,6 +132,16 @@ class UnresolvedCollector(BaseModel):
         call of ``method`` on that receiver is answered."""
         self.settled.add((node_id, receiver_root, method))
 
+    def _is_repo_source(self, module_id: str, src: str) -> bool:
+        """Whether an import source names a repo module: by its full dotted path, or as a sibling
+        of the caller's own package (`from _common import x` inside ``plugin/hooks/``)."""
+        if src in self.dotted_to_id:
+            return True
+        parent = module_id.rsplit("/", 1)[0]
+        if parent == module_id:
+            return False
+        return f"{parent.replace('/', '.')}.{src}" in self.dotted_to_id
+
     def externally_bound(self, module_id: str, *names: str | None) -> bool:
         """Whether the caller's module binds any of ``names`` from a non-repo import (``re``,
         ``subprocess``), directly or through a module-level alias (``_RX = re.compile(...)``).
@@ -140,7 +150,7 @@ class UnresolvedCollector(BaseModel):
         aliases = self.aliases_by_module.get(module_id, {})
         return any(
             (src := binds.get(aliases.get(n, n))) is not None
-            and src not in self.dotted_to_id
+            and not self._is_repo_source(module_id, src)
             for n in names
             if n is not None
         )

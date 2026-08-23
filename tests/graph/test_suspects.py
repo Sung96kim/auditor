@@ -427,3 +427,18 @@ def test_collector_skips_a_bare_name_the_node_binds():
         call_form=CallForm.BARE,
     )
     assert c.drain([]) == []
+
+
+def test_a_sibling_import_inside_one_package_is_not_externally_bound():
+    """`from _common import read_event` inside `plugin/hooks/` names a repo module by its bare
+    stem; marking it external would blacklist a genuine one-file-answerable miss forever."""
+    rows = _rows(
+        ("plugin/hooks/_common.py", "def read_event():\n    return 1\n"),
+        (
+            "plugin/hooks/verify_stop.py",
+            "from _common import read_event\ndef main():\n    return read_event()\n",
+        ),
+    )
+    row = _row(rows, "plugin/hooks/verify_stop.py::main", "read_event")
+    assert row.externally_bound is False
+    assert row.definers == ("plugin/hooks/_common.py::read_event",)
