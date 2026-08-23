@@ -188,7 +188,7 @@ class Threshold(BaseModel):
         sparse = override.model_dump(exclude_unset=True)
         if not sparse:
             return self
-        return Threshold.model_validate(_deep_merge(self.model_dump(), sparse))
+        return Threshold.model_validate(deep_merge(self.model_dump(), sparse))
 
 
 class RuleConfig(BaseModel):
@@ -461,12 +461,12 @@ class AuditorSettings(BaseSettings):
 # --------------------------------------------------------------------------- loading
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(base: dict, override: dict) -> dict:
     """Recursive dict merge; later wins. Scalars/lists replaced, dicts merged."""
     out = dict(base)
     for key, val in override.items():
         if isinstance(val, dict) and isinstance(out.get(key), dict):
-            out[key] = _deep_merge(out[key], val)
+            out[key] = deep_merge(out[key], val)
         else:
             out[key] = val
     return out
@@ -535,7 +535,7 @@ def _load_profile(name_or_path: str, _seen: frozenset[str] = frozenset()) -> dic
     parent = raw.pop("extends", None)
     if parent:
         base = _load_profile(parent, _seen | {name_or_path})
-        return _deep_merge(base, raw)
+        return deep_merge(base, raw)
     return raw
 
 
@@ -594,9 +594,9 @@ def merged_config_dict(
         or "base"
     )
     merged = _load_profile(extends)
-    merged = _deep_merge(merged, pyproject)
-    merged = _deep_merge(merged, standalone)
-    merged = _deep_merge(merged, overrides)
+    merged = deep_merge(merged, pyproject)
+    merged = deep_merge(merged, standalone)
+    merged = deep_merge(merged, overrides)
     merged["extends"] = extends
     return merged
 

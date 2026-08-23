@@ -42,6 +42,11 @@ Paths are relative to the repo root.
   rules. `ResolvedConfig.effective(rule_id)` resolves one rule for one file (rule, category, role
   policy, per-glob override). `GlobalPaths` reads the `AUDITOR_*` env vars. See
   [configuration.md](references/configuration.md).
+- `user_settings.py`: `UserSettings` (pydantic-settings, `AUDITOR_USER_` prefix) holds the
+  personal `observer` and `vectors` settings. `load_user_settings(root)` layers the model
+  defaults, `$AUDITOR_HOME/config.json`, `$AUDITOR_HOME/repos/<key>/config.json` and the env, in
+  that order. It is a second settings home on purpose, so repo policy and personal settings never
+  share a model or a file.
 - `registry.py`: the process-wide `REGISTRY` singleton. Detectors, `LanguageAuditor`s and
   `Reporter`s self-register via `__init_subclass__`; `builtins.py` is the single bootstrap import
   that pulls the built-ins in.
