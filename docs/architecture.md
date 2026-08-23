@@ -264,8 +264,8 @@ flowchart TB
   `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
   counts, so the empty-graph build takes the same path and reports the same shape as any other.
 - `graph/refine/` is the refinement layer: `models.py` (the frozen records), `namespace.py`
-  (partition-relative vs toplevel-relative node ids) and `overlay.py` (the pure merge). Stdlib plus
-  pydantic, no database.
+  (partition-relative vs toplevel-relative node ids), `overlay.py` (the pure merge) and `lock.py`
+  (the cross-process rebuild lock). Stdlib plus pydantic, no database.
 - `GraphBuilder.run` is the only place refinements are applied: triage against the anchors, merge
   the edge kinds into the resolver's output, cluster and rank over the merged set, apply the node
   and cluster kinds, rebuild the queue from the overlaid clustering and retire the rows a
@@ -275,6 +275,15 @@ flowchart TB
   costs about 15 % of a warm build.
 - Each refinement the build looked at comes back as one `RefinementOutcome` on `GraphWrite.outcomes`,
   so `refinements.write_outcomes` runs in the same transaction as the graph it describes.
+- `graph build`, the MCP `graph_build` tool and (from S5) the refinement service all go through
+  `GraphBuilder.rebuild`, which holds `$AUDITOR_HOME/observer/locks/<sha1(identity)>.lock` for the
+  whole build. One lock per checkout, not one globally: nothing is shared across identities, and a
+  global lock would queue every repo the daemon watches behind one file. The lock is polled with
+  `fcntl.flock(LOCK_EX | LOCK_NB)` so a waiting caller stays interruptible and prints "waiting for
+  the observer's rebuild" once. POSIX only.
+- `rebuild(snapshot=…)` calls the hook immediately before and immediately after the persist
+  transaction, still inside the lock. That is how the observer's change assessment sees exactly one
+  build's worth of queue delta.
 - The transaction idiom, and the rule that keeps it from growing dead halves:
   - A store method that writes owns its own commit and is `async`.
   - Its `write_*` half takes the open connection, writes, and never commits, so a caller can

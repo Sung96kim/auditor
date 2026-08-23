@@ -15,7 +15,14 @@ import typer
 
 from auditor.cli.console import ACCENT, err_console
 from auditor.cli.graph_refine import register as register_refine
-from auditor.cli.helpers import fail, present, run, run_staged, warn_unknown_config
+from auditor.cli.helpers import (
+    fail,
+    open_index,
+    present,
+    run,
+    run_staged,
+    warn_unknown_config,
+)
 from auditor.cli.lazy import GRAPH_HELP
 from auditor.cli.options import (
     ExportDepth,
@@ -62,9 +69,9 @@ async def _autoscan(root: Path) -> None:
 
 async def _build(root: Path, progress: Callable[[str], None] | None = None) -> dict:
     settings = load_config(root)
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         await index.repos.register(time.time())
-        return await GraphBuilder().run(index, settings, progress=progress)
+        return await GraphBuilder().rebuild(index, settings, progress=progress)
 
 
 @graph_app.command("build")

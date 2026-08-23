@@ -25,7 +25,7 @@ from auditor.graph.model import (
 from auditor.graph.query import GraphQuery
 from auditor.mcp.helpers import MUTATING, READ_ONLY
 from auditor.mcp.server import mcp
-from auditor.paths import index_db_path, repo_key
+from auditor.paths import index_db_path, partition_for, repo_key
 
 
 @mcp.tool(annotations=MUTATING)
@@ -38,9 +38,11 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     if scan:
         await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
     settings = load_config(root)
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await IndexStore.connect(
+        index_db_path(), repo_key(root), partition_for(root)
+    ) as index:
         await index.repos.register(time.time())
-        return await GraphBuilder().run(index, settings)
+        return await GraphBuilder().rebuild(index, settings)
 
 
 @mcp.tool(annotations=READ_ONLY)

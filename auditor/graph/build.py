@@ -25,7 +25,13 @@ from auditor.graph.model import (
 )
 from auditor.graph.naming import name_similar_edges
 from auditor.graph.rank import pagerank
-from auditor.graph.refine.models import Anchor, RefinementOutcome
+from auditor.graph.refine.lock import rebuild_lock
+from auditor.graph.refine.models import (
+    Anchor,
+    RefinementOutcome,
+    Snapshot,
+    SnapshotPhase,
+)
 from auditor.graph.refine.namespace import to_partition
 from auditor.graph.refine.overlay import (
     apply_edge_overlay,
@@ -221,6 +227,7 @@ class GraphBuilder:
         settings: AuditorSettings,
         *,
         progress: Callable[[str], None] | None = None,
+        snapshot: Snapshot | None = None,
     ) -> dict[str, int]:
         cfg = settings.graph
         report = progress or (lambda _m: None)
@@ -310,20 +317,43 @@ class GraphBuilder:
                 nodes, out_nodes, deterministic_edges, settings
             )
         report("persisting graph")
-        return await self._persist(
-            index,
-            GraphWrite(
-                nodes=tuple(out_nodes),
-                edges=tuple(all_edges),
-                clusters=tuple(clusters),
-                unresolved=tuple(unresolved),
-                findings=per_file,
-                detect=cfg.detect,
-                outcomes=merge_outcomes(
-                    triaged.outcomes, edge_overlay.outcomes, node_overlay.outcomes
-                ),
+        write = GraphWrite(
+            nodes=tuple(out_nodes),
+            edges=tuple(all_edges),
+            clusters=tuple(clusters),
+            unresolved=tuple(unresolved),
+            findings=per_file,
+            detect=cfg.detect,
+            outcomes=merge_outcomes(
+                triaged.outcomes, edge_overlay.outcomes, node_overlay.outcomes
             ),
         )
+        if snapshot is not None:
+            await snapshot(SnapshotPhase.BEFORE)
+        summary = await self._persist(index, write)
+        if snapshot is not None:
+            await snapshot(SnapshotPhase.AFTER)
+        return summary
+
+    async def rebuild(
+        self,
+        index: IndexStore,
+        settings: AuditorSettings,
+        *,
+        progress: Callable[[str], None] | None = None,
+        lock_held: bool = False,
+        snapshot: Snapshot | None = None,
+    ) -> dict[str, int]:
+        """:meth:`run` under this checkout's rebuild lock. Pass ``lock_held`` when the caller
+        already holds it, and ``snapshot`` to see the queue immediately before and after the write
+        without another build landing in between."""
+        report = progress or (lambda _m: None)
+        async with rebuild_lock(
+            index.partition.identity,
+            held=lock_held,
+            waiting=lambda: report("waiting for the observer's rebuild"),
+        ):
+            return await self.run(index, settings, progress=progress, snapshot=snapshot)
 
     @staticmethod
     async def _persist(index: IndexStore, write: GraphWrite) -> dict[str, int]:

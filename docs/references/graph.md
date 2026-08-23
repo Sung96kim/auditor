@@ -66,6 +66,12 @@ auditr graph export . --format dot > graph.dot
   graph facts. See [configuration.md](configuration.md).
 - The build runs the `GRAPH-*` detectors, described below.
 - The build reports five counts: `nodes`, `edges`, `clusters`, `unresolved` and `findings`.
+- A build takes a lock at `$AUDITOR_HOME/observer/locks/<key>.lock`, one per checkout, so two
+  builds of the same repo never interleave and builds of different repos never wait on each other.
+  If another process is mid-build, `graph build` prints `waiting for the observer's rebuild` and
+  then proceeds.
+- The lock is released when the holding process exits, so a crashed build never leaves one behind
+  and no lock file ever needs deleting.
 
 ## Querying
 

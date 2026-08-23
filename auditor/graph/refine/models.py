@@ -3,6 +3,7 @@ in both directions, so every JSON column has a model rather than a raw dict."""
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Any
 
@@ -371,3 +372,14 @@ class EvalRow(BaseModel):
     cost_usd: float = 0.0
     num_turns: int = 0
     created_at: float = Field(default_factory=time.time)
+
+
+class SnapshotPhase(StrEnum):
+    """Which side of a build's persist a snapshot is being taken on (spec 8.6 stage 2)."""
+
+    BEFORE = "before"
+    AFTER = "after"
+
+
+#: What a rebuild calls twice inside its lock, so an assessment sees exactly one build's delta.
+Snapshot = Callable[[SnapshotPhase], Awaitable[None]]

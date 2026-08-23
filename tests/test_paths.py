@@ -9,6 +9,7 @@ from _support import git
 from auditor.paths import (
     auditor_home,
     ensure_repo_dir,
+    identity_key,
     index_db_path,
     models_dir,
     partition_for,
@@ -182,3 +183,8 @@ def test_partition_for_outside_git_falls_back_to_the_partition_key(tmp_path):
     part = partition_for(plain)
     assert part.identity == repo_key(plain)
     assert part.prefix == ""
+
+
+def test_identity_key_is_what_the_repo_dir_is_named_after(git_repo):
+    assert repo_dir_key(git_repo) == identity_key(repo_identity(git_repo))
+    assert identity_key("/a/.git") != identity_key("/b/.git")
