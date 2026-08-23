@@ -247,6 +247,9 @@ auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json
 - `--flow <symbol>` exports the flow tree instead: `rankdir=LR` with one `rank=same` row per depth,
   so the picture reads left to right as the call path. `--in` reverses it and `--depth` sets the
   hops (4 by default in flow mode, 1 in `--symbol` ego mode).
+- The DOT carries the same marks the tree shows: a hub is doubled and magenta, a `--stop-at` node
+  is dashed, a cycle is orange, an already-shown node is dotted, and a node with unplaced calls
+  gets a `? N` second line in its label.
 - The modes pick different node sets, so combining them is an error rather than a silent
   preference: `--flow` with `--symbol` or `--cluster`, `--symbol` with `--cluster`, and `--in`
   without `--flow`. A `--flow` symbol the graph does not hold is an error too, not an empty DOT.

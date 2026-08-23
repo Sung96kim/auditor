@@ -1,3 +1,5 @@
+import pytest
+
 from auditor.graph.model import GraphNode, NodeKind
 from auditor.graph.viz import build_payload, to_dot
 
@@ -173,6 +175,33 @@ async def test_to_dot_flow_mode_ranks_a_revisited_node_once(viz_store):
         ln for ln in d.splitlines() if ln.strip().startswith('"m.py::leaf" [label=')
     ]
     assert len(declared) == 1
+
+
+@pytest.mark.parametrize(
+    "mark, value, expect",
+    [
+        ("hub", {"count": 41, "kind": "fan_in", "collapsed": True}, "peripheries=2"),
+        ("stopped", True, "dashed"),
+        ("cycle", True, "orange"),
+        ("seen_ref", True, "dotted"),
+    ],
+)
+async def test_to_dot_flow_mode_carries_the_walk_marks(viz_store, mark, value, expect):
+    """A pruned branch and a real leaf were the same box, so the picture said the path ended."""
+    tree = _flow_tree()
+    tree["root"]["children"][0][mark] = value
+    d = to_dot(await build_payload(viz_store), flow=tree)
+    assert expect in next(
+        ln for ln in d.splitlines() if ln.startswith('  "m.py::middle" [')
+    )
+
+
+async def test_to_dot_flow_mode_counts_unresolved_leaves_in_the_label(viz_store):
+    """The tree shows `? name` per unplaced call; the DOT dropped them entirely."""
+    tree = _flow_tree()
+    tree["root"]["children"][0]["unresolved"] = [{"name": "dispatch"}, {"name": "run"}]
+    d = to_dot(await build_payload(viz_store), flow=tree)
+    assert '"m.py::middle" [label="middle\\n? 2"' in d
 
 
 async def test_to_dot_flow_mode_is_deterministic(viz_store):
