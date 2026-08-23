@@ -1,7 +1,7 @@
 from auditor.config import AuditorSettings, GraphConfig
-from auditor.graph.build import GraphBuilder, compute_abstractness
+from auditor.graph.build import GraphBuilder, _quality_rows, compute_abstractness
 from auditor.graph.extract import extract_file_facts
-from auditor.graph.model import GraphNode, NodeKind
+from auditor.graph.model import FactKind, GraphNode, NodeKind, UnresolvedReason
 
 STUB_CLASS = "class Base:\n    def run(self): ...\n"
 
@@ -167,3 +167,88 @@ async def test_dedup_property_getter_setter(graph_store):
     nodes = await graph_store.graph.nodes()
     matching = [n for n in nodes if n["node_id"] == "prop.py::Box.config"]
     assert len(matching) == 1
+
+
+async def test_build_reports_and_persists_the_unresolved_count(facts_store):
+    """`svc.py::load_user` calls `get_user_record()`, which nothing in the fixture defines, so it
+    earns no row; `impl.py::Impl.run` calls `load_user()`, which `svc.py` defines and `impl.py`
+    never imports, so it does."""
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    summary = await GraphBuilder().run(facts_store, settings)
+    rows = await facts_store.graph.unresolved()
+    assert summary["unresolved"] == len(rows)
+    assert ("impl.py::Impl.run", "load_user") in {
+        (r["node_id"], r["name"]) for r in rows
+    }
+    assert "get_user_record" not in {r["name"] for r in rows}
+
+
+async def test_build_records_text_sparse_symbols(facts_store):
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    await GraphBuilder().run(facts_store, settings)
+    sparse = await facts_store.graph.unresolved(reasons=["text_sparse"])
+    assert sparse, (
+        "the tiny base/impl fixture has no symbol with 4 distinct concept tokens"
+    )
+    assert all(r["fact_kind"] == "node" and r["priority"] == 4 for r in sparse)
+
+
+async def test_build_replaces_the_queue_rather_than_appending(facts_store):
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    first = await GraphBuilder().run(facts_store, settings)
+    second = await GraphBuilder().run(facts_store, settings)
+    assert first["unresolved"] == second["unresolved"]
+    assert len(await facts_store.graph.unresolved()) == second["unresolved"]
+
+
+async def test_build_with_no_facts_reports_an_empty_queue(graph_store):
+    settings = AuditorSettings(graph=GraphConfig(enabled=True))
+    assert await GraphBuilder().run(graph_store, settings) == {
+        "nodes": 0,
+        "edges": 0,
+        "clusters": 0,
+        "unresolved": 0,
+        "findings": 0,
+    }
+    assert await graph_store.graph.unresolved() == []
+
+
+def test_quality_rows_flag_fallback_labels_and_singletons():
+    """Unit test for the two cluster branches: this repo currently produces no `generic_label`
+    row at all, so a build-level test would assert nothing."""
+    nodes = [
+        GraphNode(
+            id=f"m.py::{name}",
+            kind=NodeKind.FUNCTION,
+            name=name,
+            module="m.py",
+            qualname=name,
+            rank=rank,
+        )
+        for name, rank in (("a", 0.9), ("b", 0.1), ("c", 0.5))
+    ]
+    rows = _quality_rows(
+        nodes,
+        {"m.py::b"},
+        {"m.py::a": 1, "m.py::b": 1, "m.py::c": 2},
+        {1: "user"},  # cluster 2 contributed no token, so its label falls back
+        {1: 2, 2: 1},
+    )
+    seen = {(r.node_id, r.reason) for r in rows}
+    assert ("m.py::b", UnresolvedReason.TEXT_SPARSE) in seen
+    assert ("m.py::c", UnresolvedReason.GENERIC_LABEL) in seen
+    assert ("m.py::c", UnresolvedReason.SINGLETON_CLUSTER) in seen
+    assert (
+        "m.py::a",
+        UnresolvedReason.GENERIC_LABEL,
+    ) not in seen  # cluster 1 has a real label
+    assert [r.name for r in rows if r.reason is UnresolvedReason.GENERIC_LABEL] == [
+        "cluster-2"
+    ]
+    assert all(r.fact_kind is FactKind.NODE and r.priority == 4 for r in rows)

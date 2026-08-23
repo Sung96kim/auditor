@@ -1,12 +1,23 @@
 """Repo-level graph build (spec §6). Needs numpy + scikit-learn (via naming/rank/cluster)."""
 
+from collections import defaultdict
 from collections.abc import Callable
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.graph.cluster import cluster_concepts
 from auditor.graph.detectors import run_graph_detectors
-from auditor.graph.model import TEST_ROLES, FileGraphFacts, GraphCluster, GraphNode
+from auditor.graph.model import (
+    TEST_ROLES,
+    CallForm,
+    FactKind,
+    FileGraphFacts,
+    GraphCluster,
+    GraphNode,
+    UnresolvedReason,
+    UnresolvedRow,
+    unresolved_priority,
+)
 from auditor.graph.naming import name_similar_edges
 from auditor.graph.rank import pagerank
 from auditor.graph.resolve_edges import resolve_structural
@@ -31,6 +42,44 @@ def compute_abstractness(node: GraphNode, proto_method_ids: set[str]) -> float:
     if not node.callees and node.kind in ("function", "method") and node.callback_names:
         score += 0.2
     return min(1.0, score)
+
+
+def _quality_row(node_id: str, name: str, reason: UnresolvedReason) -> UnresolvedRow:
+    return UnresolvedRow(
+        node_id=node_id,
+        fact_kind=FactKind.NODE,
+        name=name,
+        reason=reason,
+        priority=unresolved_priority(reason, CallForm.BARE),
+    )
+
+
+def _quality_rows(
+    nodes: list[GraphNode],
+    sparse: set[str],
+    labels: dict[str, int],
+    label_names: dict[int, str],
+    sizes: dict[int, int],
+) -> list[UnresolvedRow]:
+    """The build-pass queue rows: symbols with too little text to cluster on, clusters that fell
+    back to a ``cluster-N`` label, and clusters of one. Both cluster rows anchor on the highest-
+    rank member so every row in the table is node-keyed."""
+    rows = [
+        _quality_row(nid, nid.split("::")[-1], UnresolvedReason.TEXT_SPARSE)
+        for nid in sorted(sparse)
+    ]
+    rank_by_id = {n.id: n.rank for n in nodes}
+    members: dict[int, list[str]] = defaultdict(list)
+    for nid, cid in labels.items():
+        members[cid].append(nid)
+    for cid, member_ids in sorted(members.items()):
+        head = max(sorted(member_ids), key=lambda nid: rank_by_id.get(nid, 0.0))
+        label = label_names.get(cid, f"cluster-{cid}")
+        if label == f"cluster-{cid}":
+            rows.append(_quality_row(head, label, UnresolvedReason.GENERIC_LABEL))
+        if sizes.get(cid, 0) == 1:
+            rows.append(_quality_row(head, label, UnresolvedReason.SINGLETON_CLUSTER))
+    return rows
 
 
 class GraphBuilder:
@@ -66,7 +115,14 @@ class GraphBuilder:
                 nodes.append(n)
         if not nodes:
             await index.graph.replace([], [], [])
-            return {"nodes": 0, "edges": 0, "clusters": 0, "findings": 0}
+            await index.graph.replace_unresolved([])
+            return {
+                "nodes": 0,
+                "edges": 0,
+                "clusters": 0,
+                "unresolved": 0,
+                "findings": 0,
+            }
 
         symbols = self._symbol_nodes(nodes)
         report("resolving structural edges")
@@ -113,8 +169,13 @@ class GraphBuilder:
             )
             for cid, sz in sorted(sizes.items())
         ]
+        unresolved = [
+            *structural.unresolved,
+            *_quality_rows(out_nodes, sparse, labels, label_names, sizes),
+        ]
         report("persisting graph")
         await index.graph.replace(out_nodes, all_edges, clusters)
+        await index.graph.replace_unresolved(unresolved)
         findings_count = 0
         if cfg.detect:
             report("running detectors")
@@ -127,6 +188,7 @@ class GraphBuilder:
             "nodes": len(out_nodes),
             "edges": len(all_edges),
             "clusters": len(clusters),
+            "unresolved": len(unresolved),
             "findings": findings_count,
         }
 
