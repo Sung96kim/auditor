@@ -164,8 +164,9 @@ async def test_graph_unresolved_rejects_an_unknown_filter_value(
 
 async def test_graph_unresolved_caps_the_id_lists_at_the_shared_cap(graph_repo: Path):
     """The cap the docstring promises: more definers than the cap, list truncated, true total
-    reported. Raising the cap must fail this test, not pass silently."""
-    definers = QUEUE_ID_CAP + 2
+    reported. The fixture size is a literal, so raising the cap fails here instead of tracking it."""
+    definers = 12
+    assert definers > QUEUE_ID_CAP, "the fixture must define more than the cap"
     for i in range(definers):
         (graph_repo / f"d{i}.py").write_text("def handle():\n    return 1\n")
     (graph_repo / "caller.py").write_text("def use():\n    return handle()\n")

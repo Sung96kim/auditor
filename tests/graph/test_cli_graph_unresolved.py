@@ -137,8 +137,10 @@ def test_no_external_drops_the_externally_bound_rows(graph_repo: Path):
 
 
 def test_the_id_lists_are_capped_with_their_true_totals(graph_repo: Path):
-    """A name many modules define: the payload carries at most the cap, and the true count."""
-    definers = QUEUE_ID_CAP + 2
+    """A name many modules define: the payload carries exactly the cap, and the true count. The
+    fixture size is a literal, so raising the cap past it fails here instead of tracking it."""
+    definers = 12
+    assert definers > QUEUE_ID_CAP, "the fixture must define more than the cap"
     for i in range(definers):
         (graph_repo / f"d{i}.py").write_text("def handle():\n    return 1\n")
     (graph_repo / "caller.py").write_text("def use():\n    return handle()\n")
