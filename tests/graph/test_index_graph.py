@@ -4,6 +4,7 @@ import re
 import pytest
 
 from auditor.database.graph import GraphDB
+from auditor.graph.hashes import FileHashes
 from auditor.graph.model import (
     CallForm,
     EdgeKind,
@@ -280,3 +281,19 @@ async def test_prune_leaves_the_unresolved_queue_alone(graph_store):
     ]  # the file row and its facts go
     assert await graph_store.graph.facts("gone.py") is None
     assert len(await graph_store.graph.unresolved()) == 1  # the queue row stays
+
+
+async def test_set_facts_stores_and_returns_the_file_hashes(graph_store):
+    assert await graph_store.graph.hashes("m.py") is None
+    hashes = FileHashes(truth="t1", facts="f1")
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc", hashes)
+    assert await graph_store.graph.hashes("m.py") == hashes
+
+
+async def test_set_facts_without_hashes_stores_nothing_to_compare(graph_store):
+    """Callers that hold no parsed facts (ad-hoc writes, tests) leave the columns NULL."""
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc")
+    assert await graph_store.graph.hashes("m.py") is None
+    assert (
+        await graph_store.graph.facts_hash("m.py") == "abc"
+    )  # content hash still there

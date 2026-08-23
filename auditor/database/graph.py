@@ -10,6 +10,7 @@ import sqlite3
 from typing import Any, ClassVar
 
 from auditor.database.base import BaseDB, Column, Index, Table
+from auditor.graph.hashes import FileHashes
 from auditor.graph.model import GraphCluster, GraphEdge, GraphNode, UnresolvedRow
 
 
@@ -34,6 +35,8 @@ class GraphDB(BaseDB):
                 Column(name="path", type="TEXT", not_null=True, primary_key=True),
                 Column(name="facts_json", type="TEXT", not_null=True),
                 Column(name="content_hash", type="TEXT", not_null=True),
+                Column(name="truth_sha", type="TEXT"),
+                Column(name="facts_sha", type="TEXT"),
             ),
         ),
         "graph_nodes": Table(
@@ -106,14 +109,31 @@ class GraphDB(BaseDB):
         ),
     }
 
-    async def set_facts(self, path: str, facts_json: str, content_hash: str) -> None:
+    async def set_facts(
+        self,
+        path: str,
+        facts_json: str,
+        content_hash: str,
+        hashes: FileHashes | None = None,
+    ) -> None:
+        """Cache one file's facts. ``hashes`` is the spec 5.5 pair, which the assessment compares
+        against a re-extraction; callers without parsed facts leave it out and store NULLs."""
+
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
             conn.execute(
-                "INSERT INTO graph_facts (repo, path, facts_json, content_hash) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
-                "facts_json=excluded.facts_json, content_hash=excluded.content_hash",
-                (self.repo, path, facts_json, content_hash),
+                "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
+                "facts_json=excluded.facts_json, content_hash=excluded.content_hash, "
+                "truth_sha=excluded.truth_sha, facts_sha=excluded.facts_sha",
+                (
+                    self.repo,
+                    path,
+                    facts_json,
+                    content_hash,
+                    hashes.truth if hashes else None,
+                    hashes.facts if hashes else None,
+                ),
             )
             conn.commit()
 
@@ -153,6 +173,16 @@ class GraphDB(BaseDB):
             "SELECT facts_json FROM graph_facts WHERE repo = ? AND path = ?", (path,)
         )
         return row["facts_json"] if row else None
+
+    async def hashes(self, path: str) -> FileHashes | None:
+        """The cached spec 5.5 pair for one file, or ``None`` when it was written without them."""
+        row = await self._fetch_one(
+            "SELECT truth_sha, facts_sha FROM graph_facts WHERE repo = ? AND path = ?",
+            (path,),
+        )
+        if row is None or row["truth_sha"] is None:
+            return None
+        return FileHashes(truth=row["truth_sha"], facts=row["facts_sha"])
 
     async def replace(
         self,

@@ -20,6 +20,7 @@ from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
 from auditor.graph.extract import extract_file_facts
+from auditor.graph.hashes import file_hashes
 from auditor.ignores import IgnoreList
 from auditor.languages.base import LanguageAuditor
 from auditor.languages.config.auditor import ConfigAuditor
@@ -378,7 +379,9 @@ class ScanEngine:
             # Extract facts here when they are missing or stale for this content.
             if self.settings.graph.enabled and await index.graph.facts_hash(rel) != sha:
                 facts = extract_file_facts(rel, source, role.value)
-                await index.graph.set_facts(rel, facts.model_dump_json(), sha)
+                await index.graph.set_facts(
+                    rel, facts.model_dump_json(), sha, file_hashes(facts.nodes)
+                )
             cached_map = await index.findings.cached_by_rule(
                 rel
             )  # one query for all rules
@@ -430,7 +433,9 @@ class ScanEngine:
 
         if self.settings.graph.enabled:
             facts = extract_file_facts(rel, source, role.value)
-            await index.graph.set_facts(rel, facts.model_dump_json(), sha)
+            await index.graph.set_facts(
+                rel, facts.model_dump_json(), sha, file_hashes(facts.nodes)
+            )
 
         hit = [rid for rid in enabled if rid not in missed]
         cached_map = await index.findings.cached_by_rule(rel) if hit else {}

@@ -274,6 +274,13 @@ flowchart TB
   them with `RefinementsDB.prune_skipped_runs` after `observer.skipped_retention_days`. Real runs
   are never swept, and neither is a skipped run that owns a `graph_refinements` or `graph_tuning`
   row: both reference `graph_runs.run_id` with no `ON DELETE`.
+- `graph/hashes.py` derives two hashes per node from the extracted facts: `truth_sha` over the fact
+  tuples structural edges read, and `facts_sha` over those plus `doc_tokens`. Neither covers `line`,
+  `role`, the identity strings the node id already carries, the build-pass fields, or `local_names`,
+  so a refinement survives a comment, a reformat and a renamed local in its own file.
+- `file_hashes` rolls them over the sorted `(node_id, hash)` set, so an added or deleted node moves
+  a file's hash even when every surviving node is unchanged. The scan stores that pair in
+  `graph_facts.truth_sha` / `facts_sha` next to the content hash.
 - The query commands (`related`, `neighbors`, `concept`, `clusters`, `search`, `usages`) all read
   the persisted tables through `graph.query.GraphQuery`; nothing is recomputed.
 - `graph flow` walks that same persisted graph through `graph.flow.build_flow`: breadth-first over

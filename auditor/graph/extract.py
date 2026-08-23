@@ -4,7 +4,12 @@ import ast
 import builtins
 
 from auditor.graph import semantic_profile
-from auditor.graph.model import FileGraphFacts, GraphNode, NodeKind
+from auditor.graph.model import (
+    UNION_FACT_FIELDS,
+    FileGraphFacts,
+    GraphNode,
+    NodeKind,
+)
 from auditor.graph.tokens import normalize_tokens, split_ident, symbol_document
 
 _FuncDef = (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -142,34 +147,12 @@ def _is_stub(fn: _FuncDefT) -> bool:
     return len(body) == 1 and isinstance(body[0], (ast.Pass, ast.Raise))
 
 
-# Fact tuples unioned on a same-id merge; identity scalars kept from the first def (Finding A).
-_UNION_FACT_FIELDS = (
-    "doc_tokens",
-    "callees",
-    "param_types",
-    "decorators",
-    "bases",
-    "method_names",
-    "callback_names",
-    "class_refs",
-    "typed_calls",
-    "attr_callees",
-    "bare_callees",
-    "local_names",
-    "imports",
-    "import_bindings",
-    "external_aliases",
-    "registry_roots",
-    "semantic_profile",
-)
-
-
 def _union_facts(a: GraphNode, b: GraphNode) -> GraphNode:
     """Merge two same-id nodes, unioning their fact tuples — so same-named methods
     (`@hybrid_property` getter + `.expression`) don't lose the later def's edges (Finding A)."""
     update: dict[str, object] = {
         f: tuple(dict.fromkeys((*getattr(a, f), *getattr(b, f))))
-        for f in _UNION_FACT_FIELDS
+        for f in UNION_FACT_FIELDS
     }
     update["is_hof"] = a.is_hof or b.is_hof
     update["is_stub"] = a.is_stub and b.is_stub
