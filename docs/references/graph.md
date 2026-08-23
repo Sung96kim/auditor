@@ -92,7 +92,7 @@ auditr graph export . --format dot > graph.dot
 the whole queue, and `graph build` reports its size as `unresolved`.
 
 ```bash
-# the whole queue, worst first (default limit 50)
+# the whole queue, worst first (the default limit is in `graph unresolved --help`)
 auditr graph unresolved .
 
 # only the names with a real candidate set
@@ -101,13 +101,19 @@ auditr graph unresolved . --reason ambiguous_name
 # only the safely answerable shapes: bare calls and self calls
 auditr graph unresolved . --call-form bare --call-form self
 
+# hide the rows bound to a non-repo import
+auditr graph unresolved . --no-external
+
 # raw rows for an agent
 auditr graph unresolved . --json --limit 500
 ```
 
 - Rows are ordered worst first: ambiguous names, then `self`/bare calls, then attribute calls, then
-  the label and cluster reasons.
-- `--reason` and `--call-form` are repeatable and combine.
+  the label and cluster reasons. Externally bound rows sink below equal-priority real ones.
+- `--reason` and `--call-form` are repeatable and combine. Both are validated against their value
+  lists, so a typo is an error, not an empty queue. `--limit` must be at least 1.
+- An empty result names its cause: a filter that matched nothing says so, and only a queue that was
+  never built points at `graph build`.
 - Reasons:
   - `ambiguous_name`: two or more repo definitions are reachable from the call site, so the
     resolver refused to pick one.
@@ -117,9 +123,12 @@ auditr graph unresolved . --json --limit 500
   - `generic_label`: a cluster whose label fell back to `cluster-N` because no member contributed
     a token.
   - `singleton_cluster`: a cluster with one member.
-- A row only exists when the name has at least one repo definition that the caller's role can see.
-  Test-only definitions are invisible to production callers, which is what keeps the queue small.
-- Test code never queues anything either. Only production and script callers produce rows.
+- A resolver row only exists when the name has at least one repo definition that the caller's role
+  can see. Test-only definitions are invisible to production callers, which is what keeps the queue
+  small. The build-pass rows (`text_sparse`, `generic_label`, `singleton_cluster`) are about a
+  symbol or a cluster rather than a name, so they carry no definers.
+- Test code never queues anything, on either side. Only production and script callers produce
+  resolver rows, and a test-role symbol never produces a `text_sparse` row.
 - A row is dropped when the node already has an edge of that kind to a symbol of the same short
   name, so a call resolved through the typed-receiver path is never queued twice.
 - `typed_call` rows survive only when the receiver's declared type is a repo class whose whole base
@@ -129,17 +138,25 @@ auditr graph unresolved . --json --limit 500
 - `call_form` is `self` only for a direct `self.method()` or `cls.method()`. A chained
   `self.dep.method()` is `attr` with a receiver root of `self`.
 - A name called both bare and through a receiver in the same function gets one row, in the bare
-  form, because that is the form a reader can settle from one file.
-- A bare row is never emitted for a name the function itself binds, such as a parameter it calls
-  (`def run(handler)` calling `handler()`) or a local it assigns.
+  form, because that is the form a reader can settle from one file. When the function itself binds
+  the bare name, the attribute form wins instead, so the real miss still surfaces.
+- A bare row is never emitted for a name the function itself binds. That covers every parameter
+  form (including keyword-only, `*args` and `**kwargs`), nested `def`/`class`/lambda names and
+  their parameters, `except ... as` targets, function-local imports, and every name it assigns.
+- A receiver whose declared type is settled outside the repo silences only the calls on that
+  receiver. `p.run()` on a `p: Path` does not hide a `job.run()` in the same function.
 - `ext-bound` (`externally_bound` in JSON) marks a row whose bare name or receiver root the calling
   module imports from outside the repo, such as `re.search` or `subprocess.run`, including through
-  a module-level alias like `_RX = re.compile(...)`. Those rows are kept for display and are not
-  worth chasing.
-- `definers` and `candidates` render as counts in the table and as full node-id lists in `--json`.
-- The queue is empty until `graph build` has run. Because facts are keyed by file content, a repo
-  indexed before this release needs one `graph build --rebuild` for the receiver information the
-  attribute rows depend on.
+  a module-level alias like `_RX = re.compile(...)`. Those rows are kept for display, sort last and
+  are not worth chasing; `--no-external` drops them. A bare source that names a sibling module of
+  the caller's own package (`from _common import x` inside `plugin/hooks/`) is a repo import, not
+  an external one.
+- `definers` and `candidates` render as counts in the table. In `--json` and through the MCP tool
+  they are node-id lists capped at the same limit, with the true totals in `definers_count` and
+  `candidates_count`, so both surfaces carry the same keys.
+- The queue is empty until `graph build` has run. This release bumps the index schema, so the
+  cached facts are dropped on first use and the next `graph build` re-extracts every file. No
+  `--rebuild` is needed.
 
 ## Graph findings
 

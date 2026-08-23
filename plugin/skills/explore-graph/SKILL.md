@@ -26,7 +26,7 @@ check first: the graph libraries are core dependencies of `auditr`, so the CLI s
    - `graph unresolved` lists what the deterministic resolver could not place, worst first. Use it
      to tell "the graph has no edge here" from "there is genuinely no caller" before trusting an
      empty `used_by`. `--reason ambiguous_name` is the short, high-signal end; rows flagged
-     `ext-bound` name a non-repo import and are noise.
+     `ext-bound` name a non-repo import, sort last and are noise (`--no-external` hides them).
    - Unfamiliar with any of these, or need real command + output examples? Read
      `references/recipes.md` — it walks "is X dead", "blast radius of changing Y", "hotspots",
      and "locate by name/term" as concrete recipes, plus how to read `used_by`/`depends_on`, edge

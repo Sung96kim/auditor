@@ -97,10 +97,12 @@ args = ["run", "-i", "--rm",
 - `graph_overview` caps `god_concepts` and `bottlenecks` at 5 entries each and reports the true
   totals as `god_concept_count` and `bottleneck_count`.
 - `graph_unresolved` returns the refinement queue: one row per fact the deterministic resolver
-  could not place, worst first, filtered by `reason`, `call_form` and `limit`. Read it alongside
+  could not place, worst first, filtered by `reason` and `call_form` (both repeatable lists,
+  validated, so an unknown value is an error), `external` and `limit`. Read it alongside
   `graph_usages` before calling a symbol dead. Rows flagged `externally_bound` name a non-repo
-  import. Like `graph_overview`, it caps its `definers` and `candidates` lists at 10 ids and
-  reports the true totals as `definers_count` and `candidates_count`.
+  import and sort last; pass `external=false` to drop them. Like `graph_overview`, it caps its
+  `definers` and `candidates` lists and reports the true totals as `definers_count` and
+  `candidates_count`; `auditr graph unresolved --json` returns the same keys.
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
   `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them

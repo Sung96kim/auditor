@@ -256,6 +256,9 @@ flowchart TB
   findings into the findings table.
 - `resolve_edges._resolve_name` returns a frozen `Resolution` (`ids`, `gated`, `definers`, `path`,
   `reason`), which is both how an edge is chosen and the evidence a queue row carries.
+- `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to the
+  `UnresolvedCollector` it owns, which applies the post-pass gates (a settled non-repo receiver, a
+  name the node already has an edge to) and materializes the rows in `drain`.
 - `graph_unresolved` is a partition table rebuilt by every build. The resolver contributes
   `ambiguous_name` and `unimportable_name` rows; the build pass adds `text_sparse`, `generic_label`
   and `singleton_cluster` rows after clustering. It is node-keyed, so `IndexStore.prune` never

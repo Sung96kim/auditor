@@ -1,4 +1,5 @@
-"""GraphDB: table store for graph_facts, graph_nodes, graph_edges, and graph_clusters tables."""
+"""GraphDB: the ``graph_*`` table store. Cached per-file facts, the materialized nodes, edges
+and clusters, and the unresolved queue."""
 
 # auditor: skip-file: PY-OOP-PARALLEL-SIBLING  (data-access layer: each read method is a thin
 # delegation to the shared _fetch helper differing only in its SQL — parallel shape is the query
@@ -23,8 +24,8 @@ def _decode_unresolved(row: sqlite3.Row) -> dict[str, Any]:
 
 
 class GraphDB(BaseDB):
-    """Table store for the ``graph_facts``, ``graph_nodes``, ``graph_edges``, and
-    ``graph_clusters`` tables."""
+    """Table store for the ``graph_*`` tables: the cached per-file facts, the materialized nodes,
+    edges and clusters, and the unresolved queue. ``TABLES`` below is the list that does not rot."""
 
     attr: ClassVar[str] = "graph"
     TABLES: ClassVar[dict[str, Table]] = {
