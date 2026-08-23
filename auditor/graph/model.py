@@ -66,7 +66,8 @@ class GraphNode(BaseModel):
     bare_callees: tuple[str, ...] = ()  # names called as a bare `name()` call
     local_names: tuple[
         str, ...
-    ] = ()  # positional params (the is_hof set) plus every name the body assigns
+    ] = ()  # every name the function binds: all parameter forms, nested def/class/lambda
+    # names and their parameters, `except ... as` targets, local imports, body assignments
     external_aliases: tuple[
         tuple[str, str], ...
     ] = ()  # module nodes: (alias, imported root) per module-level `alias = root(...)`

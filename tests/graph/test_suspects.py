@@ -3,6 +3,8 @@
 S8 extends this file with the idle-drain tests; S2 owns the gating half.
 """
 
+import pytest
+
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.model import CallForm, FactKind, UnresolvedReason
 from auditor.graph.resolve_edges import resolve_structural
@@ -149,12 +151,54 @@ def test_a_module_level_alias_of_an_external_object_is_externally_bound():
     assert row.externally_bound is True
 
 
-def test_a_call_to_one_of_the_functions_own_parameters_gets_no_row():
-    """The `is_hof` signal read the other way: `handler()` inside `def run(handler)` calls the
-    parameter, whatever the repo happens to define under that name."""
+_OWN_BINDINGS = [
+    ("positional", "def run(handler):\n    return handler()\n"),
+    ("positional_only", "def run(handler, /):\n    return handler()\n"),
+    ("keyword_only", "def run(*, handler):\n    return handler()\n"),
+    ("kwonly_default", "def run(*, handler=None):\n    return handler()\n"),
+    ("varargs", "def run(*handler):\n    return handler()\n"),
+    ("kwargs", "def run(**handler):\n    return handler()\n"),
+    (
+        "except_as",
+        "def run():\n    try:\n        pass\n"
+        "    except Exception as handler:\n        return handler()\n",
+    ),
+    (
+        "nested_def",
+        "def run():\n    def handler():\n        return 1\n    return handler()\n",
+    ),
+    (
+        "nested_def_param",
+        "def run():\n    def inner(handler):\n        return handler()\n    return inner\n",
+    ),
+    ("lambda_param", "def run():\n    return lambda handler: handler()\n"),
+    (
+        "nested_class",
+        "def run():\n    class handler:\n        pass\n    return handler()\n",
+    ),
+    ("local_import", "def run():\n    import handler\n    return handler()\n"),
+    (
+        "local_import_from",
+        "def run():\n    from pkg import handler\n    return handler()\n",
+    ),
+    ("assigned", "def run():\n    handler = 1\n    return handler()\n"),
+    ("for_target", "def run(items):\n    for handler in items:\n        handler()\n"),
+    ("with_as", "def run(ctx):\n    with ctx as handler:\n        handler()\n"),
+    ("walrus", "def run(ctx):\n    if (handler := ctx):\n        handler()\n"),
+    ("tuple_unpack", "def run(pair):\n    handler, _ = pair\n    return handler()\n"),
+]
+
+
+@pytest.mark.parametrize(
+    "src", [c[1] for c in _OWN_BINDINGS], ids=[c[0] for c in _OWN_BINDINGS]
+)
+def test_a_call_to_a_name_the_function_binds_gets_no_row(src: str):
+    """The `is_hof` signal read the other way, across every binding form: `handler()` names the
+    binding, whatever the repo happens to define under that name."""
     rows = _rows(
         ("helper.py", "def handler():\n    return 1\n"),
-        ("m.py", "def run(handler):\n    return handler()\n"),
+        ("models.py", "class handler:\n    pass\n"),
+        ("m.py", src),
     )
     assert [r for r in rows if r.name == "handler"] == []
 

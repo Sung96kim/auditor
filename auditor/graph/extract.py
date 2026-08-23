@@ -250,6 +250,20 @@ class _FnFactCollector:
                     for a in n.args:  # bare Name positional arg (potential callback)
                         if isinstance(a, ast.Name) and a.id not in _BUILTIN_NAMES:
                             self.callback_names.append(a.id)
+                # a nested def/class/lambda flattens into this node, so its own name and its
+                # parameters are names this node binds
+                elif isinstance(n, (*_FuncDef, ast.ClassDef)):
+                    self.local_names.append(n.name)
+                    if not isinstance(n, ast.ClassDef):
+                        self.local_names += [a.arg for a in _all_arg_nodes(n.args)]
+                elif isinstance(n, ast.Lambda):
+                    self.local_names += [a.arg for a in _all_arg_nodes(n.args)]
+                elif isinstance(n, ast.ExceptHandler) and n.name:
+                    self.local_names.append(n.name)
+                elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                    self.local_names += [
+                        al.asname or al.name.split(".")[0] for al in n.names
+                    ]
 
     def _scan_defaults(self, args: ast.arguments) -> None:
         # a class/callable used only as a param default is still a reference (Finding C)
@@ -371,7 +385,11 @@ class FileExtractor:
             typed_calls=facts.typed_calls(),
             attr_callees=tuple(dict.fromkeys(facts.attr_callees)),
             bare_callees=tuple(dict.fromkeys(facts.bare_callees)),
-            local_names=tuple(dict.fromkeys((*params, *facts.local_names))),
+            local_names=tuple(
+                dict.fromkeys(
+                    (*(a.arg for a in _all_arg_nodes(fn.args)), *facts.local_names)
+                )
+            ),
             is_hof=is_hof,
             is_stub=_is_stub(fn),
             line=fn.lineno,

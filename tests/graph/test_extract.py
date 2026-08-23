@@ -347,18 +347,48 @@ def test_builtin_attribute_call_is_not_an_attr_callee():
     assert fn.attr_callees == ()
 
 
-def test_local_names_hold_the_parameters_and_the_assigned_names():
+def test_local_names_hold_every_form_the_function_binds():
     """The bare-row gate reads these: a bare call or class reference naming one of them is naming
-    the local, not a repo symbol."""
+    the binding, not a repo symbol. Every parameter form counts, not only the positional ones."""
     src = (
-        "def f(job):\n"
+        "def f(pos, /, job, *rest, kw, kwd=None, **extra):\n"
         "    handler = job\n"
         "    for item in job:\n"
         "        pass\n"
-        "    return handler\n"
+        "    with job as ctx:\n"
+        "        pass\n"
+        "    try:\n"
+        "        import mod\n"
+        "        from pkg import thing as alias\n"
+        "    except ValueError as exc:\n"
+        "        print(exc)\n"
+        "    def inner(nested):\n"
+        "        return nested\n"
+        "    class Local:\n"
+        "        pass\n"
+        "    cb = lambda lam: lam\n"
+        "    return handler, inner, Local, cb\n"
     )
     fn = _by_id(extract_file_facts("m.py", src, "production"))["m.py::f"]
-    assert set(fn.local_names) == {"job", "handler", "item"}
+    assert set(fn.local_names) == {
+        "pos",
+        "job",
+        "rest",
+        "kw",
+        "kwd",
+        "extra",
+        "handler",
+        "item",
+        "ctx",
+        "mod",
+        "alias",
+        "exc",
+        "inner",
+        "nested",
+        "Local",
+        "cb",
+        "lam",
+    }
 
 
 def test_module_node_records_aliases_of_imported_callables():
