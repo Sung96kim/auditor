@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 
+from auditor.config import GraphConfig
 from auditor.database import IndexStore
 from auditor.graph.flow import (
     DEFAULT_FLOW_LIMIT,
+    DEFAULT_HUB_FAN_IN,
     FlowDirection,
     FlowNode,
     FlowOptions,
@@ -382,3 +384,109 @@ def test_extra_kinds_are_followed(cache):
         "app/base.py::Handler.handle"
     ]
     assert with_overrides.root.children[0].edge == "overrides"
+
+
+def test_hub_fan_in_default_matches_the_config_default():
+    """One number, two homes: a drift here silently changes every flow query."""
+    assert GraphConfig().flow_hub_fan_in == DEFAULT_HUB_FAN_IN == 40
+
+
+def test_tests_are_excluded_unless_asked_for(cache):
+    hidden = build_flow(
+        cache,
+        "app/cli.py::main",
+        options=FlowOptions(direction=FlowDirection.IN, depth=1),
+    )
+    shown = build_flow(
+        cache,
+        "app/cli.py::main",
+        options=FlowOptions(direction=FlowDirection.IN, depth=1, include_tests=True),
+    )
+    assert hidden.root.children == ()
+    assert [c.id for c in shown.root.children] == ["tests/test_cli.py::test_main"]
+
+
+def test_stop_at_emits_the_node_marks_it_and_refuses_to_expand_it(cache):
+    result = build_flow(
+        cache,
+        "app/cli.py::main",
+        options=FlowOptions(depth=3, stop_at=("app/engine.py",)),
+    )
+    run = _kids(result.root)["app/engine.py::run"]
+    assert run.stopped is True and run.children == ()
+    assert _kids(result.root)["app/loop.py::ping"].stopped is False
+    assert _kids(result.root)["app/loop.py::ping"].children != ()
+
+
+def test_stop_at_matches_a_glob(cache):
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=3, stop_at=("app/l*.py",))
+    )
+    assert _kids(result.root)["app/loop.py::ping"].children == ()
+    assert _kids(result.root)["app/engine.py::run"].children != ()
+
+
+def test_hub_is_elided_on_the_expansion_fan(cache):
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=2, hub_fan_in=6)
+    )
+    hub = _kids(result.root)["app/hub.py::hub"]
+    assert (hub.hub, hub.hub_kind) == (6, "expansion") and hub.children == ()
+    assert _kids(result.root)["app/engine.py::run"].children != ()
+
+
+def test_hub_is_elided_on_the_incoming_fan_even_when_the_expansion_is_small(cache):
+    """settings is called from seven places and calls one, so only the fan-in count catches it."""
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=4, hub_fan_in=7)
+    )
+    run = _kids(result.root)["app/engine.py::run"]
+    settings = _kids(_kids(run)["app/util.py::helper"])["app/conf.py::settings"]
+    assert (settings.hub, settings.hub_kind) == (7, "fan_in")
+    assert settings.children == ()
+
+
+def test_expand_hubs_keeps_the_count_and_expands_anyway(cache):
+    result = build_flow(
+        cache,
+        "app/cli.py::main",
+        options=FlowOptions(depth=2, hub_fan_in=6, expand_hubs=True),
+    )
+    hub = _kids(result.root)["app/hub.py::hub"]
+    assert (hub.hub, hub.hub_kind) == (6, "expansion") and len(hub.children) == 6
+
+
+def test_hub_fan_counts_dispatch_children(cache):
+    """Handler.handle is called once and overridden twice, so a floor of 3 elides it."""
+    result = build_flow(
+        cache, "app/engine.py::run", options=FlowOptions(depth=2, hub_fan_in=3)
+    )
+    handle = _kids(result.root)["app/base.py::Handler.handle"]
+    assert (handle.hub, handle.hub_kind) == (3, "fan_in") and handle.children == ()
+
+
+def test_the_root_is_never_elided(cache):
+    """A wide symbol is the usual reason to run a flow query; the start expands whatever its fan."""
+    result = build_flow(
+        cache, "app/conf.py::settings", options=FlowOptions(depth=1, hub_fan_in=2)
+    )
+    assert (result.root.hub, result.root.hub_kind) == (7, "fan_in")
+    assert [c.id for c in result.root.children] == ["app/conf.py::_load"]
+
+
+def test_limit_completes_shallow_levels_first_and_flags_truncation(cache):
+    result = build_flow(
+        cache,
+        "app/cli.py::main",
+        options=FlowOptions(depth=3, limit=3, expand_hubs=True),
+    )
+    assert result.truncated is True and result.limit == 3
+    assert len(result.root.children) == 3
+    assert all(c.children == () for c in result.root.children)
+
+
+def test_an_unhit_limit_leaves_truncated_false(cache):
+    result = build_flow(
+        cache, "app/engine.py::run", options=FlowOptions(depth=1, limit=50)
+    )
+    assert result.truncated is False

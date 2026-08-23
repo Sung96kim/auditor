@@ -5,8 +5,9 @@ The one-shot load pays for itself from roughly five visited nodes up; below that
 per-node ``GraphDB.edges_of`` round trips.
 """
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from enum import StrEnum
+from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -236,6 +237,88 @@ def _children(
     return _dedupe(triples)
 
 
+def _stopped(module: str, globs: Sequence[str]) -> bool:
+    return any(fnmatch(module, glob) for glob in globs)
+
+
+def _fan_in(
+    cache: GraphCache, node_id: str, *, kinds: frozenset[str], options: FlowOptions
+) -> int:
+    """Distinct symbols pointing at the node over the followed kinds, plus its dispatch children.
+
+    Direction independent on the incoming side, which is what makes a widely called helper a hub
+    in an outward tree even though it expands to almost nothing.
+    """
+    incoming = {
+        e["src"]
+        for e in cache.incoming(node_id, kinds)
+        if options.include_tests or cache.role(e["src"]) not in TEST_ROLES
+    }
+    dispatch = {
+        child
+        for child, edge, _ in _children(
+            cache,
+            node_id,
+            direction=options.direction,
+            kinds=frozenset(),
+            include_tests=options.include_tests,
+        )
+        if edge == _DISPATCH
+    }
+    return len(incoming | dispatch)
+
+
+def _hub(
+    cache: GraphCache, node_id: str, *, kinds: frozenset[str], options: FlowOptions
+) -> tuple[int, Literal["fan_in", "expansion"]] | None:
+    """``(count, which)`` when the node crosses ``hub_fan_in``, else ``None`` (spec §7)."""
+    fan_in = _fan_in(cache, node_id, kinds=kinds, options=options)
+    if fan_in >= options.hub_fan_in:
+        return fan_in, "fan_in"
+    expansion = len(
+        _children(
+            cache,
+            node_id,
+            direction=options.direction,
+            kinds=kinds,
+            include_tests=options.include_tests,
+        )
+    )
+    if expansion >= options.hub_fan_in:
+        return expansion, "expansion"
+    return None
+
+
+def _new_record(
+    cache: GraphCache,
+    node_id: str,
+    *,
+    kinds: frozenset[str],
+    options: FlowOptions,
+    parent: int | None = None,
+    edge: str | None = None,
+    source: str = _DETERMINISTIC,
+    depth: int = 0,
+    seen_ref: bool = False,
+    cycle: bool = False,
+) -> _Record:
+    """A record whose marks are already decided: ``stopped`` and the hub fan describe the node
+    itself, so every emitted node carries them whether or not the walk expanded it."""
+    hub = _hub(cache, node_id, kinds=kinds, options=options)
+    return _Record(
+        id=node_id,
+        parent=parent,
+        edge=edge,
+        source=source,
+        depth=depth,
+        seen_ref=seen_ref,
+        cycle=cycle,
+        stopped=_stopped(cache.module(node_id), options.stop_at),
+        hub=None if hub is None else hub[0],
+        hub_kind=None if hub is None else hub[1],
+    )
+
+
 def _ancestors(records: list[_Record], index: int) -> set[str]:
     out: set[str] = set()
     cursor: int | None = index
@@ -259,7 +342,7 @@ def build_flow(
     """
     followed = _BASE_KINDS | frozenset(options.kinds)
     rows = unresolved_by_node or {}
-    records = [_Record(id=start_id)]
+    records = [_new_record(cache, start_id, kinds=followed, options=options)]
     modules = [cache.module(start_id)]
     module_seen = {modules[0]}
     seen = {start_id}
@@ -269,9 +352,14 @@ def build_flow(
     for level in range(1, options.depth + 1):
         nxt: list[int] = []
         for parent in frontier:
+            record = records[parent]
+            if record.stopped:
+                continue
+            if parent != 0 and record.hub is not None and not options.expand_hubs:
+                continue  # the root always expands, however wide its fan
             pairs = _children(
                 cache,
-                records[parent].id,
+                record.id,
                 direction=options.direction,
                 kinds=followed,
                 include_tests=options.include_tests,
@@ -284,8 +372,11 @@ def build_flow(
                 cycle = child_id in ancestors
                 index = len(records)
                 records.append(
-                    _Record(
-                        id=child_id,
+                    _new_record(
+                        cache,
+                        child_id,
+                        kinds=followed,
+                        options=options,
                         parent=parent,
                         edge=edge,
                         source=source,

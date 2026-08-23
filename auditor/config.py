@@ -300,6 +300,7 @@ class GraphConfig(BaseModel):
     naming_verb_distance: float = Field(default=0.15, ge=0.0)
     naming_object_jaccard: float = Field(default=0.6, ge=0.0, le=1.0)
     naming_min_verb_count: int = Field(default=20, ge=1)
+    flow_hub_fan_in: int = Field(default=40, ge=1)
 
 
 class MalwareScanConfig(BaseModel):

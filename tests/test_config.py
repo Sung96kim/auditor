@@ -518,3 +518,10 @@ def test_unknown_keys_in_a_union_field_check_every_member():
     assert unknown_config_keys({"field": {"only_right": 1}}, _Holder) == []
     assert unknown_config_keys({"field": {"shared": 1}}, _Holder) == []
     assert unknown_config_keys({"field": {"nope": 1}}, _Holder) == ["field.nope"]
+
+
+def test_graph_flow_hub_fan_in_is_configurable(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor.graph]\nflow_hub_fan_in=12\n'
+    )
+    assert load_config(tmp_path).graph.flow_hub_fan_in == 12
