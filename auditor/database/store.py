@@ -20,19 +20,21 @@ from auditor.database.files import FilesDB
 from auditor.database.findings import FindingsDB
 from auditor.database.shapes import ShapesDB
 from auditor.database.graph import GraphDB
+from auditor.database.refinements import RefinementsDB
 from auditor.partition import Partition
 
 
 class IndexStore(BaseDB):
     """Async wrapper over a worker-owned sqlite3 connection; callers never touch SQL.
 
-    The six per-table stores are available as attributes:
-      - ``repos``    — ReposDB
-      - ``ignores``  — IgnoresDB
-      - ``files``    — FilesDB
-      - ``findings`` — FindingsDB
-      - ``shapes``   — ShapesDB
-      - ``graph``    — GraphDB
+    The seven per-table stores are available as attributes:
+      - ``repos``       — ReposDB
+      - ``ignores``     — IgnoresDB
+      - ``files``       — FilesDB
+      - ``findings``    — FindingsDB
+      - ``shapes``      — ShapesDB
+      - ``graph``       — GraphDB
+      - ``refinements`` — RefinementsDB
     """
 
     facade = True
@@ -43,6 +45,7 @@ class IndexStore(BaseDB):
     findings: FindingsDB
     shapes: ShapesDB
     graph: GraphDB
+    refinements: RefinementsDB
 
     def __init__(
         self, worker: "SqliteWorker", repo: str, partition: Partition | None = None

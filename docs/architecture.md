@@ -263,6 +263,13 @@ flowchart TB
   `ambiguous_name` and `unimportable_name` rows; the build pass adds `text_sparse`, `generic_label`
   and `singleton_cluster` rows after clustering. It is node-keyed, so `IndexStore.prune` never
   touches it. See [graph.md](references/graph.md).
+- `database/refinements.py` holds the identity tables: `graph_runs` (one row per decision, model
+  call or not), `graph_refinements` (one row per correction), and `graph_refinement_anchors` (the
+  nodes a correction is pinned to, with the `truth_sha` they had when it was made). They key on
+  `repo_identity` (the resolved git common dir), not on the repo partition, so every worktree of a
+  checkout shares them and `repos.forget()` cannot cascade into them.
+- Ids inside those tables are toplevel-relative: `partition_prefix` plus the partition-relative id,
+  so a repo scanned both at its root and at a subdirectory keeps one namespace.
 - The query commands (`related`, `neighbors`, `concept`, `clusters`, `search`, `usages`) all read
   the persisted tables through `graph.query.GraphQuery`; nothing is recomputed.
 - `graph flow` walks that same persisted graph through `graph.flow.build_flow`: breadth-first over
