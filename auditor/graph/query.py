@@ -3,7 +3,15 @@
 from collections import Counter
 from typing import TYPE_CHECKING
 
-from auditor.graph.flow import GraphCache, resolve_ids
+from auditor.graph.flow import (
+    DEFAULT_OPTIONS,
+    FlowOptions,
+    FlowPayload,
+    GraphCache,
+    QueueRow,
+    build_flow,
+    resolve_ids,
+)
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -147,6 +155,45 @@ class GraphQuery:
             "total_in": sum(v["count"] for v in used.values()),
             "total_out": sum(v["count"] for v in deps.values()),
         }
+
+    async def _unresolved_by_node(
+        self, node_ids: list[str]
+    ) -> dict[str, list[QueueRow]]:
+        """``graph_unresolved`` rows for ``node_ids`` only, keyed by node id.
+
+        Scoped to what the walk reached, so a flow over a dozen symbols never pulls the whole
+        partition back.
+        """
+        out: dict[str, list[QueueRow]] = {}
+        for row in await self.index.graph.unresolved(node_ids=node_ids):
+            out.setdefault(row["node_id"], []).append(row)
+        return out
+
+    async def flow(self, symbol: str, options: FlowOptions = DEFAULT_OPTIONS) -> dict:
+        """A directed code path from ``symbol`` as a nested tree (spec §7).
+
+        Picks the highest-rank node when the name is ambiguous and lists the rest under
+        ``ambiguous``; ``{}`` when the symbol is not in the graph.
+        """
+        cache = await GraphCache.load(self.index)
+        matches = resolve_ids(cache.nodes, symbol)
+        if not matches:
+            return {}
+        primary = max(matches, key=cache.rank)
+        result = build_flow(cache, primary, options=options)
+        result = result.with_unresolved(
+            await self._unresolved_by_node(result.node_ids())
+        )
+        return FlowPayload(
+            symbol=symbol,
+            resolved=primary,
+            ambiguous=tuple(m for m in matches if m != primary),
+            root=result.root,
+            direction=result.direction,
+            modules=result.modules,
+            truncated=result.truncated,
+            limit=result.limit,
+        ).model_dump(mode="json")
 
     async def clusters(self) -> list[dict]:
         return await self.index.graph.clusters()

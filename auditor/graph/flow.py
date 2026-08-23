@@ -155,6 +155,52 @@ class FlowResult(BaseModel):
     truncated: bool = False
     limit: int = DEFAULT_FLOW_LIMIT
 
+    def node_ids(self) -> list[str]:
+        """Every node the tree shows, first-seen order, so a queue read can be scoped to them."""
+        out: list[str] = []
+        seen: set[str] = set()
+        stack = [self.root]
+        while stack:
+            node = stack.pop()
+            if node.id not in seen:
+                seen.add(node.id)
+                out.append(node.id)
+            stack.extend(reversed(node.children))
+        return out
+
+    def with_unresolved(self, rows: Mapping[str, list[QueueRow]]) -> "FlowResult":
+        """A copy with each node's queue rows hung off it, keyed by node id.
+
+        Separate from the walk because the rows worth reading are only known once the walk has
+        said which nodes it reached.
+        """
+        return self.model_copy(update={"root": _attach(self.root, rows)})
+
+
+def _attach(node: FlowNode, rows: Mapping[str, list[QueueRow]]) -> FlowNode:
+    return node.model_copy(
+        update={
+            "children": tuple(_attach(child, rows) for child in node.children),
+            "unresolved": tuple(
+                UnresolvedLeaf(
+                    name=row["name"],
+                    fact_kind=row["fact_kind"],
+                    reason=row["reason"],
+                    external=bool(row["externally_bound"]),
+                )
+                for row in rows.get(node.id, ())
+            ),
+        }
+    )
+
+
+class FlowPayload(FlowResult):
+    """``GraphQuery.flow``'s wire shape: a ``FlowResult`` plus how the symbol resolved."""
+
+    symbol: str
+    resolved: str
+    ambiguous: tuple[str, ...] = ()
+
 
 class _Record(BaseModel):  # auditor: skip: PY-OOP-FLAT-FIELD-MODEL  (mirrors FlowNode)
     """One scratch row of the walk, assembled into a ``FlowNode`` at the end.
@@ -333,7 +379,6 @@ def build_flow(
     start_id: str,
     *,
     options: FlowOptions = DEFAULT_OPTIONS,
-    unresolved_by_node: Mapping[str, list[QueueRow]] | None = None,
 ) -> FlowResult:
     """Walk the graph from ``start_id`` breadth-first and return the tree (spec §7).
 
@@ -341,7 +386,6 @@ def build_flow(
     and leaves the shallower levels complete.
     """
     followed = _BASE_KINDS | frozenset(options.kinds)
-    rows = unresolved_by_node or {}
     records = [_new_record(cache, start_id, kinds=followed, options=options)]
     modules = [cache.module(start_id)]
     module_seen = {modules[0]}
@@ -405,15 +449,6 @@ def build_flow(
             **record.model_dump(exclude={"parent", "children"}),
             kind=cache.kind(record.id),
             children=tuple(assemble(child) for child in record.children),
-            unresolved=tuple(
-                UnresolvedLeaf(
-                    name=row["name"],
-                    fact_kind=row["fact_kind"],
-                    reason=row["reason"],
-                    external=bool(row["externally_bound"]),
-                )
-                for row in rows.get(record.id, ())
-            ),
         )
 
     return FlowResult(

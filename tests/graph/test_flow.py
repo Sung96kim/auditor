@@ -21,7 +21,16 @@ from auditor.graph.flow import (
     build_flow,
     resolve_ids,
 )
-from auditor.graph.model import EdgeKind, GraphEdge, GraphNode, NodeKind
+from auditor.graph.model import (
+    CallForm,
+    EdgeKind,
+    FactKind,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+    UnresolvedReason,
+    UnresolvedRow,
+)
 from auditor.graph.query import GraphQuery
 
 
@@ -490,3 +499,150 @@ def test_an_unhit_limit_leaves_truncated_false(cache):
         cache, "app/engine.py::run", options=FlowOptions(depth=1, limit=50)
     )
     assert result.truncated is False
+
+
+def _queue_row(node_id: str, name: str, *, external: bool = False) -> UnresolvedRow:
+    return UnresolvedRow(
+        node_id=node_id,
+        fact_kind=FactKind.ATTR_CALLEE,
+        name=name,
+        call_form=CallForm.ATTR,
+        reason=UnresolvedReason.UNIMPORTABLE_NAME,
+        externally_bound=external,
+    )
+
+
+def test_with_unresolved_hangs_rows_off_their_node(cache):
+    result = build_flow(cache, "app/engine.py::run", options=FlowOptions(depth=1))
+    marked = result.with_unresolved(
+        {
+            "app/engine.py::run": [
+                _queue_row("app/engine.py::run", "dispatch").model_dump(mode="json"),
+                _queue_row("app/engine.py::run", "search", external=True).model_dump(
+                    mode="json"
+                ),
+            ]
+        }
+    )
+    assert [(u.name, u.external) for u in marked.root.unresolved] == [
+        ("dispatch", False),
+        ("search", True),
+    ]
+    assert marked.root.unresolved[0].reason == "unimportable_name"
+    assert all(c.unresolved == () for c in marked.root.children)
+    assert result.root.unresolved == ()  # the walk's own result is untouched
+
+
+def test_node_ids_lists_every_node_in_the_tree(cache):
+    result = build_flow(cache, "app/engine.py::run", options=FlowOptions(depth=1))
+    assert result.node_ids()[0] == "app/engine.py::run"
+    assert set(result.node_ids()) == {"app/engine.py::run"} | {
+        c.id for c in result.root.children
+    }
+
+
+async def test_query_flow_returns_the_payload_shape(flow_store):
+    payload = await GraphQuery(flow_store).flow(
+        "app/cli.py::main", FlowOptions(depth=2)
+    )
+    assert payload["symbol"] == "app/cli.py::main"
+    assert payload["resolved"] == "app/cli.py::main"
+    assert payload["ambiguous"] == []
+    assert payload["direction"] == "out"
+    assert payload["truncated"] is False and payload["limit"] == 200
+    assert payload["modules"][0] == "app/cli.py"
+    assert payload["root"]["id"] == "app/cli.py::main"
+    assert isinstance(payload["root"]["children"], list)
+    assert {c["id"] for c in payload["root"]["children"]} == {
+        "app/engine.py::run",
+        "app/hub.py::hub",
+        "app/loop.py::ping",
+    }
+
+
+async def test_query_flow_resolves_a_bare_name_and_reports_ambiguity(flow_store):
+    """Three methods are named handle; every rank is 0.0, so the sorted first one wins."""
+    payload = await GraphQuery(flow_store).flow("handle", FlowOptions(depth=1))
+    assert payload["resolved"] == "app/base.py::Handler.handle"
+    assert payload["ambiguous"] == [
+        "app/impl_a.py::AlphaHandler.handle",
+        "app/impl_b.py::BetaHandler.handle",
+    ]
+
+
+async def test_query_flow_unknown_symbol_is_empty(flow_store):
+    assert await GraphQuery(flow_store).flow("does_not_exist") == {}
+
+
+async def test_query_flow_reads_the_queue_for_the_nodes_it_reached(flow_store):
+    await flow_store.graph.replace_unresolved(
+        [
+            _queue_row("app/engine.py::run", "dispatch"),
+            _queue_row("app/util.py::helper", "search", external=True),
+            _queue_row("app/conf.py::_load", "offscreen"),
+        ]
+    )
+    payload = await GraphQuery(flow_store).flow(
+        "app/engine.py::run", FlowOptions(depth=1)
+    )
+    assert payload["root"]["unresolved"] == [
+        {
+            "name": "dispatch",
+            "fact_kind": "attr_callee",
+            "reason": "unimportable_name",
+            "external": False,
+        }
+    ]
+    helper = next(
+        c for c in payload["root"]["children"] if c["id"] == "app/util.py::helper"
+    )
+    assert [(u["name"], u["external"]) for u in helper["unresolved"]] == [
+        ("search", True)
+    ]
+
+
+async def test_query_flow_scopes_the_queue_read_to_the_reached_nodes(
+    flow_store, monkeypatch
+):
+    """A whole-partition read would carry rows for nodes the tree never shows."""
+    captured: dict[str, Any] = {}
+    reader = flow_store.graph.unresolved
+
+    async def spy(**kw):
+        captured.update(kw)
+        return await reader(**kw)
+
+    monkeypatch.setattr(flow_store.graph, "unresolved", spy)
+    payload = await GraphQuery(flow_store).flow(
+        "app/engine.py::run", FlowOptions(depth=1)
+    )
+    assert set(captured["node_ids"]) == {"app/engine.py::run"} | {
+        c["id"] for c in payload["root"]["children"]
+    }
+
+
+async def test_query_flow_loads_the_node_table_once(flow_store, monkeypatch):
+    """Resolution reads the loaded cache, not a second nodes() round trip."""
+    loads = 0
+    nodes = flow_store.graph.nodes
+
+    async def counted():
+        nonlocal loads
+        loads += 1
+        return await nodes()
+
+    monkeypatch.setattr(flow_store.graph, "nodes", counted)
+    await GraphQuery(flow_store).flow("handle", FlowOptions(depth=1))
+    assert loads == 1
+
+
+async def test_query_flow_in_direction(flow_store):
+    payload = await GraphQuery(flow_store).flow(
+        "app/util.py::helper", FlowOptions(direction=FlowDirection.IN, depth=1)
+    )
+    assert payload["direction"] == "in"
+    assert {c["id"] for c in payload["root"]["children"]} == {
+        "app/engine.py::run",
+        "app/base.py::Handler.handle",
+        "app/reg.py",
+    }
