@@ -117,3 +117,43 @@ def test_ignored_env_vars_do_not_fail_the_command(tmp_path, monkeypatch, var, va
     payload = json.loads(result.stdout)
     assert payload["exclude"] == []
     assert payload["test_mode"] is None
+
+
+def test_config_show_user_rejects_config_json(tmp_path, _isolated_auditor_home):
+    """--config-json is repo policy; accepting it here silently discarded the override."""
+    result = invoke(
+        "config",
+        "show",
+        "--user",
+        "--root",
+        str(tmp_path),
+        "--config-json",
+        '{"observer":{"model":"sonnet"}}',
+    )
+    assert result.exit_code == 1
+    assert "cannot be combined with --user" in " ".join(result.output.split())
+
+
+def test_config_show_user_warns_unknown_user_keys(tmp_path, _isolated_auditor_home):
+    """The repo branch warns; the --user branch was the one place a typo surfaced nowhere."""
+    (_isolated_auditor_home / "config.json").write_text(
+        json.dumps({"observer": {"runer": "claude"}})
+    )
+    result = invoke("config", "show", "--user", "--root", str(tmp_path))
+    assert result.exit_code == 0, result.output
+    assert "unknown config key: observer.runer" in " ".join(result.output.split())
+
+
+def test_config_check_reports_a_bad_role_name_without_a_trailing_dot(tmp_path):
+    """pydantic emits an empty final loc part for a dict-key error, which rendered as
+    `roles.tets.:`."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("[roles.tets]\nrelaxed = true\n")
+    result = invoke("config", "check", "--root", str(tmp_path))
+    assert result.exit_code == 1
+    assert "roles.tets:" in " ".join(result.output.split())
+
+
+def test_config_check_names_the_root_it_checked(sample_repo):
+    payload = cli_json(invoke("config", "check", "--root", str(sample_repo), "--json"))
+    assert payload["root"] == str(sample_repo)

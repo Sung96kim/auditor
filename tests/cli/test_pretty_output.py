@@ -7,11 +7,13 @@ Pretty path: call render functions directly with a StringIO Console (force_termi
 import io
 import json
 
+import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
 from auditor.cli import app
 from auditor.cli.render import (
+    render_config_check,
     render_crossfile,
     render_discover,
     render_graph_build,
@@ -406,3 +408,14 @@ def test_render_init_still_asks_for_migrate_when_not_migrated():
     con, buf = _console()
     render_init(con, _init_payload(moved_from="/old/root"))
     assert "re-run with --migrate" in " ".join(buf.getvalue().split())
+
+
+@pytest.mark.parametrize("unknown", [[], ["malware_scan.bogus"]])
+def test_render_config_check_names_the_root(unknown):
+    """Which config was checked is the command's whole point, and only --json callers saw it."""
+    buf = io.StringIO()
+    con = Console(file=buf, width=100, no_color=True, highlight=False)
+    render_config_check(
+        con, {"root": "/w/repo", "policy_unknown": unknown, "user_unknown": []}
+    )
+    assert "/w/repo" in " ".join(buf.getvalue().split())

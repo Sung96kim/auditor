@@ -84,10 +84,18 @@ def warn_unknown_config(keys: Sequence[str]) -> None:
     err_console.print("[dim]unknown keys are ignored — run `auditr config check`[/dim]")
 
 
+# pydantic appends these when the failure is a dict *key*; neither names a field.
+_NON_FIELD_LOC = ("", "[key]")
+
+
 def format_config_error(exc: ValidationError) -> str:
-    """First validation error as ``'<dotted loc>: <msg>'`` for a clean one-line failure."""
+    """First validation error as ``'<dotted loc>: <msg>'`` for a clean one-line failure.
+
+    Parts that name no field are dropped, so a bad role or category key reads ``roles.tets``
+    rather than ``roles.tets.``.
+    """
     err = exc.errors()[0]
-    loc = ".".join(str(p) for p in err["loc"])
+    loc = ".".join(str(p) for p in err["loc"] if str(p) not in _NON_FIELD_LOC)
     return f"{loc}: {err['msg']}" if loc else err["msg"]
 
 

@@ -100,10 +100,15 @@ def test_env_prefix_is_user_scoped(project, monkeypatch):
 
 
 def test_auditor_observer_is_not_a_field(project, monkeypatch):
-    """The documented kill switch is read by the hooks and the daemon, never validated here."""
+    """The documented kill switch is read by the hooks and the daemon, never validated here.
+
+    The prefix comes from the model: hardcoding it made the first assertion true by construction,
+    including under the very change (an `AUDITOR_` prefix) it exists to catch.
+    """
     monkeypatch.setenv("AUDITOR_OBSERVER", "0")
+    prefix = UserSettings.model_config["env_prefix"]
     assert "AUDITOR_OBSERVER" not in {
-        f"AUDITOR_USER_{name.upper()}" for name in UserSettings.model_fields
+        f"{prefix}{name.upper()}" for name in UserSettings.model_fields
     }
     assert load_user_settings(project).observer.enabled is True
 

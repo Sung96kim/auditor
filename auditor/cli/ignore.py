@@ -10,7 +10,13 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import fail, open_index, present, run
+from auditor.cli.helpers import (
+    fail,
+    open_index,
+    present,
+    run,
+    warn_unknown_config,
+)
 from auditor.cli.options import (
     AllowLocalPlugins,
     IgnoreFile,
@@ -27,7 +33,7 @@ from auditor.cli.render import (
     render_ignore_list,
     render_ignore_rm,
 )
-from auditor.config import load_config
+from auditor.config import load_config_report, unknown_repo_keys
 from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
@@ -53,7 +59,8 @@ def ignore_add(
     if line is not None and file is None:
         fail("--line requires --file")
     root = find_root(target)
-    load_config(root, allow_local_plugins=allow_local_plugins)
+    loaded = load_config_report(root, allow_local_plugins=allow_local_plugins)
+    warn_unknown_config(loaded.unknown_keys)
     if not force and rule_id not in REGISTRY.rule_ids():
         fail(
             f"unknown rule_id {rule_id!r}; run `auditor rules list` to see rules "
@@ -118,6 +125,7 @@ def ignore_rm(
 ) -> None:
     """Remove an ignore by id (`ignore rm 7`) or by selector (`ignore rm <rule_id> --file …`)."""
     root = find_root(target)
+    warn_unknown_config(unknown_repo_keys(root))
     removed = run(_ignore_rm(root, selector, file, line), "removing ignore…")
     if not removed:
         fail(f"no matching ignore for {selector!r}")
@@ -140,6 +148,7 @@ def ignore_clear(
 ) -> None:
     """Remove every ignore for this repo."""
     root = find_root(target)
+    warn_unknown_config(unknown_repo_keys(root))
     present(
         {"cleared": run(_ignore_clear(root), "clearing ignores…")},
         render_ignore_clear,

@@ -195,3 +195,20 @@ def test_ignored_finding_does_not_trip_the_gate(repo):
         invoke("scan", str(repo), "--fail-on", "high", "--root", str(repo)).exit_code
         == 0
     )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("ignore", "add", "PY-SEC-HARDCODED-SECRET"),
+        ("ignore", "rm", "1"),
+        ("ignore", "clear"),
+    ],
+)
+def test_ignore_commands_warn_about_unknown_config_keys(repo, _restore_registry, args):
+    """Every other config-loading command warns once; these three were silent, so a typo in the
+    repo's policy surfaced nowhere for anyone driving ignores."""
+    (repo / ".auditor").mkdir(exist_ok=True)
+    (repo / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    result = invoke(*args, "--root", str(repo))
+    assert "unknown config key: malware_scan.bogus" in " ".join(result.output.split())

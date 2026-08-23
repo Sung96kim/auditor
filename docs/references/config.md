@@ -42,11 +42,17 @@ auditr config check
 ## Checking a config
 
 - `config check` prints one row per unknown key with its dotted path, for the repo policy and for
-  the user settings. Unknown keys are ignored at load time, so this is how a typo surfaces.
+  the user settings, under the root it resolved. Unknown keys are ignored at load time, so this
+  is how a typo surfaces.
 - It exits 0 with warnings and 1 when a value fails validation, naming the field and the reason.
+- Field *names* are reported as unknown keys and never fail the command. *Values*, and the keys of
+  a keyed table (a role name, a category name), are validated and fail it: `[roles.tets]` exits 1
+  naming `roles.tets`, it is not listed as an unknown key.
 - `config show --user` prints the resolved `UserSettings` instead of the repo policy: model
   defaults, `$AUDITOR_HOME/config.json`, `$AUDITOR_HOME/repos/<key>/config.json`, then
-  `AUDITOR_USER_*`. `--config-json` does not apply to it.
+  `AUDITOR_USER_*`. It warns about unknown user keys the same way the repo branch does.
+- `--config-json` is repo policy, so combining it with `--user` exits non-zero rather than being
+  silently dropped.
 - The files themselves are created by [`auditr init`](init.md).
 
 ## Profiles

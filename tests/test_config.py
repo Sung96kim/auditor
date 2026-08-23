@@ -4,7 +4,7 @@ threshold merge, per-rule/category/role resolution, and validation."""
 import warnings
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from auditor.config import (
     AuditorSettings,
@@ -498,3 +498,23 @@ def test_env_still_sets_non_policy_keys(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
     monkeypatch.setenv("AUDITOR_RESPECT_GITIGNORE", "false")
     assert load_config(tmp_path).respect_gitignore is False
+
+
+def test_unknown_keys_in_a_union_field_check_every_member():
+    """Only the first member used to be inspected, so a key the second member declares was
+    reported as unknown and a key neither declares was reported against the wrong path."""
+
+    class _Left(BaseModel):
+        shared: int = 0
+        only_left: int = 0
+
+    class _Right(BaseModel):
+        shared: int = 0
+        only_right: int = 0
+
+    class _Holder(BaseModel):
+        field: _Left | _Right = _Left()
+
+    assert unknown_config_keys({"field": {"only_right": 1}}, _Holder) == []
+    assert unknown_config_keys({"field": {"shared": 1}}, _Holder) == []
+    assert unknown_config_keys({"field": {"nope": 1}}, _Holder) == ["field.nope"]

@@ -1,15 +1,17 @@
 """Configuration: typed Pydantic models, layered TOML loading, per-file resolution.
 
 Layering (later wins): built-in ``extends`` profile chain -> ``pyproject [tool.auditor]``
--> ``.auditor/config.toml`` -> environment. A repo tailors rules/severities/thresholds and
-per-role/per-glob policy. ``load_config`` performs the two-phase plugin/config load so a
-config may reference plugin-contributed rules.
+-> ``.auditor/config.toml`` -> injected ``--config-json`` overrides. The environment is the
+*lowest* layer: it only fills keys no TOML layer sets, and reaches one non-policy field (see
+``_NonPolicyEnvSource``). A repo tailors rules/severities/thresholds and per-role/per-glob
+policy. ``load_config`` performs the two-phase plugin/config load so a config may reference
+plugin-contributed rules.
 """
 
 # auditor: skip-file: PY-TYPING-UNTYPED-DICT  (raw-TOML layer boundary — tomllib dicts pre-validation)
 
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from fnmatch import fnmatch
 from importlib import resources
 from pathlib import Path
@@ -460,12 +462,15 @@ class AuditorSettings(BaseSettings):
 # --------------------------------------------------------------------------- loading
 
 
-def deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(
+    base: Mapping[str, object], override: Mapping[str, object]
+) -> dict[str, object]:
     """Recursive dict merge; later wins. Scalars/lists replaced, dicts merged."""
-    out = dict(base)
+    out: dict[str, object] = dict(base)
     for key, val in override.items():
-        if isinstance(val, dict) and isinstance(out.get(key), dict):
-            out[key] = deep_merge(out[key], val)
+        current = out.get(key)
+        if isinstance(val, dict) and isinstance(current, dict):
+            out[key] = deep_merge(current, val)
         else:
             out[key] = val
     return out
@@ -488,9 +493,15 @@ def _walk_unknown_value(annotation: object, value: object, path: str) -> Iterato
     a keyed table or a list of tables reports its full dotted path."""
     origin = get_origin(annotation)
     if origin in (Union, UnionType):
-        inner = [arg for arg in get_args(annotation) if arg is not type(None)]
-        if inner:
-            yield from _walk_unknown_value(inner[0], value, path)
+        # A key is unknown only if no member declares it; taking members[0] alone reported
+        # every key valid for a later member of a two-model union.
+        per_member = [
+            set(_walk_unknown_value(arg, value, path))
+            for arg in get_args(annotation)
+            if arg is not type(None)
+        ]
+        if per_member:
+            yield from sorted(set.intersection(*per_member))
     elif origin is dict and isinstance(value, dict):
         item = get_args(annotation)[1]
         for key, entry in value.items():

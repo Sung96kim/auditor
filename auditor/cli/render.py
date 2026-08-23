@@ -342,9 +342,11 @@ def render_config_check(out: Console, payload: dict[str, Any]) -> None:
         )
         for key in keys
     ]
+    root = payload.get("root", "")
     if not unknown:
-        out.print(f"[{_ACCENT}]config ok:[/] no unknown keys")
+        out.print(f"[{_ACCENT}]config ok:[/] no unknown keys ({root})")
         return
+    out.print(f"[dim]{root}[/dim]")
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("where")
     t.add_column("unknown key")

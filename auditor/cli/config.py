@@ -14,12 +14,7 @@ from auditor.cli.helpers import (
 )
 from auditor.cli.options import ConfigJson, RootArg, UserConfig
 from auditor.cli.render import render_config_check, render_config_show
-from auditor.config import (
-    AuditorSettings,
-    load_config_report,
-    merged_config_dict,
-    unknown_config_keys,
-)
+from auditor.config import load_config_report
 from auditor.discovery import find_root
 from auditor.user_settings import load_user_settings, unknown_user_keys
 
@@ -37,10 +32,15 @@ def config_show(
     root = find_root(target)
     settings: BaseModel
     if user:
+        if config_json is not None:
+            fail(
+                "--config-json applies to repo policy; it cannot be combined with --user"
+            )
         try:
             settings = load_user_settings(root)
         except ValidationError as exc:
             fail(f"invalid user config — {format_config_error(exc)}")
+        warn_unknown_config(unknown_user_keys(root))
     else:
         try:
             loaded = load_config_report(root, overrides=parse_config_json(config_json))
@@ -60,9 +60,8 @@ def config_check(
     """Report config keys no model declares. Exits non-zero when a value fails validation."""
     root = find_root(target)
     overrides = parse_config_json(config_json)
-    raw = merged_config_dict(root, overrides=overrides)
     try:
-        load_config_report(root, overrides=overrides)
+        loaded = load_config_report(root, overrides=overrides)
     except ValidationError as exc:
         fail(f"invalid config — {format_config_error(exc)}")
     try:
@@ -73,7 +72,7 @@ def config_check(
     present(
         {
             "root": str(root),
-            "policy_unknown": unknown_config_keys(raw, AuditorSettings),
+            "policy_unknown": list(loaded.unknown_keys),
             "user_unknown": unknown_user_keys(root),
         },
         render_config_check,
