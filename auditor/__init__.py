@@ -3,7 +3,7 @@
 Public API:
     from auditor import audit_target, load_config, render, ScanEngine, IndexStore
 
-``__all__`` adds the record models and config types those five return or accept. A scan of one
+``__all__`` adds the record models and config types those entry points return or accept. A scan of one
 file or one tree is ``ScanEngine.scan_file`` / ``ScanEngine.scan_path``.
 """
 

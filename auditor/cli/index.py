@@ -87,7 +87,8 @@ def index_forget(
     if ignores and not yes:
         fail(
             f"{key} has {ignores} persistent ignore(s), which forget deletes along with the "
-            f"cached rows; run `auditr ignore list` to review them, then re-run with --yes"
+            f"cached rows; run `auditr ignore list -r {root}` to review them, then re-run "
+            "with --yes"
         )
     removed = run(_index_forget(root), "forgetting repo…")
     present(

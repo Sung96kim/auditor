@@ -1,8 +1,8 @@
 """Scan orchestration.
 
-``ScanEngine`` owns the resolved root/settings/deps/index for a run and audits files with
-the per-rule incremental cache. Module-level ``scan_file`` / ``scan_path`` are convenience
-entry points that build an engine for a target.
+``ScanEngine`` owns the resolved root/settings/deps/index for a run and audits files with the
+per-rule incremental cache via ``scan_file`` / ``scan_path``. Module-level ``audit_target`` is the
+convenience entry point that builds an engine for a target.
 """
 
 import asyncio

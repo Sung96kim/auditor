@@ -40,9 +40,14 @@ def test_index_forget_refuses_to_drop_persistent_ignores(sample_repo):
 
     refused = invoke("index", "forget", "--root", src)
     assert refused.exit_code == 1
-    assert "persistent ignore" in refused.output
-    assert cli_json(invoke("ignore", "list", "--root", src))  # still there
+    assert cli_json(invoke("ignore", "list", "--root", src))  # nothing was dropped
 
     confirmed = cli_json(invoke("index", "forget", "--root", src, "--yes"))
     assert confirmed["removed"] is True
     assert cli_json(invoke("ignore", "list", "--root", src)) == []
+    # rich wraps stderr, so match the refusal on whitespace-free text
+    squashed = "".join(refused.output.split())
+    assert "persistentignore" in squashed
+    assert (
+        f"-r{confirmed['repo']}" in squashed
+    )  # the review command it prints is runnable

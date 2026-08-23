@@ -33,6 +33,7 @@ from auditor.cli.render import (
     render_plugins_list,
     render_rules_list,
 )
+from auditor.registry import REGISTRY
 
 runner = CliRunner()
 
@@ -330,6 +331,15 @@ def test_render_manifest_list_empty():
     con, buf = _console()
     render_manifest_list(con, [])
     assert "no entries" in buf.getvalue()
+
+
+def test_render_plugins_list_renders_the_registry_snapshot():
+    """Fed the real snapshot, so the source column keeps working when its shape changes."""
+    con, buf = _console()
+    render_plugins_list(con, {**REGISTRY.snapshot(), "warnings": []})
+    out = buf.getvalue()
+    assert "PY-SEC-DANGEROUS-EVAL" in out
+    assert "built-in" in out
 
 
 def test_render_plugins_list_shows_detector_and_source():
