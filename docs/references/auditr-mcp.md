@@ -90,10 +90,9 @@ args = ["run", "-i", "--rm",
   framework), `ignore_add`, `ignore_list`, `ignore_remove`.
 - Malware backends: `malware_status`, `malware_update_dbs`, `malware_install`. Only
   `malware_update_dbs` and `malware_install` touch the network, and only when called.
-- Semantic graph, registered only when the `[graph]` extra is installed: `graph_build`,
-  `graph_search`, `graph_usages`, `graph_related`, `graph_neighbors`, `graph_concept`,
-  `graph_clusters`, `graph_overview`. Without the extra they are absent from the tool list rather
-  than failing at call time. See [graph.md](graph.md).
+- Semantic graph, always registered: `graph_build`, `graph_search`, `graph_usages`,
+  `graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters`, `graph_overview`. The
+  graph libraries are core dependencies, so `auditr[mcp]` is enough. See [graph.md](graph.md).
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
   `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them

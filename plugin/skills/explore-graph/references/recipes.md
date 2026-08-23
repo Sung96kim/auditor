@@ -165,22 +165,16 @@ matching node. Use it when you're asking "what part of the codebase handles X" r
   the same content hash). `graph serve` similarly reuses the existing build unless it's missing
   or `--rebuild` is passed.
 
-## The `[graph]` extra
+## Dependencies
 
-Graph commands need `numpy`/`scikit-learn`/`networkx`/`snowballstemmer` (the `graph` extra in
-`pyproject.toml`). Without it:
+`numpy`, `scikit-learn`, `snowballstemmer` and `networkx` are core dependencies of `auditr`, so
+there is nothing to install and no availability check to run first.
 
-- CLI: `auditor/cli/__init__.py` mounts a stub `graph_app` instead
-  (`auditor/cli/graph_stub.py`) — every subcommand prints "`auditor graph` requires the optional
-  `[graph]` dependencies" and exits 1. Running `auditr graph build` (or any subcommand) is itself
-  the check — if it prints that message, the extra isn't installed.
-- MCP: `auditor/mcp/graph_tools.py` guards the whole module behind
-  `try/except ImportError` — the `graph_*` tools simply aren't registered, so check your
-  available-tools list first.
-
-Install: `uv tool install "auditr[graph]"` (matches how the CLI itself is typically installed as
-a uv tool; `pip install "auditr[graph]"` / `uv pip install "auditr[graph]"` also work if you're
-managing it as a regular dependency instead).
+- CLI: `auditor/cli/__init__.py` mounts the `graph` sub-app through `auditor/cli/lazy.py`, which
+  imports `auditor/cli/graph.py` on the first subcommand. Help is fast; the first real graph
+  command in a process pays ~0.65 s of import.
+- MCP: `auditor/mcp/graph_tools.py` registers the `graph_*` tools unconditionally.
+- `auditr[graph]` still resolves: the extra survives as an empty alias for older install commands.
 
 ## Visuals: `serve` / `export`
 

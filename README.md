@@ -43,8 +43,14 @@ docker compose run --rm auditor scan .
 
 - The PyPI distribution is `auditr`; the commands are `auditr` and `auditr-mcp`, with `auditor`
   and `auditor-mcp` as aliases.
-- Extras gate features: `mcp` for the MCP server, `ts` for TypeScript/React (tree-sitter), `graph`
-  for the semantic graph, `code-mode` for sandboxed tool orchestration.
+- Extras gate features: `mcp` for the MCP server, `ts` for TypeScript/React (tree-sitter),
+  `code-mode` for sandboxed tool orchestration.
+- The semantic graph is part of the core install. `graph` survives as an empty extra so existing
+  `auditr[graph]` install commands and `uv tool` receipts keep resolving. It costs every install
+  about 174 MB: scipy 91 MB (a transitive dependency of scikit-learn), scikit-learn 36 MB,
+  numpy 33 MB, networkx 13 MB, snowballstemmer 2 MB.
+- `observer-claude`, `observer-codex`, `observer` and `vectors` are declared but nothing uses them
+  yet. Each pulls a large SDK, so leave them out until a release says otherwise.
 - Claude Code plugin: `claude plugin marketplace add Sung96kim/auditor`, then
   `/plugin install auditor` in a session. See
   [claude-code-plugin](docs/references/claude-code-plugin.md).
@@ -76,7 +82,7 @@ auditr rules list --category security
 auditr plugins list
 # check the opt-in malware backends and their databases
 auditr malware status
-# build the semantic graph (needs the graph extra)
+# build the semantic graph
 auditr graph build .
 # check PyPI for a newer release and install it
 auditr self update
@@ -94,8 +100,8 @@ auditr-mcp
 ## Tests
 
 ```bash
-# deps for the whole suite
-uv sync --all-extras
+# deps for the whole suite; never --all-extras, the observer and vectors SDKs are ~640MB
+uv sync --extra dev --extra mcp --extra graph --extra ts
 # the tests the CI test job runs (.github/workflows/ci.yml); that job also lints
 uv run pytest -q
 ```

@@ -8,9 +8,9 @@ Set up auditor in this repo. Report what already exists; don't clobber it.
 ## Steps
 
 1. Check the CLI: `auditr version`. If missing, install with only the extras this repo needs
-   (`references/config-guide.md` has the decision table): `uv tool install "auditr[mcp,ts,graph]"`,
-   dropping whichever of `ts`/`graph` don't apply — `mcp` is the common case for any
-   agent-driven setup.
+   (`references/config-guide.md` has the decision table): `uv tool install "auditr[mcp,ts]"`,
+   dropping `ts` for a repo with no TypeScript. `mcp` is the common case for any agent-driven
+   setup, and the semantic graph needs no extra.
 2. Check whether the repo is already configured: `.auditor/config.toml` or a `[tool.auditor]`
    table in `pyproject.toml`. If absent, scaffold `.auditor/config.toml` and choose a profile —
    `references/config-guide.md` has what `base`/`strict`/`pydantic`/`all-strict` each actually
