@@ -30,6 +30,24 @@ def _finding(rule="PY-SEC-DANGEROUS-EVAL", sev=Severity.BLOCKING) -> Finding:
     )
 
 
+def _saturated_finding() -> Finding:
+    """Every field set to a non-default, so a round trip that drops one is detectable."""
+    return Finding(
+        rule_id="GRAPH-GOD-CONCEPT",
+        category=Category.OOP_COMPOSITION,
+        severity=Severity.SUGGESTION,
+        verdict_kind=VerdictKind.CANDIDATE,
+        line=7,
+        message="x has high fan-out (9)",
+        evidence="m.py::x",
+        suggestion="split responsibilities.",
+        detector="graph",
+        subkind="fan_out",
+        checklist_item=3,
+        standard_refs=("owasp:A01",),
+    )
+
+
 def _entry(path: str, sha: str = "h") -> IndexEntry:
     return IndexEntry(
         path=path,
@@ -353,20 +371,25 @@ def test_the_facade_exposes_every_registered_store():
     assert registered == set(IndexStore.__annotations__) == listed
 
 
-async def test_a_finding_round_trips_its_subkind(tmp_path):
+def test_the_saturated_finding_leaves_no_field_at_its_default():
+    """Guards the guard: a field added to Finding without a value here would let the round-trip
+    test below pass with that column dropped."""
+    assert set(Finding.model_fields) == set(
+        _saturated_finding().model_dump(exclude_defaults=True)
+    )
+
+
+async def test_a_finding_round_trips_every_field(tmp_path):
+    """``_row_to_finding`` copies field by field with nothing checking it against the declaration,
+    so a forgotten line reads back as the default with no error."""
+    async with await IndexStore.connect(tmp_path / "index.db", "/repo") as index:
+        await index.findings.add("m.py", [_saturated_finding()])
+        assert (await index.findings.all()) == [_saturated_finding()]
+
+
+async def test_by_rule_prefix_carries_the_subkind(tmp_path):
     """The column is what graph_overview reads, so a lost value silently empties both hub lists."""
     async with await IndexStore.connect(tmp_path / "index.db", "/repo") as index:
-        finding = Finding(
-            rule_id="GRAPH-GOD-CONCEPT",
-            category=Category.OOP_COMPOSITION,
-            severity=Severity.SUGGESTION,
-            verdict_kind=VerdictKind.CANDIDATE,
-            line=1,
-            message="x has high fan-out (9)",
-            evidence="m.py::x",
-            subkind="fan_out",
-        )
-        await index.findings.add("m.py", [finding])
-        assert (await index.findings.all())[0].subkind == "fan_out"
+        await index.findings.add("m.py", [_saturated_finding()])
         rows = await index.findings.by_rule_prefix("GRAPH-")
-        assert rows[0]["subkind"] == "fan_out"
+    assert rows[0]["subkind"] == "fan_out"
