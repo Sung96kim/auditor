@@ -1,4 +1,4 @@
-"""``auditor plugins list`` — show every loaded detector/language/reporter/profile + source."""
+"""``auditor plugins list`` — show every loaded detector/language/reporter + its source."""
 
 from pathlib import Path
 
@@ -20,7 +20,7 @@ def plugins_list(
     target: RootArg = Path("."),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Show every loaded detector/language/reporter/profile and its source."""
+    """Show every loaded detector/language auditor/reporter and its source."""
     loader = PluginLoader()
     load_config(find_root(target), loader=loader)
     payload = REGISTRY.snapshot()

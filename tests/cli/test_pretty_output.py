@@ -332,19 +332,24 @@ def test_render_manifest_list_empty():
     assert "no entries" in buf.getvalue()
 
 
-def test_render_plugins_list_shows_detector():
+def test_render_plugins_list_shows_detector_and_source():
+    """Renders the registry snapshot shape, so the source column is the recorded source."""
     con, buf = _console()
     render_plugins_list(
         con,
         {
-            "detectors": {"PY-SEC-EVAL": "builtin"},
-            "languages": [],
-            "reporters": [],
-            "profiles": [],
+            "detectors": {
+                "PY-SEC-EVAL": {"category": "security", "source": "built-in"},
+                "HOUSE-NO-PRINT": {"category": "house", "source": "house_rules.py"},
+            },
+            "languages": {},
+            "reporters": {},
             "warnings": [],
         },
     )
-    assert "PY-SEC-EVAL" in buf.getvalue()
+    out = buf.getvalue()
+    assert "PY-SEC-EVAL" in out and "built-in" in out
+    assert "HOUSE-NO-PRINT" in out and "house_rules.py" in out
 
 
 def test_render_discover_shows_file_and_role():

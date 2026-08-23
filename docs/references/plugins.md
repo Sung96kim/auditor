@@ -27,6 +27,8 @@ auditr plugins list --json
 - Entry points and config-named modules load unconditionally. Local files do not; see below.
 - A plugin that raises on import does not crash the auditor. The failure becomes a warning in the
   `plugins list` output.
+- The output has one section per registry: detectors, languages, reporters. Profiles are TOML
+  resolved by name or path rather than registered classes, so they get no section.
 
 ## Local plugins and trust
 
