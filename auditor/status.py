@@ -9,13 +9,12 @@ import json
 import os
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from auditor.models import ScanResult
+from auditor.models import ScanResult, Severity
 from auditor.paths import ensure_repo_dir, read_json_dict, repo_dir
 
-_TIERS = ("blocking", "high", "medium", "low", "suggestion")
 _LOCK_TIMEOUT_S = 2.0
 _LOCK_STALE_S = 30.0
 _LOCK_POLL_S = 0.02
@@ -39,7 +38,7 @@ def _lock(path: Path) -> Iterator[None]:
 
     Breaks a lock older than 30 s at once and any lock after 2 s of waiting, live holder or not:
     this is a status cache, not a mutex, so a lost update costs one stale status line and waiting
-    on a wedged writer would cost the whole scan.
+    on a wedged writer would cost the whole scan. Every retry sleeps, including past the deadline.
     """
     deadline = time.monotonic() + _LOCK_TIMEOUT_S
     while True:
@@ -49,13 +48,17 @@ def _lock(path: Path) -> Iterator[None]:
         except FileExistsError:
             if _is_stale(path) or time.monotonic() > deadline:
                 path.unlink(missing_ok=True)
-            else:
-                time.sleep(_LOCK_POLL_S)
+            time.sleep(_LOCK_POLL_S)
     try:
         yield
     finally:
+        # Only remove the lock still on disk: a waiter that broke ours has its own there, and
+        # unlinking that one hands a third writer the lock mid-write.
+        mine = os.fstat(fd)
         os.close(fd)
-        path.unlink(missing_ok=True)
+        with suppress(OSError):
+            if os.path.samestat(os.stat(path), mine):
+                path.unlink()
 
 
 def merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
@@ -73,7 +76,7 @@ def merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
         with _lock(directory / "status.lock"):
             data = read_json_dict(out)
             data[block] = payload
-            tmp = directory / "status.json.tmp"
+            tmp = directory / f"status.json.{os.getpid()}.tmp"
             tmp.write_text(json.dumps(data))
             os.replace(tmp, out)
     except OSError:
@@ -82,10 +85,10 @@ def merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
 
 
 def write_status(root: Path, results: list[ScanResult], *, configured: bool) -> Path:
-    counts = {tier: 0 for tier in _TIERS}
+    counts = {sev.value: 0 for sev in Severity}
     for r in results:
         for sev, n in r.counts.items():
-            counts[sev.value] = counts.get(sev.value, 0) + n
+            counts[sev.value] += n
     return merge_status(
         root,
         "scan",

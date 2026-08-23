@@ -241,7 +241,10 @@ def scan(
         )
         return
 
-    if target.is_dir():
+    # Only a full, unscoped run describes the repo's posture; a subtree or diff scan would file
+    # its partial roll-up as the whole repo's. Deliberately before baseline filtering: the
+    # baseline is a gate on what to report, not a statement about what is in the tree.
+    if report_only is None and target.is_dir() and target.resolve() == root.resolve():
         write_status(root, results, configured=is_configured(root))
 
     hidden = 0

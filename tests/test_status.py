@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 
+from auditor import status
 from auditor.models import (
     Category,
     FileRole,
@@ -14,7 +15,7 @@ from auditor.models import (
     Severity,
     VerdictKind,
 )
-from auditor.status import merge_status, status_path, write_status
+from auditor.status import _lock, merge_status, status_path, write_status
 
 
 def _result(sev: Severity) -> ScanResult:
@@ -102,3 +103,52 @@ def test_torn_status_file_is_replaced_not_merged(tmp_path: Path):
     path.write_text("{not json")
     write_status(tmp_path, [_result(Severity.HIGH)], configured=True)
     assert json.loads(path.read_text())["scan"]["severity"]["high"] == 1
+
+
+def test_severity_tiers_come_from_the_enum(tmp_path: Path):
+    """The tiers were a hand-copied tuple, so a new Severity member would land in the file
+    through a .get fallback and be dropped by the status line's fixed split."""
+    written = json.loads(write_status(tmp_path, [], configured=False).read_text())
+    assert set(written["scan"]["severity"]) == {sev.value for sev in Severity}
+
+
+def test_lock_only_removes_the_file_it_still_holds(tmp_path: Path):
+    """A waiter that broke our lock owns the one on disk now; unlinking it hands a third writer
+    the lock while the second is mid-write."""
+    path = tmp_path / "status.lock"
+    with _lock(path):
+        path.unlink()
+        path.write_text("the waiter's lock")
+    assert path.exists()
+
+
+def test_lock_sleeps_on_every_retry_past_the_deadline(tmp_path: Path, monkeypatch):
+    """Past the deadline the loop skipped the sleep, so racing a live writer spun on a core."""
+    path = tmp_path / "status.lock"
+    path.write_text("")
+    monkeypatch.setattr(status, "_LOCK_TIMEOUT_S", 0.0)
+    rounds: list[float] = []
+
+    def _sleep(seconds: float) -> None:
+        rounds.append(seconds)
+        if len(rounds) < 3:
+            path.write_text("")  # a competitor takes it again
+
+    monkeypatch.setattr(time, "sleep", _sleep)
+    with _lock(path):
+        pass
+    assert len(rounds) == 3
+
+
+def test_tmp_file_is_per_process(tmp_path: Path, monkeypatch):
+    """Two processes sharing status.json.tmp can clobber each other's half-written file."""
+    seen: list[str] = []
+    real = Path.write_text
+
+    def spy(self, *args, **kwargs):
+        seen.append(self.name)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", spy)
+    merge_status(tmp_path, "graph", {"nodes": 1})
+    assert f"status.json.{os.getpid()}.tmp" in seen

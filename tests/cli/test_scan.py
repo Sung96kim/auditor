@@ -314,6 +314,31 @@ def test_scan_dir_writes_status_cache_configured_true(sample_repo):
     assert data["configured"] is True
 
 
+@pytest.mark.parametrize("scope", ["subtree", "since"])
+def test_scoped_scan_leaves_the_root_status_cache_alone(sample_repo, scope):
+    """A subtree or diff scan reports part of the tree; filing that roll-up as the repo's posture
+    made the status line drop findings that are still there. The plugin's Stop hook runs
+    `scan --since HEAD` every turn, so this was the normal case, not an edge one."""
+    if scope == "since":
+        git(sample_repo, "init", "-q")
+        git(sample_repo, "config", "user.email", "t@example.com")
+        git(sample_repo, "config", "user.name", "auditor tests")
+        git(sample_repo, "add", "-A")
+        git(sample_repo, "commit", "-qm", "init")
+    assert invoke("scan", str(sample_repo), "--no-index").exit_code == 0
+    before = json.loads(status_path(sample_repo).read_text())["scan"]
+    assert before["severity"]["blocking"] >= 1
+
+    args = (
+        ["scan", str(sample_repo / "src")]
+        if scope == "subtree"
+        else ["scan", str(sample_repo), "--since", "HEAD"]
+    )
+    assert invoke(*args, "--no-index", "--root", str(sample_repo)).exit_code == 0
+
+    assert json.loads(status_path(sample_repo).read_text())["scan"] == before
+
+
 def test_scan_file_target_does_not_write_status_cache(sample_repo):
     clean = sample_repo / "src" / "clean.py"
     result = invoke("scan", str(clean), "--no-index")

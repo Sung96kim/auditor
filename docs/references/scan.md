@@ -155,6 +155,11 @@ auditr scan . -vvv
 
 - A directory scan writes `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`: per-severity counts,
   whether the repo has auditor configuration, and a write timestamp, all under a `scan` key.
+- Only a full scan of the repo root writes it. `--since` / `--changed` / `--vs-base` and a
+  subdirectory target report part of the tree, so they leave the last full scan's counts in place
+  rather than filing a partial roll-up as the repo's posture.
+- The write happens before baseline filtering, so `--baseline` records what is in the tree, not
+  what the gate chose to show.
 - Nothing is written into the repository. `repo_dir_key` and the rest of the layout are in
   [configuration.md](configuration.md).
 - The file holds one block per writer and each writer merges only its own, so a second writer's

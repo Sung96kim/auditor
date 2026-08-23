@@ -7,9 +7,12 @@ import time
 from pathlib import Path
 
 import pytest
+from _support import result_with
 
 from auditor.discovery import find_root
+from auditor.models import Severity
 from auditor.paths import auditor_home, ensure_repo_dir, repo_dir_key
+from auditor.status import merge_status, write_status
 
 SCRIPT = (
     Path(__file__).resolve().parents[2] / "plugin" / "statusline" / "auditor_status.py"
@@ -35,18 +38,20 @@ def _run(cwd: Path) -> str:
 
 
 def _write_status(cwd: Path, severity: dict, configured=True, age=0):
-    """Write where a scan from ``cwd`` would: the status line walks up to the root first, so the
-    helper has to as well or a nested-cwd test writes to the wrong key."""
-    (ensure_repo_dir(find_root(cwd)) / "status.json").write_text(
-        json.dumps(
-            {
-                "scan": {
-                    "severity": severity,
-                    "configured": configured,
-                    "written_at": int(time.time()) - age,
-                }
-            }
-        )
+    """Write where a scan from ``cwd`` would, through production's own writer.
+
+    The status line walks up to the root first, so the helper has to as well or a nested-cwd test
+    writes to the wrong key. Hand-building the payload here made every test in this file agree
+    with a literal instead of with `auditor.status`.
+    """
+    merge_status(
+        find_root(cwd),
+        "scan",
+        {
+            "severity": severity,
+            "configured": configured,
+            "written_at": int(time.time()) - age,
+        },
     )
 
 
@@ -181,4 +186,23 @@ def test_ignores_a_legacy_in_repo_status_file(tmp_path):
             }
         )
     )
+    assert "not set up" in _run(tmp_path)
+
+
+def test_statusline_reads_what_write_status_wrote(tmp_path):
+    """The one test that closes the loop: production writes the file, the shipped status line
+    reads it. It touches all three keys, so renaming any of them in `auditor.status` fails here
+    instead of silently blanking or misreporting the segment in every session."""
+    write_status(
+        tmp_path,
+        [result_with("m.py", Severity.HIGH, Severity.LOW)],
+        configured=True,
+    )
+    out = _run(tmp_path)
+    assert "1 high" in out and "+1 lower" in out  # severity
+    assert "⟳" not in out  # written_at: a scan that just ran is not stale
+
+
+def test_statusline_reads_the_unconfigured_flag_write_status_wrote(tmp_path):
+    write_status(tmp_path, [], configured=False)
     assert "not set up" in _run(tmp_path)
