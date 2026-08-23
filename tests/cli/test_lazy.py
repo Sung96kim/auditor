@@ -1,21 +1,34 @@
 """The lazy ``graph`` mount: full help without the graph stack, real commands on dispatch."""
 
+import importlib
 import subprocess
 import sys
 import types
 from pathlib import Path
 from typing import ClassVar
 
+import click
 import pytest
 import typer
 from _support import invoke
+from typer.main import get_group
 from typer.testing import CliRunner
 
-from auditor.cli.lazy import LazyGroup
+from auditor.cli.graph import graph_app
+from auditor.cli.lazy import _ADOPTED, LazyGraphGroup, LazyGroup
 
 _ROOT = Path(__file__).resolve().parents[2]
-_HEAVY = ("auditor.cli.graph", "auditor.graph.build", "networkx", "sklearn")
-_PROBE = f"import sys, auditor.cli\nprint([m for m in {_HEAVY!r} if m in sys.modules])"
+_HEAVY = (
+    "auditor.cli.graph",
+    "auditor.graph.build",
+    "numpy",
+    "scipy",
+    "networkx",
+    "sklearn",
+)
+_LOADED = f"print([m for m in {_HEAVY!r} if m in sys.modules], file=sys.stderr)"
+_IMPORT_PROBE = f"import sys, auditor.cli\n{_LOADED}\n"
+_HELP_PROBE = f"import sys\nfrom auditor.cli import app\napp(['--help'], standalone_mode=False)\n{_LOADED}\n"
 _SUBCOMMANDS = (
     "build",
     "serve",
@@ -27,6 +40,22 @@ _SUBCOMMANDS = (
     "search",
     "usages",
 )
+
+
+def _fail_to_import(name: str) -> None:
+    raise ImportError(f"No module named {name!r}")
+
+
+def _probe(source: str) -> str:
+    """Run ``source`` in a fresh interpreter and return what it wrote to stderr."""
+    run = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return run.stderr.strip()
 
 
 @pytest.fixture
@@ -63,15 +92,13 @@ def test_root_help_lists_graph_with_its_help_text():
 
 
 def test_importing_the_cli_does_not_import_the_graph_stack():
-    """A fresh interpreter: nothing under auditor.cli may pull numpy/scikit-learn/networkx in."""
-    probe = subprocess.run(
-        [sys.executable, "-c", _PROBE],
-        cwd=_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert probe.stdout.strip() == "[]"
+    """A fresh interpreter: nothing under auditor.cli may pull numpy/scipy/scikit-learn/networkx in."""
+    assert _probe(_IMPORT_PROBE) == "[]"
+
+
+def test_rendering_the_root_help_does_not_import_the_graph_stack():
+    """Importing is only half of it — building and printing the whole help tree must stay cheap."""
+    assert _probe(_HELP_PROBE) == "[]"
 
 
 def test_graph_help_lists_the_real_subcommands():
@@ -119,6 +146,45 @@ def test_the_mount_adopts_the_sub_apps_callback_and_epilog(
     assert "tasted" in ran.output
 
 
-def test_an_unbound_lazy_group_names_the_missing_attribute():
-    with pytest.raises(RuntimeError, match="LazyGroup.module is not set"):
-        LazyGroup(name="unbound")._load()
+def test_the_mount_adopts_every_attribute_in_the_allowlist():
+    """``_ADOPTED`` is a positive allowlist; a name that stops being copied is otherwise silent."""
+    mount = LazyGraphGroup(name="graph")
+    mount._load()
+    reference = get_group(graph_app)
+    for name in _ADOPTED:
+        assert getattr(mount, name) == getattr(reference, name), name
+
+
+def test_a_failing_deferred_import_surfaces_as_a_click_exception(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A broken graph dependency prints one line, and the next dispatch repeats it."""
+    mount = LazyGraphGroup(name="graph")
+    monkeypatch.setattr(importlib, "import_module", _fail_to_import)
+
+    with pytest.raises(click.ClickException) as first:
+        mount._load()
+    assert "`auditr graph` is unavailable" in first.value.message
+    assert not mount.commands
+
+    monkeypatch.undo()
+    with pytest.raises(click.ClickException) as second:
+        mount._load()
+    assert second.value is first.value
+
+
+@pytest.mark.parametrize(
+    ("module", "attribute", "expected"),
+    [
+        ("", "", "LazyGroup.module is not set"),
+        ("auditor.cli.graph", "", "LazyGroup.attribute is not set"),
+    ],
+)
+def test_an_unbound_lazy_group_names_the_class_var_it_is_missing(
+    module: str, attribute: str, expected: str
+):
+    unbound: type[LazyGroup] = type(
+        "_Unbound", (LazyGroup,), {"module": module, "attribute": attribute}
+    )
+    with pytest.raises(RuntimeError, match=expected):
+        unbound(name="unbound")._load()

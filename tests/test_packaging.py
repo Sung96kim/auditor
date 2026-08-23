@@ -48,6 +48,11 @@ def test_opt_in_extras_are_pinned(pyproject: dict, extra: str, expected: list[st
     assert pyproject["project"]["optional-dependencies"][extra] == expected
 
 
+def test_typer_is_ceilinged_because_the_lazy_mount_uses_internals(pyproject: dict):
+    """The graph mount rides ``typer.main.get_group`` and ``TyperGroup`` internals."""
+    assert "typer>=0.26,<0.27" in pyproject["project"]["dependencies"]
+
+
 @pytest.mark.parametrize(
     "sdk", ["claude-agent-sdk", "openai-codex", "sqlite-vec", "model2vec"]
 )

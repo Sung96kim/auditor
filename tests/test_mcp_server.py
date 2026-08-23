@@ -29,6 +29,17 @@ from auditor.models import (
     VerdictKind,
 )
 
+_GRAPH_TOOLS = {
+    "graph_build",
+    "graph_related",
+    "graph_neighbors",
+    "graph_concept",
+    "graph_clusters",
+    "graph_search",
+    "graph_usages",
+    "graph_overview",
+}
+
 
 @pytest.mark.parametrize(
     "tool, args, message",
@@ -705,10 +716,10 @@ def test_mcp_server_shim_reexports_package_objects():
     assert auditor.mcp_server.main is auditor.mcp.main
 
 
-def test_every_graph_tool_registers_unconditionally():
+async def test_every_graph_tool_registers_unconditionally():
     """The graph libraries are core dependencies, so no import guard may hide these tools."""
-    assert not hasattr(auditor.mcp_server, "_GRAPH_OK")
-    assert not hasattr(auditor.mcp.graph_tools, "_GRAPH_OK")
+    names = {t.name for t in await mcp.list_tools()}
+    assert names >= _GRAPH_TOOLS, sorted(_GRAPH_TOOLS - names)
 
 
 # --- output-volume hardening ------------------------------------------------------------
