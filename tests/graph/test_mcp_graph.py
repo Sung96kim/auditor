@@ -205,3 +205,77 @@ async def test_graph_unresolved_before_a_build_is_empty(graph_repo: Path):
             _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
             == []
         )
+
+
+async def test_graph_flow_returns_a_nested_tree(graph_repo_flow: Path):
+    path = str(graph_repo_flow)
+    await audit_target(graph_repo_flow, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        payload = _data(
+            await c.call_tool(
+                "graph_flow", {"symbol": "entry", "path": path, "depth": 2}
+            )
+        )
+    assert payload["resolved"] == "m.py::entry"
+    assert payload["direction"] == "out" and payload["modules"] == ["m.py"]
+    middle = payload["root"]["children"][0]
+    assert middle["id"] == "m.py::middle" and middle["edge"] == "calls"
+    assert middle["children"][0]["id"] == "m.py::leaf"
+    assert payload["truncated"] is False
+
+
+async def test_graph_flow_in_direction_and_limit(graph_repo_flow: Path):
+    path = str(graph_repo_flow)
+    await audit_target(graph_repo_flow, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        inward = _data(
+            await c.call_tool(
+                "graph_flow",
+                {"symbol": "leaf", "path": path, "direction": "in", "depth": 2},
+            )
+        )
+        capped = _data(
+            await c.call_tool(
+                "graph_flow", {"symbol": "entry", "path": path, "depth": 2, "limit": 1}
+            )
+        )
+    assert [c["id"] for c in inward["root"]["children"]] == ["m.py::middle"]
+    assert capped["truncated"] is True and len(capped["root"]["children"]) == 1
+
+
+async def test_graph_flow_clamps_an_oversized_limit(graph_repo_flow: Path):
+    """One JSON tree per call: an unbounded limit defeats the point of asking for a tree."""
+    path = str(graph_repo_flow)
+    await audit_target(graph_repo_flow, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        payload = _data(
+            await c.call_tool(
+                "graph_flow", {"symbol": "entry", "path": path, "limit": 99_999}
+            )
+        )
+    assert payload["limit"] == 1000
+
+
+async def test_graph_flow_rejects_an_unknown_direction(graph_repo_flow: Path):
+    """FlowDirection is the whole validation: anything but out/in is a tool error."""
+    path = str(graph_repo_flow)
+    await audit_target(graph_repo_flow, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        with pytest.raises(ToolError):
+            await c.call_tool(
+                "graph_flow", {"symbol": "entry", "path": path, "direction": "up"}
+            )
+
+
+async def test_graph_flow_unknown_symbol_is_empty(graph_repo_flow: Path):
+    path = str(graph_repo_flow)
+    await audit_target(graph_repo_flow, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        result = await c.call_tool("graph_flow", {"symbol": "nope", "path": path})
+    # fastmcp leaves `.data` unset for an empty dict, so read the payload it did structure
+    assert result.structured_content == {} and not result.is_error

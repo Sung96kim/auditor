@@ -91,11 +91,15 @@ args = ["run", "-i", "--rm",
 - Malware backends: `malware_status`, `malware_update_dbs`, `malware_install`. Only
   `malware_update_dbs` and `malware_install` touch the network, and only when called.
 - Semantic graph, always registered: `graph_build`, `graph_search`, `graph_usages`,
-  `graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters`, `graph_overview`,
-  `graph_unresolved`. The graph libraries are core dependencies, so `auditr[mcp]` is enough. See
-  [graph.md](graph.md).
+  `graph_related`, `graph_neighbors`, `graph_flow`, `graph_concept`, `graph_clusters`,
+  `graph_overview`, `graph_unresolved`. The graph libraries are core dependencies, so
+  `auditr[mcp]` is enough. See [graph.md](graph.md).
 - `graph_overview` caps `god_concepts` and `bottlenecks` at 5 entries each and reports the true
   totals as `god_concept_count` and `bottleneck_count`.
+- `graph_flow(symbol, path, direction, depth, limit)` returns a nested tree rather than a flat
+  list: one call reads a whole code path. `direction="in"` reverses it. Reach for it instead of
+  chaining `graph_neighbors`, and read the `modules` list first. `limit` counts emitted nodes and
+  is capped at 1000; the default of 200 is about 40 KB of JSON.
 - `graph_unresolved` returns the refinement queue: one row per fact the deterministic resolver
   could not place, worst first, filtered by `reason` and `call_form` (both repeatable lists,
   validated, so an unknown value is an error), `external` and `limit`. Read it alongside

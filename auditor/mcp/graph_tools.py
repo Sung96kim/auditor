@@ -12,6 +12,7 @@ from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
+from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
     QUEUE_ROW_LIMIT,
     CallForm,
@@ -108,6 +109,37 @@ async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
         return await GraphQuery(index).usages(symbol, sample=sample)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def graph_flow(
+    symbol: str,
+    path: str = ".",
+    direction: str = "out",
+    depth: int = 4,
+    limit: int = 200,
+) -> dict:
+    """Read a code path from a symbol as a nested tree, instead of chaining graph_neighbors
+    calls. Outward (direction="out") follows calls and callback_arg, expanding a base method's
+    overriders and a symbol's registry as ``dispatches_to``; direction="in" reverses it into
+    "what reaches this". Returns {symbol, resolved, ambiguous, root, direction, modules,
+    truncated, limit}, or {} if the symbol isn't in the graph. ``modules``, the ordered list of
+    modules the path touches, is usually the architecture answer. Nodes carry ``hub`` (with
+    ``hub_kind``) when the node's fan crossed the hub floor, ``seen_ref``/``cycle`` when the walk
+    already covered them, ``stopped`` when a stop glob cut the branch, and ``unresolved`` for
+    calls the resolver could not place. ``limit`` counts emitted nodes and is capped at 1000; the
+    default of 200 is about 40 KB of JSON."""
+    root = find_root(Path(path))
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        return await GraphQuery(index).flow(
+            symbol,
+            FlowOptions(
+                direction=FlowDirection(direction),
+                depth=depth,
+                limit=min(limit, 1000),
+                hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+            ),
+        )
 
 
 @mcp.tool(annotations=READ_ONLY)
