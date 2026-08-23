@@ -7,6 +7,7 @@ and one directory per repo keyed by :func:`repo_dir_key`. Repo-*authored* input
 stays in the repo and is read from there; nothing is written back into it.
 """
 
+import functools
 import hashlib
 import json
 import os
@@ -115,9 +116,16 @@ def repo_identity(root: Path) -> str:
 def partition_for(root: Path) -> Partition:
     """The identity and toplevel-relative prefix that bind an index handle to one checkout.
 
-    Costs two git calls. Outside git, and for a root that is not under its own toplevel, the
-    prefix is empty and the identity falls back to the partition key.
+    Cached per process on the resolved root, because every CLI invocation opens the index and the
+    two git calls would otherwise land on the fast commands too.
     """
+    return _partition_for(root.resolve())
+
+
+@functools.cache
+def _partition_for(root: Path) -> Partition:
+    """:func:`partition_for` on an already-resolved root. Outside git, and for a root that is not
+    under its own toplevel, the prefix is empty and the identity falls back to the partition key."""
     identity = repo_identity(root)
     toplevel = git_output(root, "rev-parse", "--show-toplevel")
     if toplevel is None:

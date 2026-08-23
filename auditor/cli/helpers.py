@@ -19,7 +19,8 @@ from rich.text import Text
 from auditor.cli.console import ACCENT, console, err_console
 from auditor.database import IndexStore
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
-from auditor.paths import index_db_path, repo_key
+from auditor.models import Partition
+from auditor.paths import index_db_path, partition_for, repo_key
 from auditor.registry import REGISTRY
 
 _T = TypeVar("_T")
@@ -184,9 +185,10 @@ def run_live(
 async def open_index(root: Path) -> IndexStore:
     """Connect to the shared global index, scoped to ``root``'s partition.
 
-    Use as ``async with await open_index(root)``.
+    Binds the checkout identity as well as the partition key, so every worktree of one checkout
+    shares the refinement tables. Use as ``async with await open_index(root)``.
     """
-    return await _connect(index_db_path(), repo_key(root))
+    return await _connect(index_db_path(), repo_key(root), partition_for(root))
 
 
 async def open_shared_index() -> IndexStore:
@@ -195,14 +197,16 @@ async def open_shared_index() -> IndexStore:
     return await _connect(index_db_path(), DEFAULT_REPO)
 
 
-async def _connect(db_path: Path, repo: str) -> IndexStore:
+async def _connect(
+    db_path: Path, repo: str, partition: Partition | None = None
+) -> IndexStore:
     """Open the index, turning an unmigratable schema into a one-line repair instruction.
 
     A declaration SQLite cannot add to an existing identity table would otherwise raise on every
     command, with no command left that could repair it.
     """
     try:
-        return await IndexStore.connect(db_path, repo)
+        return await IndexStore.connect(db_path, repo, partition)
     except UnmigratableColumn as exc:
         fail(
             f"the index cannot be upgraded: {exc}. Delete it and re-scan: rm {db_path}"

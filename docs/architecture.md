@@ -60,6 +60,8 @@ Paths are relative to the repo root.
   handle to one repo's partition. `database/base.py`'s `SqliteWorker` owns the one thread-bound
   connection; every store awaits through it, so writes serialize safely.
 - `paths.py`: `auditor_home()`, `index_db_path()`, `repo_key()` (the index partition key),
+  `partition_for()` (the checkout identity plus the toplevel-relative prefix, cached per process
+  and bound by `cli/helpers.open_index`),
   `read_json_dict()` (the one tolerant JSON-object reader the home's files share), and the
   user-home layout: `user_config_path()`, `user_schema_path()`, `models_dir()`, plus
   `repo_identity()` / `repo_dir_key()` / `repo_dir()` / `ensure_repo_dir()`. The repo dir is keyed
