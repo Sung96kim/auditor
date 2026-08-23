@@ -38,6 +38,8 @@ class AuditAggregator:
         return _render(await self._results())
 
     async def write(self, out_path: Path) -> Path:
+        """Render the report to ``out_path``, creating missing parent directories."""
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(await self.markdown())
         return out_path
 

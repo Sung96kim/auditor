@@ -172,9 +172,11 @@ def open_shared_index() -> Coroutine[Any, Any, IndexStore]:
 
 
 def emit(rendered: str, output: Path | None) -> None:
-    """Write a rendered report to ``output`` (with a stderr note) or echo it to stdout."""
+    """Write a rendered report to ``output`` (with a stderr note) or echo it to stdout.
+    Missing parent directories of ``output`` are created."""
     if output is None:
         typer.echo(rendered)
         return
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding="utf-8")
     err_console.print(f"[green]✓[/green] wrote [bold]{output}[/bold]")

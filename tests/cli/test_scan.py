@@ -49,6 +49,13 @@ def test_scan_output_to_file(sample_repo, tmp_path):
     assert out.name in result.output  # stdout/stderr notes where it wrote
 
 
+def test_scan_output_creates_missing_directory(sample_repo, tmp_path):
+    out = tmp_path / "reports" / "nested" / "report.json"
+    result = invoke("scan", str(sample_repo / "src"), "-o", str(out))
+    assert result.exit_code == 0, result.output
+    assert json.loads(out.read_text())["totals"]["blocking"] >= 1
+
+
 # --- severity filtering ------------------------------------------------------------------
 
 

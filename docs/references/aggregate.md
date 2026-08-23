@@ -12,14 +12,14 @@ auditr scan . -i
 # write AUDIT.md in the current directory
 auditr aggregate .
 
-# write the rollup somewhere else (the directory must already exist)
+# write the rollup somewhere else (missing directories are created)
 auditr aggregate . -o reports/AUDIT.md
 ```
 
 - `TARGET` only resolves the project root; the rollup always covers everything the index holds
   for that repo, not just the path you pass.
 - `-o` defaults to `AUDIT.md` in the current working directory and overwrites an existing file.
-  It does not create missing parent directories.
+  Missing parent directories are created.
 - With an empty or missing index the rollup still writes, reporting zero files.
 
 ## What AUDIT.md contains
