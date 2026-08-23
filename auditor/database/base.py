@@ -97,22 +97,28 @@ class Table(BaseModel):
         lead = ("repo",) if (self.repo_fk and body) else ()
         return (*lead, *body)
 
+    def declared_columns(self) -> tuple[Column, ...]:
+        """Every column object in DDL order, the repo FK first when ``repo_fk``."""
+        return (REPO_FK, *self.cols) if self.repo_fk else self.cols
+
     def insert_columns(self) -> tuple[str, ...]:
         """Column names for an INSERT — repo prepended when repo_fk; autoincrement cols excluded."""
-        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
-        return tuple(c.name for c in cols if not c.autoincrement)
+        return tuple(c.name for c in self.declared_columns() if not c.autoincrement)
 
     def column_names(self) -> tuple[str, ...]:
         """Every declared column, in DDL order — the repo FK first when ``repo_fk``."""
-        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
-        return tuple(c.name for c in cols)
+        return tuple(c.name for c in self.declared_columns())
 
     def placeholders(self) -> str:
         return ", ".join("?" * len(self.insert_columns()))
 
-    def render(self, name: str) -> str:
-        """The CREATE TABLE/INDEX statements for this table under ``name``."""
-        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
+    def statements(self, name: str) -> tuple[str, ...]:
+        """The CREATE TABLE and CREATE INDEX statements for this table under ``name``.
+
+        One statement per element, so a caller can run them inside a transaction;
+        ``executescript`` would commit first.
+        """
+        cols = self.declared_columns()
         body = ",\n    ".join(c.render() for c in cols)
         pk = self.pk_names()
         single_auto = len(pk) == 1 and any(
@@ -120,9 +126,14 @@ class Table(BaseModel):
         )
         if pk and not single_auto:
             body += f",\n    PRIMARY KEY ({', '.join(pk)})"
-        stmts = [f"CREATE TABLE IF NOT EXISTS {name} (\n    {body}\n);"]
-        stmts += [ix.render(name) for ix in self.indexes]
-        return "\n".join(stmts)
+        return (
+            f"CREATE TABLE IF NOT EXISTS {name} (\n    {body}\n);",
+            *(ix.render(name) for ix in self.indexes),
+        )
+
+    def render(self, name: str) -> str:
+        """The CREATE TABLE/INDEX statements for this table under ``name``, as one script."""
+        return "\n".join(self.statements(name))
 
 
 def retry_on_locked(fn: Any) -> Any:

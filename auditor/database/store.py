@@ -7,7 +7,6 @@ from typing import TypeVar
 
 from auditor.database.base import (
     DEFAULT_REPO,
-    REPO_FK,
     SCHEMA_VERSION,
     BaseDB,
     SqliteWorker,
@@ -69,7 +68,11 @@ class IndexStore(BaseDB):
         await worker.start()
         store = cls(worker, repo, partition)
         store.db_path = db_path
-        await worker.run(store._init_schema)
+        try:
+            await worker.run(store._init_schema)
+        except BaseException:  # a failed bump must not leave a worker thread behind
+            worker.stop()
+            raise
         for sub in BaseDB._registry:
             setattr(store, sub.attr, sub(worker, repo, store.partition))
         return store
@@ -77,6 +80,11 @@ class IndexStore(BaseDB):
     @staticmethod
     @retry_on_locked
     def _init_schema(conn: sqlite3.Connection) -> None:
+        """Bring one database to ``SCHEMA_VERSION`` as a single transaction.
+
+        Order matters: the identity tables are reconciled first, so a declaration SQLite cannot
+        migrate raises with the cached rows and the stored version still intact.
+        """
         # busy_timeout FIRST so plain writes wait under concurrency (parallel audit agents)
         # instead of erroring; the WAL switch + schema creation additionally need retry_on_locked
         # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
@@ -84,23 +92,38 @@ class IndexStore(BaseDB):
         if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
             conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        # the index is a pure cache: on a schema-version change, drop and rebuild rather than
-        # migrate — a re-scan repopulates it and old/new layouts never have to coexist.
-        existing = conn.execute("PRAGMA user_version").fetchone()[0]
-        schema = "\n".join(
-            t.render(n) for s in BaseDB._registry for n, t in s.TABLES.items()
-        )
+        stored = conn.execute("PRAGMA user_version").fetchone()[0]
+        existing = {
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        statements = [
+            stmt
+            for s in BaseDB._registry
+            for n, t in s.TABLES.items()
+            for stmt in t.statements(n)
+        ]
         cache_tables = tuple(
             n for s in BaseDB._registry for n, t in s.TABLES.items() if t.cache
         )
-        if existing and existing != SCHEMA_VERSION:
-            # rebuild only the derived cache tables; repos + ignores (user state) are preserved.
-            # children are listed before the parent so no FK-referenced row is pulled out mid-drop.
-            for table in cache_tables:
-                conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        conn.executescript(schema)
-        IndexStore._migrate_identity_tables(conn)
+        # the index is a pure cache: on any stored version that is not this one, drop and rebuild
+        # rather than migrate. A stamp of 0 on a populated database is a stamp that was lost, not
+        # a fresh database, so it rebuilds too; only an empty file skips the sweep.
+        stale = stored != SCHEMA_VERSION and bool(existing & set(cache_tables))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            IndexStore._migrate_identity_tables(conn)
+            if stale:
+                # only the derived cache tables; repos + ignores (user state) are preserved, and
+                # children come before the parent so no FK-referenced row is pulled out mid-drop.
+                for table in cache_tables:
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
+            for statement in statements:
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        except BaseException:
+            conn.rollback()
+            raise
         conn.commit()
 
     @staticmethod
@@ -108,8 +131,9 @@ class IndexStore(BaseDB):
         """Add columns an already-created ``cache=False`` table is missing.
 
         Cache tables are dropped and recreated on a version bump, so only the preserved ones need
-        this. SQLite refuses ``ADD COLUMN`` for a `NOT NULL` column without a default and for any
-        column carrying `REFERENCES`, so those two shapes raise instead of reaching sqlite3.
+        this. SQLite refuses ``ADD COLUMN`` for a `NOT NULL` column without a default, for a
+        `PRIMARY KEY` column and for any column carrying `REFERENCES`, so those three shapes raise
+        instead of reaching sqlite3.
         """
         for store in BaseDB._registry:
             for name, table in store.TABLES.items():
@@ -120,11 +144,14 @@ class IndexStore(BaseDB):
                     for r in conn.execute(f"PRAGMA table_info({name})")  # noqa: S608
                 }
                 if not present:
-                    continue  # created by this run's executescript, already current
-                cols = [REPO_FK, *table.cols] if table.repo_fk else list(table.cols)
-                for col in cols:
-                    if col.name in present or col.primary_key:
+                    continue  # this run creates it whole, already current
+                for col in table.declared_columns():
+                    if col.name in present:
                         continue
+                    if col.primary_key:
+                        raise UnmigratableColumn(
+                            name, col.name, "PRIMARY KEY on an added column"
+                        )
                     if col.not_null and col.default is None:
                         raise UnmigratableColumn(
                             name, col.name, "NOT NULL without a default"
