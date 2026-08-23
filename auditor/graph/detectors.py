@@ -97,7 +97,7 @@ class GraphDetector:
         message: str,
         evidence: str,
         suggestion: str,
-        subkind: str | None = None,
+        subkind: StrEnum | None = None,
     ) -> Finding:
         return Finding(
             rule_id=self.rule_id,
@@ -109,7 +109,7 @@ class GraphDetector:
             evidence=evidence,
             suggestion=suggestion,
             detector="graph",
-            subkind=subkind,
+            subkind=subkind.value if subkind is not None else None,
         )
 
     def _located(
@@ -119,7 +119,7 @@ class GraphDetector:
         message: str,
         evidence: str,
         suggestion: str,
-        subkind: str | None = None,
+        subkind: StrEnum | None = None,
     ) -> tuple[str, Finding]:
         return n.module, self._finding(
             line=n.line,
@@ -191,7 +191,7 @@ class GodConcept(GraphDetector):
                     message=message,
                     evidence=n.id,
                     suggestion=suggestion,
-                    subkind=kind.value,
+                    subkind=kind,
                 )
             )
         return out
