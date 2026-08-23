@@ -162,7 +162,7 @@ def test_statusline_parses_as_python_39():
     """Syntax only: it catches what 3.9 cannot parse (a `match` statement, a parenthesized
     `with`), not a stdlib API a 3.9 interpreter lacks. `X | None` parses everywhere, which is
     why the module carries `from __future__ import annotations` instead."""
-    ast.parse(SCRIPT.read_text(), feature_version=(3, 9))
+    assert isinstance(ast.parse(SCRIPT.read_text(), feature_version=(3, 9)), ast.Module)
 
 
 def test_walks_up_to_the_repo_root(git_repo):
