@@ -22,6 +22,12 @@ auditr graph usages ComponentBlueprint .
 # structural neighbors two hops out
 auditr graph neighbors get_user . --depth 2
 
+# read the code path out of an entry point, four hops deep
+auditr graph flow auditor/cli/scan.py::scan .
+
+# who reaches a symbol, instead of what it reaches
+auditr graph flow audit_target . --in
+
 # nearest semantic neighbors (name and usage similarity)
 auditr graph related get_user .
 
@@ -85,6 +91,46 @@ auditr graph export . --format dot > graph.dot
 - `clusters` lists every concept cluster with its id, label and member count.
 - Worked recipes with real command output live in the plugin's
   [explore-graph recipes](../../plugin/skills/explore-graph/references/recipes.md).
+
+## Flow
+
+`graph flow` answers "what does this code path do" in one call, instead of a chain of `neighbors`
+queries. It walks the graph breadth-first from one symbol and prints a tree.
+
+- Outward it follows `calls` and `callback_arg`. `--in` reverses that: what reaches the symbol.
+- The start symbol always expands, however wide it is. Hub collapsing applies to what it reaches.
+- A reached method with overriders expands each overrider as `dispatches_to`, so a call to a base
+  method shows the implementations it can land in. `--in` walks the other way, from an overrider
+  to its base.
+- A symbol registered in a registry module shows that module as a leaf. `--in` on the registry
+  module expands every symbol registered there, which is how decorator-driven dispatch reads.
+- The `modules` line above the tree is the ordered list of modules the path touches. That line,
+  not the tree, is usually the architecture answer.
+- Flags: `--depth` (default 4), `--limit` (default 200 nodes, shallow levels finish first),
+  `--kinds a,b` to follow extra edge kinds on top of the two defaults, `--include-tests` to keep
+  test symbols, `--stop-at GLOB` (repeatable) to stop expanding inside a module, `--expand-hubs`
+  to open a node the hub rule elided, `--json` for the raw payload.
+- Markers in the tree:
+  - `⊕ N elided` is a hub that was collapsed. A node is a hub when either count reaches
+    `graph.flow_hub_fan_in` (default 40): the symbols that reach it, dispatch children included,
+    or the children it would emit. `⊕ N hub` is the same fan on a node that expanded anyway, which
+    is what `--expand-hubs` and the start symbol give you.
+  - `↺ seen` is a node already shown elsewhere in the tree, `↺ cycle` a node that is its own
+    ancestor. Both are shown once and not expanded again.
+  - `⊣ stop` is a node a `--stop-at` glob matched: the path reached it, the tree does not go in.
+  - `? name` is a call the resolver could not place, dimmed when the name is bound from outside
+    the repo.
+- Bare names resolve the same way `usages` does: the highest-rank match becomes `resolved` and the
+  rest are listed under `ambiguous`.
+- `graph export --flow <symbol>` renders the same walk as Graphviz DOT.
+
+```bash
+# stop at the database layer and keep the tree readable
+auditr graph flow auditor/engine.py::audit_target . --stop-at 'auditor/database/*'
+
+# follow inheritance too, and open the hubs
+auditr graph flow auditor/models.py::Finding . --kinds inherits --expand-hubs
+```
 
 ## The unresolved queue
 

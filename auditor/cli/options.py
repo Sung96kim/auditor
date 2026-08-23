@@ -250,3 +250,41 @@ QueueExternal = Annotated[
         help="Show rows bound to a non-repo import (dimmed, sorted last).",
     ),
 ]
+
+
+# --- `graph flow` options ---
+FlowIn = Annotated[
+    bool,
+    typer.Option(
+        "--in", help="Reverse the walk: what reaches the symbol, not what it reaches."
+    ),
+]
+FlowDepth = Annotated[
+    int, typer.Option("--depth", help="Hops to follow from the symbol.")
+]
+FlowLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit", help="Cap on nodes emitted; shallow levels complete first."
+    ),
+]
+FlowKinds = Annotated[
+    str | None,
+    typer.Option(
+        "--kinds",
+        help="Extra edge kinds to follow, comma separated, e.g. --kinds inherits,references_type.",
+    ),
+]
+FlowIncludeTests = Annotated[
+    bool,
+    typer.Option(
+        "--include-tests", help="Keep test and test-support symbols in the tree."
+    ),
+]
+FlowExpandHubs = Annotated[
+    bool, typer.Option("--expand-hubs", help="Expand hubs instead of eliding them.")
+]
+FlowStopAt = Annotated[
+    list[str] | None,
+    typer.Option("--stop-at", help="Module glob to stop expanding at (repeatable)."),
+]

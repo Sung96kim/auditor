@@ -17,11 +17,21 @@ from auditor.cli.console import ACCENT, err_console
 from auditor.cli.graph_refine import register as register_refine
 from auditor.cli.helpers import present, run, run_staged, warn_unknown_config
 from auditor.cli.lazy import GRAPH_HELP
-from auditor.cli.options import GraphTarget
+from auditor.cli.options import (
+    FlowDepth,
+    FlowExpandHubs,
+    FlowIn,
+    FlowIncludeTests,
+    FlowKinds,
+    FlowLimit,
+    FlowStopAt,
+    GraphTarget,
+)
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
     render_graph_concept,
+    render_graph_flow,
     render_graph_neighbors,
     render_graph_related,
     render_graph_search,
@@ -33,6 +43,7 @@ from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
+from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.query import GraphQuery
 from auditor.graph.viz import build_payload, render_app, to_dot
 from auditor.paths import index_db_path, repo_key
@@ -189,6 +200,42 @@ def graph_usages(
     present(
         run(_query_cmd("usages")(root, symbol=symbol, sample=sample), "querying…"),
         render_graph_usages,
+        as_json=json_,
+    )
+
+
+def _split_kinds(raw: str | None) -> list[str]:
+    return [k.strip() for k in (raw or "").split(",") if k.strip()]
+
+
+@graph_app.command("flow")
+def graph_flow(
+    symbol: str,
+    target: GraphTarget = Path("."),
+    inbound: FlowIn = False,
+    depth: FlowDepth = 4,
+    limit: FlowLimit = 200,
+    kinds: FlowKinds = None,
+    include_tests: FlowIncludeTests = False,
+    expand_hubs: FlowExpandHubs = False,
+    stop_at: FlowStopAt = None,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Read a code path from a symbol: what it calls, or with --in what reaches it."""
+    root = find_root(target)
+    options = FlowOptions(
+        direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+        depth=depth,
+        limit=limit,
+        kinds=tuple(_split_kinds(kinds)),
+        include_tests=include_tests,
+        expand_hubs=expand_hubs,
+        stop_at=tuple(stop_at or ()),
+        hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+    )
+    present(
+        run(_query_cmd("flow")(root, symbol=symbol, options=options), "tracing flow…"),
+        render_graph_flow,
         as_json=json_,
     )
 

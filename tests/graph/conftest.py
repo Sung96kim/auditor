@@ -28,6 +28,12 @@ IMPL_SRC = (
     "        return load_user() or _local()\n\ndef _local():\n    return 1\n"
 )
 SVC_SRC = "def load_user():\n    return get_user_record()\n"
+# a three-link chain inside one module, so a flow query has something to walk end to end
+FLOW_CALLS = (
+    "def leaf(uid):\n    return uid\n\n"
+    "def middle(uid):\n    return leaf(uid)\n\n"
+    "def entry(uid):\n    return middle(uid)\n"
+)
 
 
 def _write_graph_repo(
@@ -62,6 +68,12 @@ def graph_repo_unconfigured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def graph_repo_with_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Calls that resolve inside the module, so structural neighbors exist to cap."""
     return _write_graph_repo(tmp_path, monkeypatch, module_source=RESOLVABLE_CALLS)
+
+
+@pytest.fixture
+def graph_repo_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A three-link call chain (entry -> middle -> leaf), the repo the flow surfaces walk."""
+    return _write_graph_repo(tmp_path, monkeypatch, module_source=FLOW_CALLS)
 
 
 @pytest.fixture
