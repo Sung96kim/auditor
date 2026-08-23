@@ -137,13 +137,15 @@ def test_sourcing_nests_and_restores_after_a_raise(reg):
 
 
 def test_sourcing_is_isolated_per_thread(reg):
-    """Two threads loading different plugins at once each record their own source."""
-    ready = threading.Barrier(2)
+    """Two threads loading different plugins at once each record their own source. Both barriers
+    matter: neither thread may register, or leave its block, until the other is inside its own."""
+    inside, recorded = threading.Barrier(2), threading.Barrier(2)
 
     def load(source: str, rule_id: str) -> None:
         with reg.sources.sourcing(source):
-            ready.wait(timeout=5)
+            inside.wait(timeout=5)
             _register(reg, "detector", rule_id=rule_id)
+            recorded.wait(timeout=5)
 
     threads = [
         threading.Thread(target=load, args=args)
