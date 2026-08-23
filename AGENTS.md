@@ -11,7 +11,7 @@ restructuring anything.
 
 ```bash
 uv python install 3.13                      # the version CI pins
-uv sync --extra dev --extra mcp --extra graph --extra ts   # what CI installs
+uv sync --extra dev --extra mcp --extra ts   # what CI installs
 uv run ruff check auditor auditr_observer.py tests   # lint (CI)
 uv run ruff format --check auditor auditr_observer.py tests   # format check (CI); drop --check to rewrite
 uv run pytest -q                            # full suite (CI)

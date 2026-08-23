@@ -44,7 +44,7 @@ Top-level keys on the resolved `AuditorSettings`, grouped by what they control:
 | `cli_frameworks` | `["typer", "click"]` | CLI frameworks whose free-function-command idiom is exempted from the OOP-orchestrator / cross-file duplicate-function heuristics. |
 | `design_system` | empty | `[tool.auditor.design_system]` — a project's declared DS primitives. The `design-system` TS rules stay silent until a repo opts in (see the TS/React section of the top-level README). |
 | `sqlalchemy` | both `false` | `expire_on_commit` / `async_session` — facts about the project's session factory the auditor can't see from a model file alone. Setting either activates a dormant rule (`SA-GREENLET-ATTR-AFTER-COMMIT` / `SA-IMPLICIT-LAZY-ASYNC`). |
-| `graph` | `enabled: false` | `[tool.auditor.graph]` — the semantic graph pass (needs the `graph` extra). `enabled = true` makes a plain `scan -i` also populate graph facts; otherwise use `auditr graph build` explicitly. |
+| `graph` | `enabled: false` | `[tool.auditor.graph]` — the semantic graph pass. `enabled = true` makes a plain `scan -i` also populate graph facts; otherwise use `auditr graph build` explicitly. |
 | `malware_scan` | `enabled: false` | `[tool.auditor.malware_scan]` — the opt-in ClamAV + osv-scanner shell-outs. `enabled = true`, or per-run `scan --malware`. |
 
 Verified example — a minimal standalone config that just picks a profile:

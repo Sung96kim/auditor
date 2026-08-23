@@ -43,11 +43,13 @@ docker compose run --rm auditor scan .
 
 - The PyPI distribution is `auditr`; the commands are `auditr` and `auditr-mcp`, with `auditor`
   and `auditor-mcp` as aliases.
+- `auditr-observer` installs alongside them as a placeholder until the observer ships: every
+  subcommand prints that it is not available in this release and exits 0.
 - Extras gate features: `mcp` for the MCP server, `ts` for TypeScript/React (tree-sitter),
   `code-mode` for sandboxed tool orchestration.
 - The semantic graph is part of the core install. `graph` survives as an empty extra so existing
   `auditr[graph]` install commands and `uv tool` receipts keep resolving. It costs every install
-  about 174 MB: scipy 91 MB (a transitive dependency of scikit-learn), scikit-learn 36 MB,
+  about 175 MB: scipy 91 MB (a transitive dependency of scikit-learn), scikit-learn 36 MB,
   numpy 33 MB, networkx 13 MB, snowballstemmer 2 MB.
 - `observer-claude`, `observer-codex`, `observer` and `vectors` are declared but nothing uses them
   yet. Each pulls a large SDK, so leave them out until a release says otherwise.
@@ -101,7 +103,7 @@ auditr-mcp
 
 ```bash
 # deps for the whole suite; never --all-extras, the observer and vectors SDKs are ~640MB
-uv sync --extra dev --extra mcp --extra graph --extra ts
+uv sync --extra dev --extra mcp --extra ts
 # the tests the CI test job runs (.github/workflows/ci.yml); that job also lints
 uv run pytest -q
 ```
