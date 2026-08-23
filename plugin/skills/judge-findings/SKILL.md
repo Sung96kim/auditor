@@ -21,7 +21,16 @@ apply a recommendation.
    - Unfamiliar with the JSON shape, or the payload is huge? Read `references/reading-output.md`
      — the compact vs full shapes, what `rules`/`omitted`/`totals` hold, and how to narrow with
      `severity=`/`rule=`/`limit=`/`detail=`.
-2. For each finding with `verdict_kind == "candidate"`, worst-severity-first:
+2. Order the `candidate` findings before you judge them. Severity is a risk ordering, not a
+   value ordering:
+   - Risk categories first, at `blocking`/`high`: `security`, `malware`, `secrets`,
+     `supply-chain`, `correctness`, `async`, `a11y`.
+   - Then the promoted maintainability categories: `oop-composition`, `dead-code`, `typing`,
+     `testing`, `config`, `style`, `design-system`, `react`. Every candidate in them earns its own
+     recommendation — they are never rolled up into a "+N lower" count, and never dismissed on
+     tier alone. `references/judging.md` carries the dismissal bar.
+   - Then everything else, worst-severity-first.
+3. For each candidate, in that order:
    - MCP path: `scan` defaults to compact output (no `evidence`) — call `finding_detail(file,
      rule_id, line)` first (or re-`scan` with `detail="full"`). CLI JSON already has `evidence`.
    - Read `message`, `evidence`, `suggestion`; open the site at `file:line`.
@@ -36,15 +45,22 @@ apply a recommendation.
        (`# auditor: skip: <RULE-ID>` with a short parenthetical reason), or the db-backed
        equivalent: `auditr ignore add <RULE-ID> --file <path> --line <n> --reason "<why>"`.
      - **dismiss** — a false positive not worth a permanent marker; state the reason.
+   - In a promoted category, the recommendation also names the extensibility payoff — what
+     becomes possible or cheaper once it lands: a second consumer drops in, a boundary becomes
+     typed, duplication collapses to one place.
    - Name the directive's line, don't place it. It anchors to the finding's reported line — for
      a multi-line statement (a wrapped `except (...)`, a decorated `def`) that's the
      *statement's* keyword line, not wherever in the block feels natural. A misplaced directive
      silently no-ops: it parses fine, matches nothing, and the finding keeps firing. See
      `references/examples.md` for a real instance of this happening in this very repo, plus two
      fully worked recommendations.
-3. Report `auto` findings as already-decided.
-4. End with a verdict summary: counts recommended-fix / recommended-suppress / dismissed, and the
-   worst remaining. The recommendations are the deliverable — apply none of them yourself.
+4. Report `auto` findings as already-decided.
+5. End with a verdict summary:
+   - Counts recommended-fix / recommended-suppress / dismissed, and the worst remaining.
+   - A **Maintainability recommendations** section, listed separately from the risk findings, with
+     one entry per promoted-category candidate.
+
+   The recommendations are the deliverable — apply none of them yourself.
 
 Severity: `blocking > high > medium > low > suggestion` (`blocking` is the top tier).
 

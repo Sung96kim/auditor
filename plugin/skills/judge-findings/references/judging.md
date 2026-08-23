@@ -21,6 +21,32 @@ This file covers every category that actually emits `candidate` findings (checke
 `secrets` (`CFG-SECRET-DETECTED`, `CFG-ENV-FILE-COMMITTED`) are **auto-verdict only** in this
 build — the tool already decided them deterministically, so report them as-is; don't re-litigate.
 
+## Maintainability bias
+
+Promoted categories: `oop-composition`, `dead-code`, `typing`, `testing`, `config`, `style`,
+`design-system`, `react`. Code cleanliness, future maintainability and extensibility are the whole
+value of these findings, so every candidate in them earns its own recommendation: they are
+never rolled up into a "+N lower" count, and never dismissed on tier alone. Severity is a risk
+ordering, not a value ordering.
+
+A dismissal here needs a code-grounded reason: a throwaway script, vendored code, or a deliberate
+weld whose rationale is written down. "Low severity" is not a reason.
+
+What a recommendation in each names (the real-issue-vs-false-positive heuristics stay in that
+category's own section below):
+
+- [oop-composition](#oop-composition): the extraction or composition, and the second consumer it
+  enables.
+- [dead-code](#dead-code): the deletion, plus the grep that proved no dynamic use.
+- `typing`: the boundary that becomes checkable (auto-verdict in this build, so it is reported
+  rather than judged).
+- [testing](#testing): the assertion that makes the test meaningful.
+- [config](#config): the settings home the value belongs in.
+- [style](#style): for a long comment, the rationale that moves to a PR description or a memory
+  file.
+- [design-system](#design-system): the primitive to reuse.
+- [react](#react): the hook or pattern to extract.
+
 ## security
 
 Rules: `PY-SEC-ASSERT-FOR-SECURITY`, `PY-SEC-DJANGO-RAW-SQL`, `PY-SEC-INSECURE-RANDOM`,
