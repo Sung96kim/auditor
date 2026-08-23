@@ -100,5 +100,9 @@ Reading and filtering them:
   ships in `.auditor/plugins/` shows up like any built-in.
 - `-r`/`--root` picks the repo whose plugins load. Untrusted local plugins stay out; the trust
   switch is in [plugins.md](plugins.md).
+- Whatever the loader skipped or failed to import is printed as a warning on stderr, so a rule is
+  never missing without a reason and `--json` on stdout stays parseable.
+- A `.auditor/config.toml` that fails validation exits 1 with that error instead of printing a
+  catalogue the repo's config does not agree with.
 - `auditr plugins list` covers the same detectors plus the languages, reporters, and any loader
   warning; see [plugins.md](plugins.md).

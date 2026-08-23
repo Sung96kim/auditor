@@ -125,8 +125,9 @@ def git_changed_files(root: Path, ref: str) -> set[str] | None:
 
 
 def find_root(start: Path) -> Path:
-    """Walk up from ``start`` for a repo root (.git / pyproject.toml / .auditor)."""
-    start = start if start.is_dir() else start.parent
+    """Walk up from ``start`` for a repo root (.git / pyproject.toml / .auditor). Resolved first,
+    so a relative start such as the default ``.`` has parents to walk."""
+    start = (start if start.is_dir() else start.parent).resolve()
     for parent in [start, *start.parents]:
         if any(
             (parent / marker).exists()

@@ -37,8 +37,8 @@ auditr plugins list --json
   command warns how many files it skipped.
 - Two ways to load them: `trust_local_plugins = true` in the repo's config
   ([configuration.md](configuration.md)), or `-a`/`--allow-local-plugins` on the command.
-- `scan` and `ignore add` take `-a`. `plugins list` and `report` do not, so for those the config
-  field is the only switch.
+- `scan` and `ignore add` take `-a`. `plugins list`, `rules list` and `report` do not, so for those
+  the config field is the only switch.
 - Prefix repo-local rule ids with `LOCAL-` so they never collide with a built-in or another
   plugin's id.
 
@@ -65,5 +65,6 @@ auditr plugins list --json
 
 - `plugins list` and `auditr rules list` both load the repo's config and plugins, so either shows
   plugin-contributed detectors; see [rules.md](rules.md) for what each row carries.
+- `plugins list` carries the loader warnings in its payload; `rules list` prints them on stderr.
 - To confirm a local rule actually fires, scan a fixture with `-a`:
   `auditr scan path/to/fixture -a -f json`.

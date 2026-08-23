@@ -1,22 +1,44 @@
 """`auditor rules list` — enumerate detector rules, with category / standard filters."""
 
+import json
 import shutil
+from pathlib import Path
 
 import pytest
 from _support import PLUGIN_FILE, cli_json, invoke
 
+#: (argv, source-of-HOUSE-NO-PRINT-or-None) per command that lists a repo's plugin rules
+_LISTINGS = [
+    pytest.param(
+        ("rules", "list"),
+        lambda p: next(
+            (r["source"] for r in p if r["rule_id"] == "HOUSE-NO-PRINT"), None
+        ),
+        id="rules list",
+    ),
+    pytest.param(
+        ("plugins", "list"),
+        lambda p: p["detectors"].get("HOUSE-NO-PRINT", {}).get("source"),
+        id="plugins list",
+    ),
+]
 
-@pytest.fixture
-def plugin_repo(tmp_path, restore_registry):
-    """A repo whose trusted `.auditor/plugins/` contributes the HOUSE-NO-PRINT rule."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    plugins = tmp_path / ".auditor" / "plugins"
+
+def _plugin_repo(root: Path, *, trusted: bool) -> Path:
+    """A repo whose `.auditor/plugins/` contributes the HOUSE-NO-PRINT rule."""
+    (root / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    plugins = root / ".auditor" / "plugins"
     plugins.mkdir(parents=True)
     shutil.copy(PLUGIN_FILE, plugins / "house_rules.py")
-    (tmp_path / ".auditor" / "config.toml").write_text(
-        'extends = "base"\ntrust_local_plugins = true\n'
-    )
-    return tmp_path
+    cfg = 'extends = "base"\n' + ("trust_local_plugins = true\n" if trusted else "")
+    (root / ".auditor" / "config.toml").write_text(cfg)
+    return root
+
+
+@pytest.fixture
+def plugin_repo(tmp_path, restore_registry) -> Path:
+    """A repo whose trusted `.auditor/plugins/` contributes the HOUSE-NO-PRINT rule."""
+    return _plugin_repo(tmp_path, trusted=True)
 
 
 def test_rules_list():
@@ -72,12 +94,64 @@ def test_rules_list_includes_repo_plugin_rules(plugin_repo):
     assert house and house[0]["category"] == "house"
 
 
-@pytest.mark.parametrize("command", [("rules", "list"), ("plugins", "list")])
-def test_plugin_rule_source_names_the_plugin_file(plugin_repo, command):
-    payload = cli_json(invoke(*command, "--root", str(plugin_repo)))
-    source = (
-        payload["detectors"]["HOUSE-NO-PRINT"]["source"]
-        if isinstance(payload, dict)
-        else next(r["source"] for r in payload if r["rule_id"] == "HOUSE-NO-PRINT")
+@pytest.mark.parametrize(("argv", "source_of_house"), _LISTINGS)
+def test_plugin_rule_source_names_the_plugin_file(plugin_repo, argv, source_of_house):
+    payload = cli_json(invoke(*argv, "--root", str(plugin_repo)))
+    assert source_of_house(payload).endswith("house_rules.py")
+
+
+@pytest.mark.parametrize(("argv", "source_of_house"), _LISTINGS)
+def test_listing_from_a_subdirectory_finds_the_repo_root(
+    plugin_repo, monkeypatch, argv, source_of_house
+):
+    """With no --root, the walk up from the working directory still finds the repo's plugins."""
+    deep = plugin_repo / "sub" / "deep"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+
+    assert source_of_house(cli_json(invoke(*argv))) is not None
+
+
+@pytest.mark.parametrize(
+    ("trusted", "listed"), [(True, True), (False, False)], ids=["trusted", "untrusted"]
+)
+def test_rules_list_explains_an_omitted_plugin_rule(
+    tmp_path, restore_registry, trusted, listed
+):
+    """A plugin rule is either in the catalogue or explained on stderr, never silently absent."""
+    repo = _plugin_repo(tmp_path, trusted=trusted)
+    result = invoke("rules", "list", "--root", str(repo), "--json")
+
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)
+    assert any(r["rule_id"] == "HOUSE-NO-PRINT" for r in rows) is listed
+    assert ("ignored" in result.stderr) is not listed
+
+
+def test_rules_list_reports_a_broken_plugin_on_stderr(tmp_path, restore_registry):
+    """A plugin that raises on import warns on stderr; stdout stays a clean JSON array."""
+    repo = _plugin_repo(tmp_path, trusted=True)
+    (repo / ".auditor" / "plugins" / "zz_broken.py").write_text(
+        'raise RuntimeError("boom on import")\n'
     )
-    assert source.endswith("house_rules.py")
+    result = invoke("rules", "list", "--root", str(repo), "--json")
+
+    assert result.exit_code == 0, result.output
+    assert {r["rule_id"] for r in json.loads(result.stdout)} >= {"HOUSE-NO-PRINT"}
+    assert "failed to load local plugin" in result.stderr
+    assert "zz_broken.py" in result.stderr
+
+
+def test_rules_list_invalid_config_fails_cleanly(tmp_path):
+    """An invalid repo config exits 1 with one clean line that does not recommend this command."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text(
+        'extends = "base"\n[rules]\nNO-SUCH-RULE = { enabled = false }\n'
+    )
+    result = invoke("rules", "list", "--root", str(tmp_path))
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Traceback" not in result.output
+    assert "invalid config" in result.output and "NO-SUCH-RULE" in result.output
+    assert "rules list" not in result.output
