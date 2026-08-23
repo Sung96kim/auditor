@@ -441,7 +441,7 @@ class Overlay(BaseModel):
             applied=applied,
         )
 
-    def _record(
+    def _decide(
         self,
         refinement: Refinement,
         *,
@@ -473,7 +473,7 @@ class Overlay(BaseModel):
         src, dst = (self._local(i) for i in refinement.edge_pair())
         if kind is None:
             # defensive: `Refinement` refuses an unnameable kind at construction (spec 9.2)
-            self._record(refinement, status=RefinementStatus.STALE)
+            self._decide(refinement, status=RefinementStatus.STALE)
             return
         if refinement.kind is RefinementKind.CONFIRM_EDGE:
             self._confirm(refinement, merging, (src, dst, kind))
@@ -481,12 +481,12 @@ class Overlay(BaseModel):
         # both checks precede the retarget's tombstone: a `stale` or `redundant` verdict reached
         # after it would leave the graph missing a deterministic edge nothing replaced
         if src not in node_ids or dst not in node_ids:
-            self._record(refinement, status=RefinementStatus.STALE)
+            self._decide(refinement, status=RefinementStatus.STALE)
             return
         # decided against the resolver's own edges only: one this build's other refinement placed
         # makes this one applied with nothing to add, never terminal (spec 5.7)
         if (src, dst, kind) in merging.deterministic:
-            self._record(refinement, status=RefinementStatus.REDUNDANT)
+            self._decide(refinement, status=RefinementStatus.REDUNDANT)
             return
         if refinement.kind is RefinementKind.RETARGET_EDGE and not merging.retarget(
             (src, self._local(refinement.target.from_dst), kind)
@@ -495,33 +495,33 @@ class Overlay(BaseModel):
             return
         merging.add((src, dst, kind))
         self._edges_changed = True
-        self._record(refinement, applied=True)
+        self._decide(refinement, applied=True)
 
     def _confirm(
         self, refinement: Refinement, merging: _EdgePass, key: EdgeKey
     ) -> None:
         if merging.confirm(key):
-            self._record(refinement, applied=True)
+            self._decide(refinement, applied=True)
         else:
             self._noop(refinement)
 
     def _annotate(self, refinement: Refinement, merging: _NodePass) -> None:
         node_id = self._local(refinement.target.node_id)
         if node_id not in merging.by_id:
-            self._record(refinement, status=RefinementStatus.STALE)
+            self._decide(refinement, status=RefinementStatus.STALE)
             return
         merging.annotate(node_id, refinement.payload.annotation)
-        self._record(refinement, applied=True)
+        self._decide(refinement, applied=True)
 
     def _relabel(self, refinement: Refinement, merging: _NodePass) -> None:
         cluster_id = merging.best_cluster(
             self._members(refinement), self.config.refine_cluster_jaccard
         )
         if cluster_id is None:
-            self._record(refinement, status=RefinementStatus.STALE)
+            self._decide(refinement, status=RefinementStatus.STALE)
             return
         merging.relabel(cluster_id, refinement.payload.label)
-        self._record(refinement, applied=True)
+        self._decide(refinement, applied=True)
 
     def _move(self, refinement: Refinement, merging: _NodePass) -> None:
         cluster_id = merging.best_cluster(
@@ -529,11 +529,11 @@ class Overlay(BaseModel):
         )
         node_id = self._local(refinement.target.node_id)
         if cluster_id is None or node_id not in merging.by_id:
-            self._record(refinement, status=RefinementStatus.STALE)
+            self._decide(refinement, status=RefinementStatus.STALE)
             return
         if merging.by_id[node_id].cluster_id == cluster_id:
             self._noop(refinement)
             return
         merging.move(node_id, cluster_id)
         self._nodes_moved = True
-        self._record(refinement, applied=True)
+        self._decide(refinement, applied=True)

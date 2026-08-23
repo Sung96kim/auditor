@@ -62,9 +62,12 @@ async def test_two_identities_never_contend(_isolated_auditor_home):
 async def test_lock_held_skips_the_acquire(_isolated_auditor_home):
     """A caller that already holds the lock, which is how one hold covers a clear, a rescan and a
     build, passes `held=True` and must not block on a second acquire. The budget makes a
-    regression fail in two seconds instead of hanging the suite."""
+    regression fail in two seconds instead of hanging the suite, and the inner acquire proves the
+    outer hold is still real rather than something `held=True` released."""
     async with rebuild_lock(IDENTITY), rebuild_lock(IDENTITY, held=True, timeout=2.0):
-        pass
+        with pytest.raises(RebuildLockTimeout):
+            async with rebuild_lock(IDENTITY, timeout=0.3):
+                pass
 
 
 async def test_a_blocked_acquire_reports_that_it_is_waiting(

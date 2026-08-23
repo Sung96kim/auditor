@@ -177,7 +177,7 @@ def _flow_dot(flow: dict, nodes: dict[str, dict]) -> str:
                     node["id"],
                     child["id"],
                     child.get("edge") or "",
-                    child.get("source") or Provenance.DETERMINISTIC.value,
+                    str(child.get("source", "")),
                 )
             )
             walk(child)
