@@ -274,9 +274,10 @@ flowchart TB
 - `build.SimilarityPass` and `build.ClusterPass` are the build's own two seams: the name and usage
   edges plus the text-sparse set, and one ranking and clustering with the cluster rows and queue
   rows derived from it. Nothing in `run` is rebound to mean something else.
-- The detectors get their own pass: `build._deterministic_findings` re-ranks and re-clusters over
-  the edge list captured before the overlay, so no `GRAPH-*` finding depends on a refinement. It
-  costs about 15 % of a warm build.
+- The detectors get their own pass: a second `build._clustered` over the edge list captured before
+  the overlay, and the nodes it stamps, so no `GRAPH-*` finding depends on a refinement. It is
+  skipped, exactly, when the overlay placed no edge and moved no node, because that pass would
+  then read the arguments the merged one already did. A build with no refinements pays nothing.
 - Each refinement the build looked at comes back as one `RefinementOutcome` on `GraphWrite.outcomes`,
   so `refinements.write_outcomes` runs in the same transaction as the graph it describes.
 - `graph build`, the MCP `graph_build` tool and (from S5) the refinement service all go through

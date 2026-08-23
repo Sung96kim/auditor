@@ -229,8 +229,10 @@ auditr graph unresolved . --json --limit 500
 - The deterministic edge set is never rewritten. An overlay edge is an addition, and a
   `retarget_edge` is the only kind that moves one, by replacing it with a `refined` edge.
 - The `GRAPH-*` detectors run on a graph no refinement touched: the edge list captured before the
-  overlay, re-ranked and re-clustered over that list. A refinement can never create or silence a
-  finding, and can never move which symbol one is reported on.
+  overlay, re-ranked and re-clustered over that list, and the nodes that second pass stamps rather
+  than the overlaid ones. A refinement can never create or silence a finding, and can never move
+  which symbol one is reported on. A build in which the overlay placed no edge and moved no node
+  skips the second pass, because it would reproduce the merged one exactly.
 - A refinement expires on its own:
   - `stale` when a node it is anchored to is gone or its structural facts changed, or when it had
     no effect for `refine_max_noop_builds` consecutive builds.

@@ -331,14 +331,20 @@ class GraphBuilder:
         if cfg.detect:
             report("running detectors on the deterministic graph")
             # the detectors read a graph no refinement touched: the pre-overlay edge list, and
-            # the nodes and clusters a second pass over it produces (spec section 6 step 7)
-            det = _clustered(
-                nodes,
-                deterministic_edges,
-                cfg,
-                report,
-                sparse=similar.sparse,
-                proto=proto,
+            # the nodes and clusters a second pass over it produces (spec section 6 step 7).
+            # Exact, not an approximation: when the overlay placed no edge and moved no node,
+            # that pass reads the same arguments the merged one did and returns the same result
+            det = (
+                _clustered(
+                    nodes,
+                    deterministic_edges,
+                    cfg,
+                    report,
+                    sparse=similar.sparse,
+                    proto=proto,
+                )
+                if overlay.moved_findings
+                else merged
             )
             per_file = run_graph_detectors(
                 det.nodes, deterministic_edges, det.clusters, settings

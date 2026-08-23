@@ -1,6 +1,7 @@
 import pytest
 
 from auditor.config import AuditorSettings, GraphConfig
+from auditor.graph import build
 from auditor.graph.build import (
     _GRAPH_RULE_IDS,
     ClusterPass,
@@ -24,6 +25,7 @@ from auditor.graph.refine.models import (
     Anchor,
     Refinement,
     RefinementKind,
+    RefinementPayload,
     RefinementStatus,
     RefinementTarget,
     Run,
@@ -568,6 +570,70 @@ async def test_a_retarget_leaves_the_detector_edge_list_byte_identical(
     }
     assert ("impl.py::Impl.run", "impl.py::_local", "calls") not in merged
     assert ("impl.py::Impl.run", "svc.py::load_user", "calls") in merged
+
+
+async def test_the_detectors_never_see_an_overlay_node_field(
+    refined_facts_store, monkeypatch
+):
+    """A7: the node list gets the same treatment as the edge list. `annotation` and `refined` are
+    written by the overlay, so a detector that grew a dependency on either would silently start
+    reading a refined graph."""
+    seen: list[tuple[tuple[str | None, ...], tuple[bool, ...]]] = []
+
+    def spy(nodes, edges, clusters, settings):
+        seen.append(
+            (tuple(n.annotation for n in nodes), tuple(n.refined for n in nodes))
+        )
+        return {}
+
+    monkeypatch.setattr("auditor.graph.build.run_graph_detectors", spy)
+    store = refined_facts_store.store
+    settings = AuditorSettings()
+    settings.graph.enabled = True
+    run_id = await store.runs.add_run(
+        Run(repo_identity=store.partition.identity, started_at=1.0)
+    )
+    await store.refinements.add_refinement(
+        Refinement(
+            run_id=run_id,
+            repo_identity=store.partition.identity,
+            kind=RefinementKind.ANNOTATE_NODE,
+            target=RefinementTarget(node_id="impl.py::Impl.run"),
+            payload=RefinementPayload(annotation="the retry path"),
+            status=RefinementStatus.ACTIVE,
+        )
+    )
+    await GraphBuilder().run(store, settings)
+    annotations, refined = seen[0]
+    assert set(annotations) == {None}
+    assert set(refined) == {False}
+    served = {n["node_id"]: n["annotation"] for n in await store.graph.nodes()}
+    assert served["impl.py::Impl.run"] == "the retry path"
+
+
+async def test_the_second_clustering_pass_is_skipped_when_nothing_moved(
+    refined_facts_store, monkeypatch
+):
+    """A4: with nothing applied the second pass reads the arguments the merged one did, so it
+    would reproduce its own input. Skipping it is exact, and it is most of a warm build."""
+    passes: list[int] = []
+    real = build.cluster_concepts
+
+    def spy(nodes, edges, floor):
+        passes.append(len(edges))
+        return real(nodes, edges, floor=floor)
+
+    monkeypatch.setattr("auditor.graph.build.cluster_concepts", spy)
+    store, rid = refined_facts_store.store, refined_facts_store.refinement_id
+    settings = AuditorSettings()
+    settings.graph.enabled = True
+    await GraphBuilder().run(store, settings)
+    assert len(passes) == 2  # an applied refinement pays for the deterministic pass
+
+    passes.clear()
+    await store.refinements.set_status(rid, RefinementStatus.REVERTED)
+    await GraphBuilder().run(store, settings)
+    assert len(passes) == 1  # no refinement, no second pass
 
 
 async def test_the_detectors_see_a_graph_no_refinement_touched(
