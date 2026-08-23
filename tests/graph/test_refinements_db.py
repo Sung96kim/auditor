@@ -455,7 +455,7 @@ async def test_apply_outcomes_writes_noop_and_drift_without_a_status(refine_stor
 
 
 async def test_write_outcomes_lands_inside_the_build_transaction(refine_store):
-    """S4b's `_persist` calls it on the open connection, so the graph and its provenance land
+    """`GraphWrite.apply` calls it on the open connection, so the graph and its provenance land
     together or not at all."""
     run_id = await refine_store.runs.add_run(_run())
     rid = await refine_store.refinements.add_refinement(

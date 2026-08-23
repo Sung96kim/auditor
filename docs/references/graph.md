@@ -229,7 +229,8 @@ auditr graph unresolved . --json --limit 500
 - A refinement is recorded against a repo *identity* (the git common dir), not a scan partition, so
   every worktree of one checkout shares them.
 - Every edge carries a provenance: `deterministic` when the resolver produced it, `refined` when an
-  active refinement did. `graph export`, the visualization payload and the flow tree all show it.
+  active refinement did. The visualization payload and the flow tree carry it as a field, and both
+  `graph export` DOT paths draw a `refined` edge dashed.
 - The deterministic edge set is never rewritten. An overlay edge is an addition, and a
   `retarget_edge` is the only kind that moves one, by replacing it with a `refined` edge.
 - The `GRAPH-*` detectors run on a graph no refinement touched: the edge list captured before the

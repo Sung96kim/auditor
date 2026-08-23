@@ -260,3 +260,56 @@ async def test_payload_carries_edge_and_node_provenance(graph_store):
     by_id = {n["id"]: n for n in p["nodes"]}
     assert by_id["m.py::f"]["annotation"] == "entry point"
     assert by_id["m.py::g"]["refined"] is True
+
+
+async def test_the_dot_export_marks_a_refined_edge(graph_store):
+    """A8: `graph export` is documented as showing provenance, so an overlay edge has to be
+    distinguishable from one the resolver produced."""
+    await graph_store.repos.register(0.0)
+    nodes = [
+        GraphNode(
+            id=f"m.py::{name}",
+            kind=NodeKind.FUNCTION,
+            name=name,
+            module="m.py",
+            qualname=name,
+        )
+        for name in ("f", "g", "h")
+    ]
+    await graph_store.graph.replace(
+        nodes,
+        [
+            GraphEdge(src="m.py::f", dst="m.py::g", kind=EdgeKind.CALLS),
+            GraphEdge(
+                src="m.py::f",
+                dst="m.py::h",
+                kind=EdgeKind.CALLS,
+                provenance=Provenance.REFINED,
+            ),
+        ],
+        [],
+    )
+    dot = to_dot(await build_payload(graph_store))
+    assert '"m.py::f" -> "m.py::h" [label="calls" style="dashed"];' in dot
+    assert '"m.py::f" -> "m.py::g" [label="calls"];' in dot
+
+
+async def test_the_flow_dot_export_marks_a_refined_edge(viz_store):
+    """The flow tree already carries the provenance; the DOT it renders has to show it."""
+    flow = {
+        "root": {
+            "id": "m.py::Foo",
+            "depth": 0,
+            "children": [
+                {
+                    "id": "m.py::Foo.bar",
+                    "depth": 1,
+                    "edge": "calls",
+                    "source": "refined",
+                    "children": [],
+                }
+            ],
+        }
+    }
+    dot = to_dot(await build_payload(viz_store), flow=flow)
+    assert '"m.py::Foo" -> "m.py::Foo.bar" [label="calls" style="dashed"];' in dot

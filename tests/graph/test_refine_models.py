@@ -20,7 +20,7 @@ from auditor.graph.refine.models import (
 
 IDENTITY = "/checkout/.git"
 
-#: one valid (target, payload) pair per kind, in the shape the S4b overlay reads
+#: one valid (target, payload) pair per kind, in the shape the build overlay reads
 _SHAPES: dict[RefinementKind, tuple[RefinementTarget, RefinementPayload]] = {
     RefinementKind.ADD_EDGE: (
         RefinementTarget(

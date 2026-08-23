@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from auditor.graph.model import DEFAULT_FLOW_LIMIT, NodeKind
+from auditor.graph.model import DEFAULT_FLOW_LIMIT, NodeKind, Provenance
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -134,6 +134,12 @@ def render_app(payload: dict) -> str:
     return html + inject
 
 
+def _dot_provenance(provenance: str | None) -> str:
+    """The style a `refined` edge carries in both DOT exports, so an overlay edge cannot read as
+    one the resolver produced. Empty for everything else."""
+    return ' style="dashed"' if provenance == Provenance.REFINED.value else ""
+
+
 _FLOW_DOT_STYLE = {
     "hub": ' color="magenta" peripheries=2',
     "stopped": ' color="cyan" style="rounded,dashed"',
@@ -159,14 +165,21 @@ def _flow_dot(flow: dict, nodes: dict[str, dict]) -> str:
     carrying the same marks the tree renderer shows."""
     declared: dict[str, str] = {}
     levels: dict[int, list[str]] = {}
-    links: set[tuple[str, str, str]] = set()
+    links: set[tuple[str, str, str, str]] = set()
 
     def walk(node: dict) -> None:
         if node["id"] not in declared:  # a revisited node keeps its first-seen row
             declared[node["id"]] = _flow_declare(node, nodes)
             levels.setdefault(node["depth"], []).append(node["id"])
         for child in node.get("children", []):
-            links.add((node["id"], child["id"], child.get("edge") or ""))
+            links.add(
+                (
+                    node["id"],
+                    child["id"],
+                    child.get("edge") or "",
+                    child.get("source") or Provenance.DETERMINISTIC.value,
+                )
+            )
             walk(child)
 
     root = flow.get("root")
@@ -185,8 +198,10 @@ def _flow_dot(flow: dict, nodes: dict[str, dict]) -> str:
         lines.append(
             "  { rank=same; " + " ".join(f'"{n}";' for n in levels[level]) + " }"
         )
-    for src, dst, kind in sorted(links):
-        lines.append(f'  "{src}" -> "{dst}" [label="{kind}"];')
+    for src, dst, kind, provenance in sorted(links):
+        lines.append(
+            f'  "{src}" -> "{dst}" [label="{kind}"{_dot_provenance(provenance)}];'
+        )
     lines.append("}")
     return "\n".join(lines)
 
@@ -249,6 +264,9 @@ def to_dot(
         (e for e in edges if e["source"] in keep and e["target"] in keep),
         key=lambda e: (e["source"], e["target"], e["kind"]),
     ):
-        lines.append(f'  "{e["source"]}" -> "{e["target"]}" [label="{e["kind"]}"];')
+        lines.append(
+            f'  "{e["source"]}" -> "{e["target"]}" '
+            f'[label="{e["kind"]}"{_dot_provenance(e.get("provenance"))}];'
+        )
     lines.append("}")
     return "\n".join(lines)

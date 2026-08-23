@@ -73,10 +73,9 @@ async def rebuild_lock(
 ) -> AsyncIterator[None]:
     """Hold this identity's rebuild lock for the block.
 
-    ``held=True`` is a no-op for a caller that already took it, which is how
-    ``RefinementService.commit`` wraps an insert plus a rebuild in one hold. The kernel releases a
-    `flock` when the descriptor closes or the process dies, so a lock file is never stale and none
-    is ever deleted.
+    ``held=True`` is a no-op for a caller that already took it, which is how one hold covers a
+    clear, a rescan and the build that follows. The kernel releases a `flock` when the descriptor
+    closes or the process dies, so a lock file is never stale and none is ever deleted.
     """
     if held:
         yield

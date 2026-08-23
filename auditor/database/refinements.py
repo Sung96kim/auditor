@@ -445,7 +445,7 @@ class RefinementsDB(BaseDB):
         """Apply one build's verdicts on the open connection, without committing.
 
         The build's transaction owns the commit, so a graph and its provenance land together;
-        S4b's ``_persist`` is the caller that needs it.
+        ``GraphWrite.apply`` is the caller that needs it.
         """
         identity = self.partition.identity
         for outcome in outcomes:

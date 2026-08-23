@@ -294,8 +294,8 @@ flowchart TB
   - Its `write_*` half takes the open connection, writes, and never commits, so a caller can
     compose several stores into one commit through `IndexStore.transaction`.
   - A `write_*` half is added only when a transaction calls it. `refinements.write_outcomes` is
-    the one that exists ahead of its caller: the S4b overlay writes refinement verdicts inside the
-    build's transaction, so a graph and its provenance land together.
+    the one written for a caller in the same change: the overlay writes refinement verdicts inside
+    the build's transaction, so a graph and its provenance land together.
 - `database.open_repo_index(root)` is the one place "connect scoped to this repo's partition and
   bound to this checkout's identity" is written. `cli.helpers.open_index` and
   `mcp.helpers.open_index` wrap it with their layer's repair message; nothing else calls
