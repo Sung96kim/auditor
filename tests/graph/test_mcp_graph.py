@@ -97,15 +97,30 @@ async def test_graph_overview_shape(graph_repo: Path):
     assert all({"label", "size"} <= set(c) for c in ov["top_clusters"])
     assert isinstance(ov["god_concepts"], list) and len(ov["god_concepts"]) <= 5
     assert isinstance(ov["bottlenecks"], list) and len(ov["bottlenecks"]) <= 5
-    async with await open_repo_index(graph_repo) as index:
+    assert isinstance(ov["god_concept_count"], int)
+    assert isinstance(ov["bottleneck_count"], int)
+
+
+async def test_graph_overview_splits_the_hub_lists_by_subkind(
+    graph_repo_god_concepts: Path,
+):
+    """Regression: the split was a substring match on the message, so rewording moved a finding
+    between the lists. Both lists must be non-empty or the assertions below are vacuous."""
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": str(graph_repo_god_concepts)})
+        ov = _data(
+            await c.call_tool("graph_overview", {"path": str(graph_repo_god_concepts)})
+        )
+    async with await open_repo_index(graph_repo_god_concepts) as index:
         rows = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
     fan_out = [r.evidence for r in rows if r.subkind == GodConceptKind.FAN_OUT]
     bottleneck = [r.evidence for r in rows if r.subkind == GodConceptKind.BOTTLENECK]
+    assert fan_out and bottleneck, "fixture must trip both centralities"
     assert len(fan_out) + len(bottleneck) == len(rows)
-    assert ov["god_concept_count"] == len(fan_out)
-    assert ov["bottleneck_count"] == len(bottleneck)
-    assert ov["god_concepts"] == fan_out[:5]
-    assert ov["bottlenecks"] == bottleneck[:5]
+    assert ov["god_concepts"] == fan_out[:5] and ov["god_concept_count"] == len(fan_out)
+    assert ov["bottlenecks"] == bottleneck[:5] and ov["bottleneck_count"] == len(
+        bottleneck
+    )
 
 
 async def test_graph_unresolved_lists_the_queue(graph_repo: Path):

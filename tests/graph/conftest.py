@@ -55,6 +55,17 @@ HUB_MAIN = (
 HUB_SVC = "def leaf(uid):\n    return uid\n"
 HUB_TEST = "from m import entry\n\ndef test_entry():\n    return entry(1)\n"
 
+# `spread` calls twelve leaves and nothing calls it; `sink` is called by twelve and calls nothing,
+# so one repo trips both GOD-CONCEPT centralities and neither masks the other
+GOD_CONCEPTS = (
+    "".join(f"def leaf{i}(uid):\n    return uid\n\n" for i in range(12))
+    + "def sink(uid):\n    return uid\n\n"
+    + "def spread(uid):\n"
+    + "".join(f"    leaf{i}(uid)\n" for i in range(12))
+    + "    return uid\n\n"
+    + "".join(f"def caller{i}(uid):\n    return sink(uid)\n\n" for i in range(12))
+)
+
 
 def _write_graph_repo(
     root: Path,
@@ -93,6 +104,12 @@ def graph_repo_unconfigured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def graph_repo_with_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Calls that resolve inside the module, so structural neighbors exist to cap."""
     return _write_graph_repo(tmp_path, monkeypatch, module_source=RESOLVABLE_CALLS)
+
+
+@pytest.fixture
+def graph_repo_god_concepts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A repo with one pure fan-out hub and one pure bottleneck, so both subkinds are populated."""
+    return _write_graph_repo(tmp_path, monkeypatch, module_source=GOD_CONCEPTS)
 
 
 @pytest.fixture
