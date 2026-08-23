@@ -4,14 +4,14 @@ from pathlib import Path
 
 import typer
 
-from auditor import crossfile as crossfile_pass
 from auditor.cli.apps import app
 from auditor.cli.helpers import open_index, present, run
 from auditor.cli.options import DirTarget
 from auditor.cli.render import render_crossfile
 from auditor.config import load_config
+from auditor.crossfile import CrossFileInputs
 from auditor.discovery import find_root
-from auditor.engine import entry_point_names
+from auditor.ignores import IgnoreList
 
 
 @app.command()
@@ -26,12 +26,12 @@ def crossfile(
 
 
 async def _crossfile(root: Path) -> int:
-    settings = load_config(root)
+    inputs = CrossFileInputs.derive(root, load_config(root))
     async with await open_index(root) as index:
-        per_file = await crossfile_pass.run(
-            index,
-            settings_modules=settings.settings_modules,
-            settings_cohesion_on=settings.settings_cohesion,
-            entry_point_names=entry_point_names(root),
-        )
-        return sum(len(v) for v in per_file.values())
+        per_file = await inputs.recompute(index)
+        ignores = IgnoreList.from_rows(await index.ignores.list())
+        total = 0
+        for rel, findings in per_file.items():
+            kept, _ = inputs.apply_skips(rel, findings)
+            total += len(ignores.kept(rel, kept))
+        return total

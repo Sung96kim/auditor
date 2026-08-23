@@ -14,8 +14,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from auditor import crossfile
 from auditor.config import AuditorSettings, ResolvedConfig, load_config
+from auditor.crossfile import CrossFileInputs
 from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root
 from auditor.fingerprints import content_hash, rule_fingerprint
@@ -71,26 +71,6 @@ def project_deps(root: Path) -> frozenset[str]:
     return frozenset(names)
 
 
-def entry_point_names(root: Path) -> frozenset[str]:
-    """Names referenced by pyproject entry points / scripts (``pkg.mod:attr``) — treated as 'used'
-    so a symbol wired only as an entry point isn't flagged dead."""
-    pp = root / "pyproject.toml"
-    if not pp.exists():
-        return frozenset()
-    project = tomllib.loads(pp.read_text()).get("project", {})
-    targets: list[str] = list(project.get("scripts", {}).values())
-    targets.extend(project.get("gui-scripts", {}).values())
-    for group in project.get("entry-points", {}).values():
-        targets.extend(group.values())
-    names: set[str] = set()
-    for target in targets:
-        mod, _, attr = str(target).partition(":")
-        names.update(seg for seg in mod.split(".") if seg)
-        if attr:
-            names.add(attr.split(".")[0])
-    return frozenset(names)
-
-
 class ScanEngine:
     """Audits files under one resolved root, with config, project facts, and an optional cache."""
 
@@ -101,7 +81,7 @@ class ScanEngine:
         self.settings = settings
         self.index = index
         self.deps = project_deps(root)
-        self.entry_points = entry_point_names(root)
+        self.xfile = CrossFileInputs.derive(root, settings)
         self.roles = RoleClassifier(settings.role_globs)
         site_packages = find_site_packages(root)
         reach = tuple(settings.resolve_packages)
@@ -450,15 +430,7 @@ class ScanEngine:
         )
 
     async def _apply_crossfile(self, results: list[ScanResult]) -> None:
-        self._merge_xfindings(
-            results,
-            await crossfile.run(
-                self.index,
-                settings_modules=self.settings.settings_modules,
-                settings_cohesion_on=self.settings.settings_cohesion,
-                entry_point_names=self.entry_points,
-            ),
-        )
+        self._merge_xfindings(results, await self.xfile.recompute(self.index))
 
     def _apply_crossfile_in_memory(self, results: list[ScanResult]) -> None:
         """Cross-file dedup without an index: compute shapes in memory and group them, so a
@@ -493,14 +465,7 @@ class ScanEngine:
                     }
                 )
         self._merge_xfindings(
-            results,
-            crossfile.run_in_memory(
-                shape_rows,
-                roles,
-                settings_modules=self.settings.settings_modules,
-                settings_cohesion_on=self.settings.settings_cohesion,
-                entry_point_names=self.entry_points,
-            ),
+            results, self.xfile.recompute_in_memory(shape_rows, roles)
         )
 
     def _merge_xfindings(
@@ -510,12 +475,8 @@ class ScanEngine:
             extra = xfindings.get(res.file)
             if not extra:
                 continue
-            if self.settings.respect_skips:
-                source = (self.root / res.file).read_text(
-                    encoding="utf-8", errors="replace"
-                )
-                extra, dropped = filter_findings(source, extra, language=res.language)
-                res.suppressed += dropped
+            extra, dropped = self.xfile.apply_skips(res.file, extra)
+            res.suppressed += dropped
             res.findings.extend(extra)
             res.findings.sort(key=lambda f: (f.line, f.rule_id))
 

@@ -44,4 +44,6 @@ auditr crossfile . --json
 - Grouping reads the shapes table, so a file takes part only after it has been scanned at least
   once with `--incremental`.
 - A standalone run reads the same `pyproject.toml` entry points `scan` does, so both exempt the
-  same symbols and the counts agree.
+  same symbols.
+- It then drops what `scan` drops: in-file `auditor: skip` directives and this repo's persistent
+  ignores. The printed count is what a scan of the repo would report, not the raw pass output.
