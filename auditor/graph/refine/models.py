@@ -212,3 +212,52 @@ class RefinementOutcome(BaseModel):
     noop_builds: int = 0
     drifted: bool = False
     applied: bool = False
+
+
+class TuningStatus(StrEnum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    REVERTED = "reverted"
+    REJECTED = "rejected"
+
+
+class TuningRow(BaseModel):
+    """One proposed knob change (spec 5.8). ``value_json`` stays a raw JSON string because a knob
+    can be a float, an int or a list of stopwords."""
+
+    model_config = ConfigDict(frozen=True)
+
+    tuning_id: int = 0  # assigned by the insert
+    repo_identity: str
+    key: str
+    value_json: str
+    token: str = ""
+    run_id: str
+    reason: str = ""
+    status: TuningStatus = TuningStatus.PENDING
+    metrics: dict[str, float] = Field(default_factory=dict)
+    created_at: float = Field(default_factory=time.time)
+
+
+class EvalRow(BaseModel):
+    """One eval suite stratum's measured accuracy for a runner and model (spec 5.8, 10.2)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    eval_id: int = 0  # assigned by the insert
+    repo_identity: str
+    runner: RunnerKind
+    model: str
+    suite: str
+    stratum: str
+    n: int = 0
+    correct: int = 0
+    precision: float = 0.0
+    recall: float = 0.0
+    false_add_rate: float = 0.0
+    false_removal_rate: float = 0.0
+    lower_bound_95: float = 0.0
+    cost_usd: float = 0.0
+    num_turns: int = 0
+    created_at: float = Field(default_factory=time.time)

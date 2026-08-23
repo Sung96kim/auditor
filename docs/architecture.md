@@ -270,6 +270,10 @@ flowchart TB
   checkout shares them and `repos.forget()` cannot cascade into them.
 - Ids inside those tables are toplevel-relative: `partition_prefix` plus the partition-relative id,
   so a repo scanned both at its root and at a subdirectory keeps one namespace.
+- `graph_runs` rows with `status='skipped'` are the assessment-only records; the observer sweeps
+  them with `RefinementsDB.prune_skipped_runs` after `observer.skipped_retention_days`. Real runs
+  are never swept, and neither is a skipped run that owns a `graph_refinements` or `graph_tuning`
+  row: both reference `graph_runs.run_id` with no `ON DELETE`.
 - The query commands (`related`, `neighbors`, `concept`, `clusters`, `search`, `usages`) all read
   the persisted tables through `graph.query.GraphQuery`; nothing is recomputed.
 - `graph flow` walks that same persisted graph through `graph.flow.build_flow`: breadth-first over

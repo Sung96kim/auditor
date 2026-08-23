@@ -13,13 +13,19 @@ from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.graph.refine.models import (
     ACTIVE_STATUSES,
     Anchor,
+    EvalRow,
     Refinement,
     RefinementKind,
     RefinementOutcome,
     RefinementStatus,
     Run,
+    RunnerKind,
     RunStatus,
+    TuningRow,
+    TuningStatus,
 )
+
+_DAY_SECONDS = 86_400
 
 
 def _run_from_row(row: sqlite3.Row) -> Run:
@@ -155,6 +161,69 @@ class RefinementsDB(BaseDB):
             ),
             indexes=(
                 Index(name="graph_anchors_refinement", columns=("refinement_id",)),
+            ),
+        ),
+        "graph_tuning": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="tuning_id",
+                    type="INTEGER",
+                    primary_key=True,
+                    autoincrement=True,
+                ),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(name="key", type="TEXT", not_null=True),
+                Column(name="value_json", type="TEXT", not_null=True),
+                Column(name="token", type="TEXT", not_null=True, default="''"),
+                Column(
+                    name="run_id",
+                    type="TEXT",
+                    not_null=True,
+                    references="graph_runs (run_id)",
+                ),
+                Column(name="reason", type="TEXT", not_null=True, default="''"),
+                Column(name="status", type="TEXT", not_null=True, default="'pending'"),
+                Column(name="metrics", type="TEXT", not_null=True, default="'{}'"),
+                Column(name="created_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_tuning_identity", columns=("repo_identity", "status")
+                ),
+            ),
+        ),
+        "graph_evals": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="eval_id", type="INTEGER", primary_key=True, autoincrement=True
+                ),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(name="runner", type="TEXT", not_null=True),
+                Column(name="model", type="TEXT", not_null=True),
+                Column(name="suite", type="TEXT", not_null=True),
+                Column(name="stratum", type="TEXT", not_null=True),
+                Column(name="n", type="INTEGER", not_null=True, default="0"),
+                Column(name="correct", type="INTEGER", not_null=True, default="0"),
+                Column(name="precision", type="REAL", not_null=True, default="0"),
+                Column(name="recall", type="REAL", not_null=True, default="0"),
+                Column(name="false_add_rate", type="REAL", not_null=True, default="0"),
+                Column(
+                    name="false_removal_rate", type="REAL", not_null=True, default="0"
+                ),
+                Column(name="lower_bound_95", type="REAL", not_null=True, default="0"),
+                Column(name="cost_usd", type="REAL", not_null=True, default="0"),
+                Column(name="num_turns", type="INTEGER", not_null=True, default="0"),
+                Column(name="created_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_evals_identity",
+                    columns=("repo_identity", "runner", "model"),
+                ),
             ),
         ),
     }
@@ -404,3 +473,125 @@ class RefinementsDB(BaseDB):
             conn.commit()
 
         await self._worker.run(op)
+
+    async def add_tuning(self, row: TuningRow) -> int:
+        table = self.TABLES["graph_tuning"]
+        columns = ", ".join(table.insert_columns())
+        values = (
+            row.repo_identity,
+            row.key,
+            row.value_json,
+            row.token,
+            row.run_id,
+            row.reason,
+            row.status.value,
+            json.dumps(row.metrics),
+            row.created_at,
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            cur = conn.execute(
+                f"INSERT INTO graph_tuning ({columns}) VALUES ({table.placeholders()})",  # noqa: S608
+                values,
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+
+        return await self._worker.run(op)
+
+    async def tuning(
+        self, *, statuses: Sequence[TuningStatus] | None = None
+    ) -> list[TuningRow]:
+        sql = "SELECT * FROM graph_tuning WHERE repo_identity = ?"
+        params: list[Any] = []
+        if statuses:
+            sql += _in_clause("status", statuses)
+            params += [s.value for s in statuses]
+        sql += " ORDER BY tuning_id"
+        return [
+            TuningRow.model_validate(dict(r) | {"metrics": json.loads(r["metrics"])})
+            for r in await self._fetch_by_identity(sql, tuple(params))
+        ]
+
+    async def set_tuning_status(self, tuning_id: int, status: TuningStatus) -> None:
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE graph_tuning SET status=? WHERE tuning_id=?",
+                (status.value, tuning_id),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+    async def add_eval(self, row: EvalRow) -> int:
+        table = self.TABLES["graph_evals"]
+        columns = ", ".join(table.insert_columns())
+        values = (
+            row.repo_identity,
+            row.runner.value,
+            row.model,
+            row.suite,
+            row.stratum,
+            row.n,
+            row.correct,
+            row.precision,
+            row.recall,
+            row.false_add_rate,
+            row.false_removal_rate,
+            row.lower_bound_95,
+            row.cost_usd,
+            row.num_turns,
+            row.created_at,
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            cur = conn.execute(
+                f"INSERT INTO graph_evals ({columns}) VALUES ({table.placeholders()})",  # noqa: S608
+                values,
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+
+        return await self._worker.run(op)
+
+    async def evals(
+        self, *, runner: RunnerKind | None = None, model: str | None = None
+    ) -> list[EvalRow]:
+        """Eval rows for this identity, newest last. S6's tier gate reads them per stratum."""
+        sql = "SELECT * FROM graph_evals WHERE repo_identity = ?"
+        params: list[Any] = []
+        if runner is not None:
+            sql += " AND runner = ?"
+            params.append(runner.value)
+        if model is not None:
+            sql += " AND model = ?"
+            params.append(model)
+        sql += " ORDER BY eval_id"
+        return [
+            EvalRow.model_validate(dict(r))
+            for r in await self._fetch_by_identity(sql, tuple(params))
+        ]
+
+    async def prune_skipped_runs(
+        self, retention_days: int, *, now: float | None = None
+    ) -> int:
+        """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
+
+        Real runs are kept forever. A skipped run that somehow owns a refinement or a tuning row is
+        kept too, so the sweep can never trip a foreign key or orphan provenance.
+        """
+        cutoff = (time.time() if now is None else now) - retention_days * _DAY_SECONDS
+        identity = self.partition.identity
+
+        def op(conn: sqlite3.Connection) -> int:
+            cur = conn.execute(
+                "DELETE FROM graph_runs WHERE repo_identity = ? AND status = ? "
+                "AND started_at < ? "
+                "AND run_id NOT IN (SELECT run_id FROM graph_refinements WHERE repo_identity = ?) "
+                "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?)",
+                (identity, RunStatus.SKIPPED.value, cutoff, identity, identity),
+            )
+            conn.commit()
+            return cur.rowcount
+
+        return await self._worker.run(op)
