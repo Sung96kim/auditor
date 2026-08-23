@@ -182,7 +182,8 @@ async def graph_overview(path: str = ".") -> dict:
     Returns {nodes, edges, clusters, top_clusters, god_concepts, god_concept_count,
     bottlenecks, bottleneck_count}. The two hub lists are capped at 5 and the counts are the
     totals. If the graph isn't built yet (0 nodes), the counts are zero and the lists empty —
-    no error.
+    no error. A subkind neither hub list names is logged as a warning, so the two counts need
+    not add up to the finding count.
     """
     root = find_root(Path(path))
     async with await open_index(root) as index:
@@ -198,8 +199,8 @@ async def graph_overview(path: str = ".") -> dict:
         logger.warning(
             "graph_overview: unclassified GRAPH-GOD-CONCEPT subkinds {}", unclassified
         )
-    god_concepts = by_kind[GodConceptKind.FAN_OUT]
-    bottlenecks = by_kind[GodConceptKind.BOTTLENECK]
+    god_concepts = by_kind.get(GodConceptKind.FAN_OUT, [])
+    bottlenecks = by_kind.get(GodConceptKind.BOTTLENECK, [])
     return {
         "nodes": len(nodes),
         "edges": len(edges),
