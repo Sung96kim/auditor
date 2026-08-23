@@ -10,7 +10,15 @@ from typing import Any
 import pytest
 
 from auditor.database import IndexStore
-from auditor.graph.flow import GraphCache, resolve_ids
+from auditor.graph.flow import (
+    DEFAULT_FLOW_LIMIT,
+    FlowDirection,
+    FlowNode,
+    FlowOptions,
+    GraphCache,
+    build_flow,
+    resolve_ids,
+)
 from auditor.graph.model import EdgeKind, GraphEdge, GraphNode, NodeKind
 from auditor.graph.query import GraphQuery
 
@@ -200,3 +208,93 @@ async def test_neighbors_uses_the_cache_not_edges_of(flow_store, monkeypatch):
     }
     assert all(h["hops"] == 1 for h in hits)
     assert {h["direction"] for h in hits} == {"out", "in"}
+
+
+def _kids(node: FlowNode) -> dict[str, FlowNode]:
+    return {c.id: c for c in node.children}
+
+
+def test_flow_option_defaults_are_the_spec_defaults():
+    options = FlowOptions()
+    assert options.direction is FlowDirection.OUT
+    assert options.depth == 4
+    assert options.limit == DEFAULT_FLOW_LIMIT == 200
+
+
+def test_flow_root_has_no_edge_and_depth_zero(cache):
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=1, include_tests=True)
+    )
+    assert result.root.id == "app/cli.py::main"
+    assert result.root.edge is None and result.root.depth == 0
+    assert result.root.kind == "function"
+    assert result.direction is FlowDirection.OUT
+
+
+def test_flow_follows_calls_and_callback_arg_outward(cache):
+    result = build_flow(cache, "app/engine.py::run", options=FlowOptions(depth=1))
+    kids = _kids(result.root)
+    assert kids["app/cb.py::on_done"].edge == "callback_arg"
+    assert kids["app/util.py::helper"].edge == "calls"
+    assert all(c.depth == 1 for c in result.root.children)
+
+
+def test_flow_children_are_ordered_by_edge_then_id(cache):
+    result = build_flow(cache, "app/engine.py::run", options=FlowOptions(depth=1))
+    assert [(c.edge, c.id) for c in result.root.children] == sorted(
+        (c.edge, c.id) for c in result.root.children
+    )
+
+
+def test_flow_respects_depth(cache):
+    shallow = build_flow(cache, "app/cli.py::main", options=FlowOptions(depth=1))
+    deep = build_flow(cache, "app/cli.py::main", options=FlowOptions(depth=2))
+    assert all(not c.children for c in shallow.root.children)
+    run_shallow = _kids(shallow.root)["app/engine.py::run"]
+    run_deep = _kids(deep.root)["app/engine.py::run"]
+    assert run_shallow.children == () and run_deep.children != ()
+
+
+def test_flow_marks_a_revisited_node_as_seen_ref(cache):
+    """helper is reached under run at depth 2 and again under Handler.handle at depth 3."""
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=3, expand_hubs=True)
+    )
+    run = _kids(result.root)["app/engine.py::run"]
+    handle = _kids(run)["app/base.py::Handler.handle"]
+    assert _kids(run)["app/util.py::helper"].seen_ref is False
+    revisit = _kids(handle)["app/util.py::helper"]
+    assert revisit.seen_ref is True and revisit.children == ()
+
+
+def test_flow_marks_a_cycle_and_stops_there(cache):
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=4, expand_hubs=True)
+    )
+    ping = _kids(result.root)["app/loop.py::ping"]
+    pong = _kids(ping)["app/loop.py::pong"]
+    back = _kids(pong)["app/loop.py::ping"]
+    assert back.cycle is True and back.seen_ref is False and back.children == ()
+
+
+def test_flow_modules_are_ordered_by_first_appearance(cache):
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=2, expand_hubs=True)
+    )
+    assert result.modules[0] == "app/cli.py"
+    assert "app/engine.py" in result.modules
+    assert result.modules.index("app/engine.py") < result.modules.index("app/base.py")
+    assert len(set(result.modules)) == len(result.modules)
+
+
+def test_flow_is_deterministic(cache):
+    options = FlowOptions(depth=3, expand_hubs=True)
+    assert build_flow(cache, "app/cli.py::main", options=options) == build_flow(
+        cache, "app/cli.py::main", options=options
+    )
+
+
+def test_flow_on_an_unknown_start_id_is_a_bare_root(cache):
+    result = build_flow(cache, "nope.py::gone", options=FlowOptions(depth=3))
+    assert result.root.id == "nope.py::gone" and result.root.kind == "?"
+    assert result.root.children == () and result.modules == ("nope.py",)
