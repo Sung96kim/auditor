@@ -1,5 +1,6 @@
 """``auditr-observer``: stdlib-only, auditor-free, and inert until the daemon slice lands."""
 
+import importlib.metadata
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ _PROBE = (
     "import sys, auditr_observer; "
     "print([m for m in sys.modules if m == 'auditor' or m.startswith('auditor.')])"
 )
+_NOTICE = "auditr-observer: not available in this release"
 
 
 def test_api_version_literals_match():
@@ -48,13 +50,35 @@ def test_every_subcommand_reports_unavailable_and_exits_zero(
     argv: list[str], capsys: pytest.CaptureFixture[str]
 ):
     assert auditr_observer.main(argv) == 0
-    assert "auditr-observer: not available in this release" in capsys.readouterr().err
+    assert _NOTICE in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["bogus"],
+        ["hook"],
+        ["hook", "X", "--unknown"],
+        ["--client"],
+        ["ensure", "extra"],
+    ],
+)
+def test_malformed_argv_reports_unavailable_and_still_exits_zero(
+    argv: list[str], capsys: pytest.CaptureFixture[str]
+):
+    """Argparse exits 2 on these; propagating that would fail the very session hook."""
+    assert auditr_observer.main(argv) == 0
+    assert _NOTICE in capsys.readouterr().err
 
 
 def test_version_flag_prints_the_installed_distribution_version(
     capsys: pytest.CaptureFixture[str],
 ):
+    try:
+        expected = importlib.metadata.version("auditr")
+    except importlib.metadata.PackageNotFoundError:
+        expected = "unknown (not installed as a distribution)"
     with pytest.raises(SystemExit) as exit_info:
         auditr_observer.main(["--version"])
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.startswith("auditr-observer ")
+    assert capsys.readouterr().out.strip() == f"auditr-observer {expected}"

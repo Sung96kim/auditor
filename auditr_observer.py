@@ -2,7 +2,7 @@
 
 Deliberately outside the ``auditor`` package and stdlib-only: hooks run on every session event and
 ``import auditor`` costs ~0.23 s. The daemon lands in a later slice; every subcommand is inert here
-and always exits 0 so a hook can never fail a session.
+and nothing exits non-zero, so a hook can never fail a session.
 """
 
 import argparse
@@ -20,7 +20,7 @@ def _version() -> str:
     try:
         return importlib.metadata.version("auditr")
     except importlib.metadata.PackageNotFoundError:
-        return "unknown"
+        return "unknown (not installed as a distribution)"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,8 +41,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Report that the observer is not in this release, returning 0 so a hook can never fail a session."""
-    build_parser().parse_args(argv)
+    """Report that the observer is not in this release, never signalling failure.
+
+    Argparse exits 2 on malformed argv; that is swallowed here so a hook can never fail a
+    session. ``--version`` and ``-h`` exit 0 through argparse and pass straight through.
+    """
+    try:
+        build_parser().parse_args(argv)
+    except SystemExit as requested_exit:
+        if requested_exit.code == 0:
+            raise
     print(_UNAVAILABLE, file=sys.stderr)
     return 0
 
