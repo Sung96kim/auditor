@@ -9,6 +9,8 @@ from auditor.graph.model import (
     GraphEdge,
     GraphNode,
     NodeKind,
+    Resolution,
+    UnresolvedReason,
 )
 
 
@@ -106,7 +108,7 @@ class StructuralResolver:
                 return mid
             if (cls := self.classes.get(cid)) is not None:
                 for bn in cls.bases:
-                    frontier += self._resolve_name(bn, cls, self.by_class_name)
+                    frontier += self._resolve_name(bn, cls, self.by_class_name).ids
         return None
 
     def _binding_target(self, module_id: str, name: str) -> str | None:
@@ -116,51 +118,69 @@ class StructuralResolver:
         return None if src is None else self.dotted_to_id.get(src)
 
     def _namespace_defs(
-        self, module_id: str, name: str, definers: set[str], seen: set[str]
+        self,
+        module_id: str,
+        name: str,
+        definers: set[str],
+        seen: set[str],
+        walked: list[str],
     ) -> set[str]:
-        """Which of ``definers`` ``module_id`` re-exports ``name`` from — its own def, star
-        re-exports (any module), or a named re-export of ``name`` in a package ``__init__`` (not a
-        plain module's named import). Pins a re-exported binding to the one def it exports (Finding B)."""
+        """Which of ``definers`` ``module_id`` re-exports ``name`` from: its own def, a star
+        re-export (any module), or a named re-export in a package ``__init__`` (never a plain
+        module's named import). Appends each module visited to ``walked``, in visit order."""
         if module_id in seen:
             return set()
         seen.add(module_id)
+        walked.append(module_id)
         if module_id in definers:
             return {module_id}  # a local definition shadows any re-export
         out: set[str] = set()
         for star_src in self.star_reexports.get(module_id, ()):
-            out |= self._namespace_defs(star_src, name, definers, seen)
+            out |= self._namespace_defs(star_src, name, definers, seen, walked)
         if (
             module_id.endswith("/__init__.py")
             and (tgt := self._binding_target(module_id, name)) is not None
         ):
-            out |= self._namespace_defs(tgt, name, definers, seen)
+            out |= self._namespace_defs(tgt, name, definers, seen, walked)
         return out
 
     def _resolve_name(
         self, name: str, caller: GraphNode, index: dict[str, list[str]]
-    ) -> list[str]:
+    ) -> Resolution:
         hits = index.get(name, [])
         if caller.role not in TEST_ROLES:
             hits = [h for h in hits if self.role_by_id.get(h) not in TEST_ROLES]
-        same = [h for h in hits if h.split("::")[0] == caller.module]
+        definers = tuple(hits)
+        same = tuple(h for h in hits if h.split("::")[0] == caller.module)
         if same:
-            return same
+            return Resolution(ids=same, gated=same, definers=definers)
+        path: tuple[str, ...] = ()
         # Pin the name through its import source's namespace, so a named `__init__` hop still
         # reaches the definer and same-named siblings don't make `len(gated) != 1` → drop (Finding B).
         if (src_mod := self._binding_target(caller.module, name)) is not None:
-            definers = {h.split("::")[0] for h in hits}
-            exported = self._namespace_defs(src_mod, name, definers, set())
-            bound = [h for h in hits if h.split("::")[0] in exported]
+            walked: list[str] = []
+            exported = self._namespace_defs(
+                src_mod, name, {h.split("::")[0] for h in hits}, set(), walked
+            )
+            path = tuple(walked)
+            bound = tuple(h for h in hits if h.split("::")[0] in exported)
             if len(bound) == 1:
-                return bound
+                return Resolution(ids=bound, gated=bound, definers=definers, path=path)
         # Cross-module: a call site gives us only the name (`x.get()` → "get"), not the receiver
         # type, so a name defined elsewhere can't be attributed by name alone — that's what made
         # every `.get()`/`from_orm()` link to a same-named repo method (false hairball). Use the
         # import graph as the disambiguator: link only to a candidate whose module the caller
         # actually imports, and only when that's unambiguous.
         imported = self.imports_by_module.get(caller.module, frozenset())
-        gated = [h for h in hits if h.split("::")[0] in imported]
-        return gated if len(gated) == 1 else []
+        gated = tuple(h for h in hits if h.split("::")[0] in imported)
+        if len(gated) == 1:
+            return Resolution(ids=gated, gated=gated, definers=definers, path=path)
+        reason = (
+            UnresolvedReason.AMBIGUOUS_NAME
+            if len(gated) >= 2
+            else UnresolvedReason.UNIMPORTABLE_NAME
+        )
+        return Resolution(gated=gated, definers=definers, path=path, reason=reason)
 
     def _module_contains(self) -> None:
         top_level = [
@@ -183,26 +203,26 @@ class StructuralResolver:
     def _call_edges(self) -> None:
         for n in self.fns.values():
             for callee in n.callees:
-                for dst in self._resolve_name(callee, n, self.by_fn_name):
+                for dst in self._resolve_name(callee, n, self.by_fn_name).ids:
                     self._add(n.id, dst, EdgeKind.CALLS)
             # typed-receiver calls (Finding 2): `recv.method()` where recv has a declared type
             # resolves to THAT class's method (up the inheritance chain), disambiguating
             # same-named methods that the receiver-blind name+import gate above drops.
             for recv_type, method in n.typed_calls:
-                for cls_id in self._resolve_name(recv_type, n, self.by_class_name):
+                for cls_id in self._resolve_name(recv_type, n, self.by_class_name).ids:
                     if (mid := self._resolve_method(cls_id, method)) is not None:
                         self._add(n.id, mid, EdgeKind.CALLS)
             for cb in n.callback_names:
-                for dst in self._resolve_name(cb, n, self.by_fn_name):
+                for dst in self._resolve_name(cb, n, self.by_fn_name).ids:
                     self._add(n.id, dst, EdgeKind.CALLBACK_ARG)
             for t in n.param_types:
-                for dst in self._resolve_name(t, n, self.by_class_name):
+                for dst in self._resolve_name(t, n, self.by_class_name).ids:
                     self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
             # body class-as-value uses (Finding 3): a class instantiated/attr-accessed/passed
             # in the body edges to it, same as an annotation would. Same class-name gate, so a
             # body name resolving to a function (already a `calls` edge) never lands here.
             for ref in n.class_refs:
-                for dst in self._resolve_name(ref, n, self.by_class_name):
+                for dst in self._resolve_name(ref, n, self.by_class_name).ids:
                     self._add(n.id, dst, EdgeKind.REFERENCES_TYPE)
 
     def _registered_in(self) -> None:
@@ -227,7 +247,7 @@ class StructuralResolver:
             base_ids = [
                 b
                 for bn in c.bases
-                for b in self._resolve_name(bn, c, self.by_class_name)
+                for b in self._resolve_name(bn, c, self.by_class_name).ids
             ]
             for bid in base_ids:
                 self._add(c.id, bid, EdgeKind.INHERITS)

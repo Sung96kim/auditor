@@ -111,3 +111,27 @@ class FileGraphFacts(BaseModel):
     path: str
     role: str
     nodes: list[GraphNode] = []
+
+
+class UnresolvedReason(StrEnum):
+    """Why a fact sits in the queue. The first two come from the resolver, the rest from the
+    build pass over the clustered graph."""
+
+    AMBIGUOUS_NAME = "ambiguous_name"
+    UNIMPORTABLE_NAME = "unimportable_name"
+    TEXT_SPARSE = "text_sparse"
+    GENERIC_LABEL = "generic_label"
+    SINGLETON_CLUSTER = "singleton_cluster"
+
+
+class Resolution(BaseModel):
+    """One name-resolution attempt: what it picked (``ids``), what it weighed (``gated``), every
+    role-filtered repo definition of the name (``definers``), and the modules it went through."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ids: tuple[str, ...] = ()
+    gated: tuple[str, ...] = ()
+    definers: tuple[str, ...] = ()
+    path: tuple[str, ...] = ()
+    reason: UnresolvedReason | None = None

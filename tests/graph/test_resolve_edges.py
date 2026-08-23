@@ -1,8 +1,8 @@
 import pytest
 
 from auditor.graph.extract import extract_file_facts
-from auditor.graph.model import GraphEdge
-from auditor.graph.resolve_edges import resolve_structural
+from auditor.graph.model import GraphEdge, UnresolvedReason
+from auditor.graph.resolve_edges import StructuralResolver, resolve_structural
 
 SRC_A = """
 class Base:
@@ -477,3 +477,89 @@ def test_module_contains_top_level_symbols():
         "m.py",
         "m.py::Bar.baz",
     ) not in contains  # module does NOT directly contain methods
+
+
+def _resolve(
+    name: str,
+    files: tuple[tuple[str, str], ...],
+    *,
+    caller_id: str,
+    classes: bool = False,
+):
+    """Run one `_resolve_name` against a built resolver, so the Resolution fields can be asserted
+    directly rather than inferred from the edge set."""
+    nodes = _reexport_nodes(*files)
+    resolver = StructuralResolver(nodes)
+    caller = next(n for n in nodes if n.id == caller_id)
+    index = resolver.by_class_name if classes else resolver.by_fn_name
+    return resolver._resolve_name(name, caller, index)
+
+
+def test_resolution_of_a_same_module_name_carries_no_reason():
+    files = (
+        ("m.py", "def helper():\n    return 1\n\ndef use():\n    return helper()\n"),
+    )
+    res = _resolve("helper", files, caller_id="m.py::use")
+    assert res.ids == ("m.py::helper",)
+    assert res.definers == ("m.py::helper",)
+    assert res.reason is None
+
+
+def test_resolution_reports_ambiguous_when_two_definers_are_reachable():
+    files = (
+        ("a.py", "def save():\n    return 1\n"),
+        ("b.py", "def save():\n    return 2\n"),
+        (
+            "caller.py",
+            "import a\nimport b\ndef use():\n    return save()\n",
+        ),
+    )
+    res = _resolve("save", files, caller_id="caller.py::use")
+    assert res.ids == ()
+    assert set(res.gated) == {"a.py::save", "b.py::save"}
+    assert res.reason is UnresolvedReason.AMBIGUOUS_NAME
+
+
+def test_resolution_reports_unimportable_when_the_definer_is_not_reachable():
+    files = (
+        ("a.py", "def save():\n    return 1\n"),
+        ("caller.py", "def use():\n    return save()\n"),
+    )
+    res = _resolve("save", files, caller_id="caller.py::use")
+    assert res.ids == ()
+    assert res.gated == ()
+    assert res.definers == ("a.py::save",)
+    assert res.reason is UnresolvedReason.UNIMPORTABLE_NAME
+
+
+def test_resolution_role_filter_hides_a_test_only_definer_from_a_production_caller():
+    files = (("caller.py", "def use():\n    return handle()\n"),)
+    nodes = _reexport_nodes(*files)
+    nodes += extract_file_facts(
+        "test_x.py", "def handle():\n    return 1\n", "test"
+    ).nodes
+    resolver = StructuralResolver(nodes)
+    caller = next(n for n in nodes if n.id == "caller.py::use")
+    res = resolver._resolve_name("handle", caller, resolver.by_fn_name)
+    assert res.definers == ()  # a production caller never sees the test definition
+
+
+def test_resolution_path_records_every_module_the_binding_walked():
+    """`consumer` imports from `pkg`, which star-re-exports `pkg.models`, whose `__init__` names
+    the definer. All three hops belong in the path, not just the two endpoints."""
+    files = (
+        ("pkg/models/base.py", "class Model:\n    id = 1\n"),
+        ("pkg/models/__init__.py", "from .base import Model\n"),
+        ("pkg/__init__.py", "from pkg.models import *\n"),
+        (
+            "consumer.py",
+            "from pkg import Model\ndef q() -> int:\n    return select(Model.id) or 0\n",
+        ),
+    )
+    res = _resolve("Model", files, caller_id="consumer.py::q", classes=True)
+    assert res.ids == ("pkg/models/base.py::Model",)
+    assert res.path == (
+        "pkg/__init__.py",
+        "pkg/models/__init__.py",
+        "pkg/models/base.py",
+    )
