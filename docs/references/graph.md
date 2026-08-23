@@ -211,6 +211,35 @@ auditr graph unresolved . --json --limit 500
   cached facts are dropped on first use and the next `graph build` re-extracts every file. No
   `--rebuild` is needed.
 
+## Refinement overlay
+
+- The graph the query commands read is the deterministic build plus an overlay of active
+  refinements. There is no CLI for refinements yet; this section describes what a build does with
+  the rows once something puts them there.
+- A refinement is recorded against a repo *identity* (the git common dir), not a scan partition, so
+  every worktree of one checkout shares them.
+- Every edge carries a provenance: `deterministic` when the resolver produced it, `refined` when an
+  active refinement did. `graph export`, the visualization payload and the flow tree all show it.
+- The deterministic edge set is never rewritten. An overlay edge is an addition, and a
+  `retarget_edge` is the only kind that moves one, by replacing it with a `refined` edge.
+- The `GRAPH-*` detectors run on a graph no refinement touched: the edge list captured before the
+  overlay, re-ranked and re-clustered over that list. A refinement can never create or silence a
+  finding, and can never move which symbol one is reported on.
+- A refinement expires on its own:
+  - `stale` when a node it is anchored to is gone or its structural facts changed, or when it had
+    no effect for three consecutive builds.
+  - `redundant` when the resolver starts producing the same edge. That is the success case.
+  - `pinned` refinements are never auto-staled; a moved anchor marks them `drifted` instead.
+- A refinement whose ids belong to a different partition of the same checkout is skipped in
+  silence: not applied there, and not staled there either.
+- Cluster refinements record the member set they were made against and re-attach to whichever
+  cluster still overlaps it by at least half. Below that they go `stale`.
+- Queue rows retire two ways. A refinement that names a `(node_id, name)` pair removes exactly that
+  row, which is how `unresolvable`, `resolve_ambiguous` and an accepted edge proposal close their
+  own question. The build-pass rows (`generic_label`, `singleton_cluster`, `text_sparse`) are
+  rebuilt from the overlaid clustering instead, so a `relabel_cluster` or a `move_node` stops
+  producing them without any retirement step.
+
 ## Graph findings
 
 - The three `GRAPH-*` detectors run during `graph build`. Their findings are `suggestion` severity

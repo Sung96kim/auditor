@@ -1,6 +1,7 @@
 """Repo-level graph build (spec §6). Needs numpy + scikit-learn (via naming/rank/cluster)."""
 
 import sqlite3
+import time
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -10,6 +11,7 @@ from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.graph.cluster import cluster_concepts
 from auditor.graph.detectors import run_graph_detectors
+from auditor.graph.hashes import node_truth_sha
 from auditor.graph.model import (
     FUNCTION_KINDS,
     TEST_ROLES,
@@ -23,6 +25,15 @@ from auditor.graph.model import (
 )
 from auditor.graph.naming import name_similar_edges
 from auditor.graph.rank import pagerank
+from auditor.graph.refine.models import Anchor, RefinementOutcome
+from auditor.graph.refine.namespace import to_partition
+from auditor.graph.refine.overlay import (
+    apply_edge_overlay,
+    apply_node_overlay,
+    merge_outcomes,
+    retire_queue_rows,
+    triage,
+)
 from auditor.graph.resolve_edges import resolve_structural
 from auditor.graph.usage import usage_similar_edges
 from auditor.languages.python.detectors.graph_rules import (
@@ -82,6 +93,43 @@ def _quality_rows(
     return rows
 
 
+def _clusters_for(
+    labels: dict[str, int], label_names: dict[int, str]
+) -> list[GraphCluster]:
+    """One cluster row per label, sized by membership and named by the clusterer."""
+    sizes: dict[int, int] = {}
+    for cid in labels.values():
+        sizes[cid] = sizes.get(cid, 0) + 1
+    return [
+        GraphCluster(
+            cluster_id=cid,
+            label=label_names.get(cid, f"cluster-{cid}"),
+            member_count=size,
+        )
+        for cid, size in sorted(sizes.items())
+    ]
+
+
+def _anchor_truth(
+    nodes: list[GraphNode],
+    anchors: dict[int, tuple[Anchor, ...]],
+    prefix: str,
+) -> dict[str, str]:
+    """Current ``truth_sha`` for exactly the nodes some anchor names.
+
+    Hashing all 3.9k nodes of this repo costs 88 ms, and a build with no refinements must not pay
+    any of it.
+    """
+    wanted = {
+        local
+        for rows in anchors.values()
+        for row in rows
+        if (local := to_partition(row.node_id, prefix)) is not None
+    }
+    by_id = {n.id: n for n in nodes}
+    return {nid: node_truth_sha(by_id[nid]) for nid in wanted if nid in by_id}
+
+
 def _symbol_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
     return [n for n in nodes if n.kind is not NodeKind.MODULE]
 
@@ -92,12 +140,44 @@ def _concept_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
     ]
 
 
+def _deterministic_findings(
+    nodes: list[GraphNode],
+    out_nodes: list[GraphNode],
+    edges: list[GraphEdge],
+    settings: AuditorSettings,
+) -> dict[str, list[Finding]]:
+    """Detector findings over the pre-overlay graph (spec section 6 step 7, section 2).
+
+    Re-ranks and re-clusters over ``edges`` so no `GRAPH-*` finding can move because a refinement
+    added one: measured 1.4 s for the clustering and 0.06 s for the rank on this repo's 3.9k
+    nodes, about 15 % of a warm build.
+    """
+    ranks = pagerank(
+        [n.id for n in nodes],
+        edges,
+        personalization={n.id for n in nodes if n.role not in TEST_ROLES},
+    )
+    labels, label_names = cluster_concepts(
+        _concept_nodes(nodes), edges, floor=settings.graph.cluster_floor
+    )
+    det_nodes = [
+        n.model_copy(
+            update={"rank": ranks.get(n.id, 0.0), "cluster_id": labels.get(n.id)}
+        )
+        for n in out_nodes
+    ]
+    return run_graph_detectors(
+        det_nodes, edges, _clusters_for(labels, label_names), settings
+    )
+
+
 class GraphWrite(BaseModel):
     """One build's whole persisted result, so the write is a single argument and a new output is
     a field rather than another parameter.
 
     ``detect`` distinguishes "the detectors ran and found nothing" from "leave the findings
-    alone": only the first clears the previous build's `GRAPH-*` rows.
+    alone": only the first clears the previous build's `GRAPH-*` rows. ``outcomes`` is what the
+    build decided about each refinement it looked at, written beside the graph it describes.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -108,11 +188,13 @@ class GraphWrite(BaseModel):
     unresolved: tuple[UnresolvedRow, ...] = ()
     findings: dict[str, list[Finding]] = Field(default_factory=dict)
     detect: bool = False
+    outcomes: tuple[RefinementOutcome, ...] = ()
 
     def apply(self, conn: sqlite3.Connection, index: IndexStore) -> None:
         """The whole build write, on one open connection (spec section 6 step 8)."""
         index.graph.write_graph(conn, self.nodes, self.edges, self.clusters)
         index.graph.write_unresolved(conn, self.unresolved)
+        index.refinements.write_outcomes(conn, self.outcomes, time.time())
         if not self.detect:
             return
         index.findings.write_clear_for_rules(conn, _GRAPH_RULE_IDS)
@@ -160,6 +242,14 @@ class GraphBuilder:
         symbols = _symbol_nodes(nodes)
         report("resolving structural edges")
         structural = resolve_structural(nodes)
+        report("applying refinements")
+        prefix = index.partition.prefix
+        active = await index.refinements.active()
+        anchors = await index.refinements.anchors([r.refinement_id for r in active])
+        triaged = triage(active, anchors, _anchor_truth(nodes, anchors, prefix), prefix)
+        edge_overlay = apply_edge_overlay(
+            structural.edges, {n.id for n in nodes}, triaged, prefix
+        )
         report("computing naming similarity")
         name_edges, sparse = name_similar_edges(
             symbols,
@@ -169,7 +259,10 @@ class GraphBuilder:
         )
         report("computing usage similarity")
         usage_edges = usage_similar_edges(symbols, knn_k=cfg.knn_k)
-        all_edges = structural.edges + name_edges + usage_edges
+        # captured before the merge: `retarget_edge` deletes from the merged list, so a filter
+        # over `all_edges` would hand the detectors a graph missing an edge nothing replaced
+        deterministic_edges = structural.edges + name_edges + usage_edges
+        all_edges = list(edge_overlay.edges) + name_edges + usage_edges
 
         proto = _protocol_method_ids(nodes)
         nonrank_test = {n.id for n in nodes if n.role not in TEST_ROLES}
@@ -191,25 +284,31 @@ class GraphBuilder:
             )
             for n in nodes
         ]
-        sizes: dict[int, int] = {}
-        for cid in labels.values():
-            sizes[cid] = sizes.get(cid, 0) + 1
-        clusters = [
-            GraphCluster(
-                cluster_id=cid,
-                label=label_names.get(cid, f"cluster-{cid}"),
-                member_count=sz,
-            )
-            for cid, sz in sorted(sizes.items())
-        ]
-        unresolved = [
-            *structural.unresolved,
-            *_quality_rows(out_nodes, sparse, labels, label_names, sizes),
-        ]
+        node_overlay = apply_node_overlay(
+            out_nodes, _clusters_for(labels, label_names), triaged, prefix
+        )
+        out_nodes = list(node_overlay.nodes)
+        clusters = list(node_overlay.clusters)
+        # the queue's cluster rows describe the graph that ships, so a relabelled cluster stops
+        # emitting `generic_label` and a moved node stops emitting `singleton_cluster`
+        labels = {n.id: n.cluster_id for n in out_nodes if n.cluster_id is not None}
+        label_names = {c.cluster_id: c.label for c in clusters}
+        sizes = {c.cluster_id: c.member_count for c in clusters}
+        unresolved = retire_queue_rows(
+            [
+                *structural.unresolved,
+                *_quality_rows(out_nodes, sparse, labels, label_names, sizes),
+            ],
+            triaged,
+            prefix,
+        )
+
         per_file: dict[str, list[Finding]] = {}
         if cfg.detect:
-            report("running detectors")
-            per_file = run_graph_detectors(out_nodes, all_edges, clusters, settings)
+            report("running detectors on the deterministic graph")
+            per_file = _deterministic_findings(
+                nodes, out_nodes, deterministic_edges, settings
+            )
         report("persisting graph")
         return await self._persist(
             index,
@@ -220,6 +319,9 @@ class GraphBuilder:
                 unresolved=tuple(unresolved),
                 findings=per_file,
                 detect=cfg.detect,
+                outcomes=merge_outcomes(
+                    triaged.outcomes, edge_overlay.outcomes, node_overlay.outcomes
+                ),
             ),
         )
 

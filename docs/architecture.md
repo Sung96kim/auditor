@@ -263,6 +263,18 @@ flowchart TB
 - `build.GraphWrite` is that whole result as one frozen record: `nodes`, `edges`, `clusters`,
   `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
   counts, so the empty-graph build takes the same path and reports the same shape as any other.
+- `graph/refine/` is the refinement layer: `models.py` (the frozen records), `namespace.py`
+  (partition-relative vs toplevel-relative node ids) and `overlay.py` (the pure merge). Stdlib plus
+  pydantic, no database.
+- `GraphBuilder.run` is the only place refinements are applied: triage against the anchors, merge
+  the edge kinds into the resolver's output, cluster and rank over the merged set, apply the node
+  and cluster kinds, rebuild the queue from the overlaid clustering and retire the rows a
+  refinement answered.
+- The detectors get their own pass: `build._deterministic_findings` re-ranks and re-clusters over
+  the edge list captured before the overlay, so no `GRAPH-*` finding depends on a refinement. It
+  costs about 15 % of a warm build.
+- Each refinement the build looked at comes back as one `RefinementOutcome` on `GraphWrite.outcomes`,
+  so `refinements.write_outcomes` runs in the same transaction as the graph it describes.
 - The transaction idiom, and the rule that keeps it from growing dead halves:
   - A store method that writes owns its own commit and is `async`.
   - Its `write_*` half takes the open connection, writes, and never commits, so a caller can

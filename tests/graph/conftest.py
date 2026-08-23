@@ -10,6 +10,13 @@ import pytest
 from auditor.database import IndexStore
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
+from auditor.graph.refine.models import (
+    Refinement,
+    RefinementKind,
+    RefinementStatus,
+    RefinementTarget,
+    Run,
+)
 
 GRAPH_CONFIG = "[tool.auditor.graph]\nenabled=true\nname_similarity_threshold=0.2\n"
 SIMILAR_NAMES = (
@@ -227,3 +234,27 @@ async def facts_store(graph_store: IndexStore) -> IndexStore:
             digest,
         )
     return graph_store
+
+
+@pytest.fixture
+async def refined_facts_store(facts_store: IndexStore) -> IndexStore:
+    """`facts_store` plus one active `add_edge` refinement for the call the resolver cannot place:
+    `impl.py::Impl.run` calls `load_user`, which lives in `svc.py`."""
+    run_id = await facts_store.runs.add_run(
+        Run(repo_identity=facts_store.partition.identity, started_at=1.0)
+    )
+    await facts_store.refinements.add_refinement(
+        Refinement(
+            run_id=run_id,
+            repo_identity=facts_store.partition.identity,
+            kind=RefinementKind.ADD_EDGE,
+            target=RefinementTarget(
+                src="impl.py::Impl.run",
+                dst="svc.py::load_user",
+                edge_kind=EdgeKind.CALLS,
+                name="load_user",  # the queue row this answers (spec 5.7)
+            ),
+            status=RefinementStatus.ACTIVE,
+        )
+    )
+    return facts_store
