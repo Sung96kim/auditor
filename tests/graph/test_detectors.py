@@ -209,7 +209,7 @@ def test_god_concept_records_which_centrality_fired(fan_out, expected, phrase):
 
 
 def test_a_non_god_concept_finding_has_no_subkind():
-    """The field is opt-in per detector, so every other rule keeps a null column."""
+    """The field is opt-in per detector, so every other rule leaves it unset."""
     nodes = [_cn(f"m{i}.py::f{i}", f"f{i}", f"m{i}.py", 0) for i in range(6)]
     clusters = [GraphCluster(cluster_id=0, label="widget", member_count=6)]
     found = ScatteredConcept(

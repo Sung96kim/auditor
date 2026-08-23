@@ -37,7 +37,9 @@ _DEGREE_KINDS = (
 
 
 class GodConceptKind(StrEnum):
-    """Which centrality made a node a god concept, so a reader never parses the message."""
+    """Which centrality made a node a god concept, for readers of the index and the MCP surface.
+    The ``-f json`` scan stream does not carry it, so the message prose is still load-bearing there.
+    """
 
     FAN_OUT = "fan_out"
     BOTTLENECK = "bottleneck"

@@ -272,8 +272,9 @@ auditr graph unresolved . --json --limit 500
 - Which of the two fired is stored on the finding as `subkind`, `fan_out` or `bottleneck`. It is a
   field, not a second rule id, so a baseline entry and an `auditor: skip` directive keep resolving
   by `GRAPH-GOD-CONCEPT`. The MCP `graph_overview` tool splits its two hub lists on it.
-- `subkind` is null on every other rule. It is stored in the index and read by `graph_overview`; it
-  is not part of the `-f json` finding shape.
+- `subkind` is null on every other rule. It is stored in the index, read by `graph_overview`, and
+  included in the full record `finding_detail` returns. It is not part of the `-f json` finding
+  shape.
 - `GRAPH-SCATTERED-CONCEPT`: one concept cluster's members spread across many modules instead of
   living together.
 - `GRAPH-NAMING-INCONSISTENCY`: two same-shaped functions in one cluster naming the same concept
