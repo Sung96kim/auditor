@@ -106,20 +106,21 @@ async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
 @mcp.tool(annotations=READ_ONLY)
 async def graph_overview(path: str = ".") -> dict:
     """One compact call to orient: counts, the largest clusters, and the worst graph hubs.
-    Returns {nodes, edges, clusters, top_clusters, god_concepts, bottlenecks}. If the graph
-    isn't built yet (0 nodes), the counts are zero and the lists empty — no error.
+    Returns {nodes, edges, clusters, top_clusters, god_concepts, god_concept_count,
+    bottlenecks, bottleneck_count}. The two hub lists are capped at 5 and the counts are the
+    totals. If the graph isn't built yet (0 nodes), the counts are zero and the lists empty —
+    no error.
     """
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
         nodes = await index.graph.nodes()
         edges = await index.graph.all_edges()
         clusters = await index.graph.clusters()
-        findings = await index.findings.by_rule_prefix("GRAPH-")
+        findings = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
     god_concepts: list[str] = []
     bottlenecks: list[str] = []
+    # Flavour lives only in the message: graph/detectors.py:145 fan-out, :153 bottleneck.
     for f in findings:
-        if f["rule_id"] != "GRAPH-GOD-CONCEPT":
-            continue
         if "bottleneck" in f["message"]:
             bottlenecks.append(f["evidence"])
         elif "fan-out" in f["message"]:
@@ -132,5 +133,7 @@ async def graph_overview(path: str = ".") -> dict:
             {"label": c["label"], "size": c["member_count"]} for c in clusters[:8]
         ],
         "god_concepts": god_concepts[:5],
+        "god_concept_count": len(god_concepts),
         "bottlenecks": bottlenecks[:5],
+        "bottleneck_count": len(bottlenecks),
     }

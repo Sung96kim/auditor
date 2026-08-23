@@ -93,6 +93,8 @@ args = ["run", "-i", "--rm",
 - Semantic graph, always registered: `graph_build`, `graph_search`, `graph_usages`,
   `graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters`, `graph_overview`. The
   graph libraries are core dependencies, so `auditr[mcp]` is enough. See [graph.md](graph.md).
+- `graph_overview` caps `god_concepts` and `bottlenecks` at 5 entries each and reports the true
+  totals as `god_concept_count` and `bottleneck_count`.
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
   `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them
