@@ -143,6 +143,40 @@ counting members whose name contains the term), and returns the whole membership
 matching node. Use it when you're asking "what part of the codebase handles X" rather than
 "where exactly is symbol X."
 
+## What the graph could not resolve
+
+```
+auditr graph unresolved --json                       # whole queue, worst first
+auditr graph unresolved --reason ambiguous_name      # names with a real candidate set
+auditr graph unresolved --call-form self --call-form bare
+```
+
+Each row is a fact the deterministic resolver refused to turn into an edge, plus the evidence:
+
+```json
+{
+  "node_id": "auditor/engine.py::ScanEngine._scan_file",
+  "fact_kind": "attr_callee",
+  "name": "effective",
+  "reason": "unimportable_name",
+  "receiver_root": "config",
+  "call_form": "attr",
+  "candidates": [],
+  "definers": ["auditor/config.py::ResolvedConfig.effective"],
+  "resolution_path": [],
+  "priority": 3,
+  "externally_bound": false
+}
+```
+
+- Use it as the counterweight to a dead-code call. An empty `used_by` plus a queue row naming that
+  symbol means the graph lost the edge, not that the symbol is unused.
+- `externally_bound: true` means the calling module imports that name or receiver from outside the
+  repo (`re.search`, `subprocess.run`). Skip those.
+- `call_form` is the tractability signal: `bare` and `self` rows are answerable by reading one file,
+  `attr` rows usually are not.
+- The queue is rebuilt by every `graph build` and is empty before the first one.
+
 ## Reading the output: `used_by` vs `depends_on`, edge kinds, staleness
 
 - **`used_by`** (incoming structural edges) = who depends on this symbol — what breaks if you

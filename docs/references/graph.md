@@ -34,6 +34,9 @@ auditr graph concept tenant .
 # every concept cluster with its label and size
 auditr graph clusters .
 
+# what the deterministic resolver could not place, worst first
+auditr graph unresolved .
+
 # interactive UI on a local port
 auditr graph serve .
 
@@ -56,6 +59,7 @@ auditr graph export . --format dot > graph.dot
 - Setting `enabled = true` under `[tool.auditor.graph]` also makes a plain `auditr scan -i` populate
   graph facts. See [configuration.md](configuration.md).
 - The build runs the `GRAPH-*` detectors, described below.
+- The build reports five counts: `nodes`, `edges`, `clusters`, `unresolved` and `findings`.
 
 ## Querying
 
@@ -81,6 +85,61 @@ auditr graph export . --format dot > graph.dot
 - `clusters` lists every concept cluster with its id, label and member count.
 - Worked recipes with real command output live in the plugin's
   [explore-graph recipes](../../plugin/skills/explore-graph/references/recipes.md).
+
+## The unresolved queue
+
+`graph unresolved` lists the facts the deterministic resolver could not place. Every build rebuilds
+the whole queue, and `graph build` reports its size as `unresolved`.
+
+```bash
+# the whole queue, worst first (default limit 50)
+auditr graph unresolved .
+
+# only the names with a real candidate set
+auditr graph unresolved . --reason ambiguous_name
+
+# only the safely answerable shapes: bare calls and self calls
+auditr graph unresolved . --call-form bare --call-form self
+
+# raw rows for an agent
+auditr graph unresolved . --json --limit 500
+```
+
+- Rows are ordered worst first: ambiguous names, then `self`/bare calls, then attribute calls, then
+  the label and cluster reasons.
+- `--reason` and `--call-form` are repeatable and combine.
+- Reasons:
+  - `ambiguous_name`: two or more repo definitions are reachable from the call site, so the
+    resolver refused to pick one.
+  - `unimportable_name`: the repo defines the name, but the calling module cannot import it.
+  - `text_sparse`: the symbol has fewer than four distinct concept tokens, so it gets no
+    similarity edges.
+  - `generic_label`: a cluster whose label fell back to `cluster-N` because no member contributed
+    a token.
+  - `singleton_cluster`: a cluster with one member.
+- A row only exists when the name has at least one repo definition that the caller's role can see.
+  Test-only definitions are invisible to production callers, which is what keeps the queue small.
+- Test code never queues anything either. Only production and script callers produce rows.
+- A row is dropped when the node already has an edge of that kind to a symbol of the same short
+  name, so a call resolved through the typed-receiver path is never queued twice.
+- `typed_call` rows survive only when the receiver's declared type is a repo class whose whole base
+  chain resolves in-repo, so `str.lower`, `Path.mkdir` and pydantic receivers never appear. A
+  receiver known not to be a repo class also removes the plain attribute row for that call: the
+  call is settled, the same-named repo function is simply not what it calls.
+- `call_form` is `self` only for a direct `self.method()` or `cls.method()`. A chained
+  `self.dep.method()` is `attr` with a receiver root of `self`.
+- A name called both bare and through a receiver in the same function gets one row, in the bare
+  form, because that is the form a reader can settle from one file.
+- A bare row is never emitted for a name the function itself binds, such as a parameter it calls
+  (`def run(handler)` calling `handler()`) or a local it assigns.
+- `ext-bound` (`externally_bound` in JSON) marks a row whose bare name or receiver root the calling
+  module imports from outside the repo, such as `re.search` or `subprocess.run`, including through
+  a module-level alias like `_RX = re.compile(...)`. Those rows are kept for display and are not
+  worth chasing.
+- `definers` and `candidates` render as counts in the table and as full node-id lists in `--json`.
+- The queue is empty until `graph build` has run. Because facts are keyed by file content, a repo
+  indexed before this release needs one `graph build --rebuild` for the receiver information the
+  attribute rows depend on.
 
 ## Graph findings
 

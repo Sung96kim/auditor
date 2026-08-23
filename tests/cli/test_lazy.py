@@ -39,6 +39,7 @@ _SUBCOMMANDS = (
     "clusters",
     "search",
     "usages",
+    "unresolved",
 )
 
 

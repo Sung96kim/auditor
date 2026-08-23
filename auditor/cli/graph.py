@@ -14,8 +14,10 @@ from typing import Annotated, Any
 import typer
 
 from auditor.cli.console import ACCENT, err_console
+from auditor.cli.graph_refine import register as register_refine
 from auditor.cli.helpers import present, run, run_staged, warn_unknown_config
 from auditor.cli.lazy import GRAPH_HELP
+from auditor.cli.options import GraphTarget
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
@@ -38,8 +40,6 @@ from auditor.serve import ReportServer
 
 graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
 
-_Target = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
-
 
 async def _autoscan(root: Path) -> None:
     """Incremental scan with graph extraction forced on."""
@@ -55,7 +55,7 @@ async def _build(root: Path, progress: Callable[[str], None] | None = None) -> d
 
 @graph_app.command("build")
 def graph_build(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     no_scan: bool = typer.Option(
         False,
         "--no-scan",
@@ -102,7 +102,7 @@ def _query_cmd(
 @graph_app.command("related")
 def graph_related(
     symbol: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     limit: int = 10,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
@@ -118,7 +118,7 @@ def graph_related(
 @graph_app.command("neighbors")
 def graph_neighbors(
     symbol: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     depth: int = 1,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
@@ -134,7 +134,7 @@ def graph_neighbors(
 @graph_app.command("concept")
 def graph_concept(
     term: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Symbols in the concept cluster matching a term."""
@@ -148,7 +148,7 @@ def graph_concept(
 
 @graph_app.command("clusters")
 def graph_clusters(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List concept clusters (label + size)."""
@@ -163,7 +163,7 @@ def graph_clusters(
 @graph_app.command("search")
 def graph_search(
     term: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     limit: int = 20,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
@@ -179,7 +179,7 @@ def graph_search(
 @graph_app.command("usages")
 def graph_usages(
     symbol: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     sample: int = 5,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
@@ -212,7 +212,7 @@ async def _serve_html(
 
 @graph_app.command("serve")
 def graph_serve(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     rebuild: bool = typer.Option(
         False,
         "--rebuild",
@@ -238,7 +238,7 @@ def graph_serve(
 
 @graph_app.command("export")
 def graph_export(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     fmt: Annotated[str, typer.Option("--format")] = "dot",
     cluster: str | None = None,
     symbol: str | None = None,
@@ -268,3 +268,6 @@ def graph_export(
         typer.echo(out.stdout)
         return
     raise typer.BadParameter("--format must be dot or svg")
+
+
+register_refine(graph_app)

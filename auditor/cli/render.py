@@ -26,7 +26,7 @@ def render_graph_build(out: Console, payload: dict[str, Any]) -> None:
     t = Table.grid(padding=(0, 3))
     t.add_column(style="bold")
     t.add_column(justify="right", style=_ACCENT)
-    for key in ("nodes", "edges", "clusters", "findings"):
+    for key in ("nodes", "edges", "clusters", "unresolved", "findings"):
         if key in payload:
             t.add_row(key, str(payload[key]))
     out.print(Panel(t, title="graph built", border_style=_BORDER))
@@ -140,6 +140,29 @@ def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
             sample = ", ".join(s.split("::")[-1] for s in info.get("sample", []))
             t.add_row(edge, str(info["count"]), sample)
         out.print(t)
+
+
+def render_graph_unresolved(out: Console, payload: list[dict[str, Any]]) -> None:
+    if not payload:
+        out.print("[dim](queue is empty — run `auditr graph build` first)[/]")
+        return
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    for col in ("node", "form", "name", "reason"):
+        t.add_column(col)
+    t.add_column("definers", justify="right")
+    t.add_column("candidates", justify="right")
+    t.add_column("ext-bound", justify="center")
+    for row in payload:
+        t.add_row(
+            str(row.get("node_id", "")),
+            str(row.get("call_form", "")),
+            str(row.get("name", "")),
+            str(row.get("reason", "")),
+            str(len(row.get("definers", []))),
+            str(len(row.get("candidates", []))),
+            "yes" if row.get("externally_bound") else "",
+        )
+    out.print(t)
 
 
 # ---------------------------------------------------------------------------

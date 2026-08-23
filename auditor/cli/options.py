@@ -224,3 +224,24 @@ CleanStatus = Annotated[
         "--clean-status", help="Delete a leftover <repo>/.auditor/.status.json."
     ),
 ]
+
+
+# --- `graph` sub-app options ---
+GraphTarget = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
+QueueReason = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--reason",
+        help="Only these queue reasons (repeatable): ambiguous_name | unimportable_name | "
+        "text_sparse | generic_label | singleton_cluster.",
+    ),
+]
+QueueCallForm = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--call-form", help="Only these call forms (repeatable): bare | self | attr."
+    ),
+]
+QueueLimit = Annotated[
+    int, typer.Option("--limit", help="Cap the rows shown (default 50).")
+]

@@ -22,6 +22,7 @@ from auditor.cli.render import (
     render_graph_neighbors,
     render_graph_related,
     render_graph_search,
+    render_graph_unresolved,
     render_graph_usages,
     render_ignore_add,
     render_ignore_clear,
@@ -101,11 +102,42 @@ def test_config_show_json_flag(tmp_path):
 
 def test_render_graph_build_shows_counts():
     con, buf = _console()
-    render_graph_build(con, {"nodes": 42, "edges": 99, "clusters": 5, "findings": 3})
+    render_graph_build(
+        con, {"nodes": 42, "edges": 99, "clusters": 5, "unresolved": 7, "findings": 3}
+    )
     out = buf.getvalue()
     assert "42" in out
     assert "99" in out
+    assert "unresolved" in out and "7" in out
     assert "graph built" in out
+
+
+def test_render_graph_unresolved_shows_the_row():
+    con, buf = _console()
+    render_graph_unresolved(
+        con,
+        [
+            {
+                "node_id": "m.py::use",
+                "call_form": "attr",
+                "name": "handle",
+                "reason": "unimportable_name",
+                "definers": ["helper.py::handle"],
+                "candidates": [],
+                "externally_bound": True,
+            }
+        ],
+    )
+    out = buf.getvalue()
+    assert "m.py::use" in out
+    assert "unimportable_name" in out
+    assert "attr" in out
+
+
+def test_render_graph_unresolved_empty_queue():
+    con, buf = _console()
+    render_graph_unresolved(con, [])
+    assert "empty" in buf.getvalue()
 
 
 def test_render_graph_related_shows_symbol():
