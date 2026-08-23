@@ -17,7 +17,7 @@ jobs:
       - run: uv python install 3.13
       # Explicit extras, never --all-extras: the observer SDKs bundle ~640MB of CLI binaries
       # that nothing in the suite imports, and `vectors` needs an online model fetch.
-      - run: uv sync --extra dev --extra mcp --extra graph --extra ts
+      - run: uv sync --extra dev --extra mcp --extra ts
       - run: uv run ruff check auditor auditr_observer.py tests
       - run: uv run ruff format --check auditor auditr_observer.py tests
       - run: uv run pytest -q
