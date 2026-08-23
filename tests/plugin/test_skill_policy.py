@@ -27,6 +27,8 @@ POLICY_DOCS = (
     "skills/judge-findings/SKILL.md",
     "skills/judge-findings/references/judging.md",
     "skills/judge-findings/references/examples.md",
+    "skills/malware-scan/SKILL.md",
+    "skills/malware-scan/references/triage.md",
 )
 
 #: shipped markdown that must spell all three verdicts out by name
