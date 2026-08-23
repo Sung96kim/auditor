@@ -237,3 +237,10 @@ auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json
   binary; without graphviz installed it fails and tells you to use `--format dot`.
 - `--cluster <id>` exports one cluster and `--symbol <name>` with `--depth` exports a symbol's
   ego-graph. With neither, it exports the whole graph.
+- `--flow <symbol>` exports the flow tree instead: `rankdir=LR` with one `rank=same` row per depth,
+  so the picture reads left to right as the call path. `--in` reverses it and `--depth` sets the
+  hops (4 by default in flow mode, 1 in `--symbol` ego mode). It cannot be combined with
+  `--symbol` or `--cluster`.
+- Export has no `--limit`: the flow walk keeps its 200-node cap and the DOT records it in a
+  comment on the second line, with `truncated` when the cap was hit. Use `auditr graph flow
+  --limit N --json` when you need a different cap.

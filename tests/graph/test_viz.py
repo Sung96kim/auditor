@@ -110,3 +110,77 @@ async def test_node_cap_keeps_top_rank_not_alphabetical(graph_store):
     assert "zzz.py::hub" in ids  # highest rank kept despite late alphabet
     assert "a000.py::f" not in ids  # lowest rank dropped despite early alphabet
     assert len(p["nodes"]) == 3
+
+
+def _flow_tree(*, truncated: bool = False) -> dict:
+    return {
+        "direction": "out",
+        "limit": 200,
+        "truncated": truncated,
+        "root": {
+            "id": "m.py::entry",
+            "depth": 0,
+            "edge": None,
+            "children": [
+                {
+                    "id": "m.py::middle",
+                    "depth": 1,
+                    "edge": "calls",
+                    "children": [
+                        {
+                            "id": "m.py::leaf",
+                            "depth": 2,
+                            "edge": "calls",
+                            "children": [],
+                        }
+                    ],
+                },
+                {"id": "m.py::cb", "depth": 1, "edge": "callback_arg", "children": []},
+            ],
+        },
+    }
+
+
+async def test_to_dot_flow_mode_ranks_each_depth(viz_store):
+    p = await build_payload(viz_store)
+    d = to_dot(p, flow=_flow_tree())
+    assert d.startswith("digraph flow")
+    assert "// out, at most 200 nodes" in d
+    assert "rankdir=LR" in d
+    assert '{ rank=same; "m.py::entry"; }' in d
+    assert '{ rank=same; "m.py::middle"; "m.py::cb"; }' in d
+    assert '"m.py::entry" -> "m.py::middle" [label="calls"];' in d
+    assert '"m.py::middle" -> "m.py::leaf" [label="calls"];' in d
+    assert '"m.py::entry" -> "m.py::cb" [label="callback_arg"];' in d
+
+
+async def test_to_dot_flow_mode_notes_a_truncated_walk(viz_store):
+    """Export has no --limit, so the DOT has to say which cap produced the picture."""
+    d = to_dot(await build_payload(viz_store), flow=_flow_tree(truncated=True))
+    assert "// out, at most 200 nodes, truncated" in d
+
+
+async def test_to_dot_flow_mode_ranks_a_revisited_node_once(viz_store):
+    """graphviz cannot honour two rank=same rows for one node: first depth seen wins."""
+    tree = _flow_tree()
+    tree["root"]["children"].append(
+        {"id": "m.py::leaf", "depth": 1, "edge": "calls", "children": []}
+    )
+    d = to_dot(await build_payload(viz_store), flow=tree)
+    assert '{ rank=same; "m.py::middle"; "m.py::cb"; }' in d
+    assert '{ rank=same; "m.py::leaf"; }' in d
+    declared = [
+        ln for ln in d.splitlines() if ln.strip().startswith('"m.py::leaf" [label=')
+    ]
+    assert len(declared) == 1
+
+
+async def test_to_dot_flow_mode_is_deterministic(viz_store):
+    p = await build_payload(viz_store)
+    assert to_dot(p, flow=_flow_tree()) == to_dot(p, flow=_flow_tree())
+
+
+async def test_to_dot_flow_mode_on_an_empty_payload(viz_store):
+    p = await build_payload(viz_store)
+    d = to_dot(p, flow={})
+    assert d.startswith("digraph flow") and "->" not in d

@@ -18,6 +18,7 @@ from auditor.cli.graph_refine import register as register_refine
 from auditor.cli.helpers import present, run, run_staged, warn_unknown_config
 from auditor.cli.lazy import GRAPH_HELP
 from auditor.cli.options import (
+    ExportDepth,
     FlowDepth,
     FlowExpandHubs,
     FlowIn,
@@ -25,6 +26,7 @@ from auditor.cli.options import (
     FlowKinds,
     FlowLimit,
     FlowStopAt,
+    FlowSymbol,
     GraphTarget,
 )
 from auditor.cli.render import (
@@ -289,15 +291,31 @@ def graph_export(
     fmt: Annotated[str, typer.Option("--format")] = "dot",
     cluster: str | None = None,
     symbol: str | None = None,
-    depth: int = 1,
+    depth: ExportDepth = None,
+    flow: FlowSymbol = None,
+    inbound: FlowIn = False,
 ) -> None:
-    """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego."""
+    """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego/flow."""
     root = find_root(target)
+    if flow is not None and (symbol is not None or cluster is not None):
+        raise typer.BadParameter("--flow cannot be combined with --symbol or --cluster")
 
     async def do_export() -> str:
+        options = FlowOptions(
+            direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+            depth=4 if depth is None else depth,
+            hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+        )
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             payload = await build_payload(index)
-        return to_dot(payload, cluster=cluster, symbol=symbol, depth=depth)
+            tree = None if flow is None else await GraphQuery(index).flow(flow, options)
+        return to_dot(
+            payload,
+            cluster=cluster,
+            symbol=symbol,
+            depth=1 if depth is None else depth,
+            flow=tree,
+        )
 
     dot = run(do_export(), "exporting…")
     if fmt == "dot":

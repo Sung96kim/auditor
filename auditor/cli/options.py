@@ -288,3 +288,13 @@ FlowStopAt = Annotated[
     list[str] | None,
     typer.Option("--stop-at", help="Module glob to stop expanding at (repeatable)."),
 ]
+FlowSymbol = Annotated[
+    str | None,
+    typer.Option("--flow", help="Export the flow tree from this symbol instead."),
+]
+ExportDepth = Annotated[
+    int | None,
+    typer.Option(
+        "--depth", help="Hops for --symbol (default 1) or --flow (default 4)."
+    ),
+]
