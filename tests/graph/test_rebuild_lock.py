@@ -48,7 +48,8 @@ def test_the_lock_path_is_per_identity_under_the_auditor_home(_isolated_auditor_
 async def test_the_lock_is_created_and_released(_isolated_auditor_home):
     async with rebuild_lock(IDENTITY):
         assert rebuild_lock_path(IDENTITY).exists()
-    async with rebuild_lock(IDENTITY):  # a second acquire must not deadlock
+    # the budget is the assertion: a release that stopped working would hang the suite instead
+    async with rebuild_lock(IDENTITY, timeout=2.0):
         pass
 
 
@@ -59,9 +60,11 @@ async def test_two_identities_never_contend(_isolated_auditor_home):
 
 
 async def test_lock_held_skips_the_acquire(_isolated_auditor_home):
-    """`RefinementService.commit` holds the lock around insert plus rebuild and passes this."""
-    async with rebuild_lock(IDENTITY), rebuild_lock(IDENTITY, held=True):
-        pass  # would block forever if `held` acquired again
+    """A caller that already holds the lock, which is how one hold covers a clear, a rescan and a
+    build, passes `held=True` and must not block on a second acquire. The budget makes a
+    regression fail in two seconds instead of hanging the suite."""
+    async with rebuild_lock(IDENTITY), rebuild_lock(IDENTITY, held=True, timeout=2.0):
+        pass
 
 
 async def test_a_blocked_acquire_reports_that_it_is_waiting(
@@ -72,22 +75,29 @@ async def test_a_blocked_acquire_reports_that_it_is_waiting(
     script.write_text(textwrap.dedent(_HOLDER))
     lock = rebuild_lock_path(IDENTITY)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    holder = subprocess.Popen(
+    with subprocess.Popen(
         [sys.executable, str(script), str(lock), "1.0"],
         stdout=subprocess.PIPE,
         text=True,
-    )
-    assert holder.stdout.readline().strip() == "held"
-    async with rebuild_lock(IDENTITY, waiting=lambda: said.append("waiting")):
-        assert said == ["waiting"]  # said once, however many polls it took
-    holder.wait(timeout=10)
+    ) as holder:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held"
+        async with rebuild_lock(IDENTITY, waiting=lambda: said.append("waiting")):
+            assert said == ["waiting"]  # said once, however many polls it took
 
 
-async def test_a_timeout_raises_instead_of_waiting_forever(_isolated_auditor_home):
+async def test_the_timeout_error_carries_what_a_retry_needs(_isolated_auditor_home):
+    """F12: a caller that wants to wait longer cannot reach the budget it already spent unless the
+    exception keeps it."""
     async with rebuild_lock(IDENTITY):
-        with pytest.raises(RebuildLockTimeout):
+        with pytest.raises(RebuildLockTimeout) as caught:
             async with rebuild_lock(IDENTITY, timeout=0.5):
                 pass
+    assert (caught.value.path, caught.value.timeout) == (
+        rebuild_lock_path(IDENTITY),
+        0.5,
+    )
+    assert "0.5s" in str(caught.value)
 
 
 async def test_a_cancelled_acquire_returns_promptly(_isolated_auditor_home):

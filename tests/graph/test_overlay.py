@@ -1,6 +1,8 @@
 """The pure merge: what an active refinement does to a build's edges, nodes and clusters, and what
 status it earns for trying. No database anywhere in this module."""
 
+import time
+
 import pytest
 
 from auditor.config import GraphConfig
@@ -207,26 +209,33 @@ def test_a_retarget_to_a_vanished_node_never_removes_the_old_edge():
     assert overlay.outcomes[0].status is RefinementStatus.STALE
 
 
-def test_many_retargets_stay_linear():
-    """A10: tombstoning keeps every surviving position valid, so the index is never rebuilt."""
+def test_a_thousand_retargets_stay_linear():
+    """A10: tombstoning keeps every surviving position valid, so the index is never rebuilt.
+
+    Rebuilding it per retarget is `retargets x edges`; the budget is loose enough to be stable on
+    the linear path and far under what the rebuild costs on this shape.
+    """
     edges = [
-        GraphEdge(src=f"m.py::f{i}", dst="s.py::h", kind=EdgeKind.CALLS)
-        for i in range(1000)
+        GraphEdge(src=f"m.py::f{i}", dst=f"s.py::h{i % 7}", kind=EdgeKind.CALLS)
+        for i in range(20000)
     ]
-    node_ids = {e.src for e in edges} | {"s.py::h", "s.py::g"}
+    node_ids = {e.src for e in edges} | {e.dst for e in edges} | {"s.py::g"}
     refs = [
         _ref(
             rid=i + 1,
             kind=RefinementKind.RETARGET_EDGE,
-            target=_retarget(src=f"m.py::f{i}"),
+            target=_retarget(src=f"m.py::f{i}", from_dst=f"s.py::h{i % 7}"),
         )
         for i in range(1000)
     ]
     overlay = _overlay(*refs)
+    started = time.perf_counter()
     merged = overlay.edges(edges, node_ids)
-    assert len(merged) == 1000
-    assert all(e.provenance is Provenance.REFINED for e in merged)
+    elapsed = time.perf_counter() - started
+    assert len(merged) == 20000
+    assert sum(e.provenance is Provenance.REFINED for e in merged) == 1000
     assert all(o.applied for o in overlay.outcomes)
+    assert elapsed < 1.0
 
 
 def test_three_consecutive_noops_stale_the_refinement():

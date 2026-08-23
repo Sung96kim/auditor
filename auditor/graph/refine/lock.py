@@ -23,11 +23,15 @@ DEFAULT_POLL_SECONDS = float(
 
 
 class RebuildLockTimeout(RuntimeError):
-    """``rebuild_lock(timeout=…)`` gave up waiting for another process's build."""
+    """``rebuild_lock(timeout=…)`` gave up waiting for another process's build.
+
+    Carries both halves a caller needs to retry: which lock, and the budget it already spent.
+    """
 
     def __init__(self, path: Path, timeout: float) -> None:
         super().__init__(f"rebuild lock {path} still held after {timeout}s")
         self.path = path
+        self.timeout = timeout
 
 
 def rebuild_lock_path(identity: str) -> Path:
@@ -43,7 +47,7 @@ async def _acquire(
     poll: float,
 ) -> None:
     """Poll for the lock so the wait stays cancellable, saying so once if anyone is listening."""
-    deadline = None if timeout is None else time.monotonic() + timeout
+    started = time.monotonic()
     said = False
     while True:
         try:
@@ -53,8 +57,8 @@ async def _acquire(
             if waiting is not None and not said:
                 waiting()
                 said = True
-            if deadline is not None and time.monotonic() >= deadline:
-                raise RebuildLockTimeout(path, timeout or 0.0) from None
+            if timeout is not None and time.monotonic() - started >= timeout:
+                raise RebuildLockTimeout(path, timeout) from None
             await asyncio.sleep(poll)
 
 
