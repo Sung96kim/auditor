@@ -170,7 +170,8 @@ still shows that the path reached them:
 auditr graph flow auditor/engine.py::audit_target . --stop-at 'auditor/database/*' --depth 4
 ```
 
-MCP: `graph_flow(symbol, path, direction, depth, limit)` returns the same payload. `graph export
+MCP: `graph_flow(symbol, path, direction, depth, limit, kinds, include_tests, expand_hubs,
+stop_at)` returns the same payload with the same knobs. `graph export
 --flow <symbol>` renders it as Graphviz DOT, left to right, one rank per depth.
 
 ## Hotspots / god-concepts

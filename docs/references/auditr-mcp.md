@@ -96,10 +96,17 @@ args = ["run", "-i", "--rm",
   `auditr[mcp]` is enough. See [graph.md](graph.md).
 - `graph_overview` caps `god_concepts` and `bottlenecks` at 5 entries each and reports the true
   totals as `god_concept_count` and `bottleneck_count`.
-- `graph_flow(symbol, path, direction, depth, limit)` returns a nested tree rather than a flat
-  list: one call reads a whole code path. `direction="in"` reverses it. Reach for it instead of
-  chaining `graph_neighbors`, and read the `modules` list first. `limit` counts emitted nodes and
-  is capped at 1000; the default of 200 is about 40 KB of JSON.
+- `graph_flow(symbol, path, direction, depth, limit, kinds, include_tests, expand_hubs, stop_at)`
+  returns a nested tree rather than a flat list: one call reads a whole code path.
+  `direction="in"` reverses it. Reach for it instead of chaining `graph_neighbors`, and read the
+  `modules` list first. `limit` counts emitted nodes and is clamped to 1..1000; the default of
+  200 is about 50 KB of JSON.
+- Its pruning knobs mirror the CLI: `stop_at` takes module globs and is the way to keep a wide
+  tree readable, `kinds` follows extra edge kinds (validated, so an unknown value is an error),
+  `include_tests` keeps test symbols, `expand_hubs` opens the nodes the hub rule collapsed.
+- A node's `hub` is `{count, kind, collapsed}` or `null`; `collapsed` is true only where the hub
+  rule refused to expand it, never at the start symbol, under `expand_hubs`, or on the last level
+  `depth` reached.
 - `graph_unresolved` returns the refinement queue: one row per fact the deterministic resolver
   could not place, worst first, filtered by `reason` and `call_form` (both repeatable lists,
   validated, so an unknown value is an error), `external` and `limit`. Read it alongside

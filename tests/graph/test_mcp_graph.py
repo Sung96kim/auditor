@@ -263,6 +263,56 @@ async def test_graph_flow_clamps_the_limit_at_both_ends(
     assert payload["limit"] == expect
 
 
+async def test_graph_flow_takes_the_walk_pruning_knobs(graph_repo_flow_hub: Path):
+    """stop_at is the documented way to keep a wide tree readable; the tool did not expose it."""
+    path = str(graph_repo_flow_hub)
+    await audit_target(graph_repo_flow_hub, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        stopped = _data(
+            await c.call_tool(
+                "graph_flow",
+                {
+                    "symbol": "entry",
+                    "path": path,
+                    "depth": 3,
+                    "stop_at": ["svc.py"],
+                    "expand_hubs": True,
+                },
+            )
+        )
+        with_tests = _data(
+            await c.call_tool(
+                "graph_flow",
+                {
+                    "symbol": "entry",
+                    "path": path,
+                    "direction": "in",
+                    "depth": 1,
+                    "include_tests": True,
+                },
+            )
+        )
+    leaf = stopped["root"]["children"][0]["children"][0]
+    assert leaf["id"] == "svc.py::leaf" and leaf["stopped"] is True
+    assert [c["id"] for c in with_tests["root"]["children"]] == [
+        "tests/test_entry.py::test_entry"
+    ]
+
+
+async def test_graph_flow_rejects_an_unknown_kind(graph_repo_flow: Path):
+    """An unfollowed kind reads as 'no such edges', which is the wrong answer to a typo."""
+    path = str(graph_repo_flow)
+    await audit_target(graph_repo_flow, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        with pytest.raises(ToolError):
+            await c.call_tool(
+                "graph_flow",
+                {"symbol": "entry", "path": path, "kinds": ["inherit"]},
+            )
+
+
 async def test_graph_flow_rejects_an_unknown_direction(graph_repo_flow: Path):
     """FlowDirection is the whole validation: anything but out/in is a tool error."""
     path = str(graph_repo_flow)

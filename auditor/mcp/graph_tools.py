@@ -14,9 +14,11 @@ from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
+    DEFAULT_FLOW_LIMIT,
     MAX_FLOW_LIMIT,
     QUEUE_ROW_LIMIT,
     CallForm,
+    EdgeKind,
     UnresolvedReason,
     capped_row,
 )
@@ -112,13 +114,33 @@ async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
         return await GraphQuery(index).usages(symbol, sample=sample)
 
 
+def _filter_values(
+    raw: list[str] | None, enum: type[StrEnum], field: str
+) -> list[str] | None:
+    """Validate a repeatable filter against its enum, so a typo is a tool error rather than an
+    empty page the caller reads as an empty queue."""
+    if not raw:
+        return None
+    allowed = [e.value for e in enum]
+    unknown = [v for v in raw if v not in allowed]
+    if unknown:
+        raise ValueError(
+            f"unknown {field}: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
+        )
+    return list(raw)
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def graph_flow(
     symbol: str,
     path: str = ".",
     direction: str = "out",
     depth: int = 4,
-    limit: int = 200,
+    limit: int = DEFAULT_FLOW_LIMIT,
+    kinds: list[str] | None = None,
+    include_tests: bool = False,
+    expand_hubs: bool = False,
+    stop_at: list[str] | None = None,
 ) -> dict:
     """Read a code path from a symbol as a nested tree, instead of chaining graph_neighbors
     calls. Outward (direction="out") follows calls and callback_arg, expanding a base method's
@@ -130,8 +152,11 @@ async def graph_flow(
     where the hub rule refused to expand it (never at the start symbol, under expand_hubs, or on
     the last level the depth budget reached), ``seen_ref``/``cycle`` when the walk already covered
     them, ``stopped`` when a stop glob cut the branch, and ``unresolved`` for calls the resolver
-    could not place. ``limit`` counts emitted nodes and is capped at 1000; the
-    default of 200 is about 40 KB of JSON."""
+    could not place. ``limit`` counts emitted nodes and is clamped to 1..1000; the
+    default of 200 is about 40 KB of JSON. Prune a wide tree with ``stop_at`` (module globs,
+    the branch is shown and not entered) rather than by lowering ``depth``; ``kinds`` follows
+    extra edge kinds on top of calls/callback_arg and is validated, ``include_tests`` keeps test
+    symbols, ``expand_hubs`` opens the nodes the hub rule collapsed."""
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
         return await GraphQuery(index).flow(
@@ -140,6 +165,10 @@ async def graph_flow(
                 direction=FlowDirection(direction),
                 depth=depth,
                 limit=min(max(1, limit), MAX_FLOW_LIMIT),
+                kinds=tuple(_filter_values(kinds, EdgeKind, "kinds") or ()),
+                include_tests=include_tests,
+                expand_hubs=expand_hubs,
+                stop_at=tuple(stop_at or ()),
                 hub_fan_in=load_config(root).graph.flow_hub_fan_in,
             ),
         )
@@ -179,22 +208,6 @@ async def graph_overview(path: str = ".") -> dict:
         "bottlenecks": bottlenecks[:5],
         "bottleneck_count": len(bottlenecks),
     }
-
-
-def _filter_values(
-    raw: list[str] | None, enum: type[StrEnum], field: str
-) -> list[str] | None:
-    """Validate a repeatable filter against its enum, so a typo is a tool error rather than an
-    empty page the caller reads as an empty queue."""
-    if not raw:
-        return None
-    allowed = [e.value for e in enum]
-    unknown = [v for v in raw if v not in allowed]
-    if unknown:
-        raise ValueError(
-            f"unknown {field}: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
-        )
-    return list(raw)
 
 
 @mcp.tool(annotations=READ_ONLY)
