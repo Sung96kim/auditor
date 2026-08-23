@@ -33,11 +33,13 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.13
-      - run: uv sync --all-extras
+      # Explicit extras, never --all-extras: the observer SDKs bundle ~640MB of CLI binaries
+      # that nothing in the suite imports, and `vectors` needs an online model fetch.
+      - run: uv sync --extra dev --extra mcp --extra graph --extra ts
 
       # Gate: never release red code.
-      - run: uv run ruff check auditor tests
-      - run: uv run ruff format --check auditor tests
+      - run: uv run ruff check auditor auditr_observer.py tests
+      - run: uv run ruff format --check auditor auditr_observer.py tests
       - run: uv run pytest -q
 
       - name: Configure git identity

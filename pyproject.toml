@@ -24,6 +24,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "pyyaml",
     "ruff",
     "commitizen",
     "fastmcp",
