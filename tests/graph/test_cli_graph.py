@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from auditor.cli import app
 from auditor.cli.render import render_graph_flow
+from auditor.graph.flow import FlowNode
 
 runner = CliRunner()
 
@@ -56,6 +57,58 @@ def test_cli_graph_flow_unknown_symbol_is_empty(graph_repo_flow: Path):
     assert result.exit_code == 0 and json.loads(result.stdout) == {}
 
 
+def _flow(repo: Path, *flags: str) -> dict:
+    result = runner.invoke(app, ["graph", "flow", "entry", str(repo), *flags])
+    assert result.exit_code == 0, result.stdout
+    return json.loads(result.stdout)
+
+
+def _hub_leaf(payload: dict) -> dict:
+    """``svc.py::leaf`` as reached under ``middle``, the first parent the walk expands."""
+    middle = next(c for c in payload["root"]["children"] if c["id"] == "m.py::middle")
+    return middle["children"][0]
+
+
+def _rendered(payload: dict) -> str:
+    buf = io.StringIO()
+    render_graph_flow(Console(file=buf, width=140), payload)
+    return buf.getvalue()
+
+
+def test_cli_graph_flow_marks_only_the_hub_the_walk_collapsed(
+    graph_repo_flow_hub: Path,
+):
+    """`elided` used to mean "no children", so a root hub, a depth-boundary hub and a stopped
+    node all read as elided and --expand-hubs looked broken."""
+    _built(graph_repo_flow_hub)
+    collapsed = _flow(graph_repo_flow_hub, "--depth", "3")
+    expanded = _flow(graph_repo_flow_hub, "--depth", "3", "--expand-hubs")
+    boundary = _flow(graph_repo_flow_hub, "--depth", "2")
+    stopped = _flow(graph_repo_flow_hub, "--depth", "3", "--stop-at", "svc.py")
+
+    assert collapsed["root"]["hub"] == {
+        "count": 2,
+        "kind": "expansion",
+        "collapsed": False,
+    }
+    assert _hub_leaf(collapsed)["hub"]["collapsed"] is True
+    assert _hub_leaf(expanded)["hub"]["collapsed"] is False
+    assert _hub_leaf(boundary)["hub"]["collapsed"] is False
+    assert _hub_leaf(stopped)["stopped"] is True
+    assert _hub_leaf(stopped)["hub"]["collapsed"] is False
+
+    assert "⊕ 2 elided" in _rendered(collapsed)
+    for payload in (expanded, boundary, stopped):
+        assert "⊕ 2 hub" in _rendered(payload)
+        assert "elided" not in _rendered(payload)
+    assert "⊣ stop" in _rendered(stopped)
+
+
+def test_the_render_fixture_covers_every_flow_node_field():
+    """_flow_payload() is a hand-written mirror; a new field must reach the render tests."""
+    assert set(_flow_payload()["root"]) == set(FlowNode.model_fields)
+
+
 def _flow_payload() -> dict:
     return {
         "symbol": "main",
@@ -75,7 +128,6 @@ def _flow_payload() -> dict:
             "cycle": False,
             "stopped": False,
             "hub": None,
-            "hub_kind": None,
             "unresolved": [],
             "children": [
                 {
@@ -87,8 +139,7 @@ def _flow_payload() -> dict:
                     "seen_ref": False,
                     "cycle": False,
                     "stopped": False,
-                    "hub": 41,
-                    "hub_kind": "fan_in",
+                    "hub": {"count": 41, "kind": "fan_in", "collapsed": True},
                     "children": [],
                     "unresolved": [
                         {
@@ -115,7 +166,6 @@ def _flow_payload() -> dict:
                     "cycle": False,
                     "stopped": False,
                     "hub": None,
-                    "hub_kind": None,
                     "children": [],
                     "unresolved": [],
                 },
@@ -129,7 +179,6 @@ def _flow_payload() -> dict:
                     "cycle": True,
                     "stopped": False,
                     "hub": None,
-                    "hub_kind": None,
                     "children": [],
                     "unresolved": [],
                 },
@@ -143,7 +192,6 @@ def _flow_payload() -> dict:
                     "cycle": False,
                     "stopped": True,
                     "hub": None,
-                    "hub_kind": None,
                     "children": [],
                     "unresolved": [],
                 },
@@ -167,28 +215,13 @@ def test_render_graph_flow_shows_the_direction_modules_glyphs_and_truncation():
     assert "app/other.py::main" in text
 
 
-def test_render_graph_flow_says_hub_when_the_node_still_expanded():
-    """--expand-hubs keeps the count; only a childless hub reads as elided."""
+def test_render_graph_flow_says_hub_when_the_walk_did_not_collapse_it():
+    """The label reads ``hub.collapsed``, not the child count: a childless hub can be a `hub`."""
     payload = _flow_payload()
-    payload["root"]["children"][0]["children"] = [
-        {
-            "id": "app/db.py::save",
-            "kind": "function",
-            "edge": "calls",
-            "source": "deterministic",
-            "depth": 2,
-            "seen_ref": False,
-            "cycle": False,
-            "stopped": False,
-            "hub": None,
-            "hub_kind": None,
-            "children": [],
-            "unresolved": [],
-        }
-    ]
+    payload["root"]["children"][0]["hub"]["collapsed"] = False
     buf = io.StringIO()
     render_graph_flow(Console(file=buf, width=140), payload)
-    assert "⊕ 41 hub" in buf.getvalue()
+    assert "⊕ 41 hub" in buf.getvalue() and "⊕ 41 elided" not in buf.getvalue()
 
 
 def test_render_graph_flow_shows_the_in_direction():

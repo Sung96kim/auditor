@@ -161,9 +161,10 @@ def _flow_label(node: dict[str, Any], *, root: bool = False) -> str:
         marks.append("[dim]↺ seen[/]")
     if node.get("stopped"):
         marks.append("[cyan]⊣ stop[/]")
-    if node.get("hub"):
-        kept = "hub" if node.get("children") else "elided"
-        marks.append(f"[magenta]⊕ {node['hub']} {kept}[/]")
+    hub = node.get("hub")
+    if hub:
+        kept = "elided" if hub.get("collapsed") else "hub"
+        marks.append(f"[magenta]⊕ {hub['count']} {kept}[/]")
     marks += [
         f"[{'dim' if u.get('external') else 'yellow'}]? {u['name']}[/]"
         for u in node.get("unresolved", [])

@@ -124,10 +124,12 @@ async def graph_flow(
     overriders and a symbol's registry as ``dispatches_to``; direction="in" reverses it into
     "what reaches this". Returns {symbol, resolved, ambiguous, root, direction, modules,
     truncated, limit}, or {} if the symbol isn't in the graph. ``modules``, the ordered list of
-    modules the path touches, is usually the architecture answer. Nodes carry ``hub`` (with
-    ``hub_kind``) when the node's fan crossed the hub floor, ``seen_ref``/``cycle`` when the walk
-    already covered them, ``stopped`` when a stop glob cut the branch, and ``unresolved`` for
-    calls the resolver could not place. ``limit`` counts emitted nodes and is capped at 1000; the
+    modules the path touches, is usually the architecture answer. Nodes carry ``hub`` as
+    {count, kind, collapsed} when the node's fan crossed the hub floor, ``collapsed`` true only
+    where the hub rule refused to expand it (never at the start symbol, under expand_hubs, or on
+    the last level the depth budget reached), ``seen_ref``/``cycle`` when the walk already covered
+    them, ``stopped`` when a stop glob cut the branch, and ``unresolved`` for calls the resolver
+    could not place. ``limit`` counts emitted nodes and is capped at 1000; the
     default of 200 is about 40 KB of JSON."""
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:

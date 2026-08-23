@@ -111,10 +111,12 @@ queries. It walks the graph breadth-first from one symbol and prints a tree.
   test symbols, `--stop-at GLOB` (repeatable) to stop expanding inside a module, `--expand-hubs`
   to open a node the hub rule elided, `--json` for the raw payload.
 - Markers in the tree:
-  - `⊕ N elided` is a hub that was collapsed. A node is a hub when either count reaches
+  - `⊕ N elided` is a hub the walk refused to expand. A node is a hub when either count reaches
     `graph.flow_hub_fan_in` (default 40): the symbols that reach it, dispatch children included,
-    or the children it would emit. `⊕ N hub` is the same fan on a node that expanded anyway, which
-    is what `--expand-hubs` and the start symbol give you.
+    or the children it would emit. `⊕ N hub` is the same fan on a node that expanded anyway: the
+    start symbol, any node under `--expand-hubs`, and a hub on the last level `--depth` reached.
+  - In the JSON payload that pair is one `hub` object, `{"count": N, "kind": "fan_in", "collapsed":
+    true}`, or `null` on a node whose fan stayed under the floor.
   - `↺ seen` is a node already shown elsewhere in the tree, `↺ cycle` a node that is its own
     ancestor. Both are shown once and not expanded again.
   - `⊣ stop` is a node a `--stop-at` glob matched: the path reached it, the tree does not go in.

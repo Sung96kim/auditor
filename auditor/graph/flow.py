@@ -32,13 +32,13 @@ class FlowOptions(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     direction: FlowDirection = FlowDirection.OUT
-    depth: int = 4
-    limit: int = DEFAULT_FLOW_LIMIT
+    depth: int = Field(default=4, ge=0)
+    limit: int = Field(default=DEFAULT_FLOW_LIMIT, ge=1)
     kinds: tuple[str, ...] = ()
     include_tests: bool = False
     expand_hubs: bool = False
     stop_at: tuple[str, ...] = ()
-    hub_fan_in: int = DEFAULT_HUB_FAN_IN
+    hub_fan_in: int = Field(default=DEFAULT_HUB_FAN_IN, ge=1)
 
 
 DEFAULT_OPTIONS = FlowOptions()  # frozen, so one shared instance is a safe default
@@ -55,22 +55,37 @@ class UnresolvedLeaf(BaseModel):
     external: bool = False
 
 
-class FlowNode(BaseModel):  # auditor: skip: PY-OOP-FLAT-FIELD-MODEL  (§7 tree contract)
-    """One node of a flow tree. ``edge`` is the relation that reached it, ``None`` at the root."""
+class HubMark(BaseModel):
+    """Why a node's fan crossed the floor, and whether that actually stopped the walk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    count: int
+    kind: Literal["fan_in", "expansion"]
+    collapsed: bool = False
+
+
+class _NodeMarks(BaseModel):
+    """What the walk decides about one node, in one place, so ``_Record`` and ``FlowNode``
+    cannot drift apart."""
 
     model_config = ConfigDict(frozen=True)
 
     id: str
-    kind: str
     edge: str | None = None
     source: str = _DETERMINISTIC
     depth: int = 0
-    children: tuple["FlowNode", ...] = ()
     seen_ref: bool = False
     cycle: bool = False
     stopped: bool = False
-    hub: int | None = None
-    hub_kind: Literal["fan_in", "expansion"] | None = None
+    hub: HubMark | None = None
+
+
+class FlowNode(_NodeMarks):
+    """One node of a flow tree. ``edge`` is the relation that reached it, ``None`` at the root."""
+
+    kind: str
+    children: tuple["FlowNode", ...] = ()
     unresolved: tuple[UnresolvedLeaf, ...] = ()
 
 
@@ -130,25 +145,16 @@ class FlowPayload(FlowResult):
     ambiguous: tuple[str, ...] = ()
 
 
-class _Record(BaseModel):  # auditor: skip: PY-OOP-FLAT-FIELD-MODEL  (mirrors FlowNode)
+class _Record(_NodeMarks):
     """One scratch row of the walk, assembled into a ``FlowNode`` at the end.
 
-    ``children`` holds record indices and is the only slot that grows after construction; every
-    other field is decided when the node is emitted.
+    Deliberately mutable: ``children`` grows as the walk emits them and ``hub`` is restamped when
+    the hub rule refuses to expand the node.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=False)
 
-    id: str
     parent: int | None = None
-    edge: str | None = None
-    source: str = _DETERMINISTIC
-    depth: int = 0
-    seen_ref: bool = False
-    cycle: bool = False
-    stopped: bool = False
-    hub: int | None = None
-    hub_kind: Literal["fan_in", "expansion"] | None = None
     children: list[int] = Field(default_factory=list)
 
 
@@ -244,11 +250,15 @@ def _fan_in(
 
 def _hub(
     cache: GraphCache, node_id: str, *, kinds: frozenset[str], options: FlowOptions
-) -> tuple[int, Literal["fan_in", "expansion"]] | None:
-    """``(count, which)`` when the node crosses ``hub_fan_in``, else ``None`` (spec §7)."""
+) -> HubMark | None:
+    """The node's fan when it crosses ``hub_fan_in``, else ``None`` (spec §7).
+
+    ``collapsed`` stays false here: whether the walk acted on the mark is decided in
+    ``build_flow``, not by the fan itself.
+    """
     fan_in = _fan_in(cache, node_id, kinds=kinds, options=options)
     if fan_in >= options.hub_fan_in:
-        return fan_in, "fan_in"
+        return HubMark(count=fan_in, kind="fan_in")
     expansion = len(
         _children(
             cache,
@@ -259,7 +269,7 @@ def _hub(
         )
     )
     if expansion >= options.hub_fan_in:
-        return expansion, "expansion"
+        return HubMark(count=expansion, kind="expansion")
     return None
 
 
@@ -278,7 +288,6 @@ def _new_record(
 ) -> _Record:
     """A record whose marks are already decided: ``stopped`` and the hub fan describe the node
     itself, so every emitted node carries them whether or not the walk expanded it."""
-    hub = _hub(cache, node_id, kinds=kinds, options=options)
     return _Record(
         id=node_id,
         parent=parent,
@@ -288,8 +297,7 @@ def _new_record(
         seen_ref=seen_ref,
         cycle=cycle,
         stopped=_stopped(cache.module(node_id), options.stop_at),
-        hub=None if hub is None else hub[0],
-        hub_kind=None if hub is None else hub[1],
+        hub=_hub(cache, node_id, kinds=kinds, options=options),
     )
 
 
@@ -328,6 +336,7 @@ def build_flow(
             if record.stopped:
                 continue
             if parent != 0 and record.hub is not None and not options.expand_hubs:
+                record.hub = record.hub.model_copy(update={"collapsed": True})
                 continue  # the root always expands, however wide its fan
             pairs = _children(
                 cache,
@@ -371,7 +380,7 @@ def build_flow(
         frontier = nxt
 
     def assemble(index: int) -> FlowNode:
-        """``_Record`` mirrors ``FlowNode`` field for field, minus the walk's own bookkeeping."""
+        """Both models extend ``_NodeMarks``, so the spread carries every mark the walk set."""
         record = records[index]
         return FlowNode(
             **record.model_dump(exclude={"parent", "children"}),

@@ -149,10 +149,12 @@ That is the CLI side and the MCP side of the same entry point in one call.
 
 Reading the markers:
 
-- `⊕ N elided`: a hub, collapsed. A node is a hub when either count reaches
+- `⊕ N elided`: a hub the walk refused to expand. A node is a hub when either count reaches
   `graph.flow_hub_fan_in` (40 by default): the symbols that reach it, dispatch children included,
-  or the children it would emit. `--expand-hubs` opens it, `graph usages` gives the counts.
-  `⊕ N hub` is the same fan on a node that expanded anyway.
+  or the children it would emit. `--expand-hubs` opens it. `⊕ N hub` is the same fan on a node
+  that expanded anyway: the start symbol, anything under `--expand-hubs`, and a hub sitting on the
+  last level `--depth` reached. In JSON the mark is one `hub` object,
+  `{"count": N, "kind": "fan_in", "collapsed": true}`.
 - `↺ seen`: already shown elsewhere in this tree. `↺ cycle`: the node is its own ancestor.
 - `⊣ stop`: a `--stop-at` glob matched this module. The path reached it; the tree stops there.
 - `? name`: a call the resolver could not place, dimmed when the name comes from outside the repo

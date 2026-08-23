@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from auditor.config import GraphConfig
 from auditor.database import IndexStore
@@ -20,6 +21,9 @@ from auditor.graph.flow import (
     FlowDirection,
     FlowNode,
     FlowOptions,
+    HubMark,
+    _NodeMarks,
+    _Record,
     build_flow,
 )
 from auditor.graph.model import (
@@ -461,7 +465,8 @@ def test_hub_is_elided_on_the_expansion_fan(cache):
         cache, "app/cli.py::main", options=FlowOptions(depth=2, hub_fan_in=6)
     )
     hub = _kids(result.root)["app/hub.py::hub"]
-    assert (hub.hub, hub.hub_kind) == (6, "expansion") and hub.children == ()
+    assert hub.hub == HubMark(count=6, kind="expansion", collapsed=True)
+    assert hub.children == ()
     assert _kids(result.root)["app/engine.py::run"].children != ()
 
 
@@ -472,7 +477,7 @@ def test_hub_is_elided_on_the_incoming_fan_even_when_the_expansion_is_small(cach
     )
     run = _kids(result.root)["app/engine.py::run"]
     settings = _kids(_kids(run)["app/util.py::helper"])["app/conf.py::settings"]
-    assert (settings.hub, settings.hub_kind) == (7, "fan_in")
+    assert settings.hub == HubMark(count=7, kind="fan_in", collapsed=True)
     assert settings.children == ()
 
 
@@ -483,7 +488,8 @@ def test_expand_hubs_keeps_the_count_and_expands_anyway(cache):
         options=FlowOptions(depth=2, hub_fan_in=6, expand_hubs=True),
     )
     hub = _kids(result.root)["app/hub.py::hub"]
-    assert (hub.hub, hub.hub_kind) == (6, "expansion") and len(hub.children) == 6
+    assert hub.hub == HubMark(count=6, kind="expansion", collapsed=False)
+    assert len(hub.children) == 6
 
 
 def test_hub_fan_counts_dispatch_children(cache):
@@ -492,7 +498,8 @@ def test_hub_fan_counts_dispatch_children(cache):
         cache, "app/engine.py::run", options=FlowOptions(depth=2, hub_fan_in=3)
     )
     handle = _kids(result.root)["app/base.py::Handler.handle"]
-    assert (handle.hub, handle.hub_kind) == (3, "fan_in") and handle.children == ()
+    assert handle.hub == HubMark(count=3, kind="fan_in", collapsed=True)
+    assert handle.children == ()
 
 
 def test_the_root_is_never_elided(cache):
@@ -500,8 +507,65 @@ def test_the_root_is_never_elided(cache):
     result = build_flow(
         cache, "app/conf.py::settings", options=FlowOptions(depth=1, hub_fan_in=2)
     )
-    assert (result.root.hub, result.root.hub_kind) == (7, "fan_in")
+    assert result.root.hub == HubMark(count=7, kind="fan_in", collapsed=False)
     assert [c.id for c in result.root.children] == ["app/conf.py::_load"]
+
+
+def test_a_hub_at_the_depth_boundary_is_not_collapsed(cache):
+    """A hub on the last level has no children because the budget ran out, not because the hub
+    rule cut it; the renderer used to read both as `elided`."""
+    boundary = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=1, hub_fan_in=6)
+    )
+    deeper = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=2, hub_fan_in=6)
+    )
+    assert _kids(boundary.root)["app/hub.py::hub"].hub.collapsed is False
+    assert _kids(deeper.root)["app/hub.py::hub"].hub.collapsed is True
+
+
+def test_a_stopped_hub_is_not_collapsed(cache):
+    """--stop-at cut the branch, so the mark must not also claim the hub rule did."""
+    result = build_flow(
+        cache,
+        "app/cli.py::main",
+        options=FlowOptions(depth=3, hub_fan_in=6, stop_at=("app/hub.py",)),
+    )
+    hub = _kids(result.root)["app/hub.py::hub"]
+    assert hub.stopped is True and hub.hub.collapsed is False
+
+
+@pytest.mark.parametrize("field, bad", [("depth", -1), ("limit", 0), ("hub_fan_in", 0)])
+def test_flow_options_reject_out_of_range_values(field: str, bad: int):
+    """FlowOptions is the only validation between a flag and the walk; GraphConfig already has
+    ge=1 on its twin."""
+    with pytest.raises(ValidationError):
+        FlowOptions(**{field: bad})
+
+
+def test_a_hub_mark_survives_the_smallest_possible_floor(cache):
+    """A HubMark object is always truthy, so the renderer's guard cannot drop a low count the
+    way `hub: int` did at zero."""
+    result = build_flow(
+        cache, "app/cli.py::main", options=FlowOptions(depth=1, hub_fan_in=1)
+    )
+    assert result.root.hub == HubMark(count=3, kind="expansion", collapsed=False)
+    assert all(bool(child.hub.model_dump()) for child in result.root.children)
+
+
+def test_record_and_flow_node_share_one_field_block():
+    """assemble() spreads _Record into FlowNode; pydantic ignores extras, so drift is silent."""
+    marks = set(_NodeMarks.model_fields)
+    assert set(_Record.model_fields) - {"parent", "children"} == marks
+    assert set(FlowNode.model_fields) - {"kind", "children", "unresolved"} == marks
+
+
+def test_record_is_mutable_because_the_walk_mutates_it():
+    """frozen=True never covered `children`; saying so was the bug, not the mutation."""
+    record = _Record(id="a", hub=HubMark(count=2, kind="fan_in"))
+    record.children.append(1)
+    record.hub = record.hub.model_copy(update={"collapsed": True})
+    assert record.children == [1] and record.hub.collapsed is True
 
 
 def test_limit_completes_shallow_levels_first_and_flags_truncation(cache):
