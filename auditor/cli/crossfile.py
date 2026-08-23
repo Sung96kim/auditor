@@ -11,6 +11,7 @@ from auditor.cli.options import DirTarget
 from auditor.cli.render import render_crossfile
 from auditor.config import load_config
 from auditor.discovery import find_root
+from auditor.engine import entry_point_names
 
 
 @app.command()
@@ -31,5 +32,6 @@ async def _crossfile(root: Path) -> int:
             index,
             settings_modules=settings.settings_modules,
             settings_cohesion_on=settings.settings_cohesion,
+            entry_point_names=entry_point_names(root),
         )
         return sum(len(v) for v in per_file.values())
