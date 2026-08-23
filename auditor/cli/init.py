@@ -18,9 +18,11 @@ from auditor.paths import (
     auditor_home,
     ensure_repo_dir,
     read_json_dict,
+    read_json_dict_strict,
     repo_dir,
     user_config_path,
     user_schema_path,
+    write_json_dict,
 )
 from auditor.user_settings import UserSettings, unknown_user_keys
 
@@ -37,14 +39,26 @@ def _migrate(current_version: int) -> None:
     """
 
 
+def _read_settings(path: Path) -> dict[str, object]:
+    """The settings file's own keys, or a clean failure when the file cannot be parsed.
+
+    ``init`` rewrites these files, so a torn one has to stop the command: the lossy reader the
+    rest of the codebase uses would report ``{}`` and the rewrite would delete the user's keys.
+    """
+    current = read_json_dict_strict(path)
+    if current is None:
+        fail(f"{path} is not valid JSON; fix or delete it before re-running")
+    return current
+
+
 def _write_markers(path: Path, schema_ref: str) -> bool:
     """Set ``$schema`` and ``config_version`` on a settings file, keeping the user's own keys.
     Returns whether anything changed."""
-    current = read_json_dict(path)
+    current = _read_settings(path)
     updated = {**current, "$schema": schema_ref, "config_version": CONFIG_VERSION}
     if path.exists() and updated == current:
         return False
-    path.write_text(json.dumps(updated, indent=2) + "\n")
+    write_json_dict(path, updated)
     return True
 
 
@@ -75,6 +89,9 @@ def init(
     moved = _moved_from(root)
     legacy = root / ".auditor" / ".status.json"
     had_legacy = legacy.exists()
+    # Both modes stop on a torn settings file: --check would otherwise report it as empty.
+    _read_settings(user_config_path())
+    _read_settings(repo_dir(root) / "config.json")
 
     if not check:
         home.mkdir(parents=True, exist_ok=True)

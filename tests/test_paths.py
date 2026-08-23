@@ -12,12 +12,14 @@ from auditor.paths import (
     index_db_path,
     models_dir,
     read_json_dict,
+    read_json_dict_strict,
     repo_dir,
     repo_dir_key,
     repo_identity,
     repo_key,
     user_config_path,
     user_schema_path,
+    write_json_dict,
 )
 
 
@@ -128,3 +130,23 @@ def test_user_paths_sit_under_home(tmp_path, monkeypatch):
     assert user_config_path() == auditor_home() / "config.json"
     assert user_schema_path() == auditor_home() / "config.schema.json"
     assert models_dir() == auditor_home() / "models"
+
+
+def test_read_json_dict_strict_separates_absent_from_unusable(tmp_path):
+    """The write path needs the distinction the lossy reader erases: `{}` means nothing is there
+    to keep, None means there is something it must not replace."""
+    assert read_json_dict_strict(tmp_path / "missing.json") == {}
+    (tmp_path / "torn.json").write_text('{"a": 1,}')
+    assert read_json_dict_strict(tmp_path / "torn.json") is None
+    (tmp_path / "list.json").write_text("[]")
+    assert read_json_dict_strict(tmp_path / "list.json") is None
+    (tmp_path / "ok.json").write_text('{"a": 1}')
+    assert read_json_dict_strict(tmp_path / "ok.json") == {"a": 1}
+
+
+def test_write_json_dict_replaces_in_one_step(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("stale")
+    write_json_dict(path, {"a": 1})
+    assert json.loads(path.read_text()) == {"a": 1}
+    assert list(tmp_path.iterdir()) == [path]  # the temp file is gone

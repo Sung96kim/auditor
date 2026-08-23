@@ -127,3 +127,36 @@ def test_init_clean_status_deletes_the_legacy_file(tmp_path, _isolated_auditor_h
     )
     assert payload["legacy_status"] == str(legacy)
     assert not legacy.exists()
+
+
+def test_init_refuses_to_overwrite_a_torn_config(_isolated_auditor_home):
+    """A JSON syntax error in the settings file must stop init, not be read as `{}` and then
+    rewritten with only the marker keys (which silently deleted every user key)."""
+    path = _isolated_auditor_home / "config.json"
+    torn = '{"observer": {"max_cost_usd_per_day": 0.5},}'
+    path.write_text(torn)
+    result = invoke("init")
+    assert result.exit_code == 1
+    assert path.read_text() == torn
+    assert str(path) in "".join(result.output.split())
+    assert "Traceback" not in result.output
+
+
+def test_init_check_reports_a_torn_config(_isolated_auditor_home):
+    path = _isolated_auditor_home / "config.json"
+    path.write_text("{oops")
+    result = invoke("init", "--check")
+    assert result.exit_code == 1
+    assert "not valid JSON" in " ".join(result.output.split())
+
+
+def test_init_refuses_to_overwrite_a_torn_repo_overlay(
+    tmp_path, _isolated_auditor_home
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    overlay = ensure_repo_dir(project) / "config.json"
+    overlay.write_text("[]")  # valid JSON, wrong shape
+    result = invoke("init", "--repo", "--root", str(project))
+    assert result.exit_code == 1
+    assert overlay.read_text() == "[]"

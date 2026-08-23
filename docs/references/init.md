@@ -37,6 +37,10 @@ auditr init --json
   `"$schema": "../../config.schema.json"`, and `root.json`, the breadcrumb
   `{root, identity, created_at}`.
 - Re-running rewrites only `$schema` and `config_version`. Every other key is left alone.
+- A settings file that is not a JSON object stops the command with exit 1 and is left
+  untouched, in both write and `--check` mode. Fix or delete it, then re-run.
+- Writes go through a temp file and a rename, so an interrupted run never truncates a
+  settings file.
 - Migration starts at the first `config_version` bump. The version is 1 today, so a re-run has
   nothing to migrate; the seam that a bump fills in is `_migrate` in `auditor/cli/init.py`.
 - The full layout and every settings key is in [configuration.md](configuration.md).

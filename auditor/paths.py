@@ -9,6 +9,7 @@ stays in the repo and is read from there; nothing is written back into it.
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -25,6 +26,27 @@ def read_json_dict(path: Path) -> dict[str, object]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def read_json_dict_strict(path: Path) -> dict[str, object] | None:
+    """The JSON object at ``path``, an empty dict when it is absent, or ``None`` when it exists
+    but is unreadable or is not a JSON object. Callers that rewrite a file take ``None`` as a
+    refusal: replacing an unparseable file would throw away whatever the user typed."""
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_json_dict(path: Path, data: dict[str, object]) -> None:
+    """Replace ``path`` with ``data`` as indented JSON in one step, via a temp file and
+    ``os.replace``, so an interrupted write cannot truncate a settings file the user owns."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, path)
 
 
 def auditor_home() -> Path:
