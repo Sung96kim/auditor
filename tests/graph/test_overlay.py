@@ -127,22 +127,35 @@ def test_an_edge_the_resolver_now_produces_goes_redundant():
     assert overlay.outcomes[0].status is RefinementStatus.REDUNDANT
 
 
+def test_a_refinement_colliding_with_another_refinement_is_applied_not_terminal():
+    """A1: `redundant` is decided against the resolver's edges only. Reverting the first must not
+    silently lose the second, and `redundant` is terminal."""
+    overlay = _overlay(_ref(), _ref(rid=2))
+    edges = overlay.edges([], NODES)
+    assert [(e.src, e.dst) for e in edges] == [("m.py::f", "s.py::g")]
+    assert [(o.refinement_id, o.status, o.applied) for o in overlay.outcomes] == [
+        (1, None, True),
+        (2, None, True),
+    ]
+
+
+def test_an_add_edge_beside_a_retarget_onto_it_still_removes_the_old_edge():
+    """A1 and spec 5.7: `add_edge A->C` plus `retarget_edge A: B->C` in one build. The retarget
+    has nothing left to add, but the deterministic `A->B` still has to go."""
+    retarget = _ref(rid=2, kind=RefinementKind.RETARGET_EDGE, target=_retarget())
+    overlay = _overlay(_ref(), retarget)
+    pairs = {(e.src, e.dst, e.provenance) for e in overlay.edges([BASE_EDGE], NODES)}
+    assert ("m.py::f", "s.py::h", Provenance.DETERMINISTIC) not in pairs
+    assert ("m.py::f", "s.py::g", Provenance.REFINED) in pairs
+    assert [(o.refinement_id, o.status, o.applied) for o in overlay.outcomes] == [
+        (1, None, True),
+        (2, None, True),
+    ]
+
+
 def test_an_add_edge_to_a_vanished_node_goes_stale():
     overlay = _overlay(_ref())
     assert len(overlay.edges([BASE_EDGE], {"m.py::f"})) == 1
-    assert overlay.outcomes[0].status is RefinementStatus.STALE
-
-
-def test_an_edge_kind_no_proposal_may_name_goes_stale():
-    """Spec 9.2 lets a proposal name five structural kinds. The overlay's collision index is built
-    from structural edges only, so a similarity kind would slip past it and collapse a real row."""
-    ref = _ref(
-        target=RefinementTarget(
-            src="m.py::f", dst="s.py::g", edge_kind=EdgeKind.NAME_SIMILAR, name="g"
-        )
-    )
-    overlay = _overlay(ref)
-    assert overlay.edges([BASE_EDGE], NODES) == (BASE_EDGE,)
     assert overlay.outcomes[0].status is RefinementStatus.STALE
 
 
@@ -269,7 +282,8 @@ def test_a_matching_anchor_is_kept():
     overlay = _overlay(_ref(), anchors=anchors, node_truth={"m.py::f": "t1"})
     assert [r.refinement_id for r in overlay.kept] == [1]
     assert overlay.drifted == frozenset()
-    assert overlay.outcomes == ()
+    (outcome,) = overlay.outcomes
+    assert (outcome.status, outcome.drifted, outcome.applied) == (None, False, False)
 
 
 def test_a_pinned_refinement_with_a_broken_anchor_is_kept_and_marked_drifted():
@@ -305,6 +319,58 @@ def test_a_pinned_kind_with_no_graph_effect_still_records_its_drift():
     assert outcome.noop_builds == 2  # carried through, not reset and not advanced
 
 
+def test_a_restored_anchor_clears_the_drift_flag_on_a_kind_no_overlay_touches():
+    """F19: `unresolvable` reaches neither pass, so triage is the only place that can clear it."""
+    ref = _ref(
+        kind=RefinementKind.UNRESOLVABLE,
+        drifted=True,
+        target=RefinementTarget(node_id="m.py::f", name="handle"),
+    )
+    anchors = {
+        1: (Anchor(refinement_id=1, node_id="m.py::f", path="m.py", truth_sha="t1"),)
+    }
+    overlay = _overlay(ref, anchors=anchors, node_truth={"m.py::f": "t1"})
+    (outcome,) = overlay.outcomes
+    assert outcome.drifted is False
+
+
+@pytest.mark.parametrize(
+    "kw, node_ids, clusters, nodes",
+    [
+        ({}, {"m.py::f"}, [], []),
+        ({"kind": RefinementKind.CONFIRM_EDGE, "noop_builds": 2}, NODES, [], []),
+        (
+            {
+                "kind": RefinementKind.RELABEL_CLUSTER,
+                "target": RefinementTarget(members=("x.py::a", "x.py::b", "x.py::c")),
+                "payload": RefinementPayload(label="retry"),
+            },
+            NODES,
+            [GraphCluster(cluster_id=1, label="cluster-1", member_count=1)],
+            [("m.py::f", 1)],
+        ),
+        (
+            {
+                "kind": RefinementKind.ANNOTATE_NODE,
+                "target": RefinementTarget(node_id="gone.py::x"),
+                "payload": RefinementPayload(annotation="the retry path"),
+            },
+            NODES,
+            [],
+            [("m.py::f", None)],
+        ),
+    ],
+    ids=["vanished-dst", "third-noop", "jaccard-floor", "missing-node"],
+)
+def test_a_pinned_refinement_is_never_auto_staled(kw, node_ids, clusters, nodes):
+    """F2, spec 5.7 and docs/references/graph.md: a pin only ever earns `drifted`, never `stale`,
+    by any path. The no-op counter still advances so a long-dead pin stays visible."""
+    overlay = _overlay(_ref(status=RefinementStatus.PINNED, **kw))
+    overlay.edges([], node_ids)
+    overlay.nodes([_node(nid, cluster_id=cid) for nid, cid in nodes], clusters)
+    assert overlay.outcomes[0].status is not RefinementStatus.STALE
+
+
 def test_an_out_of_scope_refinement_is_neither_applied_nor_staled():
     ref = _ref(
         target=RefinementTarget(
@@ -329,6 +395,42 @@ def test_an_out_of_scope_candidate_is_out_of_scope_too():
         payload=RefinementPayload(candidate="apps/frontend/s.py::g"),
     )
     assert _overlay(ref, prefix="apps/backend/").kept == ()
+
+
+def test_a_refinement_into_a_file_this_build_has_no_facts_for_gets_no_verdict():
+    """F1: a rescan in flight is not a deleted symbol. The refinement is neither applied nor
+    staled, so a build landing mid-`--rebuild` cannot expire a correction."""
+    overlay = _overlay(_ref(), facts_paths=frozenset({"m.py"}))
+    assert overlay.kept == ()
+    assert overlay.outcomes == ()
+
+
+def test_a_refinement_whose_files_are_all_present_is_still_triaged():
+    overlay = _overlay(_ref(), facts_paths=frozenset({"m.py", "s.py"}))
+    assert [r.refinement_id for r in overlay.kept] == [1]
+
+
+def test_a_cluster_target_is_matched_even_when_a_member_is_out_of_scope():
+    """A6: spec 5.4 matches a cluster by overlap, so a member another partition owns lowers the
+    score rather than dropping the whole refinement in silence."""
+    clusters = [GraphCluster(cluster_id=1, label="cluster-1", member_count=2)]
+    nodes = [_node(n, cluster_id=1) for n in ("m.py::f", "s.py::g")]
+    ref = _ref(
+        kind=RefinementKind.RELABEL_CLUSTER,
+        target=RefinementTarget(
+            members=(
+                "apps/backend/m.py::f",
+                "apps/backend/s.py::g",
+                "apps/frontend/x.py::z",
+            )
+        ),
+        payload=RefinementPayload(label="retry"),
+    )
+    overlay = _overlay(ref, prefix="apps/backend/")
+    _, relabelled = overlay.nodes(nodes, clusters)
+    assert [(c.label, c.label_provenance) for c in relabelled] == [
+        ("retry", Provenance.REFINED)
+    ]
 
 
 def test_ids_are_stripped_of_the_partition_prefix_before_they_are_applied():
@@ -442,6 +544,21 @@ def test_move_node_repoints_the_node_and_recounts_both_clusters():
     assert overlay.moved_findings is True
 
 
+def test_moving_the_last_member_out_of_a_cluster_drops_the_cluster():
+    """F10: an empty cluster is not a cluster; `graph clusters` must not list one."""
+    clusters = [
+        GraphCluster(cluster_id=1, label="alpha", member_count=1),
+        GraphCluster(cluster_id=2, label="beta", member_count=1),
+    ]
+    nodes = [_node("m.py::f", cluster_id=1), _node("s.py::h", cluster_id=2)]
+    ref = _ref(
+        kind=RefinementKind.MOVE_NODE,
+        target=RefinementTarget(node_id="m.py::f", members=("s.py::h",)),
+    )
+    _, recounted = _overlay(ref).nodes(nodes, clusters)
+    assert [(c.cluster_id, c.member_count) for c in recounted] == [(2, 2)]
+
+
 def test_moving_a_node_into_the_cluster_it_is_already_in_is_a_noop():
     clusters = [GraphCluster(cluster_id=1, label="a", member_count=2)]
     nodes = [_node("m.py::f", cluster_id=1), _node("s.py::g", cluster_id=1)]
@@ -497,7 +614,8 @@ def test_an_unresolvable_retires_its_queue_row_and_never_counts_a_noop():
     overlay.edges([], NODES)
     rows = [_row("handle"), _row("other")]
     assert [r.name for r in overlay.queue_rows(rows)] == ["other"]
-    assert overlay.outcomes == ()
+    (outcome,) = overlay.outcomes
+    assert (outcome.status, outcome.noop_builds, outcome.applied) == (None, 0, False)
 
 
 def test_an_add_edge_retires_the_queue_row_it_answers():
@@ -506,6 +624,29 @@ def test_an_add_edge_retires_the_queue_row_it_answers():
     overlay = _overlay(_ref())
     overlay.edges([], NODES)
     assert overlay.queue_rows([_row("g")]) == []
+
+
+@pytest.mark.parametrize(
+    "kw, node_ids, why",
+    [
+        ({}, {"m.py::f"}, "staled: the destination is gone"),
+        (
+            {
+                "kind": RefinementKind.RETARGET_EDGE,
+                "target": _retarget(from_dst="s.py::gone", name="g"),
+            },
+            NODES,
+            "no-op: there is no edge to move",
+        ),
+    ],
+    ids=["staled", "noop"],
+)
+def test_a_refinement_that_answered_nothing_leaves_its_queue_row(kw, node_ids, why):
+    """F3: the fact has to stay briefable while no edge replaces it."""
+    overlay = _overlay(_ref(**kw))
+    overlay.edges([], node_ids)
+    rows = [_row(kw.get("target", _ref(**kw).target).name or "g")]
+    assert overlay.queue_rows(rows) == rows, why
 
 
 def test_a_kind_that_names_no_pair_retires_nothing():

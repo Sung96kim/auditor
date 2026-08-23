@@ -220,20 +220,28 @@ async def viz_store(graph_store: IndexStore) -> IndexStore:
     return graph_store
 
 
+_FACTS_FILES = (
+    ("base.py", BASE_SRC, "h1"),
+    ("impl.py", IMPL_SRC, "h2"),
+    ("svc.py", SVC_SRC, "h3"),
+)
+
+
+async def _cache_facts(store: IndexStore, paths: tuple[str, ...]) -> None:
+    for path, src, digest in _FACTS_FILES:
+        if path in paths:
+            await store.graph.set_facts(
+                path,
+                extract_file_facts(path, src, "production").model_dump_json(),
+                digest,
+            )
+
+
 @pytest.fixture
 async def facts_store(graph_store: IndexStore) -> IndexStore:
     """Cached facts for a base/impl/svc trio, so ``GraphBuilder.run`` has something to build and
     exactly one call it cannot place: ``Impl.run`` calls ``svc.load_user`` without importing it."""
-    for path, src, digest in (
-        ("base.py", BASE_SRC, "h1"),
-        ("impl.py", IMPL_SRC, "h2"),
-        ("svc.py", SVC_SRC, "h3"),
-    ):
-        await graph_store.graph.set_facts(
-            path,
-            extract_file_facts(path, src, "production").model_dump_json(),
-            digest,
-        )
+    await _cache_facts(graph_store, tuple(p for p, _, _ in _FACTS_FILES))
     return graph_store
 
 
@@ -269,3 +277,12 @@ async def refined_facts_store(facts_store: IndexStore) -> RefinedStore:
         )
     )
     return RefinedStore(store=facts_store, refinement_id=rid)
+
+
+@pytest.fixture
+async def half_scanned_refined_store(refined_facts_store: RefinedStore) -> RefinedStore:
+    """`refined_facts_store` as a build landing mid-``--rebuild`` sees it: the cache was cleared
+    and the rescan has reached `impl.py` but not `svc.py`, the refinement's destination file."""
+    await refined_facts_store.store.graph.clear_facts()
+    await _cache_facts(refined_facts_store.store, ("base.py", "impl.py"))
+    return refined_facts_store

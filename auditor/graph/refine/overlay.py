@@ -62,11 +62,17 @@ def anchor_truth(
     return {nid: node_truth_sha(by_id[nid]) for nid in wanted if nid in by_id}
 
 
+def _path_of(node_id: str) -> str:
+    """The file a node id names: ``path::qualname`` for a symbol, the path itself for a module."""
+    return node_id.split("::")[0]
+
+
 def _named_ids(refinement: Refinement) -> tuple[str, ...]:
     """Every node id the refinement names outright, in the toplevel-relative form it is stored in.
 
-    ``payload.candidate`` is in here because `resolve_ambiguous` keeps its dst there (spec 9.2),
-    and an out-of-scope dst has to make the whole refinement out of scope.
+    ``payload.candidate`` is in here because `resolve_ambiguous` keeps its dst there (spec 9.2).
+    ``target.members`` is not: spec 5.4 matches a cluster by overlap, so a member this partition
+    cannot see just does not count.
     """
     target = refinement.target
     named = (
@@ -77,7 +83,7 @@ def _named_ids(refinement: Refinement) -> tuple[str, ...]:
         target.node_id,
         refinement.payload.candidate,
     )
-    return tuple(i for i in named if i is not None) + target.members
+    return tuple(i for i in named if i is not None)
 
 
 def _jaccard(left: AbstractSet[str], right: AbstractSet[str]) -> float:
@@ -86,20 +92,26 @@ def _jaccard(left: AbstractSet[str], right: AbstractSet[str]) -> float:
 
 
 class _EdgePass(BaseModel):
-    """The edge kinds' working state: the list they merge into, and where each edge sits in
-    it."""
+    """The edge kinds' working state: the list they merge into, where each edge sits in it, the
+    keys the resolver produced, and the keys this build's own refinements added."""
 
     model_config = ConfigDict(frozen=False)
 
     merged: list[GraphEdge]
+    deterministic: frozenset[EdgeKey]
     position: dict[EdgeKey, int]
     dropped: set[int] = Field(default_factory=set)
+    placed: set[EdgeKey] = Field(default_factory=set)
 
     @classmethod
     def of(cls, edges: Sequence[GraphEdge]) -> "_EdgePass":
         merged = list(edges)
         keys = [(e.src, e.dst, e.kind) for e in merged]
-        return cls(merged=merged, position={key: at for at, key in enumerate(keys)})
+        return cls(
+            merged=merged,
+            deterministic=frozenset(keys),
+            position={key: at for at, key in enumerate(keys)},
+        )
 
     def confirm(self, key: EdgeKey) -> bool:
         """Tag the edge as confirmed, reporting ``False`` when there is none to tag."""
@@ -122,9 +134,12 @@ class _EdgePass(BaseModel):
         return True
 
     def add(self, key: EdgeKey) -> None:
-        """Append a `refined` edge for the pair and relation the key names."""
+        """Append a `refined` edge, unless another refinement placed that same edge this build."""
+        if key in self.placed:
+            return
         src, dst, kind = key
         self.position[key] = len(self.merged)
+        self.placed.add(key)
         self.merged.append(
             GraphEdge(src=src, dst=dst, kind=kind, provenance=Provenance.REFINED)
         )
@@ -205,7 +220,12 @@ class _NodePass(BaseModel):
     def result(
         self, nodes: Sequence[GraphNode]
     ) -> tuple[tuple[GraphNode, ...], tuple[GraphCluster, ...]]:
-        """The rewritten nodes in their original order and the cluster rows recounted."""
+        """The rewritten nodes in their original order and the cluster rows recounted.
+
+        A cluster a `move_node` emptied is dropped: `graph clusters` must never list a label with
+        no members behind it.
+        """
+        emptied = {cid for cid, ids in self.by_cluster.items() if not ids}
         return (
             tuple(self.by_id[n.id] for n in nodes),
             tuple(
@@ -215,6 +235,7 @@ class _NodePass(BaseModel):
                 if cid in self.by_cluster
                 else self.labels[cid]
                 for cid in sorted(self.labels)
+                if cid not in emptied
             ),
         )
 
@@ -245,21 +266,27 @@ class Overlay(BaseModel):
         node_truth: Mapping[str, str],
         prefix: str = "",
         *,
+        facts_paths: AbstractSet[str] | None = None,
         config: GraphConfig | None = None,
     ) -> "Overlay":
         """Triage the active refinements into what this partition may apply this build (spec 5.7).
 
-        An id outside ``prefix`` belongs to another partition of the same checkout: it is skipped
-        in silence, never staled. A `pinned` refinement whose anchor moved is kept and drifted.
+        An id outside ``prefix`` is another partition's and is skipped in silence; so is one whose
+        file this build holds no facts for, which is a rescan in flight rather than a deleted
+        symbol. ``facts_paths`` of ``None`` means the caller is not tracking that.
         """
         kept: list[Refinement] = []
         drifted: set[int] = set()
-        moved: list[Refinement] = []
         expired: list[Refinement] = []
         for refinement in refinements:
             rows = anchors.get(refinement.refinement_id, ())
             named = (*_named_ids(refinement), *(a.node_id for a in rows))
             if any(not in_scope(i, prefix) for i in named):
+                continue
+            local = [to_partition(i, prefix) or "" for i in named]
+            if facts_paths is not None and any(
+                _path_of(i) not in facts_paths for i in local
+            ):
                 continue
             broken = any(
                 node_truth.get(to_partition(a.node_id, prefix) or "") != a.truth_sha
@@ -270,7 +297,6 @@ class Overlay(BaseModel):
                 continue
             if broken:
                 drifted.add(refinement.refinement_id)
-                moved.append(refinement)
             kept.append(refinement)
         overlay = cls(
             kept=tuple(kept),
@@ -280,8 +306,9 @@ class Overlay(BaseModel):
         )
         for refinement in expired:
             overlay._carry(refinement, status=RefinementStatus.STALE)
-        for refinement in moved:
-            # the only place a pinned kind with no graph effect can record its drift (spec 5.7)
+        for refinement in kept:
+            # every kept refinement earns a verdict, so `drifted` is rewritten each build instead
+            # of only when it is set (spec 5.7); the passes overwrite whatever they touch
             overlay._carry(refinement)
         return overlay
 
@@ -325,19 +352,27 @@ class Overlay(BaseModel):
         return merging.result(nodes)
 
     def queue_rows(self, rows: Sequence[UnresolvedRow]) -> list[UnresolvedRow]:
-        """The queue with the rows a kept refinement already answered dropped (spec 5.7).
+        """The queue with the rows this build answered dropped (spec 5.7).
 
-        A refinement retires exactly its own ``(node_id, name)`` pair, so it needs
-        ``target.name``. Every kind that answers a queue row is required to carry it; the cluster
-        and annotation kinds answer none and retire nothing.
+        A refinement retires exactly its own ``(node_id, name)`` pair, and only when this build
+        applied it or it answers by declaring itself `unresolvable`: a row the build staled or
+        scored a no-op has to stay briefable. Call it after the passes, which is where the
+        applied verdicts come from.
         """
         settled: set[tuple[str, str]] = set()
         for refinement in self.kept:
             target = refinement.target
             node_id = self._local(target.node_id or target.src)
-            if node_id and target.name:
+            if self._answered(refinement) and node_id and target.name:
                 settled.add((node_id, target.name))
         return [row for row in rows if (row.node_id, row.name) not in settled]
+
+    def _answered(self, refinement: Refinement) -> bool:
+        """Whether this build settled the queue row the refinement names."""
+        if refinement.kind is RefinementKind.UNRESOLVABLE:
+            return True
+        outcome = self._outcomes.get(refinement.refinement_id)
+        return outcome is not None and outcome.applied
 
     def _local(self, node_id: str | None) -> str:
         """One stored id as this partition sees it, empty when it is absent or out of scope.
@@ -371,6 +406,10 @@ class Overlay(BaseModel):
         applied: bool,
         noop_builds: int,
     ) -> None:
+        pinned = refinement.status is RefinementStatus.PINNED
+        # spec 5.7: a pin outlives a refactor by every path, and still counts its dead builds
+        if pinned and status is RefinementStatus.STALE:
+            status = None
         self._outcomes[refinement.refinement_id] = RefinementOutcome(
             refinement_id=refinement.refinement_id,
             status=status,
@@ -424,7 +463,9 @@ class Overlay(BaseModel):
         if src not in node_ids or dst not in node_ids:
             self._record(refinement, status=RefinementStatus.STALE)
             return
-        if (src, dst, kind) in merging.position:
+        # decided against the resolver's own edges only: one this build's other refinement placed
+        # makes this one applied with nothing to add, never terminal (spec 5.7)
+        if (src, dst, kind) in merging.deterministic:
             self._record(refinement, status=RefinementStatus.REDUNDANT)
             return
         if refinement.kind is RefinementKind.RETARGET_EDGE and not merging.retarget(

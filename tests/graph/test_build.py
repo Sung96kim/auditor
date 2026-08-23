@@ -458,6 +458,25 @@ async def test_an_active_refinement_retires_the_queue_row_it_answers(
     assert ("impl.py::Impl.run", "load_user") not in after
 
 
+async def test_a_build_with_a_file_s_facts_missing_does_not_stale_its_refinements(
+    half_scanned_refined_store,
+):
+    """F1: a rescan window must not be indistinguishable from a deleted symbol. A refinement whose
+    target file has no cached facts right now is unaffected, not staled for ever."""
+    store, rid = (
+        half_scanned_refined_store.store,
+        half_scanned_refined_store.refinement_id,
+    )
+    settings = AuditorSettings()
+    settings.graph.enabled = True
+    await GraphBuilder().run(store, settings)
+    (stored,) = await store.refinements.refinements()
+    assert (stored.refinement_id, stored.status) == (rid, RefinementStatus.ACTIVE)
+    assert not [
+        e for e in await store.graph.all_edges() if e["provenance"] == "refined"
+    ]
+
+
 async def test_a_refinement_anchored_to_a_changed_node_goes_stale(facts_store):
     """Invariant 3: the anchor is what makes a correction expire on its own."""
     settings = AuditorSettings()

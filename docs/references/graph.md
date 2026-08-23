@@ -233,18 +233,27 @@ auditr graph unresolved . --json --limit 500
   finding, and can never move which symbol one is reported on.
 - A refinement expires on its own:
   - `stale` when a node it is anchored to is gone or its structural facts changed, or when it had
-    no effect for three consecutive builds.
-  - `redundant` when the resolver starts producing the same edge. That is the success case.
-  - `pinned` refinements are never auto-staled; a moved anchor marks them `drifted` instead.
+    no effect for `refine_max_noop_builds` consecutive builds.
+  - `redundant` when the resolver starts producing the same edge. That is the success case, and it
+    is decided against the resolver's own edges only: an edge another refinement placed in the same
+    build makes this one applied with nothing to add, so reverting the first cannot lose the second.
+  - `pinned` refinements are never auto-staled by any path; a moved anchor marks them `drifted`
+    instead, and the no-op counter still advances so a long-dead pin stays visible.
+  - `drifted` is rewritten on every build, so a restored anchor clears it.
 - A refinement whose ids belong to a different partition of the same checkout is skipped in
   silence: not applied there, and not staled there either.
+- A build that holds no cached facts for a file the refinement names gives it no verdict at all:
+  not applied, not staled, not counted. A rescan in flight is not a deleted symbol.
 - Cluster refinements record the member set they were made against and re-attach to whichever
-  cluster still overlaps it by at least half. Below that they go `stale`.
-- Queue rows retire two ways. A refinement that names a `(node_id, name)` pair removes exactly that
-  row, which is how `unresolvable`, `resolve_ambiguous` and an accepted edge proposal close their
-  own question. The build-pass rows (`generic_label`, `singleton_cluster`, `text_sparse`) are
-  rebuilt from the overlaid clustering instead, so a `relabel_cluster` or a `move_node` stops
-  producing them without any retirement step.
+  cluster still overlaps it by at least `refine_cluster_jaccard`. Below that they go `stale`. A
+  member another partition owns lowers the overlap rather than putting the whole refinement out of
+  scope, and a cluster a `move_node` empties is dropped rather than shipped with no members.
+- Queue rows retire two ways. A refinement the build applied removes exactly its own
+  `(node_id, name)` row, as does an `unresolvable`, which answers by declaring the pair
+  unanswerable; a refinement the build staled or scored a no-op leaves its row, so the fact stays
+  briefable until something replaces it. The build-pass rows (`generic_label`,
+  `singleton_cluster`, `text_sparse`) are rebuilt from the overlaid clustering instead, so a
+  `relabel_cluster` or a `move_node` stops producing them without any retirement step.
 
 ## Graph findings
 

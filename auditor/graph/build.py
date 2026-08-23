@@ -300,7 +300,7 @@ class GraphBuilder:
         report("resolving structural edges")
         structural = resolve_structural(nodes)
         report("applying refinements")
-        overlay = await self._overlay(index, cfg, nodes)
+        overlay = await self._overlay(index, cfg, nodes, {f.path for f in facts})
         similar = _similarity_edges(_symbol_nodes(nodes), cfg, report)
         # captured before the merge: `retarget_edge` deletes from the merged list, so a filter
         # over `all_edges` would hand the detectors a graph missing an edge nothing replaced
@@ -378,14 +378,23 @@ class GraphBuilder:
 
     @staticmethod
     async def _overlay(
-        index: IndexStore, cfg: GraphConfig, nodes: list[GraphNode]
+        index: IndexStore,
+        cfg: GraphConfig,
+        nodes: list[GraphNode],
+        facts_paths: set[str],
     ) -> Overlay:
-        """This build's refinement pass, triaged against the anchors it can still check."""
+        """This build's refinement pass, triaged against the anchors it can still check and the
+        files it actually holds facts for."""
         prefix = index.partition.prefix
         active = await index.refinements.active()
         anchors = await index.refinements.anchors([r.refinement_id for r in active])
         return Overlay.for_build(
-            active, anchors, anchor_truth(nodes, anchors, prefix), prefix, config=cfg
+            active,
+            anchors,
+            anchor_truth(nodes, anchors, prefix),
+            prefix,
+            facts_paths=facts_paths,
+            config=cfg,
         )
 
 

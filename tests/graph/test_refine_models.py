@@ -101,6 +101,33 @@ def test_an_edge_kind_needs_the_name_it_answers():
         )
 
 
+def test_an_edge_kind_no_proposal_may_name_is_refused():
+    """A15: spec 9.2 names five structural kinds. The overlay's collision index is built from
+    structural edges only, so a similarity kind would collapse a real row; refuse it on the way in
+    and the overlay's own branch is defence in depth."""
+    target, _ = _SHAPES[RefinementKind.ADD_EDGE]
+    with pytest.raises(ValidationError, match="name_similar"):
+        _refinement(
+            RefinementKind.ADD_EDGE,
+            target=target.model_copy(update={"edge_kind": EdgeKind.NAME_SIMILAR}),
+        )
+
+
+@pytest.mark.parametrize(
+    "kind, update",
+    [
+        (RefinementKind.ADD_EDGE, {"dst": "m.py::f"}),
+        (RefinementKind.RETARGET_EDGE, {"to_dst": "m.py::f"}),
+    ],
+    ids=["add_edge", "retarget_edge"],
+)
+def test_a_self_edge_is_refused(kind, update):
+    """A15: a cheap guard on the way in; S5's verifier stays the real gate."""
+    target, _ = _SHAPES[kind]
+    with pytest.raises(ValidationError, match="itself"):
+        _refinement(kind, target=target.model_copy(update={"src": "m.py::f", **update}))
+
+
 def test_a_fresh_refinement_carries_one_timestamp():
     """Two independent `time.time()` defaults disagreed about one construction in six, and
     `status_at` is what the staleness sweep reads as "has it moved?"."""

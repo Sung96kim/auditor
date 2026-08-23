@@ -307,6 +307,14 @@ class Refinement(BaseModel):
         ]
         if missing:
             raise ValueError(f"{self.kind.value} target is missing {missing}")
+        edge_kind = self.target.edge_kind
+        if edge_kind is not None and edge_kind not in REFINABLE_EDGE_KINDS:
+            raise ValueError(
+                f"{edge_kind.value} is not an edge kind a proposal may name"
+            )
+        src, dst = self.edge_pair()
+        if src is not None and src == dst:
+            raise ValueError(f"{self.kind.value} would point {src} at itself")
         return self
 
     def _required(self, path: str) -> object:
