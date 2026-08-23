@@ -301,13 +301,17 @@ def test_an_unresolved_class_reference_is_a_class_ref_row():
 
 
 def test_rows_are_unique_per_node_name_and_reason():
-    """The table's primary key; a repeated call must not produce a second row."""
+    """The table's primary key. One name reaching the queue under two fact kinds is what makes
+    the dedup run: `Handler` is a repo class read as a value and a repo function called on a
+    receiver, so a class_ref row and an attr_callee row collide on the same key."""
     rows = _rows(
-        ("helper.py", "def handle():\n    return 1\n"),
-        ("svc.py", "def use():\n    handle()\n    return handle()\n"),
+        ("models.py", "class Handler:\n    pass\n"),
+        ("helper.py", "def Handler():\n    return 1\n"),
+        ("m.py", "def use(job):\n    Handler\n    return job.Handler()\n"),
     )
     keys = [(r.node_id, r.name, r.reason) for r in rows]
     assert len(keys) == len(set(keys))
+    assert len([r for r in rows if r.name == "Handler"]) == 1
 
 
 def test_a_typed_call_row_replaces_the_attribute_row_for_the_same_name():

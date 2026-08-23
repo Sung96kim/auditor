@@ -50,10 +50,12 @@ def _quality_rows(
 ) -> list[UnresolvedRow]:
     """The build-pass queue rows: symbols with too little text to cluster on, clusters that fell
     back to a ``cluster-N`` label, and clusters of one. Both cluster rows anchor on the highest-
-    rank member so every row in the table is node-keyed."""
+    rank member so every row is node-keyed; test-role symbols are gated out, as the resolver does."""
+    role_by_id = {n.id: n.role for n in nodes}
     rows = [
         UnresolvedRow.for_node(nid, nid.split("::")[-1], UnresolvedReason.TEXT_SPARSE)
         for nid in sorted(sparse)
+        if role_by_id.get(nid) not in TEST_ROLES
     ]
     rank_by_id = {n.id: n.rank for n in nodes}
     members: dict[int, list[str]] = defaultdict(list)

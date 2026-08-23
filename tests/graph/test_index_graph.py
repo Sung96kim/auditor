@@ -199,6 +199,23 @@ async def test_same_node_and_name_under_two_reasons_both_persist(graph_store):
     assert len(await graph_store.graph.unresolved()) == 2
 
 
+async def test_replace_unresolved_tolerates_a_duplicate_key(graph_store):
+    """A build must not abort because two row sources agreed on a key; last write wins."""
+    dup = _row("m.py::f", "handle")
+    await graph_store.graph.replace_unresolved([dup, dup])
+    assert len(await graph_store.graph.unresolved()) == 1
+
+
+async def test_replace_tolerates_a_duplicate_node_and_cluster_key(graph_store):
+    """Same hardening on the node/cluster swap: a repeated key is a last write, not an
+    IntegrityError that takes the whole build down. `graph_edges` has no key to collide on."""
+    node = _n("x")
+    cluster = GraphCluster(cluster_id=1, label="user", member_count=1)
+    await graph_store.graph.replace([node, node], [], [cluster, cluster])
+    assert len(await graph_store.graph.nodes()) == 1
+    assert len(await graph_store.graph.clusters()) == 1
+
+
 async def test_facts_returns_the_cached_json_or_none(graph_store):
     assert await graph_store.graph.facts("m.py") is None
     await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc")

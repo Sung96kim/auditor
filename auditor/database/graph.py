@@ -185,17 +185,18 @@ class GraphDB(BaseDB):
             for t in ("graph_nodes", "graph_edges", "graph_clusters"):
                 conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608
             conn.executemany(
-                "INSERT INTO graph_nodes (repo, node_id, kind, name, module, role, line, "
-                "rank, cluster_id, abstractness, text_sparse) "
+                "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
+                "role, line, rank, cluster_id, abstractness, text_sparse) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 node_rows,
             )
             conn.executemany(
-                "INSERT INTO graph_edges (repo, src, dst, kind, weight) VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight) "
+                "VALUES (?, ?, ?, ?, ?)",
                 edge_rows,
             )
             conn.executemany(
-                "INSERT INTO graph_clusters (repo, cluster_id, label, member_count) "
+                "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count) "
                 "VALUES (?, ?, ?, ?)",
                 clu_rows,
             )
@@ -278,8 +279,8 @@ class GraphDB(BaseDB):
             self._ensure_repo(conn)
             conn.execute("DELETE FROM graph_unresolved WHERE repo = ?", (self.repo,))
             conn.executemany(
-                "INSERT INTO graph_unresolved (repo, node_id, name, reason, fact_kind, "
-                "receiver_root, call_form, candidates_json, definers_json, "
+                "INSERT OR REPLACE INTO graph_unresolved (repo, node_id, name, reason, "
+                "fact_kind, receiver_root, call_form, candidates_json, definers_json, "
                 "resolution_path_json, priority, externally_bound) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,

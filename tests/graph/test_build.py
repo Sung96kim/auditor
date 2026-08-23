@@ -197,6 +197,25 @@ async def test_build_records_text_sparse_symbols(facts_store):
     assert all(r["fact_kind"] == "node" and r["priority"] == 4 for r in sparse)
 
 
+async def test_a_text_sparse_test_symbol_does_not_reach_the_queue(graph_store):
+    """The resolver gates test callers out; the build pass must gate the same set out, or the
+    priority-4 band fills with `tests/`."""
+    for path, src, role in (
+        ("svc.py", "def load_user():\n    return 1\n", "production"),
+        ("tests/test_x.py", "def test_zz():\n    return 1\n", "test"),
+    ):
+        await graph_store.graph.set_facts(
+            path, extract_file_facts(path, src, role).model_dump_json(), path
+        )
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    await GraphBuilder().run(graph_store, settings)
+    rows = await graph_store.graph.unresolved()
+    assert rows, "the production symbol must still earn its text_sparse row"
+    assert not [r for r in rows if r["node_id"].startswith("tests/")]
+
+
 async def test_build_replaces_the_queue_rather_than_appending(facts_store):
     settings = AuditorSettings(
         graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
