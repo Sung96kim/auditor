@@ -32,6 +32,10 @@ htmlcov/
 AUDIT.md
 .audit/
 
+# Repo docs are tracked (overrides a global `**/docs/` exclude); design specs and plans stay local
+!docs/
+docs/superpowers/
+
 # Node (graph UI build deps — never committed or packaged)
 node_modules/
 

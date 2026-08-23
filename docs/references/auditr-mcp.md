@@ -1,0 +1,132 @@
+# auditr-mcp reference
+
+`auditr-mcp` runs the same audit engine as the CLI as a stdio
+[MCP](https://modelcontextprotocol.io) server, so an agent calls the tools directly instead of
+parsing CLI output. It takes no arguments; an MCP client launches it and speaks the protocol over
+stdin/stdout. `auditor-mcp` is a kept alias and `python -m auditor.mcp_server` resolves to the same
+entry point. It needs the `mcp` extra: `uv tool install "auditr[mcp]"`.
+
+## Common invocations
+
+```bash
+# run the server over stdio (what a client launches)
+auditr-mcp
+
+# register it with Claude Code for this project only (--scope local is the default)
+claude mcp add --scope local auditor -- auditr-mcp
+
+# register it for every project
+claude mcp add --scope user auditor -- auditr-mcp
+
+# register it with Codex
+codex mcp add auditor -- auditr-mcp
+
+# run it from a checkout instead of an installed tool
+claude mcp add auditor -- uv run --directory /path/to/auditor auditr-mcp
+```
+
+## Starting it
+
+- Claude Code: `claude mcp add --scope project` writes a committable `.mcp.json` instead of the
+  per-project local config.
+
+```json
+{
+  "mcpServers": {
+    "auditor": { "command": "auditr-mcp", "args": [] }
+  }
+}
+```
+
+- The auditor Claude Code plugin bundles its own server config, so enabling the plugin registers
+  the server with no `claude mcp add` at all. See
+  [claude-code-plugin.md](claude-code-plugin.md).
+- Codex: `codex mcp add auditor -- auditr-mcp`, or an entry in `~/.codex/config.toml` (a
+  project-scoped `.codex/config.toml` works in trusted projects).
+
+```toml
+[mcp_servers.auditor]
+command = "auditr-mcp"
+args = []
+# env = { AUDITOR_HOME = "/home/you/.auditor" }   # pin the shared index location
+```
+
+- Docker, when there is no local Python or uv: the repo mounts at `/auditor` and the index
+  persists in a named volume.
+
+```bash
+# build the image once
+docker build -t auditor:latest .
+
+# Claude Code, containerized
+claude mcp add auditor -- docker run -i --rm \
+  -v "$PWD:/auditor" -v auditor-index:/root/.auditor \
+  --entrypoint auditr-mcp auditor:latest
+
+# or through the compose service, which sets the same entrypoint and volumes
+docker compose run --rm -T auditor-mcp
+```
+
+```toml
+# Codex ~/.codex/config.toml, containerized
+[mcp_servers.auditor]
+command = "docker"
+args = ["run", "-i", "--rm",
+        "-v", "${PWD}:/auditor", "-v", "auditor-index:/root/.auditor",
+        "--entrypoint", "auditr-mcp", "auditor:latest"]
+```
+
+- `AUDITOR_HOME` moves the shared index and cache directory. Set it in the client's `env` block
+  when several clients must share, or avoid sharing, one index. Every environment variable is
+  listed in [configuration.md](configuration.md).
+
+## Tools
+
+- Audit: `scan` (a file or directory), `report` (one file, stateless), `manifest` (a Python file's
+  AST class and function manifest, no detectors), `discover` (auditable files with their classified
+  role), `aggregate` (roll the incremental index into `AUDIT.md`), `finding_detail` (one finding's
+  full record).
+- Rules and suppressions: `rules_list` (the detector registry, filterable by category, standard or
+  framework), `ignore_add`, `ignore_list`, `ignore_remove`.
+- Malware backends: `malware_status`, `malware_update_dbs`, `malware_install`. Only
+  `malware_update_dbs` and `malware_install` touch the network, and only when called.
+- Semantic graph, registered only when the `[graph]` extra is installed: `graph_build`,
+  `graph_search`, `graph_usages`, `graph_related`, `graph_neighbors`, `graph_concept`,
+  `graph_clusters`, `graph_overview`. Without the extra they are absent from the tool list rather
+  than failing at call time. See [graph.md](graph.md).
+- Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
+  everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
+  `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them
+  work on the local repo.
+- `scan` takes the same scoping the CLI does, including `severity`, `rule`, `since` (audit only
+  what changed against a git ref, with the whole repo still scanned so cross-file rules hold),
+  `profile`, `isolated`, `malware`, `fail_on` and a `config` override dict.
+
+## Output format
+
+- `scan` and `report` default to `detail="compact"`: a top-level `rules` map emitted once
+  (`rule_id` to category, verdict kind, checklist item, standard refs, suggestion), and slim
+  per-finding objects of `{rule_id, severity, line, message}`. Per-finding `evidence` and repeated
+  rule metadata are dropped.
+- `detail="summary"` returns counts only (`totals`, `by_rule`, `by_file`). `detail="full"` returns
+  every field on every finding, and because that payload is large it comes back as a
+  `ResourceLink` to read on demand rather than inline.
+- `limit` (compact only, default 50) caps the response to the worst findings and reports the
+  surplus under `omitted`.
+- `finding_detail(file, rule_id, line)` is the recovery path for one finding's `evidence`,
+  `suggestion` and `standard_refs` after compact mode dropped them.
+- `aggregate` also returns a `ResourceLink` rather than the markdown inline.
+- A response-limiting middleware caps any single tool response at 500,000 bytes as a backstop.
+  Resource reads, where the full artifacts live, are never truncated.
+- The CLI's own JSON (`auditr scan -f json`) is unaffected by any of this.
+
+## Code mode
+
+- Code mode is an experimental FastMCP transform: the client LLM writes a Python script that chains
+  the tools in a sandbox and receives only the final value, so large intermediate payloads never
+  enter its context.
+- It is off unless both conditions hold: the `code-mode` extra is installed
+  (`pip install "auditr[code-mode]"`, which pulls `fastmcp[code-mode]` and its sandbox) and
+  `AUDITOR_CODE_MODE` is set in the server's environment.
+- With the extra missing or the flag unset, `auditr-mcp` starts normally and serves the plain tool
+  surface.
