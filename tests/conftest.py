@@ -6,6 +6,15 @@ from pathlib import Path
 
 import pytest
 from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO
+from typer import rich_utils
+
+
+@pytest.fixture(autouse=True)
+def _plain_typer_output(monkeypatch):
+    """Keep typer's help and error panels plain text, so assertions on CLI output read the same
+    in CI (GITHUB_ACTIONS or FORCE_COLOR make typer force a styled, box-wrapped terminal) as
+    they do locally."""
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", False)
 
 
 @pytest.fixture(autouse=True)
