@@ -204,3 +204,23 @@ UserConfig = Annotated[
     bool,
     typer.Option("--user", help="Show the resolved user settings ($AUDITOR_HOME)."),
 ]
+InitRepo = Annotated[
+    bool,
+    typer.Option(
+        "--repo", help="Also write the per-repo settings file and breadcrumb."
+    ),
+]
+InitCheck = Annotated[
+    bool,
+    typer.Option("--check", help="Report only: write nothing, list unknown keys."),
+]
+InitMigrate = Annotated[
+    bool,
+    typer.Option("--migrate", help="Point a moved repo's breadcrumb at its new root."),
+]
+CleanStatus = Annotated[
+    bool,
+    typer.Option(
+        "--clean-status", help="Delete a leftover <repo>/.auditor/.status.json."
+    ),
+]

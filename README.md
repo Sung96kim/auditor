@@ -15,6 +15,7 @@ manifests, for coding agents and CI.
 | `index` | Audit scope and cache: `add`, `list`, `repos`, `forget`. |
 | `ignore` | Persistent finding ignores: `add`, `list`, `rm`, `clear`. |
 | `config` | Resolved configuration: `show`, `check`. |
+| `init` | Create the user config home under `$AUDITOR_HOME`. |
 | `rules` | Detector registry: `list`. |
 | `plugins` | Loaded detectors, languages, reporters: `list`. |
 | `malware` | Opt-in ClamAV and osv-scanner backends: `status`, `update-dbs`, `install`. |
@@ -78,6 +79,8 @@ auditr index add src/service.py
 auditr ignore add PY-SEC-WEAK-HASH --file src/legacy.py
 # print the resolved configuration
 auditr config show
+# create the user config home ($AUDITOR_HOME) and this repo's overlay
+auditr init --repo
 # list the detector rules in one category
 auditr rules list --category security
 # show every loaded plugin and where it came from
@@ -121,6 +124,7 @@ uv run pytest -q
 - [index](docs/references/index.md): audit scope, shared cache.
 - [ignore](docs/references/ignore.md): persistent ignore scopes.
 - [config](docs/references/config.md): resolved configuration layers.
+- [init](docs/references/init.md): user config home, per-repo overlay, checks.
 - [rules](docs/references/rules.md): rule registry, category filters.
 - [plugins](docs/references/plugins.md): plugin discovery, load sources.
 - [malware](docs/references/malware.md): ClamAV, osv-scanner, databases.

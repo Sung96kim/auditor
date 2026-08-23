@@ -189,8 +189,20 @@ flowchart TB
 
 ## config
 
-- `cli/config.py` (`show`) runs `config.load_config` for the resolved root and dumps the merged
-  `AuditorSettings`. It is how you see which layer won. See [config.md](references/config.md).
+- `cli/config.py` (`show`, `check`) runs `config.load_config_report` for the resolved root and
+  dumps the merged `AuditorSettings`. It is how you see which layer won. `--user` dumps the
+  resolved `UserSettings` instead, and `check` reports the keys no model declares in either. See
+  [config.md](references/config.md).
+
+## init
+
+- `cli/init.py` creates `$AUDITOR_HOME`, writes `config.json` with only `$schema` and
+  `config_version`, regenerates `config.schema.json` from `UserSettings.model_json_schema()`, and
+  with `--repo` creates `paths.ensure_repo_dir(root)` plus its overlay. See
+  [init.md](references/init.md).
+- `--check` writes nothing and reports unknown keys, a breadcrumb whose root has vanished, and a
+  leftover `<repo>/.auditor/.status.json`; `--migrate` rewrites that breadcrumb and
+  `--clean-status` deletes that file.
 
 ## rules
 
