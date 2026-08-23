@@ -11,6 +11,8 @@ from collections.abc import Sequence
 from importlib import metadata
 from pathlib import Path
 
+from auditor.registry import REGISTRY
+
 _ENTRY_POINT_GROUPS = (
     "auditor.detectors",
     "auditor.languages",
@@ -53,7 +55,8 @@ class PluginLoader:
 
     def _import_target(self, name: str) -> None:
         try:
-            importlib.import_module(name)
+            with REGISTRY.sourcing(str(name)):
+                importlib.import_module(name)
             self.loaded.append(name)
         except Exception as exc:  # a broken plugin must not crash the auditor
             self.warnings.append(f"failed to load plugin {name!r}: {exc}")
@@ -66,7 +69,8 @@ class PluginLoader:
             return
         try:
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            with REGISTRY.sourcing(str(file)):
+                spec.loader.exec_module(module)
             self.loaded.append(str(file))
         except Exception as exc:
             self.warnings.append(f"failed to load local plugin {file}: {exc}")

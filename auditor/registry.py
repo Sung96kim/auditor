@@ -6,6 +6,8 @@ the same way. Kept dependency-light so the config layer can validate rule-ids/ca
 against it without an import cycle.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from fnmatch import fnmatch
 from typing import Any
 
@@ -21,29 +23,41 @@ class Registry:
         self._reporters: dict[str, type] = {}
         self._plugin_categories: set[str] = set()
         self._sources: dict[str, str] = {}
+        self._source = "built-in"
 
     # --- registration -----------------------------------------------------
 
-    def register_detector(self, cls: type, *, source: str = "built-in") -> None:
+    @contextmanager
+    def sourcing(self, source: str) -> Iterator[None]:
+        """Attribute everything registered inside the block to ``source``. Registration happens as
+        a plugin module executes, so the loader names the plugin here instead of at the call."""
+        previous = self._source
+        self._source = source
+        try:
+            yield
+        finally:
+            self._source = previous
+
+    def register_detector(self, cls: type, *, source: str | None = None) -> None:
         existing = self._detectors.get(cls.rule_id)
         if existing is not None and existing is not cls:
             raise ValueError(
                 f"duplicate rule_id {cls.rule_id!r}: {existing!r} vs {cls!r}"
             )
         self._detectors[cls.rule_id] = cls
-        self._sources[f"detector:{cls.rule_id}"] = source
+        self._sources[f"detector:{cls.rule_id}"] = source or self._source
         if not isinstance(cls.category, Category) and cls.category not in {
             c.value for c in Category
         }:
             self._plugin_categories.add(str(cls.category))
 
-    def register_language(self, cls: type, *, source: str = "built-in") -> None:
+    def register_language(self, cls: type, *, source: str | None = None) -> None:
         self._languages[cls.language] = cls
-        self._sources[f"language:{cls.language}"] = source
+        self._sources[f"language:{cls.language}"] = source or self._source
 
-    def register_reporter(self, cls: type, *, source: str = "built-in") -> None:
+    def register_reporter(self, cls: type, *, source: str | None = None) -> None:
         self._reporters[cls.format] = cls
-        self._sources[f"reporter:{cls.format}"] = source
+        self._sources[f"reporter:{cls.format}"] = source or self._source
 
     # --- detector queries -------------------------------------------------
 

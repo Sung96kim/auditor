@@ -12,17 +12,7 @@ from auditor.config import load_config
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
-
-@pytest.fixture(autouse=True)
-def _restore_registry():
-    """Plugin tests mutate the global registry; snapshot and restore around each."""
-    detectors = dict(REGISTRY._detectors)
-    categories = set(REGISTRY._plugin_categories)
-    sources = dict(REGISTRY._sources)
-    yield
-    REGISTRY._detectors = detectors
-    REGISTRY._plugin_categories = categories
-    REGISTRY._sources = sources
+pytestmark = pytest.mark.usefixtures("restore_registry")
 
 
 def _repo_with_plugin(

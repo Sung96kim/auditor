@@ -1,6 +1,22 @@
 """`auditor rules list` — enumerate detector rules, with category / standard filters."""
 
-from _support import cli_json, invoke
+import shutil
+
+import pytest
+from _support import PLUGIN_FILE, cli_json, invoke
+
+
+@pytest.fixture
+def plugin_repo(tmp_path, restore_registry):
+    """A repo whose trusted `.auditor/plugins/` contributes the HOUSE-NO-PRINT rule."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    plugins = tmp_path / ".auditor" / "plugins"
+    plugins.mkdir(parents=True)
+    shutil.copy(PLUGIN_FILE, plugins / "house_rules.py")
+    (tmp_path / ".auditor" / "config.toml").write_text(
+        'extends = "base"\ntrust_local_plugins = true\n'
+    )
+    return tmp_path
 
 
 def test_rules_list():
@@ -48,3 +64,20 @@ def test_rules_list_unknown_framework_errors():
     result = invoke("rules", "list", "--framework", "nope")
     assert result.exit_code == 1
     assert "unknown framework" in result.output
+
+
+def test_rules_list_includes_repo_plugin_rules(plugin_repo):
+    rows = cli_json(invoke("rules", "list", "--root", str(plugin_repo)))
+    house = [r for r in rows if r["rule_id"] == "HOUSE-NO-PRINT"]
+    assert house and house[0]["category"] == "house"
+
+
+@pytest.mark.parametrize("command", [("rules", "list"), ("plugins", "list")])
+def test_plugin_rule_source_names_the_plugin_file(plugin_repo, command):
+    payload = cli_json(invoke(*command, "--root", str(plugin_repo)))
+    source = (
+        payload["detectors"]["HOUSE-NO-PRINT"]["source"]
+        if isinstance(payload, dict)
+        else next(r["source"] for r in payload if r["rule_id"] == "HOUSE-NO-PRINT")
+    )
+    assert source.endswith("house_rules.py")

@@ -1,7 +1,8 @@
 # rules reference
 
 `auditr rules list` prints the catalogue of registered detector rules: rule id, category,
-framework, default severity, verdict kind, standard references, and registration source.
+framework, default severity, verdict kind, standard references, and registration source. It loads
+the target repo's config and plugins first, so plugin rules are in the catalogue too.
 `auditr rules list --help` lists every flag. The command is the catalogue, so this page describes
 how to read and filter it rather than repeating it.
 
@@ -23,6 +24,9 @@ auditr rules list -f pytest
 # filters combine
 auditr rules list -c security -s owasp
 
+# another checkout, so its plugin rules are the ones listed
+auditr rules list -r ../other-repo
+
 # raw JSON
 auditr rules list --json
 ```
@@ -37,8 +41,8 @@ auditr rules list --json
 - `default_severity`: the severity before the repo's config adjusts it.
 - `verdict_kind`: `auto` or `candidate` (below).
 - `standard_refs`: external citations such as `bandit:B602` or `owasp:A03`.
-- `source`: where the class was registered from. It reads `built-in` unless a plugin class sets
-  its own source marker, so it is not a reliable plugin/built-in split.
+- `source`: where the class was registered from. Built-in rules read `built-in`; a plugin rule
+  names the module or file that was imported, so the column separates the two.
 
 ## Categories
 
@@ -92,7 +96,9 @@ Reading and filtering them:
 
 ## Plugin rules
 
-- `rules list` reflects the rules registered by importing the auditor package, so it does not show
-  rules that only load from a repo's plugins.
-- `auditr plugins list` loads the repo's config and its trusted plugins, and is the command that
-  shows plugin-contributed detectors; see [plugins.md](plugins.md).
+- `rules list` loads the repo's config and its trusted plugins before listing, so a rule that only
+  ships in `.auditor/plugins/` shows up like any built-in.
+- `-r`/`--root` picks the repo whose plugins load. Untrusted local plugins stay out; the trust
+  switch is in [plugins.md](plugins.md).
+- `auditr plugins list` covers the same detectors plus the languages, reporters, and any loader
+  warning; see [plugins.md](plugins.md).

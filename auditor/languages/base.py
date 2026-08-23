@@ -113,7 +113,7 @@ class Detector(ABC):
         if cls.__dict__.get("abstract"):
             return
         if getattr(cls, "rule_id", None):
-            source = getattr(cls, "_plugin_source", "built-in")
+            source = getattr(cls, "_plugin_source", None)
             REGISTRY.register_detector(cls, source=source)
 
     @abstractmethod
@@ -248,7 +248,7 @@ class LanguageAuditor(ABC):
         if cls.__dict__.get("abstract"):
             return
         if getattr(cls, "language", None):
-            source = getattr(cls, "_plugin_source", "built-in")
+            source = getattr(cls, "_plugin_source", None)
             REGISTRY.register_language(cls, source=source)
 
     @abstractmethod

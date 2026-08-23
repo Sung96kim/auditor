@@ -6,20 +6,6 @@ from pathlib import Path
 import pytest
 from _support import PLUGIN_FILE, cli_json, invoke
 
-from auditor.registry import REGISTRY
-
-
-@pytest.fixture
-def _restore_registry():
-    """`ignore add` loads the repo's plugins (mutating the global registry); restore around it."""
-    detectors = dict(REGISTRY._detectors)
-    categories = set(REGISTRY._plugin_categories)
-    sources = dict(REGISTRY._sources)
-    yield
-    REGISTRY._detectors = detectors
-    REGISTRY._plugin_categories = categories
-    REGISTRY._sources = sources
-
 
 @pytest.fixture
 def repo(tmp_path) -> Path:
@@ -131,7 +117,7 @@ def test_add_unknown_rule_with_force(repo):
     ] == ["ACME-PLUGIN-RULE"]
 
 
-def test_add_plugin_rule_without_force(tmp_path, _restore_registry):
+def test_add_plugin_rule_without_force(tmp_path, restore_registry):
     """A repo's plugin-contributed rule validates like a built-in — no --force needed,
     because `ignore add` loads the repo's config (which registers its plugins)."""
     root = tmp_path / "r"

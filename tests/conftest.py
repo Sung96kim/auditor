@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO
 
+from auditor.registry import REGISTRY
+
 
 @pytest.fixture(autouse=True)
 def _isolated_auditor_home(tmp_path_factory, monkeypatch):
@@ -15,6 +17,19 @@ def _isolated_auditor_home(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("auditor_home")
     monkeypatch.setenv("AUDITOR_HOME", str(home))
     return home
+
+
+@pytest.fixture
+def restore_registry():
+    """Snapshot and restore the global registry around a test that loads a repo's plugins
+    (loading registers detectors/categories/sources process-wide)."""
+    detectors = dict(REGISTRY._detectors)
+    categories = set(REGISTRY._plugin_categories)
+    sources = dict(REGISTRY._sources)
+    yield
+    REGISTRY._detectors = detectors
+    REGISTRY._plugin_categories = categories
+    REGISTRY._sources = sources
 
 
 @pytest.fixture

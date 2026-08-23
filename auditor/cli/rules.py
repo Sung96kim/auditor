@@ -1,11 +1,15 @@
 """``auditor rules list`` — enumerate every registered detector rule."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from auditor.cli.helpers import fail, present
+from auditor.cli.options import RootArg
 from auditor.cli.render import render_rules_list
+from auditor.config import load_config
+from auditor.discovery import find_root
 from auditor.registry import REGISTRY
 
 rules_app = typer.Typer(no_args_is_help=True, help="Inspect detector rules.")
@@ -21,6 +25,7 @@ def _known_standards() -> set[str]:
 
 @rules_app.command("list")
 def rules_list(
+    target: RootArg = Path("."),
     category: Annotated[
         str | None, typer.Option("-c", "--category", help="Filter by category.")
     ] = None,
@@ -33,7 +38,9 @@ def rules_list(
     ] = None,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """List every registered detector rule."""
+    """List every registered detector rule, including the target repo's plugin rules."""
+    # loads the repo's plugins as a side effect, so their rules are registered before we list
+    load_config(find_root(target))
     if category is not None and category not in REGISTRY.categories():
         fail(
             f"unknown category {category!r}; choose from {sorted(REGISTRY.categories())}"

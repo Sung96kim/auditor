@@ -48,8 +48,8 @@ auditr plugins list --json
   the findings for one file.
 - An intermediate base class that must not register sets `abstract = True`.
 - A detector may declare a category string that is not built in; config then accepts it.
-- Registration records a source, which reads `built-in` unless the class sets its own marker, so
-  the `source` column does not by itself separate plugins from built-ins.
+- Registration records a source: the module name or file path the loader imported, or `built-in`
+  for a rule that ships with the auditor. A class may override it with a `_plugin_source` marker.
 - The full metadata table, the `AuditContext` fields a detector may read, and the detector shapes
   with worked examples are in the bundled skill:
   [write-detector](../../plugin/skills/write-detector/SKILL.md) and its
@@ -58,8 +58,7 @@ auditr plugins list --json
 
 ## Seeing plugin rules
 
-- `plugins list` is the command that shows plugin-contributed detectors, because it is the one
-  that loads the repo's config and plugins; see [rules.md](rules.md) for how the two commands
-  differ.
+- `plugins list` and `auditr rules list` both load the repo's config and plugins, so either shows
+  plugin-contributed detectors; see [rules.md](rules.md) for what each row carries.
 - To confirm a local rule actually fires, scan a fixture with `-a`:
   `auditr scan path/to/fixture -a -f json`.
