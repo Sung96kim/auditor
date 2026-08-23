@@ -9,14 +9,11 @@ from auditor.graph.cluster import cluster_concepts
 from auditor.graph.detectors import run_graph_detectors
 from auditor.graph.model import (
     TEST_ROLES,
-    CallForm,
-    FactKind,
     FileGraphFacts,
     GraphCluster,
     GraphNode,
     UnresolvedReason,
     UnresolvedRow,
-    unresolved_priority,
 )
 from auditor.graph.naming import name_similar_edges
 from auditor.graph.rank import pagerank
@@ -44,16 +41,6 @@ def compute_abstractness(node: GraphNode, proto_method_ids: set[str]) -> float:
     return min(1.0, score)
 
 
-def _quality_row(node_id: str, name: str, reason: UnresolvedReason) -> UnresolvedRow:
-    return UnresolvedRow(
-        node_id=node_id,
-        fact_kind=FactKind.NODE,
-        name=name,
-        reason=reason,
-        priority=unresolved_priority(reason, CallForm.BARE),
-    )
-
-
 def _quality_rows(
     nodes: list[GraphNode],
     sparse: set[str],
@@ -65,7 +52,7 @@ def _quality_rows(
     back to a ``cluster-N`` label, and clusters of one. Both cluster rows anchor on the highest-
     rank member so every row in the table is node-keyed."""
     rows = [
-        _quality_row(nid, nid.split("::")[-1], UnresolvedReason.TEXT_SPARSE)
+        UnresolvedRow.for_node(nid, nid.split("::")[-1], UnresolvedReason.TEXT_SPARSE)
         for nid in sorted(sparse)
     ]
     rank_by_id = {n.id: n.rank for n in nodes}
@@ -76,9 +63,13 @@ def _quality_rows(
         head = max(sorted(member_ids), key=lambda nid: rank_by_id.get(nid, 0.0))
         label = label_names.get(cid, f"cluster-{cid}")
         if label == f"cluster-{cid}":
-            rows.append(_quality_row(head, label, UnresolvedReason.GENERIC_LABEL))
+            rows.append(
+                UnresolvedRow.for_node(head, label, UnresolvedReason.GENERIC_LABEL)
+            )
         if sizes.get(cid, 0) == 1:
-            rows.append(_quality_row(head, label, UnresolvedReason.SINGLETON_CLUSTER))
+            rows.append(
+                UnresolvedRow.for_node(head, label, UnresolvedReason.SINGLETON_CLUSTER)
+            )
     return rows
 
 

@@ -18,7 +18,6 @@ from auditor.graph.model import (
     StructuralResult,
     UnresolvedReason,
     UnresolvedRow,
-    unresolved_priority,
 )
 
 _EDGE_KIND_BY_FACT = {
@@ -167,7 +166,6 @@ class UnresolvedCollector(BaseModel):
             candidates=fact.resolution.gated,
             definers=fact.resolution.definers,
             resolution_path=fact.resolution.path,
-            priority=unresolved_priority(fact.resolution.reason, fact.call_form),
             externally_bound=self.externally_bound(fact.node.module, fact.name, root),
         )
 

@@ -1,8 +1,9 @@
 """Pure data model for the semantic graph — stdlib only (no numpy/sklearn)."""
 
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class NodeKind(StrEnum):
@@ -150,6 +151,9 @@ class FactKind(StrEnum):
 
 
 class CallForm(StrEnum):
+    """How a name was called at the site the resolver could not place: a bare ``name()``, a
+    direct ``self``/``cls`` receiver, or any other attribute receiver."""
+
     BARE = "bare"
     SELF = "self"
     ATTR = "attr"
@@ -180,8 +184,30 @@ class UnresolvedRow(BaseModel):
     candidates: tuple[str, ...] = ()
     definers: tuple[str, ...] = ()
     resolution_path: tuple[str, ...] = ()
-    priority: int = 4
+    priority: int
     externally_bound: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_priority(cls, data: Any) -> Any:
+        """Fill ``priority`` from the reason and call form unless the caller passed one, so drain
+        order can never disagree with the row it orders. S3's ``flow_leaf`` bump passes one."""
+        if not isinstance(data, dict) or data.get("priority") is not None:
+            return data
+        try:
+            reason = UnresolvedReason(data["reason"])
+            call_form = CallForm(data.get("call_form") or CallForm.BARE)
+        except (KeyError, ValueError):
+            return data
+        return {**data, "priority": unresolved_priority(reason, call_form)}
+
+    @classmethod
+    def for_node(
+        cls, node_id: str, name: str, reason: UnresolvedReason
+    ) -> "UnresolvedRow":
+        """A build-pass row, whose subject is a symbol or a cluster rather than a name the
+        resolver tried to place."""
+        return cls(node_id=node_id, fact_kind=FactKind.NODE, name=name, reason=reason)
 
 
 class StructuralResult(BaseModel):
