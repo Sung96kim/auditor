@@ -197,15 +197,11 @@ class GraphQuery:
         result = result.with_unresolved(
             await self._unresolved_by_node(result.node_ids())
         )
-        return FlowPayload(
+        return FlowPayload.of(
+            result,
             symbol=symbol,
             resolved=primary,
             ambiguous=tuple(m for m in matches if m != primary),
-            root=result.root,
-            direction=result.direction,
-            modules=result.modules,
-            truncated=result.truncated,
-            limit=result.limit,
         ).model_dump(mode="json")
 
     async def clusters(self) -> list[dict]:

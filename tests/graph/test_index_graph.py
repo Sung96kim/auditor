@@ -1,5 +1,9 @@
+import inspect
+import re
+
 import pytest
 
+from auditor.database.graph import GraphDB
 from auditor.graph.model import (
     CallForm,
     EdgeKind,
@@ -48,6 +52,20 @@ async def test_replace_graph_and_query(graph_store):
     # replace is idempotent (clears prior rows)
     await graph_store.graph.replace([_n("a")], [], [])
     assert await graph_store.graph.node("b") is None
+
+
+def test_edge_provenance_reads_a_column_the_loader_selects():
+    """`flow._source` degrades to "deterministic" on a missing key, so adding the S4 `source`
+    column without widening this SELECT would look like a walk regression."""
+    selected = set(
+        re.search(
+            r"SELECT ([\w, ]+) FROM graph_edges", inspect.getsource(GraphDB.all_edges)
+        )
+        .group(1)
+        .split(", ")
+    )
+    declared = {c.name for c in GraphDB.TABLES["graph_edges"].cols}
+    assert ("source" in selected) == ("source" in declared)
 
 
 async def test_edges_of_is_ordered_like_all_edges(graph_store):

@@ -153,7 +153,7 @@ async def graph_flow(
     the last level the depth budget reached), ``seen_ref``/``cycle`` when the walk already covered
     them, ``stopped`` when a stop glob cut the branch, and ``unresolved`` for calls the resolver
     could not place. ``limit`` counts emitted nodes and is clamped to 1..1000; the
-    default of 200 is about 40 KB of JSON. Prune a wide tree with ``stop_at`` (module globs,
+    default of 200 is roughly 50 KB of compact JSON. Prune a wide tree with ``stop_at`` (module globs,
     the branch is shown and not entered) rather than by lowering ``depth``; ``kinds`` follows
     extra edge kinds on top of calls/callback_arg and is validated, ``include_tests`` keeps test
     symbols, ``expand_hubs`` opens the nodes the hub rule collapsed."""

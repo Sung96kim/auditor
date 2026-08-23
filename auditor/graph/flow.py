@@ -105,7 +105,7 @@ class FlowResult(BaseModel):
     limit: int = DEFAULT_FLOW_LIMIT
 
     def node_ids(self) -> list[str]:
-        """Every node the tree shows, first-seen order, so a queue read can be scoped to them."""
+        """Every node the tree shows, once, in tree pre-order, so a queue read is scoped to them."""
         out: list[str] = []
         seen: set[str] = set()
         stack = [self.root]
@@ -149,6 +149,24 @@ class FlowPayload(FlowResult):
     symbol: str
     resolved: str
     ambiguous: tuple[str, ...] = ()
+
+    @classmethod
+    def of(
+        cls,
+        result: FlowResult,
+        *,
+        symbol: str,
+        resolved: str,
+        ambiguous: tuple[str, ...] = (),
+    ) -> "FlowPayload":
+        """Widen a walk result, so a field added to ``FlowResult`` reaches the wire without a
+        second edit at the query seam."""
+        return cls(
+            symbol=symbol,
+            resolved=resolved,
+            ambiguous=ambiguous,
+            **{name: getattr(result, name) for name in FlowResult.model_fields},
+        )
 
 
 class _Record(_NodeMarks):

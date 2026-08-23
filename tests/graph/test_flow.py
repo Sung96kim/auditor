@@ -22,6 +22,7 @@ from auditor.graph.flow import (
     FlowDirection,
     FlowNode,
     FlowOptions,
+    FlowResult,
     HubMark,
     _NodeMarks,
     _Record,
@@ -743,6 +744,14 @@ async def test_query_flow_returns_the_payload_shape(flow_store):
         "app/hub.py::hub",
         "app/loop.py::ping",
     }
+
+
+async def test_the_payload_carries_every_walk_result_field(flow_store):
+    """The seam hand-copied five fields, so a new FlowResult field would never reach the wire."""
+    payload = await GraphQuery(flow_store).flow(
+        "app/cli.py::main", FlowOptions(depth=1)
+    )
+    assert set(FlowResult.model_fields) <= set(payload)
 
 
 async def test_query_flow_resolves_a_bare_name_and_reports_ambiguity(flow_store):

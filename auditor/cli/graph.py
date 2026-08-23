@@ -1,4 +1,4 @@
-"""``auditor graph`` — semantic-graph commands: build|related|neighbors|concept|clusters|export.
+"""``auditor graph`` — the semantic-graph command group; ``auditr graph --help`` lists the set.
 
 Imported on the first ``graph`` subcommand by ``cli/lazy.py``, so the rest of the CLI never pays
 this module's numpy/scikit-learn/networkx import.

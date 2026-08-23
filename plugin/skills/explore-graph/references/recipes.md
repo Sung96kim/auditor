@@ -5,8 +5,8 @@ Source of truth: `auditor/graph/query.py` (`GraphQuery` — `related`/`neighbors
 `auditor/graph/cache.py` (`GraphCache`),
 `auditor/mcp/graph_tools.py` (the `graph_*` MCP tools + docstrings), `auditor/cli/graph.py` (CLI
 subcommands), `auditor/graph/detectors.py` (`GRAPH-*` rules). All example output below is real,
-captured against this repo (`auditor/graph/query.py` module and friends). Node ids and counts will
-differ on yours, but the shape won't.
+captured 2026-08-23 against this repo at 3,880 nodes / 36,736 edges. Node ids and counts differ on
+your repo and drift on this one as it changes; the shape does not.
 
 ## Is symbol X dead?
 
@@ -88,8 +88,8 @@ a symbol, expands a base method's overriders and a registry module's members as 
 and prints a tree plus the ordered list of modules the path touches. Start here when the question
 is "what does this command actually do" rather than "who uses this symbol".
 
-Real output, this repo, `auditr graph flow auditor/cli/scan.py::scan .` (149 nodes at the default
-depth of 4, trimmed here to two branches):
+Real output, this repo, `auditr graph flow auditor/cli/scan.py::scan .` at the default depth of 4
+(149 nodes in the 2026-08-23 snapshot above), trimmed here to four of `scan`'s branches:
 
 ```
 auditor/cli/scan.py::scan flow (out)
@@ -111,14 +111,20 @@ scan auditor/cli/scan.py  ? render
 │   ├── → load_config auditor/config.py
 │   │   └── → load_config_report auditor/config.py
 │   │       ├── → merged_config_dict auditor/config.py  ↺ seen
+│   │       ├── → unknown_config_keys auditor/config.py  ↺ seen
 │   │       ├── → PluginLoader.load_config_modules auditor/plugins.py
+│   │       ├── → PluginLoader.load_entry_points auditor/plugins.py
 │   │       └── → PluginLoader.load_local auditor/plugins.py
 │   ├── → default_base_ref auditor/discovery.py
 │   │   └── → _git auditor/discovery.py  ? run
-│   ├── → find_root auditor/discovery.py  ↺ seen ⊕ 48 elided
+│   ├── → find_root auditor/discovery.py  ↺ seen ⊕ 48 hub
 │   └── → git_changed_files auditor/discovery.py
 │       └── → _git auditor/discovery.py  ↺ seen ? run
+├── → find_root auditor/discovery.py  ⊕ 48 elided
 ```
+
+`find_root` shows both hub labels in one tree: `elided` where the hub rule cut it, `hub` on the
+occurrence the `↺ seen` rule had already stopped.
 
 The `modules` line is the answer to the architecture question. The tree tells you where each hop
 went.
@@ -156,6 +162,10 @@ Reading the markers:
   last level `--depth` reached. Both counts skip test callers, so `--include-tests` only ever
   widens the tree. In JSON the mark is one `hub` object,
   `{"count": N, "kind": "fan_in", "collapsed": true}`.
+- `graph usages` is not the hub measure and will report a larger number: it counts all eight
+  structural kinds and includes test callers, while the hub fan counts production `calls` and
+  `callback_arg` plus dispatch children. Here `find_root` is 48 to the hub rule and 53 to
+  `usages`; `Detector.make_finding` is 128 against 131.
 - `↺ seen`: already shown elsewhere in this tree. `↺ cycle`: the node is its own ancestor.
 - `⊣ stop`: a `--stop-at` glob matched this module. The path reached it; the tree stops there.
 - `? name`: a call the resolver could not place, dimmed when the name comes from outside the repo
