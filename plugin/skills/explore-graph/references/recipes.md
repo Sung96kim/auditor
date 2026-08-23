@@ -1,7 +1,8 @@
 # Query recipes
 
 Source of truth: `auditor/graph/query.py` (`GraphQuery` — `related`/`neighbors`/`search`/
-`usages`/`clusters`/`concept`/`flow`), `auditor/graph/flow.py` (`build_flow`, `GraphCache`),
+`usages`/`clusters`/`concept`/`flow`), `auditor/graph/flow.py` (`build_flow`),
+`auditor/graph/cache.py` (`GraphCache`),
 `auditor/mcp/graph_tools.py` (the `graph_*` MCP tools + docstrings), `auditor/cli/graph.py` (CLI
 subcommands), `auditor/graph/detectors.py` (`GRAPH-*` rules). All example output below is real,
 captured against this repo (`auditor/graph/query.py` module and friends). Node ids and counts will

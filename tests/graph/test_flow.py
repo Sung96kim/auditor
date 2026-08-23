@@ -1,25 +1,26 @@
-"""Flow search (spec §7): the per-query cache and the directed traversal.
+"""Flow search (spec §7): ``graph/cache.py``'s per-query index and ``graph/flow.py``'s walk.
 
 The graph is synthetic (node and edge rows written straight into ``GraphDB.replace``) because a
 real scan cannot produce a hub with more callers than ``hub_fan_in`` or ``graph_unresolved`` rows.
 End-to-end coverage lives in ``test_cli_graph.py`` and ``test_mcp_graph.py``.
 """
 
+import ast
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from auditor.config import GraphConfig
 from auditor.database import IndexStore
+from auditor.graph.cache import GraphCache, resolve_ids
 from auditor.graph.flow import (
     DEFAULT_FLOW_LIMIT,
     DEFAULT_HUB_FAN_IN,
     FlowDirection,
     FlowNode,
     FlowOptions,
-    GraphCache,
     build_flow,
-    resolve_ids,
 )
 from auditor.graph.model import (
     CallForm,
@@ -32,6 +33,8 @@ from auditor.graph.model import (
     UnresolvedRow,
 )
 from auditor.graph.query import GraphQuery
+
+_PACKAGE = Path(__file__).resolve().parents[2] / "auditor"
 
 
 def _node(
@@ -151,6 +154,24 @@ async def test_cache_load_matches_a_hand_built_cache(flow_store, cache):
     assert set(loaded.nodes) == set(cache.nodes)
     assert loaded.out.keys() == cache.out.keys()
     assert loaded.inc.keys() == cache.inc.keys()
+
+
+def test_the_query_api_does_not_import_the_flow_feature_for_its_cache():
+    """``neighbors``/``_resolve_all`` are not flow queries; their index must not live in flow.py."""
+    source = _PACKAGE / "graph" / "query.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    flow_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "auditor.graph.flow"
+        for alias in node.names
+    }
+    assert flow_imports == {
+        "DEFAULT_OPTIONS",
+        "FlowOptions",
+        "FlowPayload",
+        "build_flow",
+    }
 
 
 def test_cache_outgoing_and_incoming_filter_by_kind(cache):
