@@ -60,6 +60,16 @@ class GraphNode(BaseModel):
     typed_calls: tuple[
         tuple[str, str], ...
     ] = ()  # (receiver_type, method) for calls on an annotated receiver / self
+    attr_callees: tuple[
+        tuple[str | None, str, bool], ...
+    ] = ()  # (receiver root or None, method, receiver is the root itself) per attribute call
+    bare_callees: tuple[str, ...] = ()  # names called as a bare `name()` call
+    local_names: tuple[
+        str, ...
+    ] = ()  # positional params (the is_hof set) plus every name the body assigns
+    external_aliases: tuple[
+        tuple[str, str], ...
+    ] = ()  # module nodes: (alias, imported root) per module-level `alias = root(...)`
     imports: tuple[str, ...] = ()  # module nodes: candidate dotted import targets
     import_bindings: tuple[
         tuple[str, str], ...

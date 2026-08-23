@@ -109,6 +109,28 @@ def _receiver_type(ann: ast.expr | None) -> str | None:
     return None
 
 
+def _receiver_root(value: ast.expr) -> str | None:
+    """The base name an attribute chain starts from: ``a`` for ``a.b.method()``, ``self`` for
+    ``self.method()``. ``None`` when the chain starts at a call or a subscript."""
+    while isinstance(value, ast.Attribute):
+        value = value.value
+    return value.id if isinstance(value, ast.Name) else None
+
+
+def _module_aliases(tree: ast.Module, bound: set[str]) -> tuple[tuple[str, str], ...]:
+    """Module-level ``alias = root(...)`` bindings whose call root is an imported name, as
+    ``(alias, root)``: the shape that hides an imported object behind a local name."""
+    out: list[tuple[str, str]] = []
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.Assign) or not isinstance(stmt.value, ast.Call):
+            continue
+        root = _receiver_root(stmt.value.func)
+        if root is None or root not in bound:
+            continue
+        out += [(t.id, root) for t in stmt.targets if isinstance(t, ast.Name)]
+    return tuple(dict.fromkeys(out))
+
+
 def _is_stub(fn: _FuncDefT) -> bool:
     body = [
         s
@@ -131,8 +153,12 @@ _UNION_FACT_FIELDS = (
     "callback_names",
     "class_refs",
     "typed_calls",
+    "attr_callees",
+    "bare_callees",
+    "local_names",
     "imports",
     "import_bindings",
+    "external_aliases",
     "registry_roots",
     "semantic_profile",
 )
@@ -171,6 +197,9 @@ class _FnFactCollector:
         self.attr_calls: list[
             tuple[str, str]
         ] = []  # (receiver, method) for recv.method()
+        self.attr_callees: list[tuple[str | None, str, bool]] = []
+        self.bare_callees: list[str] = []
+        self.local_names: list[str] = []
         self.recv_types: dict[
             str, str
         ] = {}  # receiver var -> declared class, for typed calls
@@ -189,8 +218,12 @@ class _FnFactCollector:
         f = call.func
         if isinstance(f, ast.Name) and f.id not in _BUILTIN_NAMES:
             self.callees.append(f.id)
+            self.bare_callees.append(f.id)
         elif isinstance(f, ast.Attribute) and f.attr not in _BUILTIN_NAMES:
             self.callees.append(f.attr)
+            self.attr_callees.append(
+                (_receiver_root(f.value), f.attr, isinstance(f.value, ast.Name))
+            )
             if track_receiver and isinstance(f.value, ast.Name):
                 self.attr_calls.append((f.value.id, f.attr))
 
@@ -202,6 +235,8 @@ class _FnFactCollector:
                     self.body_idents.append(n.id)
                     if isinstance(n.ctx, ast.Load) and n.id not in _BUILTIN_NAMES:
                         self.class_refs.append(n.id)
+                    elif isinstance(n.ctx, ast.Store):
+                        self.local_names.append(n.id)
                 elif isinstance(n, ast.Attribute):
                     self.body_idents.append(n.attr)
                 elif isinstance(n, ast.AnnAssign):
@@ -286,6 +321,9 @@ class FileExtractor:
                 doc_tokens=tuple(module_doc),
                 imports=imports,
                 import_bindings=import_bindings,
+                external_aliases=_module_aliases(
+                    tree, {local for local, _ in import_bindings}
+                ),
                 line=1,
                 role=self.role,
             )
@@ -331,6 +369,9 @@ class FileExtractor:
             callback_names=tuple(dict.fromkeys(facts.callback_names)),
             class_refs=tuple(dict.fromkeys(facts.class_refs)),
             typed_calls=facts.typed_calls(),
+            attr_callees=tuple(dict.fromkeys(facts.attr_callees)),
+            bare_callees=tuple(dict.fromkeys(facts.bare_callees)),
+            local_names=tuple(dict.fromkeys((*params, *facts.local_names))),
             is_hof=is_hof,
             is_stub=_is_stub(fn),
             line=fn.lineno,
