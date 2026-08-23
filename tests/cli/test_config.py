@@ -1,4 +1,6 @@
-"""`auditor config show` — the resolved configuration."""
+"""`auditor config show` / `config check` — the resolved configuration."""
+
+import json
 
 from _support import cli_json, invoke
 
@@ -45,3 +47,53 @@ def test_invalid_repo_config_exits_non_zero(tmp_path):
     assert result.exit_code == 1
     assert "invalid config" in " ".join(result.output.split())
     assert "Traceback" not in result.output
+
+
+def test_config_check_reports_unknown_policy_keys(tmp_path):
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    payload = cli_json(invoke("config", "check", "--root", str(tmp_path), "--json"))
+    assert payload["policy_unknown"] == ["malware_scan.bogus"]
+    assert payload["user_unknown"] == []
+
+
+def test_config_check_reports_unknown_user_keys(tmp_path, _isolated_auditor_home):
+    (_isolated_auditor_home / "config.json").write_text(
+        json.dumps({"$schema": "./config.schema.json", "observer": {"runer": "claude"}})
+    )
+    payload = cli_json(invoke("config", "check", "--root", str(tmp_path), "--json"))
+    assert payload["user_unknown"] == ["observer.runer"]
+
+
+def test_config_check_is_clean_on_a_good_repo(sample_repo):
+    payload = cli_json(invoke("config", "check", "--root", str(sample_repo), "--json"))
+    assert payload["policy_unknown"] == []
+    assert payload["user_unknown"] == []
+
+
+def test_config_check_exits_non_zero_on_invalid_config(tmp_path):
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text('respect_skips = "yes-please"\n')
+    result = invoke("config", "check", "--root", str(tmp_path))
+    assert result.exit_code == 1
+    assert "invalid config" in " ".join(result.output.split())
+
+
+def test_config_show_user_prints_user_settings(tmp_path, _isolated_auditor_home):
+    (_isolated_auditor_home / "config.json").write_text(
+        json.dumps({"observer": {"model": "sonnet"}})
+    )
+    payload = cli_json(invoke("config", "show", "--user", "--root", str(tmp_path)))
+    assert payload["observer"]["model"] == "sonnet"
+    assert payload["vectors"]["enabled"] is False
+
+
+def test_config_show_user_exits_non_zero_on_invalid_user_config(
+    tmp_path, _isolated_auditor_home
+):
+    (_isolated_auditor_home / "config.json").write_text(
+        json.dumps({"observer": {"runner": "gemini"}})
+    )
+    result = invoke("config", "show", "--user", "--root", str(tmp_path))
+    assert result.exit_code == 1
+    assert "invalid user config" in " ".join(result.output.split())

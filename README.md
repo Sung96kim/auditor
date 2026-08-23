@@ -14,7 +14,7 @@ manifests, for coding agents and CI.
 | `crossfile` | Recompute cross-file duplicate findings from the index. |
 | `index` | Audit scope and cache: `add`, `list`, `repos`, `forget`. |
 | `ignore` | Persistent finding ignores: `add`, `list`, `rm`, `clear`. |
-| `config` | Resolved configuration: `show`. |
+| `config` | Resolved configuration: `show`, `check`. |
 | `rules` | Detector registry: `list`. |
 | `plugins` | Loaded detectors, languages, reporters: `list`. |
 | `malware` | Opt-in ClamAV and osv-scanner backends: `status`, `update-dbs`, `install`. |

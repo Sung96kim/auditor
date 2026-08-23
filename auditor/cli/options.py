@@ -197,3 +197,10 @@ Malware = Annotated[
         "passes) for this run, overriding [tool.auditor.malware_scan] enabled.",
     ),
 ]
+
+
+# --- `config` / `init` options ---
+UserConfig = Annotated[
+    bool,
+    typer.Option("--user", help="Show the resolved user settings ($AUDITOR_HOME)."),
+]

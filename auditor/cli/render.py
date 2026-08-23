@@ -333,6 +333,27 @@ def render_config_show(out: Console, payload: dict[str, Any]) -> None:
     out.print_json(data=payload)
 
 
+def render_config_check(out: Console, payload: dict[str, Any]) -> None:
+    unknown = [
+        (kind, key)
+        for kind, keys in (
+            ("repo policy", payload.get("policy_unknown", [])),
+            ("user settings", payload.get("user_unknown", [])),
+        )
+        for key in keys
+    ]
+    if not unknown:
+        out.print(f"[{_ACCENT}]config ok:[/] no unknown keys")
+        return
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    t.add_column("where")
+    t.add_column("unknown key")
+    for kind, key in unknown:
+        t.add_row(kind, key)
+    out.print(t)
+    out.print("[dim]unknown keys are ignored; remove them or upgrade auditr[/dim]")
+
+
 # ---------------------------------------------------------------------------
 # crossfile
 # ---------------------------------------------------------------------------
