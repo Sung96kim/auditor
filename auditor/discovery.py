@@ -246,8 +246,10 @@ class FileDiscovery:
 
     @staticmethod
     def _under(path: Path, target: Path) -> bool:
+        """Whether ``path`` sits inside ``target``. Both are resolved first, so a relative target
+        (``auditor scan .``) still matches the absolute paths git lists."""
         try:
-            path.relative_to(target)
+            path.resolve().relative_to(target.resolve())
             return True
         except ValueError:
             return False

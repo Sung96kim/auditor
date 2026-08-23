@@ -189,6 +189,14 @@ def test_since_requires_git_repo(tmp_path):
     assert "git repository" in result.output
 
 
+def test_scan_relative_target_scans_the_tree(sample_repo, monkeypatch):
+    """`auditor scan .` from inside a repo audits it: the resolved root still matches a relative
+    target."""
+    monkeypatch.chdir(sample_repo)
+    payload = cli_json(invoke("scan", ".", "--no-index", "-f", "json"))
+    assert payload["files"]
+
+
 def test_root_option_overrides_autodetected_root(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
     sub = tmp_path / "sub"
