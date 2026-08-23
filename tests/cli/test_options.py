@@ -1,15 +1,20 @@
 """Shared CLI option shape: the flags in `cli/options.py` and the confirmations that mirror
 each other across commands."""
 
+import re
+
 import pytest
 from _support import invoke
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
 
 def _help(*command: str) -> str:
-    """`--help` output with all whitespace removed, so rich's wrapping cannot split a token."""
+    """`--help` output with styling and whitespace removed, so neither rich's colors (on under
+    CI) nor its wrapping can split a token."""
     result = invoke(*command, "--help")
     assert result.exit_code == 0, result.output
-    return "".join(result.output.split())
+    return "".join(_ANSI.sub("", result.output).split())
 
 
 @pytest.mark.parametrize(
