@@ -19,6 +19,9 @@ auditr index repos
 # drop this repo's rows from the shared index
 auditr index forget
 
+# same, when the repo has persistent ignores the cascade would delete too
+auditr index forget --yes
+
 # act on another checkout instead of the working directory
 auditr index list -r ../other-repo
 
@@ -53,6 +56,8 @@ auditr index list --json
 - `forget` deletes this repo's registry row. Everything that references it cascades with it: the
   cached files, findings, shapes, and graph rows, and the repo's persistent ignores
   ([ignore.md](ignore.md)). It is not undone by a rescan.
+- Because the ignores are authored state and not cache, `forget` refuses when the repo has any
+  and prints how many. Pass `-y`/`--yes` to confirm; a repo with no ignores needs no flag.
 
 ## Populating and pruning
 

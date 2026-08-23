@@ -28,3 +28,21 @@ def test_index_repos_then_forget(sample_repo):
 def test_index_forget_unknown_repo_is_noop(sample_repo):
     out = cli_json(invoke("index", "forget", "--root", str(sample_repo)))
     assert out["removed"] is False  # never scanned → nothing to forget
+
+
+def test_index_forget_refuses_to_drop_persistent_ignores(sample_repo):
+    """The cascade takes the repo's persistent ignores, so `forget` needs --yes to proceed."""
+    src = str(sample_repo / "src")
+    assert invoke("scan", src, "--incremental").exit_code == 0
+    assert (
+        invoke("ignore", "add", "PY-SEC-DANGEROUS-EVAL", "--root", src).exit_code == 0
+    )
+
+    refused = invoke("index", "forget", "--root", src)
+    assert refused.exit_code == 1
+    assert "persistent ignore" in refused.output
+    assert cli_json(invoke("ignore", "list", "--root", src))  # still there
+
+    confirmed = cli_json(invoke("index", "forget", "--root", src, "--yes"))
+    assert confirmed["removed"] is True
+    assert cli_json(invoke("ignore", "list", "--root", src)) == []
