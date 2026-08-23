@@ -21,8 +21,8 @@ rules_app = typer.Typer(no_args_is_help=True, help="Inspect detector rules.")
 def _known_standards() -> set[str]:
     return {
         ref.split(":", 1)[0]
-        for rid in REGISTRY.rule_ids()
-        for ref in REGISTRY.detector(rid).standard_refs
+        for row in REGISTRY.rule_rows()
+        for ref in row.standard_refs
     }
 
 

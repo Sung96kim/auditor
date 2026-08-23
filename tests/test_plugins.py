@@ -134,9 +134,18 @@ def test_a_transitively_imported_plugin_is_credited_to_itself(tmp_path, monkeypa
     assert REGISTRY.sources.source_of("detector", "PROBE-B") == "auditor_probe_plugin_b"
 
 
-def test_entry_point_groups_match_the_registries():
-    """Every advertised group corresponds to a registry a plugin can actually add to."""
-    assert set(auditor.plugins._ENTRY_POINT_GROUPS) == {
+def test_entry_point_groups_match_the_registries(monkeypatch):
+    """Every group the loader asks for corresponds to a registry a plugin can add to."""
+    asked: list[str] = []
+
+    def _record(group: str) -> list:
+        asked.append(group)
+        return []
+
+    monkeypatch.setattr(auditor.plugins, "_entry_points", _record)
+    PluginLoader().load_entry_points()
+
+    assert set(asked) == {
         "auditor.detectors",
         "auditor.languages",
         "auditor.reporters",
