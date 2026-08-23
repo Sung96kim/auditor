@@ -37,6 +37,27 @@ POLICY_DOCS = (
     "skills/write-detector/references/patterns.md",
 )
 
+#: auditor categories the judge-findings family promotes as maintainability work
+PROMOTED_CATEGORIES = (
+    "oop-composition",
+    "dead-code",
+    "typing",
+    "testing",
+    "config",
+    "style",
+    "design-system",
+    "react",
+)
+
+#: the promotion rule those categories are reported under
+PROMOTION_PHRASE = "never rolled up"
+
+#: shipped markdown that must name every promoted category and state the promotion rule
+PROMOTION_DOCS = (
+    "skills/judge-findings/SKILL.md",
+    "skills/judge-findings/references/judging.md",
+)
+
 #: shipped markdown that must spell all three verdicts out by name
 VERDICT_DOCS = (
     "skills/judge-findings/SKILL.md",
@@ -57,3 +78,10 @@ def test_policy_docs_never_instruct_a_source_edit(rel: str) -> None:
 def test_policy_docs_name_all_three_verdicts(rel: str) -> None:
     text = (PLUGIN / rel).read_text()
     assert [v for v in VERDICTS if v not in text] == []
+
+
+@pytest.mark.parametrize("rel", PROMOTION_DOCS)
+def test_maintainability_categories_are_promoted(rel: str) -> None:
+    text = (PLUGIN / rel).read_text()
+    assert [c for c in PROMOTED_CATEGORIES if c not in text] == []
+    assert PROMOTION_PHRASE in text
