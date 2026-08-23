@@ -1,8 +1,11 @@
 from pathlib import Path
 
+import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 from auditor.engine import audit_target
+from auditor.graph.model import QUEUE_ID_CAP
 from auditor.mcp_server import mcp
 
 
@@ -113,23 +116,86 @@ async def test_graph_unresolved_lists_the_queue(graph_repo: Path):
         assert row["candidates"] == [] and row["candidates_count"] == 0
         only_sparse = _data(
             await c.call_tool(
-                "graph_unresolved", {"path": str(graph_repo), "reason": "text_sparse"}
+                "graph_unresolved", {"path": str(graph_repo), "reason": ["text_sparse"]}
             )
         )
         assert only_sparse and all(r["reason"] == "text_sparse" for r in only_sparse)
         attr = _data(
             await c.call_tool(
-                "graph_unresolved", {"path": str(graph_repo), "call_form": "attr"}
+                "graph_unresolved", {"path": str(graph_repo), "call_form": ["attr"]}
             )
         )
         assert all(r["call_form"] == "attr" for r in attr)
         assert ("attr_caller.py::go", "handle") in {
             (r["node_id"], r["name"]) for r in attr
         }
+        both = _data(
+            await c.call_tool(
+                "graph_unresolved",
+                {
+                    "path": str(graph_repo),
+                    "reason": ["ambiguous_name", "unimportable_name"],
+                },
+            )
+        )
+        assert both and all(
+            r["reason"] in ("ambiguous_name", "unimportable_name") for r in both
+        )
         capped = _data(
             await c.call_tool("graph_unresolved", {"path": str(graph_repo), "limit": 1})
         )
-        assert len(capped) <= 1
+        assert len(capped) == 1
+        assert capped[0] == rows[0]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("reason", "ambigous_name"), ("call_form", "barre")]
+)
+async def test_graph_unresolved_rejects_an_unknown_filter_value(
+    graph_repo: Path, field: str, value: str
+):
+    """A typo must be a tool error, not an empty page the agent reads as an empty queue."""
+    async with Client(mcp) as c:
+        with pytest.raises(ToolError, match=value):
+            await c.call_tool(
+                "graph_unresolved", {"path": str(graph_repo), field: [value]}
+            )
+
+
+async def test_graph_unresolved_caps_the_id_lists_at_the_shared_cap(graph_repo: Path):
+    """The cap the docstring promises: more definers than the cap, list truncated, true total
+    reported. Raising the cap must fail this test, not pass silently."""
+    definers = QUEUE_ID_CAP + 2
+    for i in range(definers):
+        (graph_repo / f"d{i}.py").write_text("def handle():\n    return 1\n")
+    (graph_repo / "caller.py").write_text("def use():\n    return handle()\n")
+    await audit_target(graph_repo, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": str(graph_repo)})
+        rows = _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
+    row = next(
+        r for r in rows if (r["node_id"], r["name"]) == ("caller.py::use", "handle")
+    )
+    assert len(row["definers"]) == QUEUE_ID_CAP
+    assert row["definers_count"] == definers
+
+
+async def test_graph_unresolved_can_drop_the_externally_bound_rows(graph_repo: Path):
+    (graph_repo / "helper.py").write_text("def handle():\n    return 1\n")
+    (graph_repo / "ext_caller.py").write_text(
+        "import re\ndef find(s):\n    return re.handle(s)\n"
+    )
+    await audit_target(graph_repo, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": str(graph_repo)})
+        shown = _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
+        hidden = _data(
+            await c.call_tool(
+                "graph_unresolved", {"path": str(graph_repo), "external": False}
+            )
+        )
+    assert any(r["externally_bound"] for r in shown)
+    assert hidden and not any(r["externally_bound"] for r in hidden)
 
 
 async def test_graph_unresolved_before_a_build_is_empty(graph_repo: Path):

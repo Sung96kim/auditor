@@ -292,18 +292,25 @@ class GraphDB(BaseDB):
         self,
         node_ids: list[str] | None = None,
         reasons: list[str] | None = None,
+        call_forms: list[str] | None = None,
         limit: int | None = None,
+        external: bool = True,
     ) -> list[dict[str, Any]]:
-        """Queue rows in drain order: priority first, then node id and name."""
+        """Queue rows in drain order: priority, then the externally bound rows, then node id and
+        name. Every filter and the limit run in SQL, so the limit counts rows the caller sees."""
         sql = "SELECT * FROM graph_unresolved WHERE repo = ?"
         params: list[Any] = []
-        if node_ids:
-            sql += f" AND node_id IN ({','.join('?' for _ in node_ids)})"
-            params += node_ids
-        if reasons:
-            sql += f" AND reason IN ({','.join('?' for _ in reasons)})"
-            params += reasons
-        sql += " ORDER BY priority, node_id, name"
+        for col, values in (
+            ("node_id", node_ids),
+            ("reason", reasons),
+            ("call_form", call_forms),
+        ):
+            if values:
+                sql += f" AND {col} IN ({','.join('?' for _ in values)})"
+                params += values
+        if not external:
+            sql += " AND externally_bound = 0"
+        sql += " ORDER BY priority, externally_bound, node_id, name"
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)

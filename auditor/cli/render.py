@@ -142,9 +142,24 @@ def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
         out.print(t)
 
 
-def render_graph_unresolved(out: Console, payload: list[dict[str, Any]]) -> None:
+def _queue_name(row: dict[str, Any]) -> str:
+    """The called name as written: ``job.handle`` for an attribute call, so two rows on the same
+    method under different receivers are told apart."""
+    name = str(row.get("name", ""))
+    root = row.get("receiver_root")
+    return f"{root}.{name}" if root else name
+
+
+def render_graph_unresolved(
+    out: Console, payload: list[dict[str, Any]], *, filtered: bool = False
+) -> None:
     if not payload:
-        out.print("[dim](queue is empty — run `auditr graph build` first)[/]")
+        empty = (
+            "(no rows matched the filter)"
+            if filtered
+            else "(queue is empty; run `auditr graph build` first)"
+        )
+        out.print(f"[dim]{empty}[/]")
         return
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     for col in ("node", "form", "name", "reason"):
@@ -156,10 +171,10 @@ def render_graph_unresolved(out: Console, payload: list[dict[str, Any]]) -> None
         t.add_row(
             str(row.get("node_id", "")),
             str(row.get("call_form", "")),
-            str(row.get("name", "")),
+            _queue_name(row),
             str(row.get("reason", "")),
-            str(len(row.get("definers", []))),
-            str(len(row.get("candidates", []))),
+            str(row.get("definers_count", len(row.get("definers", [])))),
+            str(row.get("candidates_count", len(row.get("candidates", [])))),
             "yes" if row.get("externally_bound") else "",
         )
     out.print(t)

@@ -210,6 +210,22 @@ class UnresolvedRow(BaseModel):
         return cls(node_id=node_id, fact_kind=FactKind.NODE, name=name, reason=reason)
 
 
+# Queue display policy, shared by every surface so the CLI and the MCP tool cannot drift apart.
+QUEUE_ROW_LIMIT = 50
+QUEUE_ID_CAP = 10
+
+
+def capped_row(row: dict[str, Any], cap: int = QUEUE_ID_CAP) -> dict[str, Any]:
+    """One queue payload row with its two id lists capped and their true totals alongside, the
+    way graph_overview caps its hub lists: a node can have dozens of definers."""
+    out = dict(row)
+    for col in ("definers", "candidates"):
+        ids = out[col]
+        out[col] = ids[:cap]
+        out[f"{col}_count"] = len(ids)
+    return out
+
+
 class StructuralResult(BaseModel):
     """One resolver pass: the deterministic edges it produced and the facts it could not place."""
 

@@ -116,6 +116,22 @@ async def test_unresolved_orders_by_priority_then_node_and_name(graph_store):
     ]
 
 
+async def test_an_externally_bound_row_sinks_below_an_equal_priority_real_one(
+    graph_store,
+):
+    """Those rows are display only, so they must not push a briefable row off the first page."""
+    await graph_store.graph.replace_unresolved(
+        [
+            _row("a.py::f", "dimmed", priority=2, externally_bound=True),
+            _row("z.py::f", "real", priority=2),
+        ]
+    )
+    rows = await graph_store.graph.unresolved()
+    assert [r["name"] for r in rows] == ["real", "dimmed"]
+    kept = await graph_store.graph.unresolved(external=False)
+    assert [r["name"] for r in kept] == ["real"]
+
+
 async def test_unresolved_filters_and_limit(graph_store):
     await graph_store.graph.replace_unresolved(
         [
@@ -129,6 +145,30 @@ async def test_unresolved_filters_and_limit(graph_store):
     by_node = await graph_store.graph.unresolved(node_ids=["b.py::g", "c.py::h"])
     assert {r["name"] for r in by_node} == {"two", "three"}
     assert len(await graph_store.graph.unresolved(limit=2)) == 2
+
+
+async def test_unresolved_applies_the_limit_after_both_filters(graph_store):
+    """The limit has to count rows the caller sees; filtering in Python after an unbounded read
+    also means the whole partition lands in memory."""
+    await graph_store.graph.replace_unresolved(
+        [
+            _row(
+                "a.py::f",
+                "one",
+                call_form=CallForm.ATTR,
+                reason=UnresolvedReason.AMBIGUOUS_NAME,
+            ),
+            _row("b.py::g", "two", call_form=CallForm.BARE),
+            _row("c.py::h", "three", call_form=CallForm.BARE),
+            _row("d.py::i", "four", call_form=CallForm.BARE),
+        ]
+    )
+    assert [r["name"] for r in await graph_store.graph.unresolved(limit=2)] == [
+        "one",
+        "two",
+    ]
+    rows = await graph_store.graph.unresolved(call_forms=["bare"], limit=2)
+    assert [r["name"] for r in rows] == ["two", "three"]
 
 
 async def test_replace_unresolved_swaps_the_whole_queue(graph_store):

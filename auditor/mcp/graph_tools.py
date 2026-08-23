@@ -3,6 +3,7 @@
 tools register unconditionally."""
 
 import time
+from enum import StrEnum
 from pathlib import Path
 
 from auditor.config import load_config
@@ -11,6 +12,12 @@ from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
+from auditor.graph.model import (
+    QUEUE_ROW_LIMIT,
+    CallForm,
+    UnresolvedReason,
+    capped_row,
+)
 from auditor.graph.query import GraphQuery
 from auditor.mcp.helpers import MUTATING, READ_ONLY
 from auditor.mcp.server import mcp
@@ -139,39 +146,46 @@ async def graph_overview(path: str = ".") -> dict:
     }
 
 
-_QUEUE_ID_CAP = 10
-
-
-def _capped(row: dict) -> dict:
-    """One queue row with its two id lists capped and their true totals alongside, the way
-    graph_overview caps its hub lists — a node can have dozens of definers."""
-    out = dict(row)
-    for col in ("definers", "candidates"):
-        ids = out[col]
-        out[col] = ids[:_QUEUE_ID_CAP]
-        out[f"{col}_count"] = len(ids)
-    return out
+def _filter_values(
+    raw: list[str] | None, enum: type[StrEnum], field: str
+) -> list[str] | None:
+    """Validate a repeatable filter against its enum, so a typo is a tool error rather than an
+    empty page the caller reads as an empty queue."""
+    if not raw:
+        return None
+    allowed = [e.value for e in enum]
+    unknown = [v for v in raw if v not in allowed]
+    if unknown:
+        raise ValueError(
+            f"unknown {field}: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
+        )
+    return list(raw)
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def graph_unresolved(
     path: str = ".",
-    reason: str | None = None,
-    call_form: str | None = None,
-    limit: int = 50,
+    reason: list[str] | None = None,
+    call_form: list[str] | None = None,
+    limit: int = QUEUE_ROW_LIMIT,
+    external: bool = True,
 ) -> list[dict]:
     """Facts the deterministic resolver could not place, worst first: ambiguous names, then
     ``self``/bare calls, then attribute calls, then label and cluster reasons. Filter with
     ``reason`` (ambiguous_name | unimportable_name | text_sparse | generic_label |
-    singleton_cluster) and ``call_form`` (bare | self | attr) — bare and self rows are the ones a
-    reader can settle from one file. A row means the graph lost an edge, not that a symbol is
-    unused, so read it before trusting an empty ``used_by`` from graph_usages. Rows with
-    ``externally_bound`` name a non-repo import and are display only. ``definers`` and
-    ``candidates`` are capped at 10 ids with the true totals in ``definers_count`` /
+    singleton_cluster) and ``call_form`` (bare | self | attr), both repeatable lists; an unknown
+    value is an error. Bare and self rows are the ones a reader can settle from one file. A row
+    means the graph lost an edge, not that a symbol is unused, so read it before trusting an
+    empty ``used_by`` from graph_usages. Rows with ``externally_bound`` name a non-repo import,
+    sort last and are display only; pass external=false to drop them. ``definers`` and
+    ``candidates`` are capped, with the true totals in ``definers_count`` /
     ``candidates_count``. Empty until graph_build has run."""
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        rows = await index.graph.unresolved(reasons=[reason] if reason else None)
-    if call_form:
-        rows = [r for r in rows if r["call_form"] == call_form]
-    return [_capped(r) for r in rows[:limit]]
+        rows = await index.graph.unresolved(
+            reasons=_filter_values(reason, UnresolvedReason, "reason"),
+            call_forms=_filter_values(call_form, CallForm, "call_form"),
+            limit=max(1, limit),
+            external=external,
+        )
+    return [capped_row(r) for r in rows]
