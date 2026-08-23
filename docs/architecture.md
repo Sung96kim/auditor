@@ -288,9 +288,9 @@ flowchart TB
   `uvx`-launched `auditr-mcp`). `plugin/settings.json` wires the status line.
 - `plugin/hooks/hooks.json` registers three stdlib hooks: `session_start.py` on `SessionStart`,
   `audit_edit.py` on `PostToolUse` matching `Edit|Write`, and `verify_stop.py` on `Stop`.
-- `plugin/statusline/auditor_status.py` reads `<repo>/.auditor/.status.json`, which
-  `status.write_status` refreshes on every directory scan, so the status line never shells out or
-  opens the index on its hot path.
+- `plugin/statusline/auditor_status.py` replicates `discovery.find_root` and `paths.repo_dir_key`
+  in stdlib only, then reads the `scan` block of `$AUDITOR_HOME/repos/<key>/status.json`, which
+  `status.write_status` refreshes on every directory scan.
 
 ## Cross-cutting behavior
 
