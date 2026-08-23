@@ -1,8 +1,8 @@
 # Configuration reference
 
 Committed config lives in `[tool.auditor]` in `pyproject.toml` or in `.auditor/config.toml`;
-env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus `AUDITOR_*` overrides of
-`AuditorSettings`). This page covers both.
+env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus the one `AUDITOR_*` override
+`AuditorSettings` accepts). This page covers both.
 
 - How a value is resolved across those sources is in [config.md](config.md), which is also the
   command that prints the merged result.
@@ -359,19 +359,20 @@ $AUDITOR_HOME/
 
 ### Repo settings (`AuditorSettings`)
 
-Every field above is also settable from the environment under the same `AUDITOR_` prefix.
+The environment reaches one field, not the whole model.
 
-| Form | Example | Notes |
+| Var | Default | Purpose |
 | --- | --- | --- |
-| Scalar field | `AUDITOR_RESPECT_GITIGNORE=false` | Field name uppercased. |
-| List or model field | `AUDITOR_SQLALCHEMY='{"expire_on_commit":true}'` | JSON value, parsed and validated like a TOML table. |
+| `AUDITOR_RESPECT_GITIGNORE` | `true` | Set to `false` to scan git-ignored files. Same as `respect_gitignore` in TOML. |
 
+- Every other field is repo policy and is ignored when it appears in the environment: `AUDITOR_RULES`,
+  `AUDITOR_EXCLUDE`, `AUDITOR_TEST_MODE` and the rest read as if unset, with no error. Policy is
+  shared through git and drives CI, so a shell variable must not disable a rule the repo leaves
+  unmentioned. Put them in TOML, or pass `--config-json` for one run.
+- The list is an allow-list in `_NonPolicyEnvSource`, so a field added to `AuditorSettings` is
+  policy until someone puts it there on purpose.
 - The environment is the lowest layer. It is deep-merged under the TOML layers, so an `AUDITOR_*`
   value only reaches keys no profile or repo file sets.
-- Policy keys are not settable from the environment at all: `rules`, `categories`, `threshold`,
-  `exclude`, `overrides`, `roles`, `role_globs`, `respect_skips` and `diff_base` are stripped from
-  the env source, so a shell variable cannot disable a rule the repo leaves unmentioned. Put them
-  in TOML, or pass `--config-json` for one run.
 - `AUDITOR_EXTENDS` never applies: the loader always writes `extends` into the merged config. Use
   `extends` in TOML or `scan --profile`.
 - Personal settings live under a different prefix entirely, `AUDITOR_USER_*`. See

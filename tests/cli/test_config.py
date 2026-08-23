@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from _support import cli_json, invoke
 
 
@@ -97,3 +98,22 @@ def test_config_show_user_exits_non_zero_on_invalid_user_config(
     result = invoke("config", "show", "--user", "--root", str(tmp_path))
     assert result.exit_code == 1
     assert "invalid user config" in " ".join(result.output.split())
+
+
+@pytest.mark.parametrize(
+    "var, value",
+    [
+        ("AUDITOR_EXCLUDE", "vendor/**"),  # shell glob, not the JSON the parser wants
+        ("AUDITOR_TEST_MODE", "excluded"),
+    ],
+)
+def test_ignored_env_vars_do_not_fail_the_command(tmp_path, monkeypatch, var, value):
+    """A policy key the docs call unsettable must be ignored, not parsed: the env source used to
+    JSON-decode it first and crash every command with a SettingsError."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    monkeypatch.setenv(var, value)
+    result = invoke("config", "show", "--root", str(tmp_path), "--json")
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["exclude"] == []
+    assert payload["test_mode"] is None

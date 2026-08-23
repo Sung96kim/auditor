@@ -15,6 +15,7 @@ from auditor.config import (
     RolePolicy,
     RuleConfig,
     Threshold,
+    _NonPolicyEnvSource,
     is_configured,
     load_config,
     load_config_report,
@@ -469,31 +470,28 @@ def test_observer_allowed_defaults_true_and_is_configurable(tmp_path):
     assert load_config(tmp_path).observer_allowed is False
 
 
-@pytest.mark.parametrize(
-    "var, value",
-    [
-        ("AUDITOR_RULES", '{"PY-SEC-DANGEROUS-EVAL": {"enabled": false}}'),
-        ("AUDITOR_EXCLUDE", '["vendor/**"]'),
-        ("AUDITOR_RESPECT_SKIPS", "false"),
-        ("AUDITOR_DIFF_BASE", "origin/nope"),
-        ("AUDITOR_THRESHOLD", '{"size": {"max_params": 1}}'),
-        ("AUDITOR_ROLE_GLOBS", '{"test": ["*.py"]}'),
-    ],
+_POLICY_FIELDS = sorted(
+    set(AuditorSettings.model_fields) - _NonPolicyEnvSource.ENV_SETTABLE
 )
-def test_env_cannot_set_repo_policy_keys(tmp_path, monkeypatch, var, value):
-    """Env must not change policy the repo shares through git; it could disable a rule the
-    repo never mentions (measured before this fix). The values below are the base profile's."""
+
+
+def test_every_settings_field_is_classified():
+    """The allow-list is the classification, so a name that no longer exists on the model would
+    silently open nothing and hide the drift."""
+    assert not _NonPolicyEnvSource.ENV_SETTABLE - set(AuditorSettings.model_fields)
+
+
+@pytest.mark.parametrize("field", _POLICY_FIELDS)
+def test_env_cannot_set_repo_policy_fields(tmp_path, monkeypatch, field):
+    """Env must not change policy the repo shares through git; it could disable a rule the repo
+    never mentions. Driven from the model, so a new field is covered the day it lands, and the
+    value is deliberately not valid JSON: a policy key must never be parsed at all."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="base"\n'
     )
-    monkeypatch.setenv(var, value)
-    settings = load_config(tmp_path)
-    assert settings.exclude == []
-    assert settings.respect_skips is True
-    assert settings.diff_base is None
-    assert settings.threshold.size.max_params == 6
-    assert settings.role_globs == {}
-    assert settings.rules.get("PY-SEC-DANGEROUS-EVAL") is None
+    expected = load_config(tmp_path).model_dump(mode="json")
+    monkeypatch.setenv(f"AUDITOR_{field.upper()}", "1")
+    assert load_config(tmp_path).model_dump(mode="json") == expected
 
 
 def test_env_still_sets_non_policy_keys(tmp_path, monkeypatch):

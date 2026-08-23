@@ -14,7 +14,7 @@ from fnmatch import fnmatch
 from importlib import resources
 from pathlib import Path
 from types import UnionType
-from typing import Literal, Union, get_args, get_origin
+from typing import Any, ClassVar, Literal, Union, get_args, get_origin
 
 from pydantic import (
     BaseModel,
@@ -24,6 +24,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
+from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
     EnvSettingsSource,
@@ -329,32 +330,27 @@ class GlobalPaths(BaseSettings):
     code_mode: bool = False
 
 
-# Repo policy is shared through git and drives CI, so the environment must not be able to reach
-# it; without this an AUDITOR_* var can disable a rule the repo never mentions.
-_POLICY_ONLY_KEYS = frozenset(
-    {
-        "rules",
-        "categories",
-        "threshold",
-        "exclude",
-        "overrides",
-        "roles",
-        "role_globs",
-        "respect_skips",
-        "diff_base",
-    }
-)
-
-
 class _NonPolicyEnvSource(EnvSettingsSource):
-    """The ``AUDITOR_`` env source with the repo-policy keys removed."""
+    """The ``AUDITOR_`` env source narrowed to the keys the environment may set.
 
-    def __call__(self) -> dict[str, object]:
-        return {
-            key: value
-            for key, value in super().__call__().items()
-            if key not in _POLICY_ONLY_KEYS
-        }
+    Repo policy is shared through git and drives CI, so the environment must not reach it: an
+    ``AUDITOR_*`` var could otherwise disable a rule the repo never mentions. The allow-list fails
+    closed, so a field nobody classified stays policy instead of shipping env-reachable.
+    """
+
+    ENV_SETTABLE: ClassVar[frozenset[str]] = frozenset({"respect_gitignore"})
+
+    def get_field_value(
+        self, field: FieldInfo, field_name: str
+    ) -> tuple[Any, str, bool]:
+        """The env value for one field, or a miss for every field outside the allow-list.
+
+        Filtering here rather than on the result matters: the base source JSON-decodes complex
+        fields first, so a policy key with an unparseable value would hard-fail the command.
+        """
+        if field_name not in self.ENV_SETTABLE:
+            return None, field_name, False
+        return super().get_field_value(field, field_name)
 
 
 class AuditorSettings(BaseSettings):
