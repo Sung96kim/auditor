@@ -2,7 +2,9 @@
 and the status console, ``options`` / ``helpers`` / ``summary`` the shared pieces, and each
 command module owns its handler (and its sub-app, when it has one). This package ``__init__`` is
 the composition root: importing the root commands registers them, and the sub-apps are mounted
-here. The ``auditor.cli:app`` entry point resolves to the ``app`` exported below.
+here. ``graph`` mounts through ``lazy.LazyGraphGroup``, which imports ``cli/graph.py`` only when a
+graph subcommand is dispatched. The ``auditor.cli:app`` entry point resolves to the ``app``
+exported below.
 """
 
 from auditor.cli import (  # noqa: F401 — imported for their @app.command() side effects
@@ -18,6 +20,7 @@ from auditor.cli.apps import app
 from auditor.cli.config import config_app
 from auditor.cli.ignore import ignore_app
 from auditor.cli.index import index_app
+from auditor.cli.lazy import LazyGraphGroup, lazy_graph_app
 from auditor.cli.malware import malware_app
 from auditor.cli.plugins import plugins_app
 from auditor.cli.rules import rules_app
@@ -31,15 +34,9 @@ app.add_typer(rules_app, name="rules")
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(self_app, name="self")
 app.add_typer(malware_app, name="malware")
+app.add_typer(lazy_graph_app, name="graph", cls=LazyGraphGroup)
 
 # ensure all built-in languages register for discovery's suffix list
 _ = PythonAuditor
-
-try:  # the graph commands need the optional [graph] extra (numpy + scikit-learn)
-    from auditor.cli.graph import graph_app
-except ImportError:
-    from auditor.cli.graph_stub import graph_app
-
-app.add_typer(graph_app, name="graph")
 
 __all__ = ["app"]
