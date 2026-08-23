@@ -251,9 +251,12 @@ flowchart TB
   `resolve_edges.resolve_structural` (returning a `StructuralResult` of deterministic edges plus the
   facts it could not place), `naming.name_similar_edges` (tf-idf plus LSI),
   `usage.usage_similar_edges` (callee and operand-type Jaccard), `rank.pagerank`,
-  `cluster.cluster_concepts`, persist through `IndexStore.graph.replace` and
-  `IndexStore.graph.replace_unresolved`, then `detectors.run_graph_detectors` writes the `GRAPH-*`
-  findings into the findings table.
+  `cluster.cluster_concepts`, run `detectors.run_graph_detectors`, then persist the nodes, edges,
+  clusters, the unresolved queue and the `GRAPH-*` findings through one `IndexStore.transaction`.
+- The build's write is one commit on purpose: an interrupted build must not leave a new node set
+  beside the previous queue or the previous run's findings. `IndexStore.transaction(fn)` runs `fn`
+  on the live connection and rolls back on any exception; the `write_*` halves of `graph.replace`,
+  `graph.replace_unresolved`, `findings.add` and `findings.clear_for_rules` are what it composes.
 - `resolve_edges._resolve_name` returns a frozen `Resolution` (`ids`, `gated`, `definers`, `path`,
   `reason`), which is both how an edge is chosen and the evidence a queue row carries.
 - `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to the

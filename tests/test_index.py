@@ -312,3 +312,32 @@ async def test_worker_error_isolation_under_load(tmp_path):
             [("h0", "model", "other.py", "D", 1)]
         )  # collide with f0's hash
         assert "h0" in await index.shapes.duplicates()
+
+
+async def test_transaction_commits_every_write_together(tmp_path):
+    async with await IndexStore.connect(tmp_path / "i.db", "/r") as store:
+        await store.transaction(
+            lambda conn: (
+                store.findings.write_add(conn, "a.py", [_finding("PY-A")]),
+                store.findings.write_add(conn, "b.py", [_finding("PY-B")]),
+            )
+        )
+        assert {f.rule_id for f in await store.findings.all()} == {"PY-A", "PY-B"}
+
+
+async def test_transaction_rolls_back_on_failure(tmp_path):
+    """A build that dies halfway must leave the previous state, not a half-written one."""
+
+    def boom(conn):
+        store.findings.write_add(conn, "a.py", [_finding("PY-A")])
+        raise RuntimeError("detector exploded")
+
+    async with await IndexStore.connect(tmp_path / "i.db", "/r") as store:
+        with pytest.raises(RuntimeError, match="detector exploded"):
+            await store.transaction(boom)
+        assert await store.findings.all() == []
+
+
+async def test_transaction_returns_what_the_callable_returns(tmp_path):
+    async with await IndexStore.connect(tmp_path / "i.db", "/r") as store:
+        assert await store.transaction(lambda conn: 7) == 7

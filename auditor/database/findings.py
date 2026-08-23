@@ -221,17 +221,22 @@ class FindingsDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def add(self, path: str, findings: list[Finding]) -> None:
+    def write_add(
+        self, conn: sqlite3.Connection, path: str, findings: list[Finding]
+    ) -> None:
+        """Append one path's findings on an open connection, without committing."""
         rows = [_finding_to_row(self.repo, path, f) for f in findings]
+        self._ensure_repo(conn)
+        t = self.TABLES["findings"]
+        cols = ", ".join(t.insert_columns())
+        conn.executemany(
+            f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
+            rows,
+        )
 
+    async def add(self, path: str, findings: list[Finding]) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            t = self.TABLES["findings"]
-            cols = ", ".join(t.insert_columns())
-            conn.executemany(
-                f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
-                rows,
-            )
+            self.write_add(conn, path, findings)
             conn.commit()
 
         await self._worker.run(op)
@@ -246,16 +251,21 @@ class FindingsDB(BaseDB):
             )
         ]
 
-    async def clear_for_rules(self, rule_ids: list[str]) -> None:
+    def write_clear_for_rules(
+        self, conn: sqlite3.Connection, rule_ids: list[str]
+    ) -> None:
+        """Drop this repo's findings for ``rule_ids`` on an open connection, without committing."""
         if not rule_ids:
             return
         placeholders = ",".join("?" for _ in rule_ids)
+        conn.execute(
+            f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",  # noqa: S608
+            (self.repo, *rule_ids),
+        )
 
+    async def clear_for_rules(self, rule_ids: list[str]) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",
-                (self.repo, *rule_ids),
-            )
+            self.write_clear_for_rules(conn, rule_ids)
             conn.commit()
 
         await self._worker.run(op)

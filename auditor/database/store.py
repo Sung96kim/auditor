@@ -1,7 +1,9 @@
 """IndexStore: the facade over all per-table DB stores."""
 
 import sqlite3  # noqa: I001
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from auditor.database.base import (
     DEFAULT_REPO,
@@ -22,6 +24,8 @@ from auditor.database.shapes import ShapesDB
 from auditor.database.graph import GraphDB
 from auditor.database.refinements import RefinementsDB
 from auditor.partition import Partition
+
+_T = TypeVar("_T")
 
 
 class IndexStore(BaseDB):
@@ -170,5 +174,20 @@ class IndexStore(BaseDB):
             if stale:
                 conn.commit()
             return stale
+
+        return await self._worker.run(op)
+
+    async def transaction(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
+        """Run ``fn`` against the live connection as one commit: everything it writes lands, or
+        nothing does. ``fn`` must not commit; any exception rolls the whole thing back."""
+
+        def op(conn: sqlite3.Connection) -> _T:
+            try:
+                result = fn(conn)
+            except BaseException:
+                conn.rollback()
+                raise
+            conn.commit()
+            return result
 
         return await self._worker.run(op)

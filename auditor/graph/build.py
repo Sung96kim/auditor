@@ -1,5 +1,6 @@
 """Repo-level graph build (spec §6). Needs numpy + scikit-learn (via naming/rank/cluster)."""
 
+import sqlite3
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -11,6 +12,7 @@ from auditor.graph.model import (
     TEST_ROLES,
     FileGraphFacts,
     GraphCluster,
+    GraphEdge,
     GraphNode,
     UnresolvedReason,
     UnresolvedRow,
@@ -24,6 +26,7 @@ from auditor.languages.python.detectors.graph_rules import (
     NAMING_INCONSISTENCY_RULE,
     SCATTERED_CONCEPT_RULE,
 )
+from auditor.models import Finding
 
 _GRAPH_RULE_IDS = [GOD_CONCEPT_RULE, SCATTERED_CONCEPT_RULE, NAMING_INCONSISTENCY_RULE]
 
@@ -166,24 +169,50 @@ class GraphBuilder:
             *structural.unresolved,
             *_quality_rows(out_nodes, sparse, labels, label_names, sizes),
         ]
-        report("persisting graph")
-        await index.graph.replace(out_nodes, all_edges, clusters)
-        await index.graph.replace_unresolved(unresolved)
-        findings_count = 0
+        per_file: dict[str, list[Finding]] = {}
         if cfg.detect:
             report("running detectors")
-            await index.findings.clear_for_rules(_GRAPH_RULE_IDS)
             per_file = run_graph_detectors(out_nodes, all_edges, clusters, settings)
-            for path, findings in per_file.items():
-                await index.findings.add(path, findings)
-                findings_count += len(findings)
+        report("persisting graph")
+        await index.transaction(
+            lambda conn: self._persist(
+                conn,
+                index,
+                out_nodes,
+                all_edges,
+                clusters,
+                unresolved,
+                per_file,
+                cfg.detect,
+            )
+        )
         return {
             "nodes": len(out_nodes),
             "edges": len(all_edges),
             "clusters": len(clusters),
             "unresolved": len(unresolved),
-            "findings": findings_count,
+            "findings": sum(len(f) for f in per_file.values()),
         }
+
+    @staticmethod
+    def _persist(
+        conn: sqlite3.Connection,
+        index: IndexStore,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+        clusters: list[GraphCluster],
+        unresolved: list[UnresolvedRow],
+        per_file: dict[str, list[Finding]],
+        detect: bool,
+    ) -> None:
+        """The whole build write, on one open connection (spec section 6 step 8)."""
+        index.graph.write_graph(conn, nodes, edges, clusters)
+        index.graph.write_unresolved(conn, unresolved)
+        if not detect:
+            return
+        index.findings.write_clear_for_rules(conn, _GRAPH_RULE_IDS)
+        for path, findings in per_file.items():
+            index.findings.write_add(conn, path, findings)
 
 
 def _protocol_method_ids(nodes: list[GraphNode]) -> set[str]:

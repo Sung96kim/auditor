@@ -1,3 +1,5 @@
+import pytest
+
 from auditor.config import AuditorSettings, GraphConfig
 from auditor.graph.build import GraphBuilder, _quality_rows, compute_abstractness
 from auditor.graph.extract import extract_file_facts
@@ -271,3 +273,23 @@ def test_quality_rows_flag_fallback_labels_and_singletons():
         "cluster-2"
     ]
     assert all(r.fact_kind is FactKind.NODE and r.priority == 4 for r in rows)
+
+
+async def test_a_failed_persist_leaves_the_previous_graph(facts_store, monkeypatch):
+    """One transaction, so a crash between the node swap and the queue swap cannot half-land."""
+    settings = AuditorSettings()
+    settings.graph.enabled = True
+    await GraphBuilder().run(facts_store, settings)
+    before_nodes = await facts_store.graph.nodes()
+    before_queue = await facts_store.graph.unresolved()
+    assert before_nodes and before_queue
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("queue write failed")
+
+    monkeypatch.setattr(type(facts_store.graph), "write_unresolved", explode)
+    with pytest.raises(RuntimeError, match="queue write failed"):
+        await GraphBuilder().run(facts_store, settings)
+
+    assert await facts_store.graph.nodes() == before_nodes
+    assert await facts_store.graph.unresolved() == before_queue

@@ -204,12 +204,14 @@ class GraphDB(BaseDB):
             return None
         return FileHashes(truth=row["truth_sha"], facts=row["facts_sha"])
 
-    async def replace(
+    def write_graph(
         self,
+        conn: sqlite3.Connection,
         nodes: list[GraphNode],
         edges: list[GraphEdge],
         clusters: list[GraphCluster],
     ) -> None:
+        """Swap this repo's graph on an open connection, without committing."""
         node_rows = [
             (
                 self.repo,
@@ -245,26 +247,34 @@ class GraphDB(BaseDB):
             for c in clusters
         ]
 
+        self._ensure_repo(conn)
+        for t in ("graph_nodes", "graph_edges", "graph_clusters"):
+            conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
+            "role, line, rank, cluster_id, abstractness, text_sparse, refined, annotation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            node_rows,
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight, source, confirmed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            edge_rows,
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count, label_source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            clu_rows,
+        )
+
+    async def replace(
+        self,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+        clusters: list[GraphCluster],
+    ) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            for t in ("graph_nodes", "graph_edges", "graph_clusters"):
-                conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
-                "role, line, rank, cluster_id, abstractness, text_sparse, refined, annotation) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                node_rows,
-            )
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight, source, confirmed) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                edge_rows,
-            )
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count, label_source) "
-                "VALUES (?, ?, ?, ?, ?)",
-                clu_rows,
-            )
+            self.write_graph(conn, nodes, edges, clusters)
             conn.commit()
 
         await self._worker.run(op)
@@ -326,8 +336,10 @@ class GraphDB(BaseDB):
             )
         ]
 
-    async def replace_unresolved(self, rows: list[UnresolvedRow]) -> None:
-        """Swap this repo's whole unresolved queue for ``rows``; every build rebuilds it."""
+    def write_unresolved(
+        self, conn: sqlite3.Connection, rows: list[UnresolvedRow]
+    ) -> None:
+        """Swap this repo's whole unresolved queue on an open connection, without committing."""
         values = [
             (
                 self.repo,
@@ -345,17 +357,21 @@ class GraphDB(BaseDB):
             )
             for r in rows
         ]
+        self._ensure_repo(conn)
+        conn.execute("DELETE FROM graph_unresolved WHERE repo = ?", (self.repo,))
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_unresolved (repo, node_id, name, reason, "
+            "fact_kind, receiver_root, call_form, candidates_json, definers_json, "
+            "resolution_path_json, priority, externally_bound) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            values,
+        )
+
+    async def replace_unresolved(self, rows: list[UnresolvedRow]) -> None:
+        """Swap this repo's whole unresolved queue for ``rows``; every build rebuilds it."""
 
         def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            conn.execute("DELETE FROM graph_unresolved WHERE repo = ?", (self.repo,))
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_unresolved (repo, node_id, name, reason, "
-                "fact_kind, receiver_root, call_form, candidates_json, definers_json, "
-                "resolution_path_json, priority, externally_bound) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                values,
-            )
+            self.write_unresolved(conn, rows)
             conn.commit()
 
         await self._worker.run(op)
