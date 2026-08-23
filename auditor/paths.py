@@ -86,15 +86,16 @@ def repo_identity(root: Path) -> str:
     resolved root outside git. A symlinked path or a subdirectory resolves to the same value.
 
     Both git branches resolve, so `/tmp` and `/private/tmp` on macOS cannot mint two directories
-    for one checkout.
+    for one checkout. ``git_output`` returns None when git is missing or the command fails, which
+    is the only case that falls through.
     """
     absolute = git_output(
         root, "rev-parse", "--path-format=absolute", "--git-common-dir"
     )
-    if absolute:
+    if absolute is not None:
         return str(Path(absolute).resolve())
     relative = git_output(root, "rev-parse", "--git-common-dir")  # git < 2.31
-    if relative:
+    if relative is not None:
         return str((root / relative).resolve())
     return repo_key(root)
 

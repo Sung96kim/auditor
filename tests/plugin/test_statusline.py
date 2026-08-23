@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import json
 import subprocess
@@ -8,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from auditor.discovery import find_root
-from auditor.paths import ensure_repo_dir, repo_dir_key
+from auditor.paths import auditor_home, ensure_repo_dir, repo_dir_key
 
 SCRIPT = (
     Path(__file__).resolve().parents[2] / "plugin" / "statusline" / "auditor_status.py"
@@ -126,12 +127,37 @@ def test_key_matches_the_package_helper(git_repo):
     assert _module()._repo_dir_key(git_repo) == repo_dir_key(git_repo)
 
 
-def test_find_root_matches_the_package_helper(git_repo):
+@pytest.mark.parametrize("marker", [".git", "pyproject.toml", ".auditor"])
+def test_find_root_matches_the_package_helper(tmp_path, marker):
     """The other duplicated half: walk up the same way, or the key is computed for a different
-    root and the two land in different directories."""
-    nested = git_repo / "src" / "deep"
+    root and the two land in different directories. Parametrized over every marker, since a
+    git-only fixture cannot tell whether the other two are still in the list."""
+    root = tmp_path / "proj"
+    nested = root / "src" / "deep"
     nested.mkdir(parents=True)
+    if marker == "pyproject.toml":
+        (root / marker).write_text("")
+    else:
+        (root / marker).mkdir()
     assert _module()._find_root(nested) == find_root(nested)
+
+
+@pytest.mark.parametrize("value", [None, "", "~/x", "/tmp/auditor-home-parity"])
+def test_home_matches_the_package_helper(monkeypatch, value):
+    """The third duplicated helper. An empty AUDITOR_HOME has to mean unset on both sides, or
+    the package writes state into the working directory and the status line reads elsewhere."""
+    if value is None:
+        monkeypatch.delenv("AUDITOR_HOME", raising=False)
+    else:
+        monkeypatch.setenv("AUDITOR_HOME", value)
+    assert _module()._home() == auditor_home()
+
+
+def test_statusline_parses_as_python_39():
+    """Syntax only: it catches what 3.9 cannot parse (a `match` statement, a parenthesized
+    `with`), not a stdlib API a 3.9 interpreter lacks. `X | None` parses everywhere, which is
+    why the module carries `from __future__ import annotations` instead."""
+    ast.parse(SCRIPT.read_text(), feature_version=(3, 9))
 
 
 def test_walks_up_to_the_repo_root(git_repo):

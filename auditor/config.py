@@ -323,9 +323,12 @@ class GlobalPaths(BaseSettings):
     ``$AUDITOR_HOME`` (default ``~/.auditor``); ``code_mode`` ← ``$AUDITOR_CODE_MODE`` gates the
     experimental Code Mode MCP transform. Lives here so the project's BaseSettings stay together
     (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the ``home`` helper.
+
+    ``env_ignore_empty`` makes ``AUDITOR_HOME=`` mean unset rather than ``Path(".")``, which would
+    write the shared index and every repo's state into whatever directory the user is standing in.
     """
 
-    model_config = SettingsConfigDict(env_prefix="AUDITOR_")
+    model_config = SettingsConfigDict(env_prefix="AUDITOR_", env_ignore_empty=True)
     home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
     code_mode: bool = False
 

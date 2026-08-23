@@ -85,8 +85,9 @@ from PATH or the event payload is unusable. The environment variables that tune 
 - Configured in `plugin/settings.json`, which also turns on `subagentStatusLine`.
 - It walks up from the session's cwd for `.git`, `pyproject.toml` or `.auditor`, hashes that
   repo's git common dir the same way `auditr` does, and reads
-  `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`. One `git rev-parse` is the only subprocess and
-  the database is never opened. Which runs write that file is in [scan.md](scan.md).
+  `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`. `git rev-parse` is the only subprocess it
+  runs, twice outside a git checkout for the pre-2.31 fallback, and the database is never opened.
+  Which runs write that file is in [scan.md](scan.md).
 - It reads the file's `scan` block. An older in-repo `.auditor/.status.json` is ignored.
 
 ```
