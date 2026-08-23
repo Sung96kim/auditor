@@ -69,7 +69,7 @@ def rules_list(
                 "default_severity": det.default_severity.value,
                 "verdict_kind": det.verdict_kind.value,
                 "standard_refs": refs,
-                "source": REGISTRY.source_of("detector", rid),
+                "source": REGISTRY.sources.source_of("detector", rid),
             }
         )
     present(rows, render_rules_list, as_json=json_)

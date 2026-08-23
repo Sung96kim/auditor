@@ -35,7 +35,7 @@ class PluginLoader:
 
     def load_config_modules(self, module_names: list[str]) -> None:
         for name in module_names:
-            self._import_target(name)
+            self._import_target(name, listed=module_names)
 
     def load_local(self, root: Path, *, trusted: bool) -> None:
         plugin_dir = root / ".auditor" / "plugins"
@@ -53,9 +53,9 @@ class PluginLoader:
 
     # --- internals --------------------------------------------------------
 
-    def _import_target(self, name: str) -> None:
+    def _import_target(self, name: str, *, listed: Sequence[str] = ()) -> None:
         try:
-            with REGISTRY.sourcing(str(name)):
+            with REGISTRY.sources.sourcing(name, listed=listed):
                 importlib.import_module(name)
             self.loaded.append(name)
         except Exception as exc:  # a broken plugin must not crash the auditor
@@ -69,7 +69,7 @@ class PluginLoader:
             return
         try:
             module = importlib.util.module_from_spec(spec)
-            with REGISTRY.sourcing(str(file)):
+            with REGISTRY.sources.sourcing(str(file)):
                 spec.loader.exec_module(module)
             self.loaded.append(str(file))
         except Exception as exc:

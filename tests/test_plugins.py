@@ -2,6 +2,7 @@
 two-phase load (a config can reference a plugin-contributed rule)."""
 
 import shutil
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,29 @@ from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
 pytestmark = pytest.mark.usefixtures("restore_registry")
+
+_PROBE_PLUGIN = """{imports}from typing import ClassVar
+
+from auditor.languages.base import AuditContext, Detector
+from auditor.models import Finding
+
+
+class Probe(Detector):
+    rule_id: ClassVar[str] = "{rule}"
+    category: ClassVar[str] = "probe"
+
+    def run(self, ctx: AuditContext) -> list[Finding]:
+        return []
+"""
+
+
+@pytest.fixture(autouse=True)
+def _unimport_plugins():
+    """Drop whatever a loader test imported, so the next one executes its plugin again."""
+    before = set(sys.modules)
+    yield
+    for name in set(sys.modules) - before:
+        del sys.modules[name]
 
 
 def _repo_with_plugin(
@@ -105,3 +129,22 @@ def test_import_path_spec_none_warns_not_crashes(tmp_path):
 
     assert loader.loaded == []
     assert any("mystery.py" in w or "could not load" in w for w in loader.warnings)
+
+
+def test_a_transitively_imported_plugin_is_credited_to_itself(tmp_path, monkeypatch):
+    """Two configured plugins where the first imports the second: each rule names the module
+    that defines it, not the one that pulled it in."""
+    (tmp_path / "auditor_probe_plugin_b.py").write_text(
+        _PROBE_PLUGIN.format(rule="PROBE-B", imports="")
+    )
+    (tmp_path / "auditor_probe_plugin_a.py").write_text(
+        _PROBE_PLUGIN.format(rule="PROBE-A", imports="import auditor_probe_plugin_b\n")
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    loader = PluginLoader()
+    loader.load_config_modules(["auditor_probe_plugin_a", "auditor_probe_plugin_b"])
+
+    assert loader.warnings == []
+    assert REGISTRY.sources.source_of("detector", "PROBE-A") == "auditor_probe_plugin_a"
+    assert REGISTRY.sources.source_of("detector", "PROBE-B") == "auditor_probe_plugin_b"

@@ -22,14 +22,10 @@ def _isolated_auditor_home(tmp_path_factory, monkeypatch):
 @pytest.fixture
 def restore_registry():
     """Snapshot and restore the global registry around a test that loads a repo's plugins
-    (loading registers detectors/categories/sources process-wide)."""
-    detectors = dict(REGISTRY._detectors)
-    categories = set(REGISTRY._plugin_categories)
-    sources = dict(REGISTRY._sources)
+    (loading registers detectors/languages/reporters/categories/sources process-wide)."""
+    state = REGISTRY.state()
     yield
-    REGISTRY._detectors = detectors
-    REGISTRY._plugin_categories = categories
-    REGISTRY._sources = sources
+    REGISTRY.restore(state)
 
 
 @pytest.fixture

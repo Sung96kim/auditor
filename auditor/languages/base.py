@@ -113,8 +113,7 @@ class Detector(ABC):
         if cls.__dict__.get("abstract"):
             return
         if getattr(cls, "rule_id", None):
-            source = getattr(cls, "_plugin_source", None)
-            REGISTRY.register_detector(cls, source=source)
+            REGISTRY.register_detector(cls)
 
     @abstractmethod
     def run(self, ctx: AuditContext) -> list[Finding]:
@@ -248,8 +247,7 @@ class LanguageAuditor(ABC):
         if cls.__dict__.get("abstract"):
             return
         if getattr(cls, "language", None):
-            source = getattr(cls, "_plugin_source", None)
-            REGISTRY.register_language(cls, source=source)
+            REGISTRY.register_language(cls)
 
     @abstractmethod
     def audit(

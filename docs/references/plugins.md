@@ -51,7 +51,9 @@ auditr plugins list --json
 - An intermediate base class that must not register sets `abstract = True`.
 - A detector may declare a category string that is not built in; config then accepts it.
 - Registration records a source: the module name or file path the loader imported, or `built-in`
-  for a rule that ships with the auditor. A class may override it with a `_plugin_source` marker.
+  for a rule that ships with the auditor.
+- A class one plugin imports from another module is credited to the importing plugin, unless that
+  module is a loaded plugin in its own right, in which case it keeps its own name.
 - The full metadata table, the `AuditContext` fields a detector may read, and the detector shapes
   with worked examples are in the bundled skill:
   [write-detector](../../plugin/skills/write-detector/SKILL.md) and its
