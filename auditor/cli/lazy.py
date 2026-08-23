@@ -6,6 +6,7 @@ tree, so a ``LazyGroup`` mount resolves its commands only when one is actually d
 import importlib
 from typing import ClassVar
 
+import click
 import typer
 from typer.core import TyperCommand, TyperGroup
 from typer.main import get_group
@@ -15,7 +16,7 @@ GRAPH_HELP = "Build + query the semantic code graph."
 # Everything `typer.main.get_group` sets that belongs to the sub-app rather than to the mount.
 # Excluded on purpose: `name`, `help`, `hidden`, `deprecated`, `context_settings` and the rich
 # settings, which the `add_typer` call owns.
-_ADOPTED = (
+_ADOPTED: tuple[str, ...] = (
     "callback",
     "params",
     "epilog",
@@ -31,8 +32,8 @@ _ADOPTED = (
 
 def _mounted(module: str, attribute: str) -> TyperGroup:
     """Import ``module`` and return ``attribute``'s Typer sub-app as a resolved click group."""
-    # Documentary: the detector does not flag importlib, kept to mark the one sanctioned deferred import.
-    mod = importlib.import_module(module)  # auditor: skip: PY-STYLE-INLINE-IMPORT
+    # The one sanctioned deferred import in the package; everything else imports at module level.
+    mod = importlib.import_module(module)
     return get_group(getattr(mod, attribute))
 
 
@@ -42,19 +43,34 @@ class LazyGroup(TyperGroup):
     module: ClassVar[str] = ""
     attribute: ClassVar[str] = ""
     _loaded: bool = False
+    _failure: click.ClickException | None = None
 
     def _load(self) -> None:
+        """Mount the sub-app once, recording completion only after every attribute is adopted.
+
+        A failed import is cached and re-raised, so a second dispatch reports the same error
+        instead of presenting an empty group as a working one.
+        """
+        if self._failure is not None:
+            raise self._failure
         if self._loaded:
             return
         if not self.module:
             raise RuntimeError("LazyGroup.module is not set")
         if not self.attribute:
             raise RuntimeError("LazyGroup.attribute is not set")
-        self._loaded = True
-        mounted = _mounted(self.module, self.attribute)
+        try:
+            mounted = _mounted(self.module, self.attribute)
+        except ImportError as exc:
+            # `self.name` is the mount name click gave the group, so the message names the command.
+            self._failure = click.ClickException(
+                f"`auditr {self.name}` is unavailable: {exc}"
+            )
+            raise self._failure from exc
         self.commands.update(mounted.commands)
         for name in _ADOPTED:
             setattr(self, name, getattr(mounted, name))
+        self._loaded = True
 
     def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:
         self._load()
@@ -78,4 +94,6 @@ class LazyGraphGroup(LazyGroup):
     attribute: ClassVar[str] = "graph_app"
 
 
-lazy_graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
+# `no_args_is_help` belongs to `graph_app` and is adopted on load; only `help` is the mount's own,
+# so the root help tree renders without paying for the graph import.
+lazy_graph_app = typer.Typer(help=GRAPH_HELP)

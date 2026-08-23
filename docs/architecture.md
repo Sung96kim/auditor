@@ -219,6 +219,9 @@ flowchart TB
 - `cli/__init__.py` mounts `graph` through `cli/lazy.py`'s `LazyGraphGroup`, which imports
   `cli/graph.py` on the first graph subcommand, so numpy, scikit-learn and networkx never load
   for the other commands. See [graph.md](references/graph.md).
+- A broken graph dependency surfaces as a one-line click error naming `auditr graph`, not a
+  traceback, and the failed import is cached, so a second dispatch repeats that error instead
+  of presenting an empty group as a working one.
 - `graph build` auto-scans first with graph extraction forced on (skip with `--no-scan`), then runs
   `graph.build.GraphBuilder.run` over the cached per-file facts: dedupe nodes,
   `resolve_edges.resolve_structural`, `naming.name_similar_edges` (tf-idf plus LSI),
