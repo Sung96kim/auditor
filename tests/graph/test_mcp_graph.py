@@ -4,9 +4,12 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from auditor.database import IndexStore
 from auditor.engine import audit_target
+from auditor.graph.detectors import GodConceptKind
 from auditor.graph.model import MAX_FLOW_LIMIT, QUEUE_ID_CAP
 from auditor.mcp_server import mcp
+from auditor.paths import index_db_path, repo_key
 
 
 def _data(result):
@@ -88,15 +91,24 @@ async def test_graph_overview_shape(graph_repo: Path):
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": str(graph_repo)})
         ov = _data(await c.call_tool("graph_overview", {"path": str(graph_repo)}))
-        assert isinstance(ov["nodes"], int) and ov["nodes"] > 0
-        assert isinstance(ov["edges"], int)
-        assert isinstance(ov["clusters"], int)
-        assert isinstance(ov["top_clusters"], list) and len(ov["top_clusters"]) <= 8
-        assert all({"label", "size"} <= set(c) for c in ov["top_clusters"])
-        assert isinstance(ov["god_concepts"], list) and len(ov["god_concepts"]) <= 5
-        assert isinstance(ov["bottlenecks"], list) and len(ov["bottlenecks"]) <= 5
-        assert ov["god_concept_count"] >= len(ov["god_concepts"])
-        assert ov["bottleneck_count"] >= len(ov["bottlenecks"])
+    assert isinstance(ov["nodes"], int) and ov["nodes"] > 0
+    assert isinstance(ov["edges"], int)
+    assert isinstance(ov["clusters"], int)
+    assert isinstance(ov["top_clusters"], list) and len(ov["top_clusters"]) <= 8
+    assert all({"label", "size"} <= set(c) for c in ov["top_clusters"])
+    assert isinstance(ov["god_concepts"], list) and len(ov["god_concepts"]) <= 5
+    assert isinstance(ov["bottlenecks"], list) and len(ov["bottlenecks"]) <= 5
+    async with await IndexStore.connect(index_db_path(), repo_key(graph_repo)) as index:
+        rows = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
+    fan_out = [r["evidence"] for r in rows if r["subkind"] == GodConceptKind.FAN_OUT]
+    bottleneck = [
+        r["evidence"] for r in rows if r["subkind"] == GodConceptKind.BOTTLENECK
+    ]
+    assert len(fan_out) + len(bottleneck) == len(rows)
+    assert ov["god_concept_count"] == len(fan_out)
+    assert ov["bottleneck_count"] == len(bottleneck)
+    assert ov["god_concepts"] == fan_out[:5]
+    assert ov["bottlenecks"] == bottleneck[:5]
 
 
 async def test_graph_unresolved_lists_the_queue(graph_repo: Path):

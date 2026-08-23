@@ -351,3 +351,22 @@ def test_the_facade_exposes_every_registered_store():
     registered = {store.attr for store in BaseDB._registry}
     listed = set(re.findall(r"``(\w+)``\s+—", IndexStore.__doc__))
     assert registered == set(IndexStore.__annotations__) == listed
+
+
+async def test_a_finding_round_trips_its_subkind(tmp_path):
+    """The column is what graph_overview reads, so a lost value silently empties both hub lists."""
+    async with await IndexStore.connect(tmp_path / "index.db", "/repo") as index:
+        finding = Finding(
+            rule_id="GRAPH-GOD-CONCEPT",
+            category=Category.OOP_COMPOSITION,
+            severity=Severity.SUGGESTION,
+            verdict_kind=VerdictKind.CANDIDATE,
+            line=1,
+            message="x has high fan-out (9)",
+            evidence="m.py::x",
+            subkind="fan_out",
+        )
+        await index.findings.add("m.py", [finding])
+        assert (await index.findings.all())[0].subkind == "fan_out"
+        rows = await index.findings.by_rule_prefix("GRAPH-")
+        assert rows[0]["subkind"] == "fan_out"

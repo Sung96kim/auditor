@@ -11,6 +11,7 @@ from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
+from auditor.graph.detectors import GodConceptKind
 from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
     DEFAULT_FLOW_LIMIT,
@@ -188,11 +189,10 @@ async def graph_overview(path: str = ".") -> dict:
         findings = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
     god_concepts: list[str] = []
     bottlenecks: list[str] = []
-    # Flavour lives only in the message: graph/detectors.py:145 fan-out, :153 bottleneck.
     for f in findings:
-        if "bottleneck" in f["message"]:
+        if f["subkind"] == GodConceptKind.BOTTLENECK:
             bottlenecks.append(f["evidence"])
-        elif "fan-out" in f["message"]:
+        elif f["subkind"] == GodConceptKind.FAN_OUT:
             god_concepts.append(f["evidence"])
     return {
         "nodes": len(nodes),
