@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NodeKind(StrEnum):
@@ -135,3 +135,58 @@ class Resolution(BaseModel):
     definers: tuple[str, ...] = ()
     path: tuple[str, ...] = ()
     reason: UnresolvedReason | None = None
+
+
+class FactKind(StrEnum):
+    """Which extracted fact a queue row is about. ``NODE`` covers the build-pass rows, whose
+    subject is a symbol or a cluster rather than a name the resolver tried to place."""
+
+    CALLEE = "callee"
+    ATTR_CALLEE = "attr_callee"
+    CLASS_REF = "class_ref"
+    TYPED_CALL = "typed_call"
+    NODE = "node"
+
+
+class CallForm(StrEnum):
+    BARE = "bare"
+    SELF = "self"
+    ATTR = "attr"
+
+
+def unresolved_priority(reason: UnresolvedReason, call_form: CallForm) -> int:
+    """Drain order for the queue (spec §8.3 item 3), lowest first. 0 is reserved for the
+    ``flow_leaf`` bump a flow request applies in S3."""
+    if reason is UnresolvedReason.AMBIGUOUS_NAME:
+        return 1
+    if reason is UnresolvedReason.UNIMPORTABLE_NAME:
+        return 2 if call_form in (CallForm.SELF, CallForm.BARE) else 3
+    return 4
+
+
+class UnresolvedRow(BaseModel):
+    """One queue row: a fact the deterministic pass could not place, carrying everything a
+    refiner needs to judge it without re-deriving the resolution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    fact_kind: FactKind
+    name: str
+    reason: UnresolvedReason
+    receiver_root: str | None = None
+    call_form: CallForm = CallForm.BARE
+    candidates: tuple[str, ...] = ()
+    definers: tuple[str, ...] = ()
+    resolution_path: tuple[str, ...] = ()
+    priority: int = 4
+    externally_bound: bool = False
+
+
+class StructuralResult(BaseModel):
+    """One resolver pass: the deterministic edges it produced and the facts it could not place."""
+
+    model_config = ConfigDict(frozen=True)
+
+    edges: list[GraphEdge] = Field(default_factory=list)
+    unresolved: list[UnresolvedRow] = Field(default_factory=list)

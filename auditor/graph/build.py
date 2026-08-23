@@ -80,7 +80,7 @@ class GraphBuilder:
         )
         report("computing usage similarity")
         usage_edges = usage_similar_edges(symbols, knn_k=cfg.knn_k)
-        all_edges = structural + name_edges + usage_edges
+        all_edges = structural.edges + name_edges + usage_edges
 
         proto = _protocol_method_ids(nodes)
         nonrank_test = {n.id for n in nodes if n.role not in TEST_ROLES}
