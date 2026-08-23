@@ -51,6 +51,7 @@ code-mode = ["fastmcp[code-mode]"]
 [project.scripts]
 auditr = "auditor.cli:app"
 auditr-mcp = "auditor.mcp_server:main"
+auditr-observer = "auditr_observer:main"  # top-level module, never imports the auditor package
 auditor = "auditor.cli:app"  # alias — matches the import package name
 auditor-mcp = "auditor.mcp_server:main"  # alias
 
@@ -58,7 +59,7 @@ auditor-mcp = "auditor.mcp_server:main"  # alias
 artifacts = ["auditor/graph/ui/dist/index.html"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["auditor"]
+packages = ["auditor", "auditr_observer.py"]
 exclude = [
     "auditor/graph/ui/node_modules",
     "auditor/graph/ui/src",
