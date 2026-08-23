@@ -214,6 +214,9 @@ separate graph command:
     blast-radius."` — real example from this repo: `"AuditContext is a bottleneck (103
     dependents) — changes here have wide blast-radius."` This is the load-bearing-code signal;
     cross-check the count with `graph usages` (above) before treating a change here as routine.
+  - Which shape fired is stored on the finding as `subkind` (`fan_out` or `bottleneck`), so
+    `graph_overview` splits its two hub lists on the field. The `-f json` scan stream below does
+    not carry it, which is why this recipe reads the message.
 - **`GRAPH-SCATTERED-CONCEPT`** — a concept cluster whose members are spread across many modules
   instead of living together. Real example: `"concept 'reporters' is scattered across 7 modules
   (9 symbols) — consider consolidating."` Points at fragmentation, the opposite problem from

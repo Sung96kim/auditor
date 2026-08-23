@@ -4,12 +4,11 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from auditor.database import IndexStore
+from auditor.database import open_repo_index
 from auditor.engine import audit_target
 from auditor.graph.detectors import GodConceptKind
 from auditor.graph.model import MAX_FLOW_LIMIT, QUEUE_ID_CAP
 from auditor.mcp_server import mcp
-from auditor.paths import index_db_path, repo_key
 
 
 def _data(result):
@@ -98,7 +97,7 @@ async def test_graph_overview_shape(graph_repo: Path):
     assert all({"label", "size"} <= set(c) for c in ov["top_clusters"])
     assert isinstance(ov["god_concepts"], list) and len(ov["god_concepts"]) <= 5
     assert isinstance(ov["bottlenecks"], list) and len(ov["bottlenecks"]) <= 5
-    async with await IndexStore.connect(index_db_path(), repo_key(graph_repo)) as index:
+    async with await open_repo_index(graph_repo) as index:
         rows = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
     fan_out = [r["evidence"] for r in rows if r["subkind"] == GodConceptKind.FAN_OUT]
     bottleneck = [
