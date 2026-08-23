@@ -93,6 +93,32 @@ class RegistryState(BaseModel):
     sources: dict[str, str]
 
 
+class RuleRow(BaseModel):
+    """One catalogue row: a detector's metadata plus where it was registered from."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_id: RuleId
+    category: str
+    framework: str | None
+    default_severity: str
+    verdict_kind: str
+    standard_refs: list[str]
+    source: str
+
+    def matches(
+        self, *, category: str | None, standard: str | None, framework: str | None
+    ) -> bool:
+        """Whether the row survives the catalogue filters (a standard matches by its prefix)."""
+        if category is not None and self.category != category:
+            return False
+        if framework is not None and self.framework != framework:
+            return False
+        return standard is None or any(
+            ref.startswith(f"{standard}:") for ref in self.standard_refs
+        )
+
+
 class Registry:
     """Holds every registered detector/language/reporter and the categories they declare."""
 
@@ -149,6 +175,32 @@ class Registry:
 
     def rule_ids(self) -> set[RuleId]:
         return set(self._detectors)
+
+    def rule_rows(
+        self,
+        *,
+        category: str | None = None,
+        standard: str | None = None,
+        framework: str | None = None,
+    ) -> list[RuleRow]:
+        """The filtered rule catalogue, as `auditor rules list` and the MCP tool both report it."""
+        rows = (
+            RuleRow(
+                rule_id=rid,
+                category=str(cls.category),
+                framework=getattr(cls, "framework", None),
+                default_severity=cls.default_severity.value,
+                verdict_kind=cls.verdict_kind.value,
+                standard_refs=list(cls.standard_refs),
+                source=self.sources.source_of("detector", rid),
+            )
+            for rid, cls in sorted(self._detectors.items())
+        )
+        return [
+            row
+            for row in rows
+            if row.matches(category=category, standard=standard, framework=framework)
+        ]
 
     def categories(self) -> set[str]:
         return {c.value for c in Category} | self._plugin_categories

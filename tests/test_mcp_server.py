@@ -4,6 +4,7 @@ import json
 import subprocess
 
 import pytest
+from _support import write_plugin_repo
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddleware
@@ -67,6 +68,25 @@ async def test_rules_list_tool():
     result = await mcp.call_tool("rules_list", {"category": "security"})
     data = _structured(result)
     assert data and all(r["category"] == "security" for r in data)
+    assert all(r["source"] == "built-in" for r in data)
+
+
+async def test_rules_list_tool_includes_repo_plugin_rules(tmp_path, restore_registry):
+    """The catalogue agents read covers the repo's plugin rules, with the file they came from."""
+    repo = write_plugin_repo(tmp_path)
+    rows = _structured(await mcp.call_tool("rules_list", {"root": str(repo)}))
+    house = [r for r in rows if r["rule_id"] == "HOUSE-NO-PRINT"]
+    assert house and house[0]["source"].endswith("house_rules.py")
+
+
+async def test_rules_list_tool_rejects_an_invalid_config(tmp_path):
+    """A repo config that fails validation is a tool error, not a pydantic traceback."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text(
+        'extends = "base"\n[rules]\nNO-SUCH-RULE = { enabled = false }\n'
+    )
+    with pytest.raises(ToolError, match="invalid config"):
+        await mcp.call_tool("rules_list", {"root": str(tmp_path)})
 
 
 async def test_report_tool(sample_repo):

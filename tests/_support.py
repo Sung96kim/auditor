@@ -2,6 +2,7 @@
 (``tests/`` is on the path via ``pythonpath``)."""
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -27,6 +28,23 @@ SAMPLE_REPO = DATA_DIR / "sample_repo"
 DEAD_SYMBOL_REGISTRY = DATA_DIR / "dead_symbol_registry"
 PLUGIN_FILE = DATA_DIR / "plugins" / "house_rules.py"
 TS_DATA = DATA_DIR / "ts"
+
+
+def write_plugin_repo(
+    root: Path, *, trusted: bool = True, references_rule: bool = False
+) -> Path:
+    """Turn ``root`` into a repo whose `.auditor/plugins/` contributes the HOUSE-NO-PRINT rule."""
+    (root / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    plugins = root / ".auditor" / "plugins"
+    plugins.mkdir(parents=True)
+    shutil.copy(PLUGIN_FILE, plugins / "house_rules.py")
+    cfg = 'extends = "base"\n'
+    if trusted:
+        cfg += "trust_local_plugins = true\n"
+    if references_rule:
+        cfg += '[rules]\nHOUSE-NO-PRINT = { severity = "high" }\n'
+    (root / ".auditor" / "config.toml").write_text(cfg)
+    return root
 
 
 def run_ts_audit(

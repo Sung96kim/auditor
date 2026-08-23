@@ -1,11 +1,10 @@
 """`auditor rules list` — enumerate detector rules, with category / standard filters."""
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
-from _support import PLUGIN_FILE, cli_json, invoke
+from _support import cli_json, invoke, write_plugin_repo
 
 #: (argv, source-of-HOUSE-NO-PRINT-or-None) per command that lists a repo's plugin rules
 _LISTINGS = [
@@ -24,21 +23,10 @@ _LISTINGS = [
 ]
 
 
-def _plugin_repo(root: Path, *, trusted: bool) -> Path:
-    """A repo whose `.auditor/plugins/` contributes the HOUSE-NO-PRINT rule."""
-    (root / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    plugins = root / ".auditor" / "plugins"
-    plugins.mkdir(parents=True)
-    shutil.copy(PLUGIN_FILE, plugins / "house_rules.py")
-    cfg = 'extends = "base"\n' + ("trust_local_plugins = true\n" if trusted else "")
-    (root / ".auditor" / "config.toml").write_text(cfg)
-    return root
-
-
 @pytest.fixture
 def plugin_repo(tmp_path, restore_registry) -> Path:
     """A repo whose trusted `.auditor/plugins/` contributes the HOUSE-NO-PRINT rule."""
-    return _plugin_repo(tmp_path, trusted=True)
+    return write_plugin_repo(tmp_path)
 
 
 def test_rules_list():
@@ -119,7 +107,7 @@ def test_rules_list_explains_an_omitted_plugin_rule(
     tmp_path, restore_registry, trusted, listed
 ):
     """A plugin rule is either in the catalogue or explained on stderr, never silently absent."""
-    repo = _plugin_repo(tmp_path, trusted=trusted)
+    repo = write_plugin_repo(tmp_path, trusted=trusted)
     result = invoke("rules", "list", "--root", str(repo), "--json")
 
     assert result.exit_code == 0, result.output
@@ -130,7 +118,7 @@ def test_rules_list_explains_an_omitted_plugin_rule(
 
 def test_rules_list_reports_a_broken_plugin_on_stderr(tmp_path, restore_registry):
     """A plugin that raises on import warns on stderr; stdout stays a clean JSON array."""
-    repo = _plugin_repo(tmp_path, trusted=True)
+    repo = write_plugin_repo(tmp_path)
     (repo / ".auditor" / "plugins" / "zz_broken.py").write_text(
         'raise RuntimeError("boom on import")\n'
     )

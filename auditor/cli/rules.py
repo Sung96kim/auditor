@@ -60,25 +60,5 @@ def rules_list(
         fail(
             f"unknown framework {framework!r}; choose from {sorted(REGISTRY.frameworks())}"
         )
-    rows = []
-    for rid in sorted(REGISTRY.rule_ids()):
-        det = REGISTRY.detector(rid)
-        if category and str(det.category) != category:
-            continue
-        if framework and getattr(det, "framework", None) != framework:
-            continue
-        refs = list(det.standard_refs)
-        if standard and not any(r.startswith(f"{standard}:") for r in refs):
-            continue
-        rows.append(
-            {
-                "rule_id": rid,
-                "category": str(det.category),
-                "framework": getattr(det, "framework", None),
-                "default_severity": det.default_severity.value,
-                "verdict_kind": det.verdict_kind.value,
-                "standard_refs": refs,
-                "source": REGISTRY.sources.source_of("detector", rid),
-            }
-        )
-    present(rows, render_rules_list, as_json=json_)
+    rows = REGISTRY.rule_rows(category=category, standard=standard, framework=framework)
+    present([row.model_dump() for row in rows], render_rules_list, as_json=json_)
