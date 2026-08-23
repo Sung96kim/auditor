@@ -3,6 +3,8 @@
 from collections import Counter
 from typing import TYPE_CHECKING
 
+from auditor.graph.flow import GraphCache, resolve_ids
+
 if TYPE_CHECKING:
     from auditor.database import IndexStore
 
@@ -16,6 +18,7 @@ _STRUCTURAL = [
     "contains",
     "imports",
 ]
+_STRUCTURAL_KINDS = frozenset(_STRUCTURAL)
 _SEMANTIC = ["name_similar", "usage_similar"]
 
 
@@ -28,12 +31,8 @@ class GraphQuery:
         sorted. A bare name can legitimately match several nodes (same-named symbols)."""
         if await self.index.graph.node(symbol):
             return [symbol]
-        return sorted(
-            n["node_id"]
-            for n in await self.index.graph.nodes()
-            if n["node_id"] == symbol
-            or n["node_id"].endswith(f"::{symbol}")
-            or n["node_id"].endswith(f".{symbol}")
+        return resolve_ids(
+            [n["node_id"] for n in await self.index.graph.nodes()], symbol
         )
 
     async def _resolve(self, symbol: str) -> str | None:
@@ -65,14 +64,14 @@ class GraphQuery:
         nid = await self._resolve(symbol)
         if nid is None:
             return []
-        kinds = {n["node_id"]: n["kind"] for n in await self.index.graph.nodes()}
+        cache = await GraphCache.load(self.index)
         seen = {nid}
         frontier = [nid]
         out: list[dict] = []
         for hop in range(1, depth + 1):
             nxt: list[str] = []
             for cur in frontier:
-                for e in await self.index.graph.edges_of(cur, _STRUCTURAL):
+                for e in cache.incident(cur, _STRUCTURAL_KINDS):
                     other, direction = (
                         (e["dst"], "out") if e["src"] == cur else (e["src"], "in")
                     )
@@ -82,7 +81,7 @@ class GraphQuery:
                         out.append(
                             {
                                 "id": other,
-                                "kind": kinds.get(other, "?"),
+                                "kind": cache.kind(other),
                                 "edge": e["kind"],
                                 "direction": direction,
                                 "hops": hop,

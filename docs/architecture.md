@@ -268,9 +268,13 @@ flowchart TB
 - `graph serve` renders `graph.viz.build_payload` into the bundled UI and serves it on
   `ReportServer`, rebuilding only when no graph exists or `--rebuild` is passed. `graph export`
   emits Graphviz DOT, or SVG by piping it through the system `dot`.
-- `graph/extract.py` and `graph/model.py` are stdlib only and run inside the core scan. The numpy
-  and scikit-learn modules are imported only from `build.py`, `naming.py`, `usage.py`, `rank.py`
-  and `cluster.py`, which is why `graph/__init__.py` never imports them.
+- `graph/extract.py`, `graph/model.py` and `graph/flow.py` are stdlib plus pydantic only and never
+  touch numpy. The numpy and scikit-learn modules are imported only from `build.py`, `naming.py`,
+  `usage.py`, `rank.py` and `cluster.py`, which is why `graph/__init__.py` never imports them.
+- `graph/flow.py` holds `GraphCache`, the per-query index of every node and edge in a partition.
+  `GraphQuery.neighbors` and the flow traversal load it once instead of issuing one
+  `GraphDB.edges_of` round trip per visited node. The full load pays for itself from about five
+  visited nodes up, which `neighbors` passes at its default depth of 1 on any real repo.
 
 ## self
 
