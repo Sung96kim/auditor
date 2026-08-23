@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 
 from auditor.config import GlobalPaths
 from auditor.discovery import git_output
-from auditor.partition import Partition
+from auditor.models import Partition
 
 
 def read_json_dict(path: Path) -> dict[str, object]:

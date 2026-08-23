@@ -65,7 +65,7 @@ class GraphDB(BaseDB):
                 Column(name="kind", type="TEXT", not_null=True),
                 Column(name="weight", type="REAL", not_null=True, default="1"),
                 Column(
-                    name="source",
+                    name="provenance",
                     type="TEXT",
                     not_null=True,
                     default="'deterministic'",
@@ -90,7 +90,7 @@ class GraphDB(BaseDB):
                 Column(name="label", type="TEXT", not_null=True),
                 Column(name="member_count", type="INTEGER", not_null=True),
                 Column(
-                    name="label_source",
+                    name="label_provenance",
                     type="TEXT",
                     not_null=True,
                     default="'deterministic'",
@@ -231,13 +231,13 @@ class GraphDB(BaseDB):
                 e.dst,
                 e.kind.value,
                 e.weight,
-                e.source.value,
+                e.provenance.value,
                 int(e.confirmed),
             )
             for e in edges
         ]
         clu_rows = [
-            (self.repo, c.cluster_id, c.label, c.member_count, c.label_source.value)
+            (self.repo, c.cluster_id, c.label, c.member_count, c.label_provenance.value)
             for c in clusters
         ]
 
@@ -251,12 +251,12 @@ class GraphDB(BaseDB):
             node_rows,
         )
         conn.executemany(
-            "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight, source, confirmed) "
+            "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight, provenance, confirmed) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             edge_rows,
         )
         conn.executemany(
-            "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count, label_source) "
+            "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count, label_provenance) "
             "VALUES (?, ?, ?, ?, ?)",
             clu_rows,
         )
@@ -291,7 +291,7 @@ class GraphDB(BaseDB):
         self, node_id: str, kinds: list[str] | None
     ) -> list[dict[str, Any]]:
         sql = (
-            "SELECT src, dst, kind, weight, source, confirmed FROM graph_edges "
+            "SELECT src, dst, kind, weight, provenance, confirmed FROM graph_edges "
             "WHERE repo = ? AND (src = ? OR dst = ?)"
         )
         params: list[Any] = [node_id, node_id]
@@ -316,7 +316,7 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT cluster_id, label, member_count, label_source FROM graph_clusters "
+                "SELECT cluster_id, label, member_count, label_provenance FROM graph_clusters "
                 "WHERE repo = ? ORDER BY member_count DESC, cluster_id"
             )
         ]
@@ -325,7 +325,7 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT src, dst, kind, weight, source, confirmed FROM graph_edges "
+                "SELECT src, dst, kind, weight, provenance, confirmed FROM graph_edges "
                 "WHERE repo = ? ORDER BY src, dst, kind"
             )
         ]

@@ -18,10 +18,10 @@ from auditor.models import (
     FileRole,
     Finding,
     IndexEntry,
+    Partition,
     Severity,
     VerdictKind,
 )
-from auditor.partition import Partition
 
 _WORKING_TABLES = ["files", "file_rules", "findings", "shapes"]
 

@@ -8,12 +8,12 @@ from auditor.graph.hashes import FileHashes
 from auditor.graph.model import (
     CallForm,
     EdgeKind,
-    EdgeSource,
     FactKind,
     GraphCluster,
     GraphEdge,
     GraphNode,
     NodeKind,
+    Provenance,
     UnresolvedReason,
     UnresolvedRow,
 )
@@ -57,7 +57,7 @@ async def test_replace_graph_and_query(graph_store):
 
 
 def test_edge_provenance_reads_a_column_the_loader_selects():
-    """`flow._source` degrades to "deterministic" on a missing key, so adding the S4 `source`
+    """`flow._source` degrades to "deterministic" on a missing key, so adding the S4 `provenance`
     column without widening this SELECT would look like a walk regression."""
     selected = set(
         re.search(
@@ -67,7 +67,7 @@ def test_edge_provenance_reads_a_column_the_loader_selects():
         .split(", ")
     )
     declared = {c.name for c in GraphDB.TABLES["graph_edges"].cols}
-    assert ("source" in selected) == ("source" in declared)
+    assert ("provenance" in selected) == ("provenance" in declared)
 
 
 async def test_edges_of_is_ordered_like_all_edges(graph_store):
@@ -307,18 +307,20 @@ async def test_edges_round_trip_their_provenance(graph_store):
             src="a",
             dst="c",
             kind=EdgeKind.CALLS,
-            source=EdgeSource.REFINED,
+            provenance=Provenance.REFINED,
             confirmed=True,
         ),
     ]
     await graph_store.graph.replace([_n("a"), _n("b"), _n("c")], edges, [])
     by_dst = {e["dst"]: e for e in await graph_store.graph.all_edges()}
-    assert by_dst["b"]["source"] == "deterministic"
+    assert by_dst["b"]["provenance"] == "deterministic"
     assert by_dst["b"]["confirmed"] == 0
-    assert by_dst["c"]["source"] == "refined"
+    assert by_dst["c"]["provenance"] == "refined"
     assert by_dst["c"]["confirmed"] == 1
     # edges_of has to carry it too: `graph neighbors` and the flow tree both read that shape
-    hop = {e["dst"]: e["source"] for e in await graph_store.graph.edges_of("a", None)}
+    hop = {
+        e["dst"]: e["provenance"] for e in await graph_store.graph.edges_of("a", None)
+    }
     assert hop == {"b": "deterministic", "c": "refined"}
 
 
@@ -328,13 +330,15 @@ async def test_a_repeated_edge_key_collapses_to_one_row(graph_store):
         [_n("a"), _n("b")],
         [
             GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS),
-            GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS, source=EdgeSource.REFINED),
+            GraphEdge(
+                src="a", dst="b", kind=EdgeKind.CALLS, provenance=Provenance.REFINED
+            ),
         ],
         [],
     )
     rows = await graph_store.graph.all_edges()
     assert len(rows) == 1
-    assert rows[0]["source"] == "refined"  # last write wins
+    assert rows[0]["provenance"] == "refined"  # last write wins
 
 
 async def test_node_and_cluster_provenance_round_trip(graph_store):
@@ -346,13 +350,13 @@ async def test_node_and_cluster_provenance_round_trip(graph_store):
                 cluster_id=1,
                 label="retry",
                 member_count=1,
-                label_source=EdgeSource.REFINED,
+                label_provenance=Provenance.REFINED,
             )
         ],
     )
     node = await graph_store.graph.node("a")
     assert (node["refined"], node["annotation"]) == (1, "the retry path")
     (cluster,) = await graph_store.graph.clusters()
-    assert cluster["label_source"] == "refined"
+    assert cluster["label_provenance"] == "refined"
     (member,) = await graph_store.graph.cluster_members(1)
     assert (member["refined"], member["annotation"]) == (1, "the retry path")

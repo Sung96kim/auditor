@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from auditor.database import IndexStore
 
 NodeRow = dict[str, Any]  # one graph_nodes row, as GraphDB.nodes() returns it
-EdgeRow = dict[str, Any]  # one graph_edges row: src, dst, kind, weight
+EdgeRow = dict[str, Any]  # one graph_edges row: src, dst, kind, weight, provenance
 QueueRow = dict[
     str, Any
 ]  # one graph_unresolved payload row, as GraphDB.unresolved() returns it

@@ -183,8 +183,8 @@ class _Record(_NodeMarks):
 
 
 def _source(edge: EdgeRow) -> str:
-    """Edge provenance. S4 adds the column; until then every edge is deterministic."""
-    return edge.get("source") or _DETERMINISTIC
+    """Edge provenance. A row read before the column existed degrades to deterministic."""
+    return edge.get("provenance") or _DETERMINISTIC
 
 
 def _edge_rank(edge: str) -> tuple[int, str]:

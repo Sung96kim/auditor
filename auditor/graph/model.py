@@ -32,7 +32,7 @@ class EdgeKind(StrEnum):
     USAGE_SIMILAR = "usage_similar"
 
 
-class EdgeSource(StrEnum):
+class Provenance(StrEnum):
     """Where a merged graph row came from. The detectors only ever see ``DETERMINISTIC``."""
 
     DETERMINISTIC = "deterministic"
@@ -104,7 +104,7 @@ class GraphEdge(BaseModel):
     dst: str
     kind: EdgeKind
     weight: float = 1.0
-    source: EdgeSource = EdgeSource.DETERMINISTIC
+    provenance: Provenance = Provenance.DETERMINISTIC
     confirmed: bool = False
 
 
@@ -114,7 +114,7 @@ class GraphCluster(BaseModel):
     cluster_id: int
     label: str
     member_count: int
-    label_source: EdgeSource = EdgeSource.DETERMINISTIC
+    label_provenance: Provenance = Provenance.DETERMINISTIC
 
 
 class FileGraphFacts(BaseModel):

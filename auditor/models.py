@@ -233,3 +233,14 @@ class IndexEntry(BaseModel):
     last_scanned: float
     counts: dict[Severity, int] = Field(default_factory=dict)
     doc_path: str | None = None
+
+
+class Partition(BaseModel):
+    """The identity every worktree of one checkout shares, and the partition root's path inside
+    that checkout. Identity rows key on ``identity`` and store ids prefixed by ``prefix``, so two
+    partitions of one checkout never collide."""
+
+    model_config = ConfigDict(frozen=True)
+
+    identity: str
+    prefix: str = ""

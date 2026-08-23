@@ -30,7 +30,7 @@ from auditor.graph.refine.models import (
     TuningRow,
     TuningStatus,
 )
-from auditor.partition import Partition
+from auditor.models import Partition
 
 IDENTITY = "/checkout/.git"
 OTHER = "/elsewhere/.git"

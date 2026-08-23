@@ -53,7 +53,8 @@ Paths are relative to the repo root.
 - `roles.py`: `RoleClassifier` labels each file production, test, test_support, script, or
   generated from path globs plus parsed content. The role picks the policy `ResolvedConfig`
   applies, so tests are classified rather than dropped.
-- `models.py`: the shared records `Finding`, `ScanResult`, `ManifestEntry`, `IndexEntry`, and the
+- `models.py`: the shared records `Finding`, `ScanResult`, `ManifestEntry`, `IndexEntry`,
+  `Partition` (the identity a checkout's worktrees share, plus the partition prefix), and the
   `Severity` / `VerdictKind` / `FileRole` enums.
 - `database/store.py`: `IndexStore.connect(db_path, repo_key)` opens the shared db and binds the
   handle to one repo's partition. `database/base.py`'s `SqliteWorker` owns the one thread-bound

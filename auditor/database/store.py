@@ -22,7 +22,7 @@ from auditor.database.findings import FindingsDB
 from auditor.database.shapes import ShapesDB
 from auditor.database.graph import GraphDB
 from auditor.database.refinements import EvalsDB, RefinementsDB, RunsDB, TuningDB
-from auditor.partition import Partition
+from auditor.models import Partition
 
 _T = TypeVar("_T")
 

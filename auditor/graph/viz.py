@@ -92,7 +92,7 @@ async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> 
                     "target": e["dst"],
                     "kind": e["kind"],
                     "weight": round(e["weight"], 4),
-                    "provenance": e["source"],
+                    "provenance": e["provenance"],
                     "confirmed": bool(e["confirmed"]),
                 }
             )

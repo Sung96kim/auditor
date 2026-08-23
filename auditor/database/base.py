@@ -17,7 +17,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
-from auditor.partition import Partition
+from auditor.models import Partition
 
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05

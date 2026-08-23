@@ -2,10 +2,10 @@ import pytest
 
 from auditor.graph.model import (
     EdgeKind,
-    EdgeSource,
     GraphEdge,
     GraphNode,
     NodeKind,
+    Provenance,
 )
 from auditor.graph.viz import build_payload, to_dot
 
@@ -249,7 +249,7 @@ async def test_payload_carries_edge_and_node_provenance(graph_store):
                 src="m.py::f",
                 dst="m.py::g",
                 kind=EdgeKind.CALLS,
-                source=EdgeSource.REFINED,
+                provenance=Provenance.REFINED,
             )
         ],
         [],
