@@ -95,7 +95,8 @@ class Evidence(BaseModel):
 
 class RefinementTarget(BaseModel):
     """What a refinement points at, in toplevel-relative ids. One model for the eight kinds in
-    spec 5.4; `Refinement._REQUIRED_BY_KIND` is what each one must fill in.
+    spec 5.4; the `_REQUIRED_BY_KIND` table below says what each one must fill in, and
+    `Refinement` enforces it.
 
     ``name`` is spec 5.4's `{node_id, name}` shape, and the edge kinds carry it too: it is the only
     thing that lets a build retire the `graph_unresolved` row the refinement answers (spec 5.7).

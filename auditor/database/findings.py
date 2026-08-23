@@ -151,7 +151,7 @@ class FindingsDB(BaseDB):
                 fr_rows,
             )
             conn.execute(
-                f"DELETE FROM findings WHERE repo = ? AND path = ? AND rule_id IN ({placeholders})",  # noqa: S608
+                f"DELETE FROM findings WHERE repo = ? AND path = ? AND rule_id IN ({placeholders})",  # noqa: S608  (placeholders only)
                 (self.repo, path, *rule_ids),
             )
             insert, binds = self.insert_many_sql("findings", f_rows)
@@ -248,7 +248,7 @@ class FindingsDB(BaseDB):
             return
         placeholders = ",".join("?" for _ in rule_ids)
         conn.execute(
-            f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",  # noqa: S608
+            f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",  # noqa: S608  (placeholders only)
             (self.repo, *rule_ids),
         )
 

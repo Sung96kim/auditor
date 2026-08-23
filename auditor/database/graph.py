@@ -250,7 +250,7 @@ class GraphDB(BaseDB):
 
         self._ensure_repo(conn)
         for t in ("graph_nodes", "graph_edges", "graph_clusters"):
-            conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608
+            conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608  (table name comes from a fixed tuple)
         conn.executemany(
             "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
             "role, line, rank, cluster_id, abstractness, text_sparse, refined, annotation) "

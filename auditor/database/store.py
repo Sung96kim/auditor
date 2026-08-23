@@ -123,7 +123,7 @@ class IndexStore(BaseDB):
                 # only the derived cache tables; repos + ignores (user state) are preserved, and
                 # children come before the parent so no FK-referenced row is pulled out mid-drop.
                 for table in cache_tables:
-                    conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608  (table name comes from the Table declaration)
             for statement in statements:
                 conn.execute(statement)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -147,7 +147,7 @@ class IndexStore(BaseDB):
                     continue
                 present = {
                     r["name"]
-                    for r in conn.execute(f"PRAGMA table_info({name})")  # noqa: S608
+                    for r in conn.execute(f"PRAGMA table_info({name})")  # noqa: S608  (table name comes from the Table declaration)
                 }
                 if not present:
                     continue  # this run creates it whole, already current
@@ -167,7 +167,7 @@ class IndexStore(BaseDB):
                             name, col.name, "REFERENCES on an added column"
                         )
                     conn.execute(
-                        f"ALTER TABLE {name} ADD COLUMN {col.render()}"  # noqa: S608
+                        f"ALTER TABLE {name} ADD COLUMN {col.render()}"  # noqa: S608  (name and column come from the Table declaration)
                     )
 
     async def __aenter__(self) -> "IndexStore":
