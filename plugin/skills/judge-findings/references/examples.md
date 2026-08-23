@@ -3,7 +3,7 @@
 Real findings from `auditr scan` runs against this repo (auditor auditing itself). Line numbers
 are as of the commit these were captured against — re-verify with a fresh scan before reusing.
 
-## 1. False positive → skip-directive
+## 1. False positive → suppress-recommended
 
 **Finding** (`auditor/status.py:33`, `PY-CORRECT-SWALLOWED-EXCEPTION`, medium):
 
@@ -43,15 +43,22 @@ returns the path either way. This is a genuine false positive, not a bug, and th
 (`try: write cache / except OSError: pass`) is stable — it won't turn into a real bug on a
 future edit without someone deliberately removing the comment too.
 
-**Verdict**: skip-directive, placed on the finding's reported line — the `except OSError:` line
-(33), not the `pass` line below it:
+**Verdict**: suppress-recommended. Hand over the directive and the line it belongs on — the
+`except OSError:` line (33), not the `pass` line below it — and let the author apply it:
 
 ```python
     except OSError:  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION
         pass  # best-effort cache (gitignored) — a read-only fs must not fail the scan
 ```
 
-## 2. True positive → fix
+Offer the db-backed form too, for anyone who would rather not touch the source:
+
+```bash
+auditr ignore add PY-CORRECT-SWALLOWED-EXCEPTION --file auditor/status.py --line 33 \
+  --reason "best-effort status cache; a read-only fs must not fail the scan"
+```
+
+## 2. True positive → fix-recommended
 
 **Finding** (`auditor/languages/python/detectors/oop.py:524`, `PY-OOP-HIGH-COMPLEXITY`, low):
 
@@ -78,10 +85,23 @@ case the rule's `suggestion` is pointing at: extract helpers. It also matches th
 category (`oop-composition`) — a free function accreting responsibilities is exactly what the
 category flags.
 
-**Verdict**: fix. Split into three small predicate/bump helpers (`_bump_from_assign`,
-`_bump_from_tuple_unpack`, `_bump_from_call_kwargs`), each walking its own node-type check, called
-from a slimmer top-level loop. Each helper's complexity drops well under the threshold and the
-function reads as "three independent passes," not one tangle.
+**Verdict**: fix-recommended. The recommendation, for the author to apply: split the flat loop
+into three helpers, one per syntactic shape, and lift the `bump` closure to a module-level
+`_bump(counts, target_attr, value)` the three share.
+
+```python
+def _field_copies(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for node in ast.walk(fn):
+        _copies_from_assign(node, counts)
+        _copies_from_tuple_unpack(node, counts)
+        _copies_from_call_kwargs(node, counts)
+    return counts
+```
+
+Each helper keeps its own `isinstance` check, its complexity drops well under the threshold, and
+the function reads as "three independent passes," not one tangle. Report the sketch and the
+reasoning — don't edit `oop.py` yourself.
 
 ## 3. The line-anchoring footgun, live in this repo
 
@@ -115,8 +135,8 @@ against the *exact* line number the finding is reported on; a directive on a dif
 inert. Confirmed against the repo: `scan --rule PY-CORRECT-SWALLOWED-EXCEPTION` on this file
 still returns the finding, and `suppressed: 0` — the existing directive is doing nothing.
 
-**Verdict**: skip-directive is still the right call — the finding really is a false positive —
-but it has to move to line 67, the `except (` line itself:
+**Verdict**: suppress-recommended is still the right call — the finding really is a false
+positive — but the directive you recommend has to sit on line 67, the `except (` line itself:
 
 ```python
         except (  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION

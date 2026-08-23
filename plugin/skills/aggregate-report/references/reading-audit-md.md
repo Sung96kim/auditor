@@ -38,7 +38,8 @@ Scope: <N> files audited.
   column, or re-sort yourself, if you need worst-first.
 - **Candidates to judge** — every finding across the whole scope with `verdict_kind == "candidate"`,
   properly sorted worst-first this time (`-severity_rank(f.severity)`, then `rule_id`). This is
-  the list `judge-findings` works through — see that skill for the fix/skip/dismiss workflow.
+  the list `judge-findings` works through — see that skill for the `fix-recommended` /
+  `suppress-recommended` / `dismiss` workflow, which recommends and never edits.
   `suggestion`-tier and `auto`-verdict findings never appear here even if present in the totals.
 
 `suggestion` severity is intentionally the softest tier (`_SEVERITY_ORDER` puts it below `low`)

@@ -130,8 +130,9 @@ whether an agent re-judges every hit before acting on it (`judge-findings` skill
   (`AV-MAL-MATCH`, `CFG-ENV-FILE-COMMITTED`), `high` (`PY-SEC-HARDCODED-SECRET`,
   `PY-SEC-SHELL-INJECTION`), `medium` (`PY-CORRECT-BROAD-EXCEPT`, `PY-SEC-FLASK-DEBUG`), `low`
   (`PY-TYPING-MISSING-HINTS`, `PY-SEC-BIND-ALL-INTERFACES`).
-- **`candidate`** — evidence, not a verdict; a human/agent judgment call decides fix vs.
-  false-positive. Use this whenever the same syntactic shape has a legitimate reading depending on
+- **`candidate`** — evidence, not a verdict; a human/agent judgment call decides `fix-recommended`,
+  `suppress-recommended`, or `dismiss`. Use this whenever the same syntactic shape has a
+  legitimate reading depending on
   context the detector can't see: reachability from untrusted input (`PY-SEC-SSRF`), whether a
   swallowed exception is a deliberate best-effort path or a hidden bug
   (`PY-CORRECT-SWALLOWED-EXCEPTION`), whether a flat-field model is a wire-boundary passthrough

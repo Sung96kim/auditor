@@ -1,15 +1,17 @@
 # Per-category verdict heuristics
 
-For every `candidate` finding you have three verdicts. Pick one:
+For every `candidate` finding you have three verdicts. Pick one and report it — this skill
+recommends, it never edits the audited file:
 
-- **fix** — it's a real issue; change the code.
-- **skip-directive** — it's a genuine false positive that will keep re-firing on this exact
-  line/file (the pattern is inherent to the code, not a one-off); suppress it permanently with
-  `# auditor: skip: <RULE-ID>` on the finding's reported `line`. See the SKILL body for the
-  line-anchoring footgun before you place one.
+- **fix-recommended** — it's a real issue; say what to change, where, and why.
+- **suppress-recommended** — it's a genuine false positive that will keep re-firing on this exact
+  line/file (the pattern is inherent to the code, not a one-off); recommend suppressing it
+  permanently with `# auditor: skip: <RULE-ID>` on the finding's reported `line`, and quote that
+  line in the recommendation. See the SKILL body for the line-anchoring footgun before you name
+  one.
 - **dismiss** — it's a genuine false positive, but not worth a permanent marker (a one-off,
-  code that's about to change anyway, or a borderline call you want on record without editing
-  the file). State the reason in your verdict summary; no code change.
+  code that's about to change anyway, or a borderline call you want on record). State the reason
+  in your verdict summary.
 
 Never silently drop a candidate. If you didn't open `file:line` and read the evidence, you
 haven't judged it — you've guessed.
@@ -18,6 +20,32 @@ This file covers every category that actually emits `candidate` findings (checke
 `auditr rules list`). `typing` (`PY-TYPING-MISSING-HINTS`, `PY-TYPING-UNTYPED-DICT`) and
 `secrets` (`CFG-SECRET-DETECTED`, `CFG-ENV-FILE-COMMITTED`) are **auto-verdict only** in this
 build — the tool already decided them deterministically, so report them as-is; don't re-litigate.
+
+## Maintainability bias
+
+Promoted categories: `oop-composition`, `dead-code`, `typing`, `testing`, `config`, `style`,
+`design-system`, `react`. Code cleanliness, future maintainability and extensibility are the whole
+value of these findings, so every candidate in them earns its own recommendation: they are
+never rolled up into a "+N lower" count, and never dismissed on tier alone. Severity is a risk
+ordering, not a value ordering.
+
+A dismissal here needs a code-grounded reason: a throwaway script, vendored code, or a deliberate
+weld whose rationale is written down. "Low severity" is not a reason.
+
+What a recommendation in each names (the real-issue-vs-false-positive heuristics stay in that
+category's own section below):
+
+- [oop-composition](#oop-composition): the extraction or composition, and the second consumer it
+  enables.
+- [dead-code](#dead-code): the deletion, plus the grep that proved no dynamic use.
+- `typing`: the boundary that becomes checkable (auto-verdict in this build, so it is reported
+  rather than judged).
+- [testing](#testing): the assertion that makes the test meaningful.
+- [config](#config): the settings home the value belongs in.
+- [style](#style): for a long comment, the rationale that moves to a PR description or a memory
+  file.
+- [design-system](#design-system): the primitive to reuse.
+- [react](#react): the hook or pattern to extract.
 
 ## security
 
@@ -36,9 +64,9 @@ Rules: `PY-SEC-ASSERT-FOR-SECURITY`, `PY-SEC-DJANGO-RAW-SQL`, `PY-SEC-INSECURE-R
 - **Verify**: trace the flagged value backward to its origin. For `SQL-STRING-BUILD`/`RAW-SQL`,
   confirm it reaches `.execute()`/`.raw()` unparameterized. For `SSRF`, confirm there's no
   allow-list downstream.
-- **Decision**: reachable + unguarded → fix (parameterize, allow-list, escape). Provably
+- **Decision**: reachable + unguarded → recommend fix: parameterize, allow-list, escape. Provably
   trusted/internal origin → dismiss with reason. Deliberate vulnerable-pattern-as-test-fixture →
-  skip-directive.
+  recommend suppression.
 
 ## malware
 
@@ -57,10 +85,11 @@ tunnel URLs (ngrok, etc.) on purpose, plugin systems with legitimate dynamic imp
   runtime logic? Does the credential-path read actually flow anywhere (especially outbound)? Is
   there a nearby decode-then-exec or fetch-then-exec that would make this auto-blocking instead?
 - **Decision**: this category is security-sensitive — false negatives are expensive, so don't
-  dismiss on a hunch. Demonstrably malicious → do not quietly "fix" it as a style issue; flag it
-  loudly and prefer removal over patching. Demonstrably legitimate (test fixture, doc example,
-  intentional tool behavior) → skip-directive scoped to the exact line, with a short comment
-  explaining why. When you can't tell → dismiss with reason and say so explicitly; don't guess.
+  dismiss on a hunch. Demonstrably malicious → don't dress it up as a style fix; flag it loudly
+  and recommend removal over patching. Demonstrably legitimate (test fixture, doc example,
+  intentional tool behavior) → recommend suppression scoped to the exact line, with a short
+  comment explaining why. When you can't tell → dismiss with reason and say so explicitly; don't
+  guess.
 
 ## supply-chain
 
@@ -74,10 +103,11 @@ Rules: `DEP-VULN-KNOWN`, `MF-SUPPLY-INSTALL-HOOK`, `PY-SUPPLY-SETUP-EXEC`.
   may not be reachable from how this project actually uses the dependency.
 - **Verify**: read exactly what the hook does — network calls? exec of downloaded/decoded
   content? For `DEP-VULN-KNOWN`, check the advisory against the actual usage.
-- **Decision**: real install-time risk → fix (remove the hook, or pin/patch the dependency).
-  Necessary, side-effect-free build step or confirmed-unreachable CVE path → dismiss with
-  reason. Don't skip-suppress this category casually — supply-chain detection here is
-  deliberately narrow/high-signal by design, so a candidate earned real scrutiny to get flagged.
+- **Decision**: real install-time risk → recommend fix: remove the hook, or pin/patch the
+  dependency. Necessary, side-effect-free build step or confirmed-unreachable CVE path → dismiss
+  with reason. Don't recommend suppression for this category casually — supply-chain detection
+  here is deliberately narrow/high-signal by design, so a candidate earned real scrutiny to get
+  flagged.
 
 ## oop-composition
 
@@ -102,10 +132,11 @@ The largest bucket (24 candidates): `PY-OOP-CONSTRUCTOR-WALL`, `PY-OOP-FLAT-FIEL
   usages`) and read `used_by` before acting — don't trust a single file's view. For
   flat-field/model complaints, check whether the model sits at a wire/API/DB boundary (a
   Pydantic passthrough) vs an internal domain object that should carry behavior.
-- **Decision**: real internal-domain duplication or feature-envy → fix, following the rule's
-  `suggestion` (extract a class, add a `from_*` classmethod, compose instead of copy). Legitimate
-  boundary type, ABC conformance, or deliberate simplicity → dismiss with reason. A pattern the
-  team has already decided against elsewhere in this exact form → skip-directive.
+- **Decision**: real internal-domain duplication or feature-envy → recommend fix, following the
+  rule's `suggestion` (extract a class, add a `from_*` classmethod, compose instead of copy).
+  Legitimate boundary type, ABC conformance, or deliberate simplicity → dismiss with reason. A
+  pattern the team has already decided against elsewhere in this exact form → recommend
+  suppression.
 
 ## dead-code
 
@@ -117,11 +148,12 @@ symbol with zero references anywhere in the index).
   repo's graph (the index is repo-partitioned — cross-repo usage isn't visible), or it's reached
   dynamically (string-based dispatch, decorator registration, `getattr`, `__all__` exports)
   which static analysis won't see, or it's a fixture kept intentionally for future use.
-- **Verify — mandatory before deleting anything**: `graph usages <symbol>` and confirm `used_by`
-  is genuinely empty. Also grep for the symbol name as a string literal (dynamic dispatch,
-  plugin registries) — the graph only sees static references.
-- **Decision**: confirmed zero usages, not a public/plugin entrypoint → fix (delete). Any doubt
-  at all → dismiss with reason; do not delete on suspicion.
+- **Verify — mandatory before you recommend a deletion**: `graph usages <symbol>` and confirm
+  `used_by` is genuinely empty. Also grep for the symbol name as a string literal (dynamic
+  dispatch, plugin registries) — the graph only sees static references.
+- **Decision**: confirmed zero usages, not a public/plugin entrypoint → recommend fix: delete it,
+  naming the symbol and its file. Any doubt at all → dismiss with reason; never recommend a
+  deletion on suspicion.
 
 ## async
 
@@ -140,9 +172,9 @@ Rules: `PY-ASYNC-NO-AWAIT-BODY`, `PY-ASYNC-SEQUENTIAL-AWAITS`, `PY-ASYNC-SYNC-IO
 - **Verify**: trace whether the loop body's iterations share state or must run in order; check
   whether the lazy-init attribute is actually reachable from more than one concurrent task (a
   single-consumer async path has no race regardless of the missing lock).
-- **Decision**: real blocking call / real race / genuinely-independent-but-serial awaits → fix
-  (`asyncio.to_thread`, add a lock, `asyncio.gather`). Interface-mandated shape or a real
-  ordering dependency → dismiss with reason.
+- **Decision**: real blocking call / real race / genuinely-independent-but-serial awaits →
+  recommend fix: `asyncio.to_thread`, add a lock, `asyncio.gather`. Interface-mandated shape or a
+  real ordering dependency → dismiss with reason.
 
 ## correctness
 
@@ -162,9 +194,9 @@ Rules: `PY-CORRECT-NAIVE-DATETIME`, `PY-CORRECT-RAISE-WITHOUT-FROM`,
   already reasoned out? For `PY-PYDANTIC-V1-CONFIG-CLASS`, check whether any configured key
   (e.g. `orm_mode`) has a real v2 replacement (`from_attributes`) that's now silently unapplied.
 - **Decision**: a real setting silently dropped, or a real failure hidden from a caller that
-  needs it → fix. Deliberate, already-reasoned best-effort behavior → skip-directive with a
-  short comment, or dismiss if the code changes often enough that a directive would just be
-  noise.
+  needs it → recommend fix. Deliberate, already-reasoned best-effort behavior → recommend
+  suppression with a short comment, or dismiss if the code changes often enough that a directive
+  would just be noise.
 
 ## config
 
@@ -179,8 +211,8 @@ Rules: `PY-CONFIG-IMPORT-TIME-IO`, `PY-CONFIG-SCATTERED-SETTINGS`.
   a self-contained subpackage/plugin that's meant to own its own config.
 - **Verify**: check whether the import-time call can fail, block, or behave differently between
   test/prod; check whether the settings class is meant to be central vs intentionally local.
-- **Decision**: fragile or side-effectful import → fix (lazy-load it). Legitimately scoped/local
-  → dismiss with reason.
+- **Decision**: fragile or side-effectful import → recommend fix: lazy-load it. Legitimately
+  scoped/local → dismiss with reason.
 
 ## testing
 
@@ -200,9 +232,9 @@ Rules: `PY-TEST-DUPLICATE-SETUP`, `PY-TEST-FIXTURE-MUTABLE-WIDE-SCOPE`,
   in for a boundary — not testing mocks for their own sake.
 - **Verify**: always open the test body directly; don't trust the message's shape assumption.
   Count what's actually asserted/mocked and why.
-- **Decision**: genuinely weak test → fix (add the assertion, extract the fixture, replace sleep
-  with a poll/await, parametrize). Legitimate shape the heuristic under-recognizes → dismiss
-  with reason.
+- **Decision**: genuinely weak test → recommend fix: add the assertion, extract the fixture,
+  replace sleep with a poll/await, parametrize. Legitimate shape the heuristic under-recognizes →
+  dismiss with reason.
 
 ## react
 
@@ -219,8 +251,8 @@ Rules: `TS-REACT-ARRAY-INDEX-KEY`, `TS-REACT-DEEP-JSX-NESTING`, `TS-REACT-EAGER-
   real per-item behavior, not just literal values.
 - **Verify**: check whether the list can reorder (sort/filter calls upstream, user-driven
   reordering); read each "repeated" block for behavioral differences beyond substituted data.
-- **Decision**: real reorder risk or real data-driven repetition → fix (stable key from data,
-  extract + `.map()`). Static list or meaningfully different blocks → dismiss with reason.
+- **Decision**: real reorder risk or real data-driven repetition → recommend fix: stable key from
+  data, extract + `.map()`. Static list or meaningfully different blocks → dismiss with reason.
 
 ## a11y
 
@@ -237,8 +269,8 @@ Rules: `TS-A11Y-ANCHOR-NO-HREF`, `TS-A11Y-AUTOFOCUS`, `TS-A11Y-DECORATIVE-ICON`,
   `aria-hidden` applied via a prop spread the static check can't see through.
 - **Verify**: check the actual accessible-name path (`aria-label`, a visually-hidden text
   sibling, spread props) before assuming the finding is right.
-- **Decision**: no real accessible path exists → fix (add the label/handler/alt/title). An
-  accessible path is provably present via a pattern the detector missed → dismiss with reason.
+- **Decision**: no real accessible path exists → recommend fix: add the label/handler/alt/title.
+  An accessible path is provably present via a pattern the detector missed → dismiss with reason.
 
 ## design-system
 
@@ -250,8 +282,9 @@ Rules: `TS-DS-DIRECT-UI-IMPORT`, `TS-DS-INLINE-PRIMITIVE`, `TS-DS-SIZE-OVERRIDE`
   implementation, or it's a genuinely one-off case with no existing primitive that fits.
 - **Verify**: confirm a matching primitive actually exists and covers this exact case — check
   the design-system package directly, don't assume from the rule firing.
-- **Decision**: a matching primitive exists → fix (swap it in). No real primitive fits → dismiss
-  with reason (a candidate for a *new* primitive is a separate task, not this judgment pass).
+- **Decision**: a matching primitive exists → recommend fix: swap it in. No real primitive fits →
+  dismiss with reason (a candidate for a *new* primitive is a separate task, not this judgment
+  pass).
 
 ## style
 
@@ -265,5 +298,6 @@ Rules: `GRAPH-NAMING-INCONSISTENCY`, `PY-STYLE-LONG-COMMENT`, `PY-STYLE-STALE-CO
   distinct concepts that only look similar.
 - **Verify**: for stale-comment, grep the repo for the referenced name/path yourself before
   trusting the rule's string match.
-- **Decision**: genuinely stale or inconsistent → fix (update the comment, rename). False match
-  on the string heuristic → dismiss with reason, or skip-directive if it will keep re-firing.
+- **Decision**: genuinely stale or inconsistent → recommend fix: update the comment, rename.
+  False match on the string heuristic → dismiss with reason, or recommend suppression if it will
+  keep re-firing.
