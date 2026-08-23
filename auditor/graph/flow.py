@@ -8,10 +8,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from auditor.graph.cache import EdgeRow, GraphCache, QueueRow
-from auditor.graph.model import TEST_ROLES, EdgeKind
+from auditor.graph.model import DEFAULT_FLOW_LIMIT, TEST_ROLES, EdgeKind
 
 DEFAULT_HUB_FAN_IN = 40  # keep in step with GraphConfig.flow_hub_fan_in
-DEFAULT_FLOW_LIMIT = 200
 
 _DISPATCH = "dispatches_to"
 _DETERMINISTIC = "deterministic"

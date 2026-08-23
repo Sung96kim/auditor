@@ -1,13 +1,17 @@
+import inspect
 import io
 import json
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
 from auditor.cli import app
+from auditor.cli.graph import _split_kinds, graph_flow
 from auditor.cli.render import render_graph_flow
 from auditor.graph.flow import FlowNode
+from auditor.graph.model import DEFAULT_FLOW_LIMIT
 
 runner = CliRunner()
 
@@ -107,6 +111,100 @@ def test_cli_graph_flow_marks_only_the_hub_the_walk_collapsed(
 def test_the_render_fixture_covers_every_flow_node_field():
     """_flow_payload() is a hand-written mirror; a new field must reach the render tests."""
     assert set(_flow_payload()["root"]) == set(FlowNode.model_fields)
+
+
+def test_the_flow_node_cap_has_one_home():
+    """The constant, the CLI signature and the MCP ceiling were three copies of one policy."""
+    assert (
+        inspect.signature(graph_flow).parameters["limit"].default == DEFAULT_FLOW_LIMIT
+    )
+
+
+@pytest.mark.parametrize(
+    "raw, want",
+    [(None, []), ("", []), (" calls , inherits ,,", ["calls", "inherits"])],
+)
+def test_split_kinds_trims_and_drops_empties(raw: str | None, want: list[str]):
+    assert _split_kinds(raw) == want
+
+
+@pytest.mark.parametrize("bad", ["inherit", "NOT_A_KIND", "calls,references_typ"])
+def test_cli_graph_flow_rejects_an_unknown_kind(graph_repo_flow: Path, bad: str):
+    """An unfollowed kind reads as 'no such edges', which is the wrong answer to a typo."""
+    _built(graph_repo_flow)
+    result = runner.invoke(
+        app, ["graph", "flow", "entry", str(graph_repo_flow), "--kinds", bad]
+    )
+    assert result.exit_code != 0
+    assert "unknown --kinds" in result.output
+
+
+@pytest.mark.parametrize(
+    "flag, value", [("--depth", "5000"), ("--limit", "100000"), ("--depth", "-1")]
+)
+def test_cli_graph_flow_bounds_its_traversal_flags(
+    graph_repo_flow: Path, flag: str, value: str
+):
+    """Four recursive walks over the tree; an unbounded depth is a traceback, not an error."""
+    _built(graph_repo_flow)
+    result = runner.invoke(
+        app, ["graph", "flow", "entry", str(graph_repo_flow), flag, value]
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize(
+    "flags, check",
+    [
+        (
+            ("--depth", "3"),
+            lambda p: (
+                [c["id"] for c in p["root"]["children"]]
+                == ["m.py::middle", "m.py::other"]
+            ),
+        ),
+        (("--depth", "1"), lambda p: _no_ids(p, "svc.py::leaf")),
+        (("--depth", "3", "--limit", "2"), lambda p: p["truncated"] is True),
+        (
+            ("--depth", "3", "--stop-at", "svc.py"),
+            lambda p: _hub_leaf(p)["stopped"] is True,
+        ),
+        (
+            ("--depth", "3", "--expand-hubs"),
+            lambda p: _hub_leaf(p)["hub"]["collapsed"] is False,
+        ),
+        (("--in", "--depth", "1"), lambda p: p["root"]["children"] == []),
+        (
+            ("--in", "--depth", "1", "--include-tests"),
+            lambda p: (
+                [c["id"] for c in p["root"]["children"]]
+                == ["tests/test_entry.py::test_entry"]
+            ),
+        ),
+        (
+            ("--depth", "1", "--kinds", "imports"),
+            lambda p: (
+                [c["id"] for c in p["root"]["children"]]
+                == ["m.py::middle", "m.py::other"]
+            ),
+        ),
+    ],
+)
+def test_cli_graph_flow_flag_matrix(graph_repo_flow_hub: Path, flags, check):
+    """Every flow flag reaches FlowOptions; a transposed keyword used to ship green."""
+    _built(graph_repo_flow_hub)
+    assert check(_flow(graph_repo_flow_hub, *flags))
+
+
+def _no_ids(payload: dict, missing: str) -> bool:
+    return all(c["id"] != missing for c in payload["root"]["children"])
+
+
+def test_cli_graph_flow_reads_the_hub_floor_from_repo_config(graph_repo_flow_hub: Path):
+    """`flow_hub_fan_in = 2` in the fixture's pyproject is what makes `leaf` a hub at all."""
+    _built(graph_repo_flow_hub)
+    assert _hub_leaf(_flow(graph_repo_flow_hub, "--depth", "3"))["hub"]["count"] == 2
 
 
 def _flow_payload() -> dict:

@@ -5,7 +5,13 @@ from typing import Annotated
 
 import typer
 
-from auditor.graph.model import QUEUE_ROW_LIMIT, CallForm, UnresolvedReason
+from auditor.graph.model import (
+    MAX_FLOW_DEPTH,
+    MAX_FLOW_LIMIT,
+    QUEUE_ROW_LIMIT,
+    CallForm,
+    UnresolvedReason,
+)
 from auditor.models import RuleId
 
 ScanTarget = Annotated[Path, typer.Argument(help="File or directory to audit.")]
@@ -260,12 +266,21 @@ FlowIn = Annotated[
     ),
 ]
 FlowDepth = Annotated[
-    int, typer.Option("--depth", help="Hops to follow from the symbol.")
+    int,
+    typer.Option(
+        "--depth",
+        min=0,
+        max=MAX_FLOW_DEPTH,
+        help="Hops to follow from the symbol.",
+    ),
 ]
 FlowLimit = Annotated[
     int,
     typer.Option(
-        "--limit", help="Cap on nodes emitted; shallow levels complete first."
+        "--limit",
+        min=1,
+        max=MAX_FLOW_LIMIT,
+        help="Cap on nodes emitted; shallow levels complete first.",
     ),
 ]
 FlowKinds = Annotated[

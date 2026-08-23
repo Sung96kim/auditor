@@ -106,10 +106,13 @@ queries. It walks the graph breadth-first from one symbol and prints a tree.
   module expands every symbol registered there, which is how decorator-driven dispatch reads.
 - The `modules` line above the tree is the ordered list of modules the path touches. That line,
   not the tree, is usually the architecture answer.
-- Flags: `--depth` (default 4), `--limit` (default 200 nodes, shallow levels finish first),
-  `--kinds a,b` to follow extra edge kinds on top of the two defaults, `--include-tests` to keep
-  test symbols, `--stop-at GLOB` (repeatable) to stop expanding inside a module, `--expand-hubs`
-  to open a node the hub rule elided, `--json` for the raw payload.
+- Flags: `--depth` (default 4, 0 to 64), `--limit` (default 200 nodes, 1 to 1000, shallow levels
+  finish first), `--kinds a,b` to follow extra edge kinds on top of the two defaults,
+  `--include-tests` to keep test symbols, `--stop-at GLOB` (repeatable) to stop expanding inside a
+  module, `--expand-hubs` to open a node the hub rule elided, `--json` for the raw payload.
+- `--kinds` is validated against the edge kinds, so a typo is an error rather than a tree that
+  silently omits the relation you asked for. `--stop-at` stays a free glob: a glob that matches
+  nothing is a legitimate query.
 - Markers in the tree:
   - `⊕ N elided` is a hub the walk refused to expand. A node is a hub when either count reaches
     `graph.flow_hub_fan_in` (default 40): the symbols that reach it, dispatch children included,
@@ -243,8 +246,10 @@ auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json
   ego-graph. With neither, it exports the whole graph.
 - `--flow <symbol>` exports the flow tree instead: `rankdir=LR` with one `rank=same` row per depth,
   so the picture reads left to right as the call path. `--in` reverses it and `--depth` sets the
-  hops (4 by default in flow mode, 1 in `--symbol` ego mode). It cannot be combined with
-  `--symbol` or `--cluster`.
+  hops (4 by default in flow mode, 1 in `--symbol` ego mode).
+- The modes pick different node sets, so combining them is an error rather than a silent
+  preference: `--flow` with `--symbol` or `--cluster`, `--symbol` with `--cluster`, and `--in`
+  without `--flow`. A `--flow` symbol the graph does not hold is an error too, not an empty DOT.
 - Export has no `--limit`: the flow walk keeps its 200-node cap and the DOT records it in a
   comment on the second line, with `truncated` when the cap was hit. Use `auditr graph flow
   --limit N --json` when you need a different cap.

@@ -7,8 +7,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from auditor.graph.flow import DEFAULT_FLOW_LIMIT
-from auditor.graph.model import NodeKind
+from auditor.graph.model import DEFAULT_FLOW_LIMIT, NodeKind
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore

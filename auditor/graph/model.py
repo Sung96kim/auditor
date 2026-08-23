@@ -214,6 +214,11 @@ class UnresolvedRow(BaseModel):
 QUEUE_ROW_LIMIT = 50
 QUEUE_ID_CAP = 10
 
+# Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
+DEFAULT_FLOW_LIMIT = 200
+MAX_FLOW_LIMIT = 1000
+MAX_FLOW_DEPTH = 64
+
 
 def capped_row(row: dict[str, Any], cap: int = QUEUE_ID_CAP) -> dict[str, Any]:
     """One queue payload row with its two id lists capped and their true totals alongside, the

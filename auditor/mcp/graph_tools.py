@@ -14,6 +14,7 @@ from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
+    MAX_FLOW_LIMIT,
     QUEUE_ROW_LIMIT,
     CallForm,
     UnresolvedReason,
@@ -138,7 +139,7 @@ async def graph_flow(
             FlowOptions(
                 direction=FlowDirection(direction),
                 depth=depth,
-                limit=min(limit, 1000),
+                limit=min(max(1, limit), MAX_FLOW_LIMIT),
                 hub_fan_in=load_config(root).graph.flow_hub_fan_in,
             ),
         )
