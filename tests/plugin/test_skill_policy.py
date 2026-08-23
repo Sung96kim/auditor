@@ -26,6 +26,7 @@ BANNED = (
 POLICY_DOCS = (
     "skills/judge-findings/SKILL.md",
     "skills/judge-findings/references/judging.md",
+    "skills/judge-findings/references/examples.md",
 )
 
 #: shipped markdown that must spell all three verdicts out by name
