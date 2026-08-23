@@ -94,3 +94,47 @@ async def test_graph_overview_shape(graph_repo: Path):
         assert isinstance(ov["bottlenecks"], list) and len(ov["bottlenecks"]) <= 5
         assert ov["god_concept_count"] >= len(ov["god_concepts"])
         assert ov["bottleneck_count"] >= len(ov["bottlenecks"])
+
+
+async def test_graph_unresolved_lists_the_queue(graph_repo: Path):
+    (graph_repo / "helper.py").write_text("def handle():\n    return 1\n")
+    (graph_repo / "caller.py").write_text("def use():\n    return handle()\n")
+    (graph_repo / "attr_caller.py").write_text(
+        "def go(job):\n    return job.handle()\n"
+    )
+    await audit_target(graph_repo, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": str(graph_repo)})
+        rows = _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
+        by_key = {(r["node_id"], r["name"]): r for r in rows}
+        row = by_key["caller.py::use", "handle"]
+        assert row["definers"] == ["helper.py::handle"]
+        assert row["definers_count"] == 1  # capped list, true total alongside
+        assert row["candidates"] == [] and row["candidates_count"] == 0
+        only_sparse = _data(
+            await c.call_tool(
+                "graph_unresolved", {"path": str(graph_repo), "reason": "text_sparse"}
+            )
+        )
+        assert only_sparse and all(r["reason"] == "text_sparse" for r in only_sparse)
+        attr = _data(
+            await c.call_tool(
+                "graph_unresolved", {"path": str(graph_repo), "call_form": "attr"}
+            )
+        )
+        assert all(r["call_form"] == "attr" for r in attr)
+        assert ("attr_caller.py::go", "handle") in {
+            (r["node_id"], r["name"]) for r in attr
+        }
+        capped = _data(
+            await c.call_tool("graph_unresolved", {"path": str(graph_repo), "limit": 1})
+        )
+        assert len(capped) <= 1
+
+
+async def test_graph_unresolved_before_a_build_is_empty(graph_repo: Path):
+    async with Client(mcp) as c:
+        assert (
+            _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
+            == []
+        )

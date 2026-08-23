@@ -91,10 +91,16 @@ args = ["run", "-i", "--rm",
 - Malware backends: `malware_status`, `malware_update_dbs`, `malware_install`. Only
   `malware_update_dbs` and `malware_install` touch the network, and only when called.
 - Semantic graph, always registered: `graph_build`, `graph_search`, `graph_usages`,
-  `graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters`, `graph_overview`. The
-  graph libraries are core dependencies, so `auditr[mcp]` is enough. See [graph.md](graph.md).
+  `graph_related`, `graph_neighbors`, `graph_concept`, `graph_clusters`, `graph_overview`,
+  `graph_unresolved`. The graph libraries are core dependencies, so `auditr[mcp]` is enough. See
+  [graph.md](graph.md).
 - `graph_overview` caps `god_concepts` and `bottlenecks` at 5 entries each and reports the true
   totals as `god_concept_count` and `bottleneck_count`.
+- `graph_unresolved` returns the refinement queue: one row per fact the deterministic resolver
+  could not place, worst first, filtered by `reason`, `call_form` and `limit`. Read it alongside
+  `graph_usages` before calling a symbol dead. Rows flagged `externally_bound` name a non-repo
+  import. Like `graph_overview`, it caps its `definers` and `candidates` lists at 10 ids and
+  reports the true totals as `definers_count` and `candidates_count`.
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
   `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them

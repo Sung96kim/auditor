@@ -22,7 +22,7 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     """Build the semantic graph. By default it first runs a forced incremental scan (graph
     extraction on) so it works even if the repo never enabled the [graph] config — pass
     scan=False to build from existing cached facts only. Returns {nodes, edges, clusters,
-    findings}."""
+    unresolved, findings}."""
     root = find_root(Path(path))
     if scan:
         await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
@@ -137,3 +137,41 @@ async def graph_overview(path: str = ".") -> dict:
         "bottlenecks": bottlenecks[:5],
         "bottleneck_count": len(bottlenecks),
     }
+
+
+_QUEUE_ID_CAP = 10
+
+
+def _capped(row: dict) -> dict:
+    """One queue row with its two id lists capped and their true totals alongside, the way
+    graph_overview caps its hub lists — a node can have dozens of definers."""
+    out = dict(row)
+    for col in ("definers", "candidates"):
+        ids = out[col]
+        out[col] = ids[:_QUEUE_ID_CAP]
+        out[f"{col}_count"] = len(ids)
+    return out
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def graph_unresolved(
+    path: str = ".",
+    reason: str | None = None,
+    call_form: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Facts the deterministic resolver could not place, worst first: ambiguous names, then
+    ``self``/bare calls, then attribute calls, then label and cluster reasons. Filter with
+    ``reason`` (ambiguous_name | unimportable_name | text_sparse | generic_label |
+    singleton_cluster) and ``call_form`` (bare | self | attr) — bare and self rows are the ones a
+    reader can settle from one file. A row means the graph lost an edge, not that a symbol is
+    unused, so read it before trusting an empty ``used_by`` from graph_usages. Rows with
+    ``externally_bound`` name a non-repo import and are display only. ``definers`` and
+    ``candidates`` are capped at 10 ids with the true totals in ``definers_count`` /
+    ``candidates_count``. Empty until graph_build has run."""
+    root = find_root(Path(path))
+    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        rows = await index.graph.unresolved(reasons=[reason] if reason else None)
+    if call_form:
+        rows = [r for r in rows if r["call_form"] == call_form]
+    return [_capped(r) for r in rows[:limit]]

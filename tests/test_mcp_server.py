@@ -38,6 +38,7 @@ _GRAPH_TOOLS = {
     "graph_search",
     "graph_usages",
     "graph_overview",
+    "graph_unresolved",
 }
 
 
