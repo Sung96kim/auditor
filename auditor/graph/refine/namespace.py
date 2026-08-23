@@ -5,11 +5,6 @@ toplevel. A partition applies what falls under its own prefix and leaves the res
 """
 
 
-def to_toplevel(node_id: str, prefix: str) -> str:
-    """A partition-relative node id in the form identity rows store."""
-    return f"{prefix}{node_id}"
-
-
 def to_partition(node_id: str, prefix: str) -> str | None:
     """A stored node id as this partition sees it, or ``None`` when it is out of scope here."""
     if not prefix:

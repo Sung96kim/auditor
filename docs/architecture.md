@@ -265,11 +265,15 @@ flowchart TB
   counts, so the empty-graph build takes the same path and reports the same shape as any other.
 - `graph/refine/` is the refinement layer: `models.py` (the frozen records), `namespace.py`
   (partition-relative vs toplevel-relative node ids), `overlay.py` (the pure merge) and `lock.py`
-  (the cross-process rebuild lock). Stdlib plus pydantic, no database.
-- `GraphBuilder.run` is the only place refinements are applied: triage against the anchors, merge
-  the edge kinds into the resolver's output, cluster and rank over the merged set, apply the node
-  and cluster kinds, rebuild the queue from the overlaid clustering and retire the rows a
-  refinement answered.
+  (the cross-process rebuild lock). Stdlib, pydantic and `config.py`, no database.
+- `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
+  the active rows against their anchors and the passes are its methods: `edges` merges the edge
+  kinds into the resolver's output, `nodes` applies the node and cluster kinds to the ranked and
+  clustered result, and `queue_rows` retires the rows a refinement answered. Each pass records its
+  verdicts on the object, so `Overlay.outcomes` is whole however many passes the build ran.
+- `build.SimilarityPass` and `build.ClusterPass` are the build's own two seams: the name and usage
+  edges plus the text-sparse set, and one ranking and clustering with the cluster rows and queue
+  rows derived from it. Nothing in `run` is rebound to mean something else.
 - The detectors get their own pass: `build._deterministic_findings` re-ranks and re-clusters over
   the edge list captured before the overlay, so no `GRAPH-*` finding depends on a refinement. It
   costs about 15 % of a warm build.

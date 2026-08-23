@@ -3,15 +3,14 @@
 import sqlite3
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from auditor.config import AuditorSettings
+from auditor.config import AuditorSettings, GraphConfig
 from auditor.database import IndexStore
 from auditor.graph.cluster import cluster_concepts
 from auditor.graph.detectors import run_graph_detectors
-from auditor.graph.hashes import node_truth_sha
 from auditor.graph.model import (
     FUNCTION_KINDS,
     TEST_ROLES,
@@ -27,19 +26,11 @@ from auditor.graph.naming import name_similar_edges
 from auditor.graph.rank import pagerank
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.refine.models import (
-    Anchor,
     RefinementOutcome,
     Snapshot,
     SnapshotPhase,
 )
-from auditor.graph.refine.namespace import to_partition
-from auditor.graph.refine.overlay import (
-    apply_edge_overlay,
-    apply_node_overlay,
-    merge_outcomes,
-    retire_queue_rows,
-    triage,
-)
+from auditor.graph.refine.overlay import Overlay, anchor_truth
 from auditor.graph.resolve_edges import resolve_structural
 from auditor.graph.usage import usage_similar_edges
 from auditor.languages.python.detectors.graph_rules import (
@@ -65,40 +56,6 @@ def compute_abstractness(node: GraphNode, proto_method_ids: set[str]) -> float:
     return min(1.0, score)
 
 
-def _quality_rows(
-    nodes: list[GraphNode],
-    sparse: set[str],
-    labels: dict[str, int],
-    label_names: dict[int, str],
-    sizes: dict[int, int],
-) -> list[UnresolvedRow]:
-    """The build-pass queue rows: symbols with too little text to cluster on, clusters that fell
-    back to a ``cluster-N`` label, and clusters of one. Both cluster rows anchor on the highest-
-    rank member so every row is node-keyed; test-role symbols are gated out, as the resolver does."""
-    role_by_id = {n.id: n.role for n in nodes}
-    rows = [
-        UnresolvedRow.for_node(nid, nid.split("::")[-1], UnresolvedReason.TEXT_SPARSE)
-        for nid in sorted(sparse)
-        if role_by_id.get(nid) not in TEST_ROLES
-    ]
-    rank_by_id = {n.id: n.rank for n in nodes}
-    members: dict[int, list[str]] = defaultdict(list)
-    for nid, cid in labels.items():
-        members[cid].append(nid)
-    for cid, member_ids in sorted(members.items()):
-        head = max(sorted(member_ids), key=lambda nid: rank_by_id.get(nid, 0.0))
-        label = label_names.get(cid, f"cluster-{cid}")
-        if label == f"cluster-{cid}":
-            rows.append(
-                UnresolvedRow.for_node(head, label, UnresolvedReason.GENERIC_LABEL)
-            )
-        if sizes.get(cid, 0) == 1:
-            rows.append(
-                UnresolvedRow.for_node(head, label, UnresolvedReason.SINGLETON_CLUSTER)
-            )
-    return rows
-
-
 def _clusters_for(
     labels: dict[str, int], label_names: dict[int, str]
 ) -> list[GraphCluster]:
@@ -116,26 +73,6 @@ def _clusters_for(
     ]
 
 
-def _anchor_truth(
-    nodes: list[GraphNode],
-    anchors: dict[int, tuple[Anchor, ...]],
-    prefix: str,
-) -> dict[str, str]:
-    """Current ``truth_sha`` for exactly the nodes some anchor names.
-
-    Hashing all 3.9k nodes of this repo costs 88 ms, and a build with no refinements must not pay
-    any of it.
-    """
-    wanted = {
-        local
-        for rows in anchors.values()
-        for row in rows
-        if (local := to_partition(row.node_id, prefix)) is not None
-    }
-    by_id = {n.id: n for n in nodes}
-    return {nid: node_truth_sha(by_id[nid]) for nid in wanted if nid in by_id}
-
-
 def _symbol_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
     return [n for n in nodes if n.kind is not NodeKind.MODULE]
 
@@ -146,34 +83,139 @@ def _concept_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
     ]
 
 
-def _deterministic_findings(
-    nodes: list[GraphNode],
-    out_nodes: list[GraphNode],
-    edges: list[GraphEdge],
-    settings: AuditorSettings,
-) -> dict[str, list[Finding]]:
-    """Detector findings over the pre-overlay graph (spec section 6 step 7, section 2).
+def _protocol_method_ids(nodes: list[GraphNode]) -> set[str]:
+    proto = {
+        n.id
+        for n in nodes
+        if n.kind == "class" and ({"Protocol", "ABC"} & set(n.bases))
+    }
+    return {
+        f"{cid}.{m}"
+        for cid in proto
+        for n in nodes
+        if n.kind == "class" and n.id == cid
+        for m in n.method_names
+    }
 
-    Re-ranks and re-clusters over ``edges`` so no `GRAPH-*` finding can move because a refinement
-    added one: measured 1.4 s for the clustering and 0.06 s for the rank on this repo's 3.9k
-    nodes, about 15 % of a warm build.
+
+class SimilarityPass(BaseModel):
+    """The similarity half of a build: the name and usage edges, and the symbols carrying too
+    little text to cluster on (spec section 6 step 3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name_edges: tuple[GraphEdge, ...] = ()
+    usage_edges: tuple[GraphEdge, ...] = ()
+    sparse: frozenset[str] = frozenset()
+
+
+def _similarity_edges(
+    symbols: list[GraphNode], cfg: GraphConfig, report: Callable[[str], None]
+) -> SimilarityPass:
+    """Name and usage similarity over the symbol nodes, both driven by the same knobs."""
+    report("computing naming similarity")
+    name_edges, sparse = name_similar_edges(
+        symbols,
+        threshold=cfg.name_similarity_threshold,
+        knn_k=cfg.knn_k,
+        extra_stopwords=tuple(cfg.stopwords),
+    )
+    report("computing usage similarity")
+    return SimilarityPass(
+        name_edges=tuple(name_edges),
+        usage_edges=tuple(usage_similar_edges(symbols, knn_k=cfg.knn_k)),
+        sparse=frozenset(sparse),
+    )
+
+
+class ClusterPass(BaseModel):
+    """One ranking and clustering of a build: the nodes it stamped and the cluster rows it
+    produced. The lookups below are derived from those two, so nothing can disagree."""
+
+    model_config = ConfigDict(frozen=True)
+
+    nodes: tuple[GraphNode, ...] = ()
+    clusters: tuple[GraphCluster, ...] = ()
+
+    @property
+    def labels(self) -> dict[int, str]:
+        return {c.cluster_id: c.label for c in self.clusters}
+
+    @property
+    def sizes(self) -> dict[int, int]:
+        return {c.cluster_id: c.member_count for c in self.clusters}
+
+    def quality_rows(self, sparse: frozenset[str]) -> list[UnresolvedRow]:
+        """The build-pass queue rows: symbols with too little text to cluster on, clusters that
+        fell back to a ``cluster-N`` label, and clusters of one. Both cluster rows anchor on the
+        highest-rank member so every row is node-keyed; test-role symbols are gated out."""
+        role_by_id = {n.id: n.role for n in self.nodes}
+        rows = [
+            UnresolvedRow.for_node(
+                nid, nid.split("::")[-1], UnresolvedReason.TEXT_SPARSE
+            )
+            for nid in sorted(sparse)
+            if role_by_id.get(nid) not in TEST_ROLES
+        ]
+        labels, sizes = self.labels, self.sizes
+        rank_by_id = {n.id: n.rank for n in self.nodes}
+        members: dict[int, list[str]] = defaultdict(list)
+        for node in self.nodes:
+            if node.cluster_id is not None:
+                members[node.cluster_id].append(node.id)
+        for cid, member_ids in sorted(members.items()):
+            head = max(sorted(member_ids), key=lambda nid: rank_by_id.get(nid, 0.0))
+            label = labels.get(cid, f"cluster-{cid}")
+            if label == f"cluster-{cid}":
+                rows.append(
+                    UnresolvedRow.for_node(head, label, UnresolvedReason.GENERIC_LABEL)
+                )
+            if sizes.get(cid, 0) == 1:
+                rows.append(
+                    UnresolvedRow.for_node(
+                        head, label, UnresolvedReason.SINGLETON_CLUSTER
+                    )
+                )
+        return rows
+
+
+def _clustered(
+    nodes: list[GraphNode],
+    edges: Sequence[GraphEdge],
+    cfg: GraphConfig,
+    report: Callable[[str], None],
+    *,
+    sparse: frozenset[str],
+    proto: set[str],
+) -> ClusterPass:
+    """Rank and cluster one edge list, stamping every node with what it produced.
+
+    ``sparse`` and ``proto`` are edge-independent, so a second pass over another edge list
+    reproduces them exactly (spec section 6 steps 4 and 7).
     """
+    report("ranking (PageRank)")
     ranks = pagerank(
         [n.id for n in nodes],
         edges,
         personalization={n.id for n in nodes if n.role not in TEST_ROLES},
     )
+    report("clustering concepts")
     labels, label_names = cluster_concepts(
-        _concept_nodes(nodes), edges, floor=settings.graph.cluster_floor
+        _concept_nodes(nodes), edges, floor=cfg.cluster_floor
     )
-    det_nodes = [
-        n.model_copy(
-            update={"rank": ranks.get(n.id, 0.0), "cluster_id": labels.get(n.id)}
-        )
-        for n in out_nodes
-    ]
-    return run_graph_detectors(
-        det_nodes, edges, _clusters_for(labels, label_names), settings
+    return ClusterPass(
+        nodes=tuple(
+            n.model_copy(
+                update={
+                    "abstractness": compute_abstractness(n, proto),
+                    "rank": ranks.get(n.id, 0.0),
+                    "cluster_id": labels.get(n.id),
+                    "text_sparse": n.id in sparse,
+                }
+            )
+            for n in nodes
+        ),
+        clusters=tuple(_clusters_for(labels, label_names)),
     )
 
 
@@ -207,6 +249,21 @@ class GraphWrite(BaseModel):
         for path, findings in self.findings.items():
             index.findings.write_add(conn, path, findings)
 
+    async def persist(
+        self, index: IndexStore, snapshot: Snapshot | None = None
+    ) -> dict[str, int]:
+        """Land this build as one commit and report what it wrote (spec section 6 step 8).
+
+        ``snapshot`` sees the queue immediately before and immediately after that commit, which
+        is the only window in which one build's delta is observable.
+        """
+        if snapshot is not None:
+            await snapshot(SnapshotPhase.BEFORE)
+        await index.transaction(lambda conn: self.apply(conn, index))
+        if snapshot is not None:
+            await snapshot(SnapshotPhase.AFTER)
+        return self.summary()
+
     def summary(self) -> dict[str, int]:
         """What the CLI and the MCP tool report; the one place the counts are named."""
         return {
@@ -235,105 +292,68 @@ class GraphBuilder:
         facts = [
             FileGraphFacts.model_validate_json(b) for b in await index.graph.all_facts()
         ]
-        raw = [n for f in facts for n in f.nodes]
-        seen: set[str] = set()
-        nodes = []
-        for n in raw:
-            if n.id not in seen:
-                seen.add(n.id)
-                nodes.append(n)
+        nodes = _deduped(facts)
         if not nodes:
             # one write path: the empty graph also clears the last build's GRAPH-* findings
-            return await self._persist(index, GraphWrite(detect=cfg.detect))
+            return await GraphWrite(detect=cfg.detect).persist(index, snapshot)
 
-        symbols = _symbol_nodes(nodes)
         report("resolving structural edges")
         structural = resolve_structural(nodes)
         report("applying refinements")
-        prefix = index.partition.prefix
-        active = await index.refinements.active()
-        anchors = await index.refinements.anchors([r.refinement_id for r in active])
-        triaged = triage(active, anchors, _anchor_truth(nodes, anchors, prefix), prefix)
-        edge_overlay = apply_edge_overlay(
-            structural.edges, {n.id for n in nodes}, triaged, prefix
-        )
-        report("computing naming similarity")
-        name_edges, sparse = name_similar_edges(
-            symbols,
-            threshold=cfg.name_similarity_threshold,
-            knn_k=cfg.knn_k,
-            extra_stopwords=tuple(cfg.stopwords),
-        )
-        report("computing usage similarity")
-        usage_edges = usage_similar_edges(symbols, knn_k=cfg.knn_k)
+        overlay = await self._overlay(index, cfg, nodes)
+        similar = _similarity_edges(_symbol_nodes(nodes), cfg, report)
         # captured before the merge: `retarget_edge` deletes from the merged list, so a filter
         # over `all_edges` would hand the detectors a graph missing an edge nothing replaced
-        deterministic_edges = structural.edges + name_edges + usage_edges
-        all_edges = list(edge_overlay.edges) + name_edges + usage_edges
+        deterministic_edges = [
+            *structural.edges,
+            *similar.name_edges,
+            *similar.usage_edges,
+        ]
+        all_edges = [
+            *overlay.edges(structural.edges, {n.id for n in nodes}),
+            *similar.name_edges,
+            *similar.usage_edges,
+        ]
 
         proto = _protocol_method_ids(nodes)
-        nonrank_test = {n.id for n in nodes if n.role not in TEST_ROLES}
-        report("ranking (PageRank)")
-        ranks = pagerank([n.id for n in nodes], all_edges, personalization=nonrank_test)
-        report("clustering concepts")
-        labels, label_names = cluster_concepts(
-            _concept_nodes(nodes), all_edges, floor=cfg.cluster_floor
+        merged = _clustered(
+            nodes, all_edges, cfg, report, sparse=similar.sparse, proto=proto
         )
-
-        out_nodes = [
-            n.model_copy(
-                update={
-                    "abstractness": compute_abstractness(n, proto),
-                    "rank": ranks.get(n.id, 0.0),
-                    "cluster_id": labels.get(n.id),
-                    "text_sparse": n.id in sparse,
-                }
-            )
-            for n in nodes
-        ]
-        node_overlay = apply_node_overlay(
-            out_nodes, _clusters_for(labels, label_names), triaged, prefix
-        )
-        out_nodes = list(node_overlay.nodes)
-        clusters = list(node_overlay.clusters)
         # the queue's cluster rows describe the graph that ships, so a relabelled cluster stops
         # emitting `generic_label` and a moved node stops emitting `singleton_cluster`
-        labels = {n.id: n.cluster_id for n in out_nodes if n.cluster_id is not None}
-        label_names = {c.cluster_id: c.label for c in clusters}
-        sizes = {c.cluster_id: c.member_count for c in clusters}
-        unresolved = retire_queue_rows(
-            [
-                *structural.unresolved,
-                *_quality_rows(out_nodes, sparse, labels, label_names, sizes),
-            ],
-            triaged,
-            prefix,
+        out_nodes, clusters = overlay.nodes(merged.nodes, merged.clusters)
+        served = ClusterPass(nodes=out_nodes, clusters=clusters)
+        unresolved = overlay.queue_rows(
+            [*structural.unresolved, *served.quality_rows(similar.sparse)]
         )
 
         per_file: dict[str, list[Finding]] = {}
         if cfg.detect:
             report("running detectors on the deterministic graph")
-            per_file = _deterministic_findings(
-                nodes, out_nodes, deterministic_edges, settings
+            # the detectors read a graph no refinement touched: the pre-overlay edge list, and
+            # the nodes and clusters a second pass over it produces (spec section 6 step 7)
+            det = _clustered(
+                nodes,
+                deterministic_edges,
+                cfg,
+                report,
+                sparse=similar.sparse,
+                proto=proto,
+            )
+            per_file = run_graph_detectors(
+                det.nodes, deterministic_edges, det.clusters, settings
             )
         report("persisting graph")
         write = GraphWrite(
-            nodes=tuple(out_nodes),
+            nodes=served.nodes,
             edges=tuple(all_edges),
-            clusters=tuple(clusters),
+            clusters=served.clusters,
             unresolved=tuple(unresolved),
             findings=per_file,
             detect=cfg.detect,
-            outcomes=merge_outcomes(
-                triaged.outcomes, edge_overlay.outcomes, node_overlay.outcomes
-            ),
+            outcomes=overlay.outcomes,
         )
-        if snapshot is not None:
-            await snapshot(SnapshotPhase.BEFORE)
-        summary = await self._persist(index, write)
-        if snapshot is not None:
-            await snapshot(SnapshotPhase.AFTER)
-        return summary
+        return await write.persist(index, snapshot)
 
     async def rebuild(
         self,
@@ -357,22 +377,24 @@ class GraphBuilder:
             return await self.run(index, settings, progress=progress, snapshot=snapshot)
 
     @staticmethod
-    async def _persist(index: IndexStore, write: GraphWrite) -> dict[str, int]:
-        """Land one build as a single commit and report what it wrote."""
-        await index.transaction(lambda conn: write.apply(conn, index))
-        return write.summary()
+    async def _overlay(
+        index: IndexStore, cfg: GraphConfig, nodes: list[GraphNode]
+    ) -> Overlay:
+        """This build's refinement pass, triaged against the anchors it can still check."""
+        prefix = index.partition.prefix
+        active = await index.refinements.active()
+        anchors = await index.refinements.anchors([r.refinement_id for r in active])
+        return Overlay.for_build(
+            active, anchors, anchor_truth(nodes, anchors, prefix), prefix, config=cfg
+        )
 
 
-def _protocol_method_ids(nodes: list[GraphNode]) -> set[str]:
-    proto = {
-        n.id
-        for n in nodes
-        if n.kind == "class" and ({"Protocol", "ABC"} & set(n.bases))
-    }
-    return {
-        f"{cid}.{m}"
-        for cid in proto
-        for n in nodes
-        if n.kind == "class" and n.id == cid
-        for m in n.method_names
-    }
+def _deduped(facts: list[FileGraphFacts]) -> list[GraphNode]:
+    """Every node the cached facts hold, first definition winning on a duplicate id."""
+    seen: set[str] = set()
+    nodes: list[GraphNode] = []
+    for node in (n for f in facts for n in f.nodes):
+        if node.id not in seen:
+            seen.add(node.id)
+            nodes.append(node)
+    return nodes

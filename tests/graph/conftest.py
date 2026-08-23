@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from auditor.database import IndexStore
 from auditor.graph.extract import extract_file_facts
@@ -236,14 +237,24 @@ async def facts_store(graph_store: IndexStore) -> IndexStore:
     return graph_store
 
 
+class RefinedStore(BaseModel):
+    """A connected store plus the refinement id the fixture inserted into it, so no test has to
+    assume its row is the first insert."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    store: IndexStore
+    refinement_id: int
+
+
 @pytest.fixture
-async def refined_facts_store(facts_store: IndexStore) -> IndexStore:
+async def refined_facts_store(facts_store: IndexStore) -> RefinedStore:
     """`facts_store` plus one active `add_edge` refinement for the call the resolver cannot place:
     `impl.py::Impl.run` calls `load_user`, which lives in `svc.py`."""
     run_id = await facts_store.runs.add_run(
         Run(repo_identity=facts_store.partition.identity, started_at=1.0)
     )
-    await facts_store.refinements.add_refinement(
+    rid = await facts_store.refinements.add_refinement(
         Refinement(
             run_id=run_id,
             repo_identity=facts_store.partition.identity,
@@ -257,4 +268,4 @@ async def refined_facts_store(facts_store: IndexStore) -> IndexStore:
             status=RefinementStatus.ACTIVE,
         )
     )
-    return facts_store
+    return RefinedStore(store=facts_store, refinement_id=rid)

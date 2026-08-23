@@ -3,16 +3,17 @@ import pytest
 from auditor.config import AuditorSettings, GraphConfig
 from auditor.graph.build import (
     _GRAPH_RULE_IDS,
+    ClusterPass,
     GraphBuilder,
     GraphWrite,
     _concept_nodes,
-    _quality_rows,
     compute_abstractness,
 )
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.model import (
     EdgeKind,
     FactKind,
+    GraphCluster,
     GraphEdge,
     GraphNode,
     NodeKind,
@@ -274,16 +275,19 @@ def test_quality_rows_flag_fallback_labels_and_singletons():
             module="m.py",
             qualname=name,
             rank=rank,
+            cluster_id=cid,
         )
-        for name, rank in (("a", 0.9), ("b", 0.1), ("c", 0.5))
+        for name, rank, cid in (("a", 0.9, 1), ("b", 0.1, 1), ("c", 0.5, 2))
     ]
-    rows = _quality_rows(
-        nodes,
-        {"m.py::b"},
-        {"m.py::a": 1, "m.py::b": 1, "m.py::c": 2},
-        {1: "user"},  # cluster 2 contributed no token, so its label falls back
-        {1: 2, 2: 1},
+    clustered = ClusterPass(
+        nodes=tuple(nodes),
+        clusters=(
+            GraphCluster(cluster_id=1, label="user", member_count=2),
+            # cluster 2 contributed no token, so its label falls back
+            GraphCluster(cluster_id=2, label="cluster-2", member_count=1),
+        ),
     )
+    rows = clustered.quality_rows(frozenset({"m.py::b"}))
     seen = {(r.node_id, r.reason) for r in rows}
     assert ("m.py::b", UnresolvedReason.TEXT_SPARSE) in seen
     assert ("m.py::c", UnresolvedReason.GENERIC_LABEL) in seen
@@ -394,10 +398,11 @@ def _graph_finding() -> Finding:
 
 
 async def test_an_active_refinement_adds_a_refined_edge(refined_facts_store):
+    store = refined_facts_store.store
     settings = AuditorSettings()
     settings.graph.enabled = True
-    await GraphBuilder().run(refined_facts_store, settings)
-    edges = await refined_facts_store.graph.all_edges()
+    await GraphBuilder().run(store, settings)
+    edges = await store.graph.all_edges()
     refined = [e for e in edges if e["provenance"] == "refined"]
     assert [(e["src"], e["dst"]) for e in refined] == [
         ("impl.py::Impl.run", "svc.py::load_user")
@@ -408,33 +413,30 @@ async def test_the_deterministic_edge_set_is_unchanged_by_a_refinement(
     refined_facts_store,
 ):
     """Invariant 1: the overlay adds, it never rewrites what the resolver produced."""
+    store, rid = refined_facts_store.store, refined_facts_store.refinement_id
     settings = AuditorSettings()
     settings.graph.enabled = True
-    await GraphBuilder().run(refined_facts_store, settings)
+    await GraphBuilder().run(store, settings)
     with_refinement = {
         (e["src"], e["dst"], e["kind"])
-        for e in await refined_facts_store.graph.all_edges()
+        for e in await store.graph.all_edges()
         if e["provenance"] == "deterministic"
     }
-    await refined_facts_store.refinements.set_status(1, RefinementStatus.REVERTED)
-    await GraphBuilder().run(refined_facts_store, settings)
-    plain = {
-        (e["src"], e["dst"], e["kind"])
-        for e in await refined_facts_store.graph.all_edges()
-    }
+    await store.refinements.set_status(rid, RefinementStatus.REVERTED)
+    await GraphBuilder().run(store, settings)
+    plain = {(e["src"], e["dst"], e["kind"]) for e in await store.graph.all_edges()}
     assert with_refinement == plain
 
 
 async def test_a_reverted_refinement_stops_being_applied(refined_facts_store):
+    store, rid = refined_facts_store.store, refined_facts_store.refinement_id
     settings = AuditorSettings()
     settings.graph.enabled = True
-    await GraphBuilder().run(refined_facts_store, settings)
-    await refined_facts_store.refinements.set_status(1, RefinementStatus.REVERTED)
-    await GraphBuilder().run(refined_facts_store, settings)
+    await GraphBuilder().run(store, settings)
+    await store.refinements.set_status(rid, RefinementStatus.REVERTED)
+    await GraphBuilder().run(store, settings)
     assert not [
-        e
-        for e in await refined_facts_store.graph.all_edges()
-        if e["provenance"] == "refined"
+        e for e in await store.graph.all_edges() if e["provenance"] == "refined"
     ]
 
 
@@ -442,20 +444,17 @@ async def test_an_active_refinement_retires_the_queue_row_it_answers(
     refined_facts_store,
 ):
     """Spec 5.7: an accepted refinement removes its own `(node_id, name)` row from the queue."""
+    store, rid = refined_facts_store.store, refined_facts_store.refinement_id
     settings = AuditorSettings()
     settings.graph.enabled = True
-    await refined_facts_store.refinements.set_status(1, RefinementStatus.REVERTED)
-    await GraphBuilder().run(refined_facts_store, settings)
-    before = {
-        (r["node_id"], r["name"]) for r in await refined_facts_store.graph.unresolved()
-    }
+    await store.refinements.set_status(rid, RefinementStatus.REVERTED)
+    await GraphBuilder().run(store, settings)
+    before = {(r["node_id"], r["name"]) for r in await store.graph.unresolved()}
     assert ("impl.py::Impl.run", "load_user") in before
 
-    await refined_facts_store.refinements.set_status(1, RefinementStatus.ACTIVE)
-    await GraphBuilder().run(refined_facts_store, settings)
-    after = {
-        (r["node_id"], r["name"]) for r in await refined_facts_store.graph.unresolved()
-    }
+    await store.refinements.set_status(rid, RefinementStatus.ACTIVE)
+    await GraphBuilder().run(store, settings)
+    after = {(r["node_id"], r["name"]) for r in await store.graph.unresolved()}
     assert ("impl.py::Impl.run", "load_user") not in after
 
 
@@ -506,7 +505,7 @@ async def test_the_detectors_never_see_a_refined_edge(refined_facts_store, monke
     monkeypatch.setattr("auditor.graph.build.run_graph_detectors", spy)
     settings = AuditorSettings()
     settings.graph.enabled = True
-    await GraphBuilder().run(refined_facts_store, settings)
+    await GraphBuilder().run(refined_facts_store.store, settings)
     assert seen and all(e.provenance is Provenance.DETERMINISTIC for e in seen[0])
 
 

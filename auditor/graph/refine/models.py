@@ -83,6 +83,18 @@ class Tier(StrEnum):
 #: statuses a build applies. `pinned` is never auto-staled, only marked `drifted` (spec 5.7).
 ACTIVE_STATUSES = frozenset({RefinementStatus.ACTIVE, RefinementStatus.PINNED})
 
+#: the only edge kinds a proposal may name (spec 9.2). The overlay's collision index is built from
+#: structural edges alone, so a similarity kind would slip past it and collapse a real row.
+REFINABLE_EDGE_KINDS = frozenset(
+    {
+        EdgeKind.CALLS,
+        EdgeKind.REFERENCES_TYPE,
+        EdgeKind.CALLBACK_ARG,
+        EdgeKind.INHERITS,
+        EdgeKind.OVERRIDES,
+    }
+)
+
 
 class Evidence(BaseModel):
     """One source excerpt behind a proposal. Provenance only: nothing verifies against it."""
@@ -301,6 +313,22 @@ class Refinement(BaseModel):
         """One required field, read from the target unless ``path`` names the payload half."""
         owner, _, name = path.rpartition(".")
         return getattr(self.payload if owner == "payload" else self.target, name)
+
+    def edge_pair(self) -> tuple[str | None, str | None]:
+        """The ``(src, dst)`` this refinement would put in the graph, toplevel-relative.
+
+        `resolve_ambiguous` names its node in ``target.node_id`` and its chosen dst in
+        ``payload.candidate``; `retarget_edge` means its ``to_dst``. The node kinds mean nothing
+        here and answer ``(None, None)``.
+        """
+        target = self.target
+        if self.kind is RefinementKind.RESOLVE_AMBIGUOUS:
+            return target.node_id, self.payload.candidate
+        if self.kind is RefinementKind.RETARGET_EDGE:
+            return target.src, target.to_dst
+        if self.kind in (RefinementKind.ADD_EDGE, RefinementKind.CONFIRM_EDGE):
+            return target.src, target.dst
+        return None, None
 
 
 class Anchor(BaseModel):

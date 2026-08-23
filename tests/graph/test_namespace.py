@@ -2,7 +2,7 @@
 
 import pytest
 
-from auditor.graph.refine.namespace import in_scope, to_partition, to_toplevel
+from auditor.graph.refine.namespace import in_scope, to_partition
 
 
 @pytest.mark.parametrize(
@@ -13,8 +13,7 @@ from auditor.graph.refine.namespace import in_scope, to_partition, to_toplevel
         ("pkg/m.py::C.method", "apps/backend/", "apps/backend/pkg/m.py::C.method"),
     ],
 )
-def test_a_partition_id_round_trips_through_the_toplevel_form(node_id, prefix, stored):
-    assert to_toplevel(node_id, prefix) == stored
+def test_a_stored_id_maps_back_into_the_partition(node_id, prefix, stored):
     assert to_partition(stored, prefix) == node_id
 
 
