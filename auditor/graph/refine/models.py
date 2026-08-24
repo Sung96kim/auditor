@@ -96,6 +96,16 @@ REFINABLE_EDGE_KINDS = frozenset(
     }
 )
 
+#: the proposal kinds that put an edge in the graph: the only ones a verifier can check and the
+#: only ones that can collide with prior work at commit (spec 9.1, 9.2)
+EDGE_PROPOSAL_KINDS = frozenset(
+    {
+        RefinementKind.ADD_EDGE,
+        RefinementKind.RETARGET_EDGE,
+        RefinementKind.RESOLVE_AMBIGUOUS,
+    }
+)
+
 
 class Evidence(BaseModel):
     """One source excerpt behind a proposal. Provenance only: nothing verifies against it."""
@@ -265,6 +275,21 @@ LABEL_LENGTH = (2, 40)
 ANNOTATION_MAX = 280
 
 
+class ProposedEdge(BaseModel):
+    """The edge a proposal puts in the graph, with the queue name it answers.
+
+    `GraphEdge` is the stored row and carries a weight and a provenance no proposal sets, so a
+    proposal's edge is its own record.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    src: str
+    dst: str
+    kind: EdgeKind
+    name: str
+
+
 class Proposal(BaseModel):
     """One correction a caller offers, before the service judges it (spec 9.2).
 
@@ -326,21 +351,29 @@ class Proposal(BaseModel):
         owner, _, name = path.rpartition(".")
         return getattr(self.payload if owner == "payload" else self.target, name)
 
-    def edge_pair(self) -> tuple[str | None, str | None]:
-        """The ``(src, dst)`` this proposal would put in the graph, toplevel-relative.
+    def edge(self) -> ProposedEdge | None:
+        """The edge this proposal would put in the graph, toplevel-relative.
 
-        `resolve_ambiguous` names its node in ``target.node_id`` and its chosen dst in
-        ``payload.candidate``; `retarget_edge` means its ``to_dst``. The node kinds mean nothing
-        here and answer ``(None, None)``.
+        ``None`` for the node and cluster kinds, and for a stored row read back without the fields
+        its kind needs; `resolve_ambiguous` keeps its dst in ``payload.candidate``.
         """
         target = self.target
         if self.kind is RefinementKind.RESOLVE_AMBIGUOUS:
-            return target.node_id, self.payload.candidate
-        if self.kind is RefinementKind.RETARGET_EDGE:
-            return target.src, target.to_dst
-        if self.kind in (RefinementKind.ADD_EDGE, RefinementKind.CONFIRM_EDGE):
-            return target.src, target.dst
-        return None, None
+            src, dst = target.node_id, self.payload.candidate
+        elif self.kind is RefinementKind.RETARGET_EDGE:
+            src, dst = target.src, target.to_dst
+        elif self.kind in (RefinementKind.ADD_EDGE, RefinementKind.CONFIRM_EDGE):
+            src, dst = target.src, target.dst
+        else:
+            return None
+        if src is None or dst is None or target.edge_kind is None or not target.name:
+            return None
+        return ProposedEdge(src=src, dst=dst, kind=target.edge_kind, name=target.name)
+
+    def edge_pair(self) -> tuple[str | None, str | None]:
+        """The ``(src, dst)`` of :meth:`edge`, or ``(None, None)`` when it names no edge."""
+        edge = self.edge()
+        return (edge.src, edge.dst) if edge is not None else (None, None)
 
 
 class Refinement(Proposal):

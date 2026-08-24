@@ -21,18 +21,10 @@ from auditor.graph.model import (
     NodeKind,
     UnresolvedRow,
 )
-from auditor.graph.refine.models import Anchor, Proposal, RefinementKind
+from auditor.graph.refine.models import EDGE_PROPOSAL_KINDS, Anchor, Proposal
+from auditor.graph.refine.namespace import file_of, short_name
 from auditor.graph.resolve_edges import NameBindings, call_forms, form_for
 from auditor.roles import RoleClassifier
-
-#: the kinds whose destination is backed by a fact, and therefore the only ones with a verifier
-VERIFIED_KINDS = frozenset(
-    {
-        RefinementKind.ADD_EDGE,
-        RefinementKind.RETARGET_EDGE,
-        RefinementKind.RESOLVE_AMBIGUOUS,
-    }
-)
 
 #: node kinds each edge kind's endpoints must have (spec 9.2 "src/dst kinds obey the resolver's
 #: rules"): the resolver only ever emits these pairings.
@@ -148,7 +140,7 @@ class FactVerifier(BaseModel):
             *(i for i in (src, dst, proposal.target.node_id) if i),
             *(row.resolution_path if row else ()),
         ]
-        return tuple(dict.fromkeys(i.split("::")[0] for i in ids))
+        return tuple(dict.fromkeys(file_of(i) for i in ids))
 
     def check(
         self,
@@ -161,18 +153,14 @@ class FactVerifier(BaseModel):
         unusable = self._unusable_path(proposal, row)
         if unusable is not None:
             return unusable
-        if proposal.kind not in VERIFIED_KINDS:
+        edge = proposal.edge()
+        if proposal.kind not in EDGE_PROPOSAL_KINDS or edge is None:
             return VerifyResult(status=VerifyStatus.UNVERIFIED)
-        src, dst = proposal.edge_pair()
-        kind = proposal.target.edge_kind
-        if src is None or dst is None or kind is None:  # refused at construction
-            return VerifyResult(
-                status=VerifyStatus.NO_SRC_NODE, detail="incomplete target"
-            )
+        src, dst, kind = edge.src, edge.dst, edge.kind
         if dst not in definers:
             return VerifyResult(
                 status=VerifyStatus.NOT_A_DEFINER,
-                detail=f"{dst} does not define {proposal.target.name}",
+                detail=f"{dst} does not define {edge.name}",
             )
         if kind is EdgeKind.OVERRIDES and "." not in src.partition("::")[2]:
             return VerifyResult(
@@ -186,7 +174,7 @@ class FactVerifier(BaseModel):
         if endpoint is not None:
             return VerifyResult(status=VerifyStatus.BAD_NODE_KIND, detail=endpoint)
         forms = call_forms(owner)
-        short = dst.split("::")[-1].rsplit(".", 1)[-1]
+        short = short_name(dst)
         call_form, receivers = self._call_site(owner, forms, short, row)
         if short not in self._facts(owner, forms, kind, call_form):
             return VerifyResult(
@@ -214,7 +202,7 @@ class FactVerifier(BaseModel):
         ]
         out: list[Anchor] = []
         for node_id in dict.fromkeys(ids):
-            facts = self.files.get(node_id.split("::")[0])
+            facts = self.files.get(file_of(node_id))
             node = facts.node(node_id) if facts else None
             if facts is not None and node is not None:
                 out.append(
@@ -263,7 +251,7 @@ class FactVerifier(BaseModel):
         if kind is EdgeKind.OVERRIDES:
             path, _, qual = src.partition("::")
             node_id = f"{path}::{qual.rsplit('.', 1)[0]}"
-        facts = self.files.get(node_id.split("::")[0])
+        facts = self.files.get(file_of(node_id))
         return facts.node(node_id) if facts else None
 
     def _call_site(
@@ -290,7 +278,7 @@ class FactVerifier(BaseModel):
         src_kinds, dst_kinds = _ENDPOINT_KINDS[kind]
         if owner.kind not in src_kinds:
             return f"{owner.id} is a {owner.kind.value}, not one of {sorted(k.value for k in src_kinds)}"
-        facts = self.files.get(dst.split("::")[0])
+        facts = self.files.get(file_of(dst))
         node = facts.node(dst) if facts else None
         if node is None:
             return f"{dst} is not a node in its file"

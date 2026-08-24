@@ -2,7 +2,7 @@
 
 import pytest
 
-from auditor.graph.model import EdgeKind, Provenance
+from auditor.graph.model import EdgeKind, GraphEdge, Provenance
 from auditor.graph.refine.conflicts import Conflict, ConflictKind, ConflictRules
 from auditor.graph.refine.models import (
     Proposal,
@@ -35,13 +35,8 @@ def _add(src="a.py::f", dst="b.py::g", name="g") -> Proposal:
 
 def _edge(
     src: str, dst: str, provenance: Provenance = Provenance.DETERMINISTIC
-) -> dict:
-    return {
-        "src": src,
-        "dst": dst,
-        "kind": EdgeKind.CALLS.value,
-        "provenance": provenance.value,
-    }
+) -> GraphEdge:
+    return GraphEdge(src=src, dst=dst, kind=EdgeKind.CALLS, provenance=provenance)
 
 
 def test_no_prior_work_is_no_conflict():

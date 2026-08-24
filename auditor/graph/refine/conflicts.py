@@ -4,34 +4,21 @@ Read against the refinements already active and the resolver's own edges leaving
 second proposal for a settled edge is answered rather than stacked on top of the first.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from enum import StrEnum
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from auditor.graph.model import Provenance
+from auditor.graph.model import GraphEdge, Provenance
 from auditor.graph.refine.models import (
     ACTIVE_STATUSES,
+    EDGE_PROPOSAL_KINDS,
     Proposal,
+    ProposedEdge,
     Refinement,
-    RefinementKind,
     RefinementStatus,
 )
-
-#: the kinds that put an edge in the graph, and therefore the only ones that can collide
-_EDGE_KINDS = frozenset(
-    {
-        RefinementKind.ADD_EDGE,
-        RefinementKind.RETARGET_EDGE,
-        RefinementKind.RESOLVE_AMBIGUOUS,
-    }
-)
-
-
-def _short(node_id: str) -> str:
-    """The bare symbol name inside a node id: ``g`` for ``b.py::Klass.g``."""
-    return node_id.split("::")[-1].rsplit(".", 1)[-1]
+from auditor.graph.refine.namespace import short_name
 
 
 class ConflictKind(StrEnum):
@@ -80,63 +67,50 @@ class ConflictRules(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     active: tuple[Refinement, ...] = ()
-    deterministic: tuple[tuple[str, str, str], ...] = ()
+    deterministic: tuple[GraphEdge, ...] = ()
 
     @classmethod
     def of(
-        cls, active: Sequence[Refinement], edges: Sequence[Mapping[str, Any]]
+        cls, active: Sequence[Refinement], edges: Sequence[GraphEdge]
     ) -> "ConflictRules":
-        """Keep the active edge-shaped refinements and the resolver's own edges.
+        """Keep the active edge-shaped refinements and the resolver's own edges leaving the source.
 
         A `refined` edge is another refinement's work, which the first rule already covers; counting
-        it here would reject a proposal for being its own duplicate. ``edges`` is whatever the
-        caller collected: `GraphDB.edges_of` answers ``src = ? OR dst = ?``, so a caller that does
-        not filter hands in inbound rows too. They are dropped by the source comparison below, but
-        the caller should not send them.
+        it here would reject a proposal for being its own duplicate.
         """
         return cls(
             active=tuple(
                 r
                 for r in active
-                if r.status in ACTIVE_STATUSES and r.kind in _EDGE_KINDS
+                if r.status in ACTIVE_STATUSES and r.kind in EDGE_PROPOSAL_KINDS
             ),
             deterministic=tuple(
-                (str(e["src"]), str(e["kind"]), str(e["dst"]))
-                for e in edges
-                if e.get("provenance", Provenance.DETERMINISTIC.value)
-                == Provenance.DETERMINISTIC.value
+                e for e in edges if e.provenance is Provenance.DETERMINISTIC
             ),
         )
 
     def check(self, proposal: Proposal) -> Conflict | None:
         """The first rule this proposal trips, or ``None``."""
-        if proposal.kind not in _EDGE_KINDS:
+        edge = proposal.edge()
+        if proposal.kind not in EDGE_PROPOSAL_KINDS or edge is None:
             return None
-        src, dst = proposal.edge_pair()
-        kind = proposal.target.edge_kind
-        if src is None or dst is None or kind is None:
-            return None
-        name = proposal.target.name or ""
-        prior = self._prior(src, dst, kind.value, name)
-        if prior is not None:
-            return prior
-        return self._deterministic(src, dst, kind.value, name)
+        prior = self._prior(edge)
+        return prior if prior is not None else self._deterministic(edge)
 
-    def _prior(self, src: str, dst: str, kind: str, name: str) -> Conflict | None:
+    def _prior(self, edge: ProposedEdge) -> Conflict | None:
         """An active refinement that already answers this edge *for this name*, either the same
         way or another.
 
         The short name is half the key. Without it, one accepted correction from a source would
         reject every other unplaced call that source makes.
         """
-        short = name or _short(dst)
         for refinement in self.active:
-            other_src, other_dst = refinement.edge_pair()
-            if other_src != src or refinement.target.edge_kind != kind:
+            other = refinement.edge()
+            if other is None or other.src != edge.src or other.kind is not edge.kind:
                 continue
-            if other_dst is None or _short(other_dst) != short:
+            if short_name(other.dst) != edge.name:
                 continue
-            if other_dst == dst:
+            if other.dst == edge.dst:
                 return Conflict(
                     kind=ConflictKind.DUPLICATE,
                     detail=f"refinement {refinement.refinement_id} already adds this edge",
@@ -145,24 +119,22 @@ class ConflictRules(BaseModel):
             return Conflict(
                 kind=ConflictKind.CONTRADICTS,
                 detail=(
-                    f"refinement {refinement.refinement_id} already points {src} at "
-                    f"{other_dst} for this name"
+                    f"refinement {refinement.refinement_id} already points {edge.src} at "
+                    f"{other.dst} for this name"
                 ),
                 prior_id=refinement.refinement_id,
             )
         return None
 
-    def _deterministic(
-        self, src: str, dst: str, kind: str, name: str
-    ) -> Conflict | None:
-        """A resolver edge of the same kind leaving ``src`` for a symbol of the same short name."""
-        short = name or _short(dst)
-        for other_src, other_kind, other_dst in self.deterministic:
-            if other_src != src or other_kind != kind:
+    def _deterministic(self, edge: ProposedEdge) -> Conflict | None:
+        """A resolver edge of the same kind leaving the source for a symbol of the same short
+        name."""
+        for other in self.deterministic:
+            if other.src != edge.src or other.kind is not edge.kind:
                 continue
-            if _short(other_dst) != short:
+            if short_name(other.dst) != edge.name:
                 continue
-            if other_dst == dst:
+            if other.dst == edge.dst:
                 return Conflict(
                     kind=ConflictKind.REDUNDANT,
                     detail="the resolver already produces this edge",
@@ -170,8 +142,8 @@ class ConflictRules(BaseModel):
             return Conflict(
                 kind=ConflictKind.ALREADY_RESOLVED,
                 detail=(
-                    f"{src} already has a deterministic {kind} edge to {other_dst}; "
-                    "correct it with retarget_edge, not add_edge"
+                    f"{edge.src} already has a deterministic {edge.kind.value} edge to "
+                    f"{other.dst}; correct it with retarget_edge, not add_edge"
                 ),
             )
         return None

@@ -20,6 +20,7 @@ from auditor.graph.model import (
     UnresolvedReason,
     UnresolvedRow,
 )
+from auditor.graph.refine.namespace import short_name
 
 _EDGE_KIND_BY_FACT = {
     FactKind.CALLEE: EdgeKind.CALLS,
@@ -33,16 +34,11 @@ _SELF_RECEIVERS = ("self", "cls")
 _FORM_PREFERENCE = (CallForm.BARE, CallForm.SELF, CallForm.ATTR)
 
 
-def _short_name(node_id: str) -> str:
-    """The bare symbol name inside a node id: ``do_thing`` for ``svc/foo.py::Foo.do_thing``."""
-    return node_id.split("::")[-1].rsplit(".", 1)[-1]
-
-
 def _edged_names(edges: list[GraphEdge]) -> dict[tuple[str, str], set[str]]:
     """(src, edge kind) -> the dst short names already leaving that node."""
     out: dict[tuple[str, str], set[str]] = defaultdict(set)
     for e in edges:
-        out[(e.src, e.kind.value)].add(_short_name(e.dst))
+        out[(e.src, e.kind.value)].add(short_name(e.dst))
     return out
 
 
