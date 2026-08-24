@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
+    Proposal,
     Refinement,
     RefinementKind,
     RefinementPayload,
@@ -13,6 +14,7 @@ from auditor.graph.refine.models import (
     RefinementTarget,
     Run,
     RunStatus,
+    Tier,
     ToolCall,
     TriggerDetail,
     TuningStatus,
@@ -168,3 +170,66 @@ def test_a_run_is_frozen_all_the_way_down():
         run.trigger_detail.files.append("other.py")  # a tuple has no append
     with pytest.raises(ValidationError):
         run.tool_trace[0].tool = "Write"
+
+
+def test_a_cluster_label_must_be_a_name_a_reader_recognises():
+    with pytest.raises(ValidationError, match="label"):
+        Proposal(
+            kind=RefinementKind.RELABEL_CLUSTER,
+            target=RefinementTarget(members=("m.py::a",)),
+            payload=RefinementPayload(label="x"),
+            reason="too short",
+        )
+    with pytest.raises(ValidationError, match="label"):
+        Proposal(
+            kind=RefinementKind.RELABEL_CLUSTER,
+            target=RefinementTarget(members=("m.py::a",)),
+            payload=RefinementPayload(label="cluster-7"),
+            reason="that is the fallback label, not a name",
+        )
+
+
+def test_an_annotation_is_capped_at_280_characters():
+    with pytest.raises(ValidationError, match="annotation"):
+        Proposal(
+            kind=RefinementKind.ANNOTATE_NODE,
+            target=RefinementTarget(node_id="m.py::a"),
+            payload=RefinementPayload(annotation="x" * 281),
+            reason="too long",
+        )
+
+
+def test_a_stored_row_reads_back_even_when_it_predates_the_text_rules():
+    """`_refinement_from_row` re-validates every row on every read, and the overlay reads them on
+    every build, so a rule added after a row was written must not make that row unreadable."""
+    stored = Refinement(
+        run_id="r1",
+        repo_identity="/repo/.git",
+        kind=RefinementKind.ANNOTATE_NODE,
+        target=RefinementTarget(node_id="m.py::a"),
+        payload=RefinementPayload(annotation="x" * 400),
+        reason="written before the cap existed",
+    )
+    assert len(stored.payload.annotation or "") == 400
+
+
+def test_a_refinement_is_built_from_the_proposal_it_stores():
+    proposal = Proposal(
+        kind=RefinementKind.ADD_EDGE,
+        target=RefinementTarget(
+            src="a.py::f", dst="b.py::g", edge_kind=EdgeKind.CALLS, name="g"
+        ),
+        reason="the bare call resolves in b.py",
+        confidence=0.8,
+    )
+    stored = Refinement.of(
+        proposal,
+        run_id="r1",
+        repo_identity="/repo/.git",
+        tier=Tier.B,
+        status=RefinementStatus.PENDING,
+    )
+    assert isinstance(stored, Proposal)
+    assert stored.target == proposal.target
+    assert (stored.run_id, stored.tier, stored.confidence) == ("r1", Tier.B, 0.8)
+    assert stored.created_at > 0 and stored.status_at == stored.created_at

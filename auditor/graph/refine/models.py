@@ -1,11 +1,12 @@
 """Frozen records for the refinement tables (spec 5.3, 5.4, 5.5). These cross the store boundary
 in both directions, so every JSON column has a model rather than a raw dict."""
 
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -258,48 +259,33 @@ _REQUIRED_BY_KIND: dict[RefinementKind, tuple[str, ...]] = {
 }
 
 
-class Refinement(BaseModel):
-    """One correction to the graph, owned by a run and expiring on its own (spec 5.4)."""
+#: a cluster label a proposal may not choose: it is the clusterer's own fallback (spec 9.2)
+_FALLBACK_LABEL = re.compile(r"^cluster-\d+$")
+LABEL_LENGTH = (2, 40)
+ANNOTATION_MAX = 280
+
+
+class Proposal(BaseModel):
+    """One correction a caller offers, before the service judges it (spec 9.2).
+
+    `Refinement` is the stored form of exactly this shape, so the per-kind rules live here and a
+    target no build could ever apply is refused before a run row is written.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    refinement_id: int = 0  # assigned by the insert
-    run_id: str
-    repo_identity: str
+    #: the text rules gate the write path only; a stored row is read back as it was written
+    enforce_text_rules: ClassVar[bool] = True
+
     kind: RefinementKind
     target: RefinementTarget = Field(default_factory=RefinementTarget)
     payload: RefinementPayload = Field(default_factory=RefinementPayload)
     reason: str = ""
     evidence: tuple[Evidence, ...] = ()
     confidence: float = 0.0
-    tier: Tier = Tier.C
-    status: RefinementStatus = RefinementStatus.PENDING
-    drifted: bool = False
-    noop_builds: int = 0
-    supersedes: int | None = None
-    attempts: int = 0
-    created_at: float = 0.0  # both stamped by the validator below when absent
-    status_at: float = 0.0
-
-    @model_validator(mode="before")
-    @classmethod
-    def _one_timestamp_until_it_moves(cls, data: Any) -> Any:
-        """Stamp `created_at` and default `status_at` to it, rather than calling the clock twice.
-
-        Two independent defaults disagreed about one construction in six, and `status_at` is what
-        the staleness sweep reads as "has this moved since it was made?".
-        """
-        if not isinstance(data, dict):
-            return data
-        created = data.get("created_at") or time.time()
-        return {
-            **data,
-            "created_at": created,
-            "status_at": data.get("status_at") or created,
-        }
 
     @model_validator(mode="after")
-    def _the_target_matches_the_kind(self) -> "Refinement":
+    def _the_target_matches_the_kind(self) -> "Proposal":
         """Refuse a target no build could apply: an `add_edge` with no destination is worse
         stored than rejected, and nothing downstream would ever report it."""
         missing = [
@@ -317,13 +303,31 @@ class Refinement(BaseModel):
             raise ValueError(f"{self.kind.value} would point {src} at itself")
         return self
 
+    @model_validator(mode="after")
+    def _the_text_a_reader_sees_is_usable(self) -> "Proposal":
+        """A label has to name the cluster and an annotation has to fit on a card (spec 9.2)."""
+        if not self.enforce_text_rules:
+            return self
+        label = self.payload.label
+        low, high = LABEL_LENGTH
+        if label is not None and (
+            not low <= len(label) <= high or _FALLBACK_LABEL.match(label)
+        ):
+            raise ValueError(
+                f"label must be {low} to {high} characters and not the clusterer's own cluster-N"
+            )
+        annotation = self.payload.annotation
+        if annotation is not None and len(annotation) > ANNOTATION_MAX:
+            raise ValueError(f"annotation must be at most {ANNOTATION_MAX} characters")
+        return self
+
     def _required(self, path: str) -> object:
         """One required field, read from the target unless ``path`` names the payload half."""
         owner, _, name = path.rpartition(".")
         return getattr(self.payload if owner == "payload" else self.target, name)
 
     def edge_pair(self) -> tuple[str | None, str | None]:
-        """The ``(src, dst)`` this refinement would put in the graph, toplevel-relative.
+        """The ``(src, dst)`` this proposal would put in the graph, toplevel-relative.
 
         `resolve_ambiguous` names its node in ``target.node_id`` and its chosen dst in
         ``payload.candidate``; `retarget_edge` means its ``to_dst``. The node kinds mean nothing
@@ -337,6 +341,64 @@ class Refinement(BaseModel):
         if self.kind in (RefinementKind.ADD_EDGE, RefinementKind.CONFIRM_EDGE):
             return target.src, target.dst
         return None, None
+
+
+class Refinement(Proposal):
+    """One correction to the graph, owned by a run and expiring on its own (spec 5.4)."""
+
+    #: `_refinement_from_row` re-validates every stored row on every read, and every build reads
+    #: the overlay, so a text rule tightened later must never make an old row unreadable
+    enforce_text_rules: ClassVar[bool] = False
+
+    refinement_id: int = 0  # assigned by the insert
+    run_id: str
+    repo_identity: str
+    tier: Tier = Tier.C
+    status: RefinementStatus = RefinementStatus.PENDING
+    drifted: bool = False
+    noop_builds: int = 0
+    supersedes: int | None = None
+    attempts: int = 0
+    created_at: float = 0.0  # both stamped by the validator below when absent
+    status_at: float = 0.0
+
+    @classmethod
+    def of(
+        cls,
+        proposal: Proposal,
+        *,
+        run_id: str,
+        repo_identity: str,
+        tier: Tier,
+        status: RefinementStatus,
+        supersedes: int | None = None,
+    ) -> "Refinement":
+        """The stored form of one accepted proposal (spec 9.1's commit step)."""
+        return cls(
+            **proposal.model_dump(),
+            run_id=run_id,
+            repo_identity=repo_identity,
+            tier=tier,
+            status=status,
+            supersedes=supersedes,
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _one_timestamp_until_it_moves(cls, data: Any) -> Any:
+        """Stamp `created_at` and default `status_at` to it, rather than calling the clock twice.
+
+        Two independent defaults disagreed about one construction in six, and `status_at` is what
+        the staleness sweep reads as "has this moved since it was made?".
+        """
+        if not isinstance(data, dict):
+            return data
+        created = data.get("created_at") or time.time()
+        return {
+            **data,
+            "created_at": created,
+            "status_at": data.get("status_at") or created,
+        }
 
 
 class Anchor(BaseModel):
