@@ -16,6 +16,7 @@ from auditor.graph.refine.models import (
     Proposal,
     ProposedEdge,
     Refinement,
+    RefinementKind,
     RefinementStatus,
 )
 from auditor.graph.refine.namespace import short_name
@@ -90,12 +91,20 @@ class ConflictRules(BaseModel):
         )
 
     def check(self, proposal: Proposal) -> Conflict | None:
-        """The first rule this proposal trips, or ``None``."""
+        """The first rule this proposal trips, or ``None``.
+
+        The resolver's own edges answer first, so an edge it now produces is terminal rather than
+        a confirmation of the refinement that used to place it (spec 5.4).
+        """
         edge = proposal.edge()
         if proposal.kind not in EDGE_PROPOSAL_KINDS or edge is None:
             return None
-        prior = self._prior(edge)
-        return prior if prior is not None else self._deterministic(edge)
+        settled = (
+            self._deterministic(edge)
+            if proposal.kind is RefinementKind.ADD_EDGE
+            else None
+        )
+        return settled if settled is not None else self._prior(edge)
 
     def _prior(self, edge: ProposedEdge) -> Conflict | None:
         """An active refinement that already answers this edge *for this name*, either the same
@@ -127,23 +136,29 @@ class ConflictRules(BaseModel):
         return None
 
     def _deterministic(self, edge: ProposedEdge) -> Conflict | None:
-        """A resolver edge of the same kind leaving the source for a symbol of the same short
-        name."""
-        for other in self.deterministic:
-            if other.src != edge.src or other.kind is not edge.kind:
-                continue
-            if short_name(other.dst) != edge.name:
-                continue
-            if other.dst == edge.dst:
-                return Conflict(
-                    kind=ConflictKind.REDUNDANT,
-                    detail="the resolver already produces this edge",
-                )
+        """Spec 9.1's already-resolved rule, which scopes to `add_edge` alone.
+
+        The exact destination is looked for across every resolver edge of the same name before any
+        of them is reported as pointing elsewhere; a `retarget_edge` names one of these on purpose.
+        """
+        settled = [
+            other
+            for other in self.deterministic
+            if other.src == edge.src
+            and other.kind is edge.kind
+            and short_name(other.dst) == edge.name
+        ]
+        if any(other.dst == edge.dst for other in settled):
             return Conflict(
-                kind=ConflictKind.ALREADY_RESOLVED,
-                detail=(
-                    f"{edge.src} already has a deterministic {edge.kind.value} edge to "
-                    f"{other.dst}; correct it with retarget_edge, not add_edge"
-                ),
+                kind=ConflictKind.REDUNDANT,
+                detail="the resolver already produces this edge",
             )
-        return None
+        if not settled:
+            return None
+        return Conflict(
+            kind=ConflictKind.ALREADY_RESOLVED,
+            detail=(
+                f"{edge.src} already has a deterministic {edge.kind.value} edge to "
+                f"{settled[0].dst}; correct it with retarget_edge, not add_edge"
+            ),
+        )
