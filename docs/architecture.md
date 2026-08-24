@@ -266,6 +266,12 @@ flowchart TB
 - `graph/refine/` is the refinement layer: `models.py` (the frozen records), `namespace.py`
   (partition-relative vs toplevel-relative node ids), `overlay.py` (the pure merge) and `lock.py`
   (the cross-process rebuild lock). Stdlib, pydantic and `config.py`, no database.
+- `refine/verify.py` is spec 9.2's fact check. It re-reads every file a proposal names, re-extracts
+  it, and refuses when the file no longer hashes to what the build cached; then it checks the
+  destination's short name against the src node's own fact tuple for that edge kind and call form,
+  rejects a name the caller's module imported from outside the repo, and rejects a destination that
+  does not define the name. The externally-bound rule is `resolve_edges.NameBindings`, the same
+  object the unresolved queue dims a row with.
 - `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
   the active rows against their anchors and the passes are its methods: `edges` merges the edge
   kinds into the resolver's output, `nodes` applies the node and cluster kinds to the ranked and
