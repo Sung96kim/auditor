@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
-from loguru import logger
 
 from auditor.database import open_repo_index
 from auditor.engine import audit_target
@@ -127,7 +126,7 @@ async def test_graph_overview_splits_the_hub_lists_by_subkind(
 
 
 async def test_an_unknown_subkind_is_not_silently_dropped(
-    graph_repo_god_concepts: Path,
+    graph_repo_god_concepts: Path, warning_log: list[str]
 ):
     """The two hub lists are a partition, so a subkind neither of them names has to be reported
     rather than vanish between graph_build's finding count and graph_overview's."""
@@ -146,20 +145,11 @@ async def test_an_unknown_subkind_is_not_silently_dropped(
         async with await open_repo_index(graph_repo_god_concepts) as index:
             await index.findings.add("m.py", [unknown])
             rows = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
-        warnings: list[str] = []
-        sink_id = logger.add(warnings.append, level="WARNING", format="{message}")
-        logger.enable("auditor")
-        try:
-            ov = _data(
-                await c.call_tool(
-                    "graph_overview", {"path": str(graph_repo_god_concepts)}
-                )
-            )
-        finally:
-            logger.disable("auditor")
-            logger.remove(sink_id)
+        ov = _data(
+            await c.call_tool("graph_overview", {"path": str(graph_repo_god_concepts)})
+        )
     assert ov["god_concept_count"] + ov["bottleneck_count"] < len(rows)
-    assert any("cycle" in m for m in warnings)
+    assert any("cycle" in m for m in warning_log)
 
 
 async def test_graph_unresolved_lists_the_queue(graph_repo: Path):
