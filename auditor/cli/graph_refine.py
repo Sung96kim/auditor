@@ -44,14 +44,13 @@ from auditor.graph.model import (
     UnresolvedReason,
 )
 from auditor.graph.payloads import (
-    PruneReport,
     QueueReport,
     QueueRowPayload,
     RefinementRowPayload,
     RefinementsReport,
 )
 from auditor.graph.query import LogQuery
-from auditor.graph.refine.models import Refinement, RefinementStatus
+from auditor.graph.refine.models import PruneOutcome, Refinement, RefinementStatus
 from auditor.graph.refine.service import (
     RefinementLedger,
     RefinementRefused,
@@ -153,7 +152,7 @@ def _transition(
 
 async def _prune(
     root: Path, settings: AuditorSettings, user: UserSettings
-) -> PruneReport:
+) -> PruneOutcome:
     """The retention sweep at this user's configured windows.
 
     The one command here that does build a `RefinementService`: `prune()` reads
@@ -161,8 +160,7 @@ async def _prune(
     read at the command edge, where a broken file is one line, and handed in.
     """
     async with await open_index(root) as index:
-        service = RefinementService(index, root, settings, user)
-        return PruneReport.of(await service.prune())
+        return await RefinementService(index, root, settings, user).prune()
 
 
 @refinements_app.command("list")

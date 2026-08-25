@@ -415,10 +415,9 @@ class RunRegistry(BaseModel):
     def process(cls, identity: str) -> "RunRegistry":
         """The registry every service on ``identity`` stages into unless it is handed another.
 
-        An MCP server builds a `RefinementService` per tool call and takes the repo path per call,
-        so one process holds runs from several checkouts: keyed by identity, an eviction can only
-        ever drop a run of the same identity the caller's handle and rows are bound to, and one
-        repo's `max_open_runs` cannot decide which of another's runs is dropped.
+        An MCP server builds a service per tool call and takes the repo path per call, so one
+        process holds runs from several checkouts. Keyed by identity, an eviction can only drop a
+        run whose rows this handle addresses, and one repo's cap cannot evict another's runs.
         """
         registry = cls.PROCESS.get(identity)
         if registry is None:
@@ -504,7 +503,7 @@ class RefinementLedger(BaseModel):
             older_than=stranded_seconds
         )
         swept = await self.index.runs.prune_skipped_runs(retention_days)
-        return swept.model_copy(update={"stranded": stranded})
+        return swept.model_copy(update={"stranded_runs": stranded})
 
     async def refinement(self, refinement_id: int) -> Refinement:
         """One refinement by id, refused by name rather than answered with ``None``."""

@@ -19,6 +19,7 @@ from pydantic import (
 
 from auditor.graph.model import CallForm, EdgeKind
 from auditor.graph.refine.namespace import file_of, to_toplevel
+from auditor.payload import WirePayload
 
 
 class RunStatus(StrEnum):
@@ -329,18 +330,17 @@ class RefinementCounts(BaseModel):
         return self.model_copy(update={field: getattr(self, field) + rows})
 
 
-class PruneOutcome(BaseModel):
+class PruneOutcome(WirePayload):
     """What one retention sweep did (spec 5.1, 5.7): rows deleted, and stranded runs finished.
+    This is the wire shape too, so `auditr graph refinements prune --json` has no second copy.
 
     Three numbers rather than one, because a sweep that deletes a run deletes the rejections it
     owns with it, and a caller told only "1 run removed" cannot see that.
     """
 
-    model_config = ConfigDict(frozen=True)
-
-    runs: int = 0
-    refinements: int = 0
-    stranded: int = 0
+    removed_runs: int = 0
+    removed_refinements: int = 0
+    stranded_runs: int = 0
 
 
 class RunOutcome(BaseModel):
@@ -548,9 +548,8 @@ class Proposal(BaseModel):
         """One proposal, and the validator's complaint about it when it is not a legal one.
 
         Spec 9.2 stores every rejection, so an illegal payload is re-read with the values the
-        validator could not read dropped: a target no kind could fill, an unreadable enum and a
-        malformed evidence item all become one stored row carrying the complaint. ``kind`` is the
-        exception, because it chooses the shape and there is no row to store without it.
+        validator could not read dropped, and becomes one row carrying the complaint. ``kind`` is
+        the exception: it chooses the shape, and there is no row to store without it.
         """
         if isinstance(raw, Proposal):
             return raw, ""

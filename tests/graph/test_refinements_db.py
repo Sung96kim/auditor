@@ -678,7 +678,7 @@ async def test_prune_skipped_runs_spares_real_runs_and_recent_ones(refine_store)
     )
     await refine_store.runs.add_run(_run(status=RunStatus.SUCCEEDED, started_at=0.0))
     swept = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
-    assert (swept.runs, swept.refinements) == (1, 0)
+    assert (swept.removed_runs, swept.removed_refinements) == (1, 0)
     kept = {r.run_id for r in await refine_store.runs.runs()}
     assert old_skipped not in kept
     assert len(kept) == 2
@@ -695,7 +695,11 @@ async def test_prune_counts_the_rejections_it_deletes_with_the_run(refine_store)
             _refinement(run_id, status=RefinementStatus.REJECTED)
         )
     swept = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
-    assert (swept.runs, swept.refinements, swept.stranded) == (1, 2, 0)
+    assert (swept.removed_runs, swept.removed_refinements, swept.stranded_runs) == (
+        1,
+        2,
+        0,
+    )
     assert await refine_store.refinements.of_run(run_id) == []
 
 
@@ -738,7 +742,9 @@ async def test_prune_never_orphans_a_child_row(refine_store, child):
         await refine_store.refinements.add_refinement(_refinement(run_id))
     else:
         await refine_store.tuning.add_tuning(_tuning(run_id))
-    assert (await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)).runs == 0
+    assert (
+        await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
+    ).removed_runs == 0
     assert await refine_store.runs.run(run_id) is not None
 
 

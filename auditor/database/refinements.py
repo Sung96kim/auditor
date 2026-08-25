@@ -354,7 +354,9 @@ class RunsDB(BaseDB):
                 "DELETE FROM graph_runs WHERE repo_identity = ? AND run_id = ?", doomed
             )
             conn.commit()
-            return PruneOutcome(runs=len(doomed), refinements=max(dropped, 0))
+            return PruneOutcome(
+                removed_runs=len(doomed), removed_refinements=max(dropped, 0)
+            )
 
         return await self._worker.run(op)
 

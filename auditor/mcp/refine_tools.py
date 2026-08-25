@@ -37,10 +37,9 @@ RUN_ENV = "AUDITOR_REFINE_RUN"
 async def _service(repo: ToolRepo) -> RefinementService:
     """One service per tool call, over the run registry this process already shares.
 
-    The registry is deliberately not passed: `RefinementService` defaults to
-    `RunRegistry.process(identity)`, and a second one would split the staging
-    `graph_refine_status` reports on. The user's settings come through `tool_user`, so the read
-    stays off the event loop and a broken settings file is one line rather than a traceback.
+    The registry is deliberately not passed: a second one would split the staging
+    `graph_refine_status` reports on. The user's settings come through `tool_user`, which keeps
+    that read off the event loop and turns a broken settings file into one line.
     """
     return RefinementService(
         repo.index, repo.root, repo.settings, await tool_user(repo)

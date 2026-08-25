@@ -36,7 +36,6 @@ from auditor.graph.payloads import (
     ConceptPayload,
     GraphBuildReport,
     NeighborsReport,
-    PruneReport,
     QueueReport,
     RefinementRowPayload,
     RefinementsReport,
@@ -44,7 +43,7 @@ from auditor.graph.payloads import (
     SearchReport,
     UsagesPayload,
 )
-from auditor.graph.refine.models import RefinementStatus
+from auditor.graph.refine.models import PruneOutcome, RefinementStatus
 from auditor.user_settings import UserSettings
 
 _ACCENT = "#7C7CFF"
@@ -307,7 +306,7 @@ def render_graph_refinement(out: Console, payload: RefinementRowPayload) -> None
         out.print("[dim]run `auditr graph build` to apply it[/dim]")
 
 
-def render_graph_prune(out: Console, payload: PruneReport) -> None:
+def render_graph_prune(out: Console, payload: PruneOutcome) -> None:
     out.print(
         f"[{_ACCENT}]{payload.removed_runs}[/] assessment-only runs removed, with "
         f"[{_ACCENT}]{payload.removed_refinements}[/] rejected refinements they owned"

@@ -27,7 +27,6 @@ from auditor.graph.refine.models import (
     Anchor,
     ClientKind,
     ProducerKind,
-    PruneOutcome,
     Refinement,
     RefinementCounts,
     RefinementKind,
@@ -500,24 +499,4 @@ class LogReport(WirePayload):
             run_count=total if spec.view is LogView.RUNS else 0,
             refinement_count=0 if spec.view is LogView.RUNS else total,
             truncated=total > len(chosen),
-        )
-
-
-class PruneReport(WirePayload):
-    """``auditr graph refinements prune``: what the sweep did to the run log.
-
-    Three numbers, because dropping an assessment-only run drops the rejections it owns with it
-    and finishing a stranded run changes what the log shows.
-    """
-
-    removed_runs: int = 0
-    removed_refinements: int = 0
-    stranded_runs: int = 0
-
-    @classmethod
-    def of(cls, outcome: PruneOutcome) -> "PruneReport":
-        return cls(
-            removed_runs=outcome.runs,
-            removed_refinements=outcome.refinements,
-            stranded_runs=outcome.stranded,
         )
