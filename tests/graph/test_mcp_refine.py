@@ -18,11 +18,11 @@ def _data(result):
 
 
 @pytest.fixture
-async def queued_repo(graph_repo: Path, process_runs: RunRegistry) -> Path:
+async def queued_repo(graph_repo: Path, process_runs: dict[str, RunRegistry]) -> Path:
     """The one-module repo plus a bare call the resolver cannot place, scanned and built.
 
-    `process_runs` is the registry every service in this process shares; taking it here empties it
-    around each test instead of this file building a second one.
+    `process_runs` is every per-identity registry this process shares; taking it here empties them
+    around each test instead of this file building one of its own.
     """
     (graph_repo / "helper.py").write_text(HELPER)
     (graph_repo / "caller.py").write_text(CALLER)

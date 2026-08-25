@@ -3,9 +3,11 @@
 import asyncio
 import time
 from contextlib import suppress
+from pathlib import Path
 
 import pytest
 
+from auditor.database import IndexStore
 from auditor.database.refinements import RefinementsDB
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.lock import rebuild_lock
@@ -28,6 +30,7 @@ from auditor.graph.refine.service import (
     RunRegistry,
 )
 from auditor.graph.refine.verify import VerifyStatus
+from auditor.models import Partition
 from auditor.user_settings import UserSettings
 
 CALL_EDGE = Proposal(
@@ -201,6 +204,49 @@ async def test_an_evicted_run_is_finished_and_its_staging_stored(
         await refine_service.commit(first.run_id)
     with pytest.raises(RefinementRefused, match="not open in this process"):
         await refine_service.commit("a-run-nobody-opened")
+
+
+def _open_runs(most: int) -> UserSettings:
+    """User settings whose only non-default is the registry cap one identity runs under."""
+    return UserSettings.model_validate(
+        {"observer": {"limits": {"max_open_runs": most}}}
+    )
+
+
+async def test_an_eviction_in_one_repo_leaves_another_repos_run_open(
+    refine_service: RefinementService,
+    process_runs: dict[str, RunRegistry],
+    tmp_path: Path,
+):
+    """One MCP server holds runs from every checkout its clients named, so the registry is keyed
+    by identity: on one shared registry the second repo's cap chose which of the first repo's runs
+    to drop, and wrote the drop through the wrong identity, leaving a row `queued` for ever."""
+    parts = (refine_service.index, refine_service.root, refine_service.settings)
+    here = RefinementService(*parts, refine_service.user)
+    mine = await here.begin()
+    await here.propose(mine.run_id, CALL_EDGE)
+
+    elsewhere = await IndexStore.connect(
+        tmp_path / "other.db",
+        repo="other",
+        partition=Partition(identity=str(tmp_path / "other" / ".git")),
+    )
+    try:
+        there = RefinementService(
+            elsewhere, tmp_path, refine_service.settings, _open_runs(1)
+        )
+        first = await there.begin()
+        await there.begin()
+        dropped = await elsewhere.runs.run(first.run_id)
+        assert dropped is not None and dropped.status is RunStatus.SKIPPED
+        assert set(process_runs) == {here.identity, there.identity}
+    finally:
+        await elsewhere.aclose()
+
+    kept = await refine_service.index.runs.run(mine.run_id)
+    assert kept is not None and kept.status is RunStatus.QUEUED
+    assert mine.run_id in RunRegistry.process(here.identity).open_runs
+    assert await refine_service.index.refinements.of_run(mine.run_id) == []
 
 
 async def test_pruning_reaps_an_evicted_run_and_its_rejections(
@@ -445,14 +491,16 @@ async def test_the_run_report_separates_what_committed_from_what_was_refused(
 
 
 async def test_two_services_in_one_process_share_the_run_that_was_staged(
-    refine_service: RefinementService, process_runs: RunRegistry
+    refine_service: RefinementService, process_runs: dict[str, RunRegistry]
 ):
-    """An MCP server builds a `RefinementService` per tool call: without one process-wide home
+    """An MCP server builds a `RefinementService` per tool call: without one home per identity
     `graph_refine_propose` cannot find what `graph_refine_begin` staged."""
     parts = (refine_service.index, refine_service.root, refine_service.settings)
     opener = RefinementService(*parts, refine_service.user)
     proposer = RefinementService(*parts, refine_service.user)
-    assert opener.registry is process_runs and proposer.registry is process_runs
+    shared = RunRegistry.process(refine_service.identity)
+    assert opener.registry is shared and proposer.registry is shared
+    assert set(process_runs) == {refine_service.identity}
     run = await opener.begin()
     verdict = await proposer.propose(run.run_id, CALL_EDGE)
     assert verdict.outcome is ProposalOutcome.STAGED

@@ -389,7 +389,8 @@ class StagedRun(BaseModel):
 
 
 class RunRegistry(BaseModel):
-    """The runs one process has open. Process-local by design (spec 9.1's staging step).
+    """The runs one process has open on one repo identity. Process-local by design (spec 9.1's
+    staging step).
 
     Bounded: an agent that opens a run and then stops is the normal end of a session, and a
     long-lived MCP server would otherwise hold every one of them, with their proposals and anchors,
@@ -400,6 +401,8 @@ class RunRegistry(BaseModel):
 
     #: evicted ids remembered past their run, so `require` can tell a caller what happened
     REMEMBERED: ClassVar[int] = 64
+    #: one registry per repo identity (spec 5.2), keyed the way the identity tables are
+    PROCESS: ClassVar[dict[str, "RunRegistry"]] = {}
 
     open_runs: dict[str, StagedRun] = Field(default_factory=dict)
     #: overwritten from `user.observer.limits.max_open_runs` by every service built on it
@@ -407,13 +410,18 @@ class RunRegistry(BaseModel):
     evicted: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
-    def process(cls) -> "RunRegistry":
-        """The registry every service in this process stages into unless it is handed another.
+    def process(cls, identity: str) -> "RunRegistry":
+        """The registry every service on ``identity`` stages into unless it is handed another.
 
-        An MCP server builds a `RefinementService` per tool call, so without one home a `propose`
-        would look for `begin`'s run in a registry that was thrown away.
+        An MCP server builds a `RefinementService` per tool call and takes the repo path per call,
+        so one process holds runs from several checkouts: keyed by identity, an eviction can only
+        ever drop a run of the same identity the caller's handle and rows are bound to, and one
+        repo's `max_open_runs` cannot decide which of another's runs is dropped.
         """
-        return _PROCESS_RUNS
+        registry = cls.PROCESS.get(identity)
+        if registry is None:
+            registry = cls.PROCESS[identity] = cls()
+        return registry
 
     def opened(
         self, run: Run, scope: str, partition: tuple[str, str]
@@ -458,10 +466,6 @@ class RunRegistry(BaseModel):
         self.evicted[run_id] = self.reason()
         while len(self.evicted) > self.REMEMBERED:
             del self.evicted[next(iter(self.evicted))]
-
-
-#: the runs this process has open (spec 9.1's staging step); `RunRegistry.process` is the reader
-_PROCESS_RUNS = RunRegistry()
 
 
 class RefinementLedger(BaseModel):
@@ -529,9 +533,11 @@ class RefinementService:
         self.root = root
         self.settings = settings
         self.user = user
-        self.registry = registry if registry is not None else RunRegistry.process()
-        # the registry is process-scoped and so is the user's own settings file, so the cap this
-        # service was built with is the cap the process runs under
+        self.registry = (
+            registry if registry is not None else RunRegistry.process(self.identity)
+        )
+        # the registry is per identity and so is the settings file this repo's overlay is read
+        # from, so the cap this service was built with is the cap that identity runs under
         self.registry.max_open = user.observer.limits.max_open_runs
         self.ledger = RefinementLedger(index=index)
         self.facts = FactReader(
@@ -998,7 +1004,9 @@ class RefinementService:
         """Finish a run the registry dropped, so no row is left `queued` (Invariant 2).
 
         Its staging was never promised, but it is stored as rejections rather than vanishing, and
-        the row goes `skipped`, which is the one status `prune_skipped_runs` can ever reap.
+        the row goes `skipped`, which is the one status `prune_skipped_runs` can ever reap. The
+        registry is keyed by identity, so the evicted run's rows and this handle's are the same
+        identity's: a rejection cannot land in another repo's table and `finish_run` cannot miss.
         """
         detail = self.registry.reason()
         async with (

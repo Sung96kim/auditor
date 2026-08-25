@@ -377,11 +377,12 @@ async def refine_service_other(refine_service: RefinementService) -> RefinementS
 
 
 @pytest.fixture
-def process_runs() -> Iterator[RunRegistry]:
-    """The one registry every service in this process shares, emptied around the test."""
-    registry = RunRegistry.process()
-    registry.open_runs.clear()
-    registry.evicted.clear()
-    yield registry
-    registry.open_runs.clear()
-    registry.evicted.clear()
+def process_runs() -> Iterator[dict[str, RunRegistry]]:
+    """Every per-identity registry this process shares, emptied around the test.
+
+    Taking the whole map rather than one registry: a test that drives two checkouts gets two, and
+    a test that leaked one into the next would be the bug this fixture exists to prevent.
+    """
+    RunRegistry.PROCESS.clear()
+    yield RunRegistry.PROCESS
+    RunRegistry.PROCESS.clear()

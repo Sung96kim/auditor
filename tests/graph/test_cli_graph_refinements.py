@@ -46,7 +46,7 @@ BAD = GOOD | {"name": "get_user", "reason": "a name main does not call"}
 
 
 @pytest.fixture
-def refined_repo(graph_repo: Path, process_runs: RunRegistry) -> Path:
+def refined_repo(graph_repo: Path, process_runs: dict[str, RunRegistry]) -> Path:
     """The one-module repo plus a bare call the resolver cannot place, built once."""
     (graph_repo / "helper.py").write_text(HELPER)
     (graph_repo / "caller.py").write_text(CALLER)

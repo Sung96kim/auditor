@@ -33,8 +33,8 @@ def _service(repo: ToolRepo) -> RefinementService:
     """One service per tool call, over the run registry this process already shares.
 
     The registry is deliberately not passed: `RefinementService` defaults to
-    `RunRegistry.process()`, and a second one would split the staging `graph_refine_status`
-    reports on.
+    `RunRegistry.process(identity)`, and a second one would split the staging
+    `graph_refine_status` reports on.
     """
     return RefinementService(
         repo.index, repo.root, repo.settings, load_user_settings(repo.root)
