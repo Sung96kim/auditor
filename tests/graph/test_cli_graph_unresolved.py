@@ -11,11 +11,12 @@ from typer.testing import CliRunner
 from auditor.cli import app
 from auditor.cli.render import render_graph_unresolved
 from auditor.graph.model import QUEUE_ID_CAP
+from auditor.graph.payloads import QueueReport
 
 runner = CliRunner()
 
 
-def _render(payload: list[dict], *, filtered: bool = False) -> str:
+def _render(payload: QueueReport, *, filtered: bool = False) -> str:
     buf = io.StringIO()
     render_graph_unresolved(Console(file=buf, width=100), payload, filtered=filtered)
     return buf.getvalue()
@@ -158,8 +159,8 @@ def test_the_id_lists_are_capped_with_their_true_totals(graph_repo: Path):
 
 def test_an_empty_queue_and_an_empty_filter_read_differently():
     """Four causes used to render one message; only the never-built one may name the build."""
-    empty = _render([])
-    filtered = _render([], filtered=True)
+    empty = _render(QueueReport(()))
+    filtered = _render(QueueReport(()), filtered=True)
     assert "graph build" in empty
     assert "graph build" not in filtered
     assert "filter" in filtered

@@ -28,6 +28,13 @@ from auditor.cli.options import (
     IgnoreSelector,
     RootArg,
 )
+from auditor.cli.payloads import (
+    IgnoreAddReport,
+    IgnoreClearReport,
+    IgnoreListReport,
+    IgnoreRmReport,
+    IgnoreRow,
+)
 from auditor.cli.render import (
     render_ignore_add,
     render_ignore_clear,
@@ -75,7 +82,7 @@ def ignore_add(
 
 async def _ignore_add(
     root: Path, rule_id: str, file: str | None, line: int | None, reason: str | None
-) -> dict:
+) -> IgnoreAddReport:
     ev_hash: str | None = None
     note: str | None = None
     if line is not None and file is not None:
@@ -88,14 +95,14 @@ async def _ignore_add(
         ignore_id = await index.ignores.add(
             rule_id, file, line, ev_hash, reason, time.time()
         )
-    return {
-        "id": ignore_id,
-        "rule_id": rule_id,
-        "file": file,
-        "line": line,
-        "reason": reason,
-        "note": note,
-    }
+    return IgnoreAddReport(
+        id=ignore_id,
+        rule_id=rule_id,
+        file=file,
+        line=line,
+        reason=reason,
+        note=note,
+    )
 
 
 @ignore_app.command("list")
@@ -106,13 +113,15 @@ def ignore_list(
     """List the ignores recorded for this repo (with their ids)."""
     root = cli_root(target)
     present(
-        run(_ignore_list(root), "reading ignores…"), render_ignore_list, as_json=json_
+        IgnoreListReport(tuple(run(_ignore_list(root), "reading ignores…"))),
+        render_ignore_list,
+        as_json=json_,
     )
 
 
-async def _ignore_list(root: Path) -> list[dict]:
+async def _ignore_list(root: Path) -> list[IgnoreRow]:
     async with await open_index(root) as index:
-        return await index.ignores.list()
+        return [IgnoreRow.model_validate(row) for row in await index.ignores.list()]
 
 
 @ignore_app.command("rm")
@@ -128,7 +137,9 @@ def ignore_rm(
     removed = run(_ignore_rm(root, selector, file, line), "removing ignore…")
     if not removed:
         fail(f"no matching ignore for {selector!r}")
-    present({"removed": True, "selector": selector}, render_ignore_rm, as_json=json_)
+    present(
+        IgnoreRmReport(removed=True, selector=selector), render_ignore_rm, as_json=json_
+    )
 
 
 async def _ignore_rm(
@@ -148,7 +159,7 @@ def ignore_clear(
     """Remove every ignore for this repo."""
     root = cli_root(target)
     present(
-        {"cleared": run(_ignore_clear(root), "clearing ignores…")},
+        IgnoreClearReport(cleared=run(_ignore_clear(root), "clearing ignores…")),
         render_ignore_clear,
         as_json=json_,
     )

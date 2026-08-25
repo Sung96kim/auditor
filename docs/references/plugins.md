@@ -5,6 +5,12 @@ the source recorded for each, plus any warning the loader raised. `auditr plugin
 lists every flag. It loads the repo's config first, so what it prints is what a scan of that repo
 would use.
 
+- It prints three sections: `detectors`, `languages` and `reporters`, each row carrying the entry's
+  name and the source it was registered from (`built-in`, an entry point, or a local plugin file).
+- There is no `profiles` section. Profiles are TOML files resolved by `extends`, not registry
+  entries; see [configuration.md](configuration.md).
+- `--json` emits the same three sections plus `warnings`.
+
 ## Common invocations
 
 ```bash

@@ -6,6 +6,7 @@ import typer
 
 from auditor.cli.helpers import cli_root, load_settings, present
 from auditor.cli.options import RootArg
+from auditor.cli.payloads import PluginsReport
 from auditor.cli.render import render_plugins_list
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
@@ -23,6 +24,8 @@ def plugins_list(
     load_settings(
         cli_root(target), loader=loader
     )  # registers every plugin so REGISTRY.snapshot() below sees them
-    payload = REGISTRY.snapshot()
-    payload["warnings"] = loader.warnings
-    present(payload, render_plugins_list, as_json=json_)
+    present(
+        PluginsReport.of(REGISTRY.snapshot(), warnings=loader.warnings),
+        render_plugins_list,
+        as_json=json_,
+    )

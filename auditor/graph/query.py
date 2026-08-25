@@ -10,6 +10,20 @@ from auditor.graph.flow import (
     FlowPayload,
     build_flow,
 )
+from auditor.graph.payloads import (
+    ClusterMember,
+    ClusterRow,
+    ClustersReport,
+    ConceptPayload,
+    NeighborRow,
+    NeighborsReport,
+    RelatedReport,
+    RelatedRow,
+    SearchReport,
+    SearchRow,
+    UsageGroup,
+    UsagesPayload,
+)
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -45,10 +59,10 @@ class GraphQuery:
         matches = await self._resolve_all(symbol)
         return matches[0] if matches else None
 
-    async def related(self, symbol: str, limit: int = 10) -> list[dict]:
+    async def related(self, symbol: str, limit: int = 10) -> RelatedReport:
         nid = await self._resolve(symbol)
         if nid is None:
-            return []
+            return RelatedReport(())
         nodes = await self.index.graph.nodes()
         ranks = {n["node_id"]: n["rank"] for n in nodes}
         kinds = {n["node_id"]: n["kind"] for n in nodes}
@@ -56,17 +70,17 @@ class GraphQuery:
         for e in await self.index.graph.edges_of(nid, _SEMANTIC):
             other = e["dst"] if e["src"] == nid else e["src"]
             out.append(
-                {
-                    "id": other,
-                    "kind": kinds.get(other, "?"),
-                    "weight": round(e["weight"], 4),
-                    "rank": round(ranks.get(other, 0.0), 6),
-                }
+                RelatedRow(
+                    id=other,
+                    kind=kinds.get(other, "?"),
+                    weight=round(e["weight"], 4),
+                    rank=round(ranks.get(other, 0.0), 6),
+                )
             )
-        out.sort(key=lambda r: (-r["weight"], -r["rank"], r["id"]))
-        return out[:limit]
+        out.sort(key=lambda r: (-r.weight, -r.rank, r.id))
+        return RelatedReport(tuple(out[:limit]))
 
-    async def neighbors(self, symbol: str, depth: int = 1) -> list[dict]:
+    async def neighbors(self, symbol: str, depth: int = 1) -> NeighborsReport:
         """Structural neighbours within ``depth`` hops of ``symbol``, breadth-first.
 
         The whole-partition ``GraphCache`` is loaded only past depth 1: one hop visits a single
@@ -74,7 +88,7 @@ class GraphQuery:
         """
         nid = await self._resolve(symbol)
         if nid is None:
-            return []
+            return NeighborsReport(())
         cache = await GraphCache.load(self.index) if depth > 1 else None
         kind_of = (
             {n: row["kind"] for n, row in cache.nodes.items()}
@@ -83,7 +97,7 @@ class GraphQuery:
         )
         seen = {nid}
         frontier = [nid]
-        out: list[dict] = []
+        out: list[NeighborRow] = []
         for hop in range(1, depth + 1):
             nxt: list[str] = []
             for cur in frontier:
@@ -100,18 +114,18 @@ class GraphQuery:
                         seen.add(other)
                         nxt.append(other)
                         out.append(
-                            {
-                                "id": other,
-                                "kind": kind_of.get(other, "?"),
-                                "edge": e["kind"],
-                                "direction": direction,
-                                "hops": hop,
-                            }
+                            NeighborRow(
+                                id=other,
+                                kind=kind_of.get(other, "?"),
+                                edge=e["kind"],
+                                direction=direction,
+                                hops=hop,
+                            )
                         )
             frontier = nxt
-        return out
+        return NeighborsReport(tuple(out))
 
-    async def search(self, term: str, limit: int = 20) -> list[dict]:
+    async def search(self, term: str, limit: int = 20) -> SearchReport:
         """Find symbols whose id contains ``term`` (case-insensitive), highest-rank first —
         for locating the exact node before a usages/neighbors query."""
         term_l = term.lower()
@@ -119,23 +133,25 @@ class GraphQuery:
             n for n in await self.index.graph.nodes() if term_l in n["node_id"].lower()
         ]
         hits.sort(key=lambda n: (-(n.get("rank") or 0.0), n["node_id"]))
-        return [
-            {
-                "id": n["node_id"],
-                "kind": n["kind"],
-                "rank": round(n.get("rank") or 0.0, 6),
-            }
-            for n in hits[:limit]
-        ]
+        return SearchReport(
+            tuple(
+                SearchRow(
+                    id=n["node_id"],
+                    kind=n["kind"],
+                    rank=round(n.get("rank") or 0.0, 6),
+                )
+                for n in hits[:limit]
+            )
+        )
 
-    async def usages(self, symbol: str, sample: int = 5) -> dict:
+    async def usages(self, symbol: str, sample: int = 5) -> UsagesPayload | None:
         """How ``symbol`` connects: structural edges grouped by kind with full counts and a
         rank-ordered sample, split into ``used_by`` (incoming — who depends on it) and
         ``depends_on`` (outgoing). Picks the highest-rank node when a name is ambiguous and
-        lists the rest under ``ambiguous``. ``{}`` if the symbol isn't found."""
+        lists the rest under ``ambiguous``. ``None`` if the symbol isn't found."""
         matches = await self._resolve_all(symbol)
         if not matches:
-            return {}
+            return None
         nodes = await self.index.graph.nodes()
         rank = {n["node_id"]: (n.get("rank") or 0.0) for n in nodes}
         kind_of = {n["node_id"]: n["kind"] for n in nodes}
@@ -149,25 +165,25 @@ class GraphQuery:
             bucket = used_by if incoming else depends_on
             bucket.setdefault(e["kind"], []).append(other)
 
-        def summarize(b: dict[str, list[str]]) -> dict[str, dict]:
+        def summarize(b: dict[str, list[str]]) -> dict[str, UsageGroup]:
             out = {}
             for k, others in b.items():
                 uniq = sorted(set(others), key=lambda o: (-rank.get(o, 0.0), o))
-                out[k] = {"count": len(uniq), "sample": uniq[:sample]}
+                out[k] = UsageGroup(count=len(uniq), sample=tuple(uniq[:sample]))
             return out
 
         used = summarize(used_by)
         deps = summarize(depends_on)
-        return {
-            "symbol": symbol,
-            "resolved": primary,
-            "kind": kind_of.get(primary),
-            "ambiguous": [m for m in matches if m != primary],
-            "used_by": used,
-            "depends_on": deps,
-            "total_in": sum(v["count"] for v in used.values()),
-            "total_out": sum(v["count"] for v in deps.values()),
-        }
+        return UsagesPayload(
+            symbol=symbol,
+            resolved=primary,
+            kind=kind_of.get(primary),
+            ambiguous=tuple(m for m in matches if m != primary),
+            used_by=used,
+            depends_on=deps,
+            total_in=sum(v.count for v in used.values()),
+            total_out=sum(v.count for v in deps.values()),
+        )
 
     async def _unresolved_by_node(
         self, node_ids: list[str]
@@ -182,16 +198,18 @@ class GraphQuery:
             out.setdefault(row["node_id"], []).append(row)
         return out
 
-    async def flow(self, symbol: str, options: FlowOptions = DEFAULT_OPTIONS) -> dict:
+    async def flow(
+        self, symbol: str, options: FlowOptions = DEFAULT_OPTIONS
+    ) -> FlowPayload | None:
         """A directed code path from ``symbol`` as a nested tree (spec §7).
 
         Picks the highest-rank node when the name is ambiguous and lists the rest under
-        ``ambiguous``; ``{}`` when the symbol is not in the graph.
+        ``ambiguous``; ``None`` when the symbol is not in the graph.
         """
         cache = await GraphCache.load(self.index)
         matches = resolve_ids(cache.nodes, symbol)
         if not matches:
-            return {}
+            return None
         primary = max(matches, key=cache.rank)
         result = build_flow(cache, primary, options=options)
         result = result.with_unresolved(
@@ -202,18 +220,23 @@ class GraphQuery:
             symbol=symbol,
             resolved=primary,
             ambiguous=tuple(m for m in matches if m != primary),
-        ).model_dump(mode="json")
+        )
 
-    async def clusters(self) -> list[dict]:
-        return await self.index.graph.clusters()
+    async def clusters(self) -> ClustersReport:
+        return ClustersReport(
+            tuple(
+                ClusterRow.model_validate(row)
+                for row in await self.index.graph.clusters()
+            )
+        )
 
-    async def concept(self, term: str) -> dict:
+    async def concept(self, term: str) -> ConceptPayload | None:
         """The concept cluster best matching ``term`` — by label first, else by the cluster
-        with the most members whose name contains the term. Returns ``{}`` when nothing
+        with the most members whose name contains the term. Returns ``None`` when nothing
         matches (rather than falling back to the largest cluster)."""
         clusters = await self.index.graph.clusters()
         if not clusters:
-            return {}
+            return None
         term_l = term.lower()
         label_hits = [
             c
@@ -231,14 +254,14 @@ class GraphQuery:
                 if cid is not None and term_l in (n.get("name") or "").lower():
                     counts[cid] += 1
             if not counts:
-                return {}
+                return None
             best_id = counts.most_common(1)[0][0]
             best = next((c for c in clusters if c["cluster_id"] == best_id), None)
             if best is None:
-                return {}
+                return None
         members = await self.index.graph.cluster_members(best["cluster_id"])
-        return {
-            "cluster_id": best["cluster_id"],
-            "label": best["label"],
-            "members": members,
-        }
+        return ConceptPayload(
+            cluster_id=best["cluster_id"],
+            label=best["label"],
+            members=tuple(ClusterMember.model_validate(m) for m in members),
+        )

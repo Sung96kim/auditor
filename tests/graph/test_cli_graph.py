@@ -2,15 +2,17 @@ import inspect
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+from _support import cli_json, invoke
 from rich.console import Console
 from typer.testing import CliRunner
 
 from auditor.cli import app
 from auditor.cli.graph import _split_kinds, graph_flow
 from auditor.cli.render import render_graph_flow
-from auditor.graph.flow import FlowNode
+from auditor.graph.flow import FlowNode, FlowPayload
 from auditor.graph.model import DEFAULT_FLOW_LIMIT
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
 from auditor.paths import partition_for
@@ -75,9 +77,9 @@ def _hub_leaf(payload: dict) -> dict:
     return middle["children"][0]
 
 
-def _rendered(payload: dict) -> str:
+def _rendered(payload: dict[str, Any]) -> str:
     buf = io.StringIO()
-    render_graph_flow(Console(file=buf, width=140), payload)
+    render_graph_flow(Console(file=buf, width=140), FlowPayload.model_validate(payload))
     return buf.getvalue()
 
 
@@ -111,8 +113,8 @@ def test_cli_graph_flow_marks_only_the_hub_the_walk_collapsed(
 
 
 def test_the_render_fixture_covers_every_flow_node_field():
-    """_flow_payload() is a hand-written mirror; a new field must reach the render tests."""
-    assert set(_flow_payload()["root"]) == set(FlowNode.model_fields)
+    """_flow_dict() is a hand-written mirror; a new field must reach the render tests."""
+    assert set(_flow_dict()["root"]) == set(FlowNode.model_fields)
 
 
 def test_the_flow_node_cap_has_one_home():
@@ -209,7 +211,13 @@ def test_cli_graph_flow_reads_the_hub_floor_from_repo_config(graph_repo_flow_hub
     assert _hub_leaf(_flow(graph_repo_flow_hub, "--depth", "3"))["hub"]["count"] == 2
 
 
-def _flow_payload() -> dict:
+def _flow_dict() -> dict[str, Any]:
+    """The hand-written mirror of one flow response, as raw JSON keys.
+
+    Kept as a dict so `test_the_render_fixture_covers_every_flow_node_field` still compares real
+    hand-written keys against `FlowNode.model_fields`; comparing a validated model's dump would
+    be tautological.
+    """
     return {
         "symbol": "main",
         "resolved": "app/cli.py::main",
@@ -300,6 +308,11 @@ def _flow_payload() -> dict:
     }
 
 
+def _flow_payload(**over: Any) -> FlowPayload:
+    """`_flow_dict()` validated, with top-level overrides applied before validation."""
+    return FlowPayload.model_validate(_flow_dict() | over)
+
+
 def test_render_graph_flow_shows_the_direction_modules_glyphs_and_truncation():
     """Plain Console, no force_terminal: ANSI codes would split "→ run" into three pieces."""
     buf = io.StringIO()
@@ -317,17 +330,16 @@ def test_render_graph_flow_shows_the_direction_modules_glyphs_and_truncation():
 
 def test_render_graph_flow_says_hub_when_the_walk_did_not_collapse_it():
     """The label reads ``hub.collapsed``, not the child count: a childless hub can be a `hub`."""
-    payload = _flow_payload()
-    payload["root"]["children"][0]["hub"]["collapsed"] = False
+    raw = _flow_dict()
+    raw["root"]["children"][0]["hub"]["collapsed"] = False
     buf = io.StringIO()
-    render_graph_flow(Console(file=buf, width=140), payload)
+    render_graph_flow(Console(file=buf, width=140), FlowPayload.model_validate(raw))
     assert "⊕ 41 hub" in buf.getvalue() and "⊕ 41 elided" not in buf.getvalue()
 
 
 def test_render_graph_flow_shows_the_in_direction():
-    payload = _flow_payload() | {"direction": "in"}
     buf = io.StringIO()
-    render_graph_flow(Console(file=buf, width=140), payload)
+    render_graph_flow(Console(file=buf, width=140), _flow_payload(direction="in"))
     assert "app/cli.py::main flow (in)" in buf.getvalue()
 
 
@@ -345,7 +357,7 @@ def test_render_graph_flow_styles_at_a_terminal():
 
 def test_render_graph_flow_on_an_empty_payload():
     buf = io.StringIO()
-    render_graph_flow(Console(file=buf, width=140), {})
+    render_graph_flow(Console(file=buf, width=140), None)
     assert "no such symbol" in buf.getvalue()
 
 
@@ -376,3 +388,103 @@ def test_rebuild_holds_the_lock_across_the_clear_and_the_scan(
     result = runner.invoke(app, ["graph", "build", str(graph_repo), "--rebuild"])
     assert result.exit_code == 0, result.stdout
     assert seen == ["blocked"]
+
+
+GRAPH_JSON_KEYS: dict[str, list[str]] = {
+    "build": [
+        "clusters",
+        "edges",
+        "expired",
+        "findings",
+        "nodes",
+        "refined",
+        "unresolved",
+    ],
+    "usages": [
+        "ambiguous",
+        "depends_on",
+        "kind",
+        "resolved",
+        "symbol",
+        "total_in",
+        "total_out",
+        "used_by",
+    ],
+    "concept": ["cluster_id", "label", "members"],
+    "flow": [
+        "ambiguous",
+        "direction",
+        "limit",
+        "modules",
+        "resolved",
+        "root",
+        "symbol",
+        "truncated",
+    ],
+}
+GRAPH_ROW_KEYS: dict[str, list[str]] = {
+    "clusters": ["cluster_id", "label", "label_provenance", "member_count"],
+    "search": ["id", "kind", "rank"],
+    "neighbors": ["direction", "edge", "hops", "id", "kind"],
+    "related": ["id", "kind", "rank", "weight"],
+}
+QUEUE_ROW_KEYS: list[str] = [
+    "call_form",
+    "candidates",
+    "candidates_count",
+    "definers",
+    "definers_count",
+    "externally_bound",
+    "fact_kind",
+    "name",
+    "node_id",
+    "priority",
+    "reason",
+    "receiver_root",
+    "resolution_path",
+]
+
+
+@pytest.mark.parametrize("name", sorted(GRAPH_JSON_KEYS))
+def test_graph_object_payload_keys_are_unchanged(graph_repo: Path, name):
+    argv = {
+        "build": ["graph", "build", str(graph_repo)],
+        "usages": ["graph", "usages", "get_user", str(graph_repo)],
+        "concept": ["graph", "concept", "user", str(graph_repo)],
+        "flow": ["graph", "flow", "get_user", str(graph_repo)],
+    }[name]
+    if name != "build":
+        _built(graph_repo)
+    payload = cli_json(invoke(*argv, "--json"))
+    assert payload, (
+        f"{name} produced an empty payload; pick a symbol the fixture graph holds"
+    )
+    assert sorted(payload) == GRAPH_JSON_KEYS[name]
+
+
+@pytest.mark.parametrize("name", sorted(GRAPH_ROW_KEYS))
+def test_graph_row_payload_keys_are_unchanged(graph_repo: Path, name):
+    _built(graph_repo)
+    argv = {
+        "clusters": ["graph", "clusters", str(graph_repo)],
+        "search": ["graph", "search", "user", str(graph_repo)],
+        "neighbors": ["graph", "neighbors", "get_user", str(graph_repo)],
+        "related": ["graph", "related", "get_user", str(graph_repo)],
+    }[name]
+    payload = cli_json(invoke(*argv, "--json"))
+    assert payload, f"{name} produced no rows; pick a symbol the fixture graph holds"
+    assert sorted(payload[0]) == GRAPH_ROW_KEYS[name]
+
+
+def test_graph_unresolved_row_keys_are_unchanged(graph_repo: Path):
+    """The only payload re-derived from a model rather than passed through, so its 13 keys and its
+    derived `priority` both need a pin."""
+    (graph_repo / "helper.py").write_text("def handle():\n    return 1\n")
+    (graph_repo / "caller.py").write_text("def use():\n    return handle()\n")
+    _built(graph_repo)
+    payload = cli_json(invoke("graph", "unresolved", str(graph_repo), "--json"))
+    assert payload, "the fixture repo produced no unresolved rows"
+    assert sorted(payload[0]) == QUEUE_ROW_KEYS
+    # `priority` is a stored column that `QueueRowPayload.of` now re-validates through
+    # `UnresolvedRow._derive_priority`; it must survive that round trip, not be recomputed away.
+    assert isinstance(payload[0]["priority"], int)

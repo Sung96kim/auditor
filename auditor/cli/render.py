@@ -7,12 +7,40 @@ path directly without a TTY.
 Accent colour ``#7C7CFF`` matches the rest of the auditor CLI (see self_update.py).
 """
 
-from typing import Any
-
+from pydantic import BaseModel
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
+
+from auditor.cli.payloads import (
+    ConfigCheckReport,
+    CrossfileReport,
+    DiscoverReport,
+    GraphBuildReport,
+    IgnoreAddReport,
+    IgnoreClearReport,
+    IgnoreListReport,
+    IgnoreRmReport,
+    IndexAddReport,
+    IndexForgetReport,
+    IndexListReport,
+    IndexReposReport,
+    InitReport,
+    ManifestReport,
+    PluginsReport,
+    RulesListReport,
+)
+from auditor.graph.flow import FlowNode, FlowPayload
+from auditor.graph.payloads import (
+    ClustersReport,
+    ConceptPayload,
+    NeighborsReport,
+    QueueReport,
+    RelatedReport,
+    SearchReport,
+    UsagesPayload,
+)
 
 _ACCENT = "#7C7CFF"
 _BORDER = "dim"
@@ -23,116 +51,96 @@ _BORDER = "dim"
 # ---------------------------------------------------------------------------
 
 
-def render_graph_build(out: Console, payload: dict[str, Any]) -> None:
+def render_graph_build(out: Console, payload: GraphBuildReport) -> None:
     t = Table.grid(padding=(0, 3))
     t.add_column(style="bold")
     t.add_column(justify="right", style=_ACCENT)
-    for key in (
-        "nodes",
-        "edges",
-        "clusters",
-        "unresolved",
-        "findings",
-        "refined",
-        "expired",
+    for label, value in (
+        ("nodes", payload.nodes),
+        ("edges", payload.edges),
+        ("clusters", payload.clusters),
+        ("unresolved", payload.unresolved),
+        ("findings", payload.findings),
+        ("refined", payload.refined),
+        ("expired", payload.expired),
     ):
-        if key in payload:
-            t.add_row(key, str(payload[key]))
+        t.add_row(label, str(value))
     out.print(Panel(t, title="graph built", border_style=_BORDER))
 
 
-def render_graph_related(out: Console, payload: list[dict[str, Any]]) -> None:
+def render_graph_related(out: Console, payload: RelatedReport) -> None:
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("symbol")
     t.add_column("kind")
     t.add_column("weight", justify="right")
     t.add_column("rank", justify="right")
-    for row in payload:
-        t.add_row(
-            str(row.get("id", "")),
-            str(row.get("kind", "")),
-            str(row.get("weight", "")),
-            str(row.get("rank", "")),
-        )
+    for row in payload.root:
+        t.add_row(row.id, row.kind, str(row.weight), str(row.rank))
     out.print(t)
 
 
-def render_graph_neighbors(out: Console, payload: list[dict[str, Any]]) -> None:
+def render_graph_neighbors(out: Console, payload: NeighborsReport) -> None:
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("dir")
     t.add_column("edge")
     t.add_column("symbol")
     t.add_column("kind")
     t.add_column("hops", justify="right")
-    for row in sorted(
-        payload,
-        key=lambda r: (r.get("direction", ""), r.get("hops", 0)),
-    ):
-        t.add_row(
-            str(row.get("direction", "")),
-            str(row.get("edge", "")),
-            str(row.get("id", "")),
-            str(row.get("kind", "")),
-            str(row.get("hops", "")),
-        )
+    for row in sorted(payload.root, key=lambda r: (r.direction, r.hops)):
+        t.add_row(row.direction, row.edge, row.id, row.kind, str(row.hops))
     out.print(t)
 
 
-def render_graph_concept(out: Console, payload: dict[str, Any]) -> None:
-    label = payload.get("label", "")
-    member_count = payload.get("member_count", 0)
-    shown = payload.get("shown", 0)
+def render_graph_concept(out: Console, payload: ConceptPayload | None) -> None:
+    if payload is None:
+        out.print("[dim]no such concept[/]")
+        return
     out.print(
-        f"[bold {_ACCENT}]{label}[/] [dim]({member_count} members)[/]"
-        + (f", showing {shown}" if shown and shown < member_count else "")
+        f"[bold {_ACCENT}]{payload.label}[/] [dim]({len(payload.members)} members)[/]"
     )
-    members = payload.get("members", [])
-    if members:
+    if payload.members:
         t = Table(border_style=_BORDER, show_header=False)
         t.add_column("symbol")
-        for m in members:
-            t.add_row(str(m))
+        for member in payload.members:
+            t.add_row(member.id)
         out.print(t)
 
 
-def render_graph_clusters(out: Console, payload: list[dict[str, Any]]) -> None:
+def render_graph_clusters(out: Console, payload: ClustersReport) -> None:
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("label")
     t.add_column("size", justify="right")
-    for row in sorted(payload, key=lambda r: r.get("member_count", 0), reverse=True):
-        t.add_row(str(row.get("label", "")), str(row.get("member_count", "")))
+    for row in sorted(payload.root, key=lambda r: r.member_count, reverse=True):
+        t.add_row(row.label, str(row.member_count))
     out.print(t)
 
 
-def render_graph_search(out: Console, payload: list[dict[str, Any]]) -> None:
+def render_graph_search(out: Console, payload: SearchReport) -> None:
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("symbol")
     t.add_column("kind")
     t.add_column("rank", justify="right")
-    for row in payload:
-        t.add_row(
-            str(row.get("id", "")),
-            str(row.get("kind", "")),
-            str(row.get("rank", "")),
-        )
+    for row in payload.root:
+        t.add_row(row.id, row.kind, str(row.rank))
     out.print(t)
 
 
-def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
-    if not payload:
+def render_graph_usages(out: Console, payload: UsagesPayload | None) -> None:
+    if payload is None:
         out.print("[dim]no such symbol[/]")
         return
     out.print(
-        f"[bold {_ACCENT}]{payload.get('resolved', '')}[/] "
-        f"[dim]({payload.get('kind', '')})[/]  "
-        f"used_by [bold]{payload.get('total_in', 0)}[/] · "
-        f"depends_on [bold]{payload.get('total_out', 0)}[/]"
+        f"[bold {_ACCENT}]{payload.resolved}[/] "
+        f"[dim]({payload.kind or ''})[/]  "
+        f"used_by [bold]{payload.total_in}[/] · "
+        f"depends_on [bold]{payload.total_out}[/]"
     )
-    ambiguous = payload.get("ambiguous", [])
-    if ambiguous:
-        out.print("[yellow]ambiguous[/], also matched: " + ", ".join(ambiguous))
-    for title, key in (("USED BY", "used_by"), ("DEPENDS ON", "depends_on")):
-        groups = payload.get(key, {})
+    if payload.ambiguous:
+        out.print("[yellow]ambiguous[/], also matched: " + ", ".join(payload.ambiguous))
+    for title, groups in (
+        ("USED BY", payload.used_by),
+        ("DEPENDS ON", payload.depends_on),
+    ):
         if not groups:
             continue
         t = Table(
@@ -145,9 +153,9 @@ def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
         t.add_column("edge")
         t.add_column("count", justify="right")
         t.add_column("e.g.")
-        for edge, info in sorted(groups.items(), key=lambda kv: -kv[1]["count"]):
-            sample = ", ".join(s.split("::")[-1] for s in info.get("sample", []))
-            t.add_row(edge, str(info["count"]), sample)
+        for edge, info in sorted(groups.items(), key=lambda kv: -kv[1].count):
+            sample = ", ".join(sym.split("::")[-1] for sym in info.sample)
+            t.add_row(edge, str(info.count), sample)
         out.print(t)
 
 
@@ -159,67 +167,54 @@ _FLOW_GLYPH = {
 }
 
 
-def _flow_label(node: dict[str, Any], *, root: bool = False) -> str:
-    nid = str(node["id"])
-    glyph = "" if root else f"{_FLOW_GLYPH.get(node.get('edge') or '', '→')} "
+def _flow_label(node: FlowNode, *, root: bool = False) -> str:
+    glyph = "" if root else f"{_FLOW_GLYPH.get(node.edge or '', '→')} "
     marks = []
-    if node.get("cycle"):
+    if node.cycle:
         marks.append("[yellow]↺ cycle[/]")
-    elif node.get("seen_ref"):
+    elif node.seen_ref:
         marks.append("[dim]↺ seen[/]")
-    if node.get("stopped"):
+    if node.stopped:
         marks.append("[cyan]⊣ stop[/]")
-    hub = node.get("hub")
-    if hub:
-        kept = "elided" if hub.get("collapsed") else "hub"
-        marks.append(f"[magenta]⊕ {hub['count']} {kept}[/]")
+    if node.hub is not None:
+        kept = "elided" if node.hub.collapsed else "hub"
+        marks.append(f"[magenta]⊕ {node.hub.count} {kept}[/]")
     marks += [
-        f"[{'dim' if u.get('external') else 'yellow'}]? {u['name']}[/]"
-        for u in node.get("unresolved", [])
+        f"[{'dim' if leaf.external else 'yellow'}]? {leaf.name}[/]"
+        for leaf in node.unresolved
     ]
     tail = ("  " + " ".join(marks)) if marks else ""
-    return f"{glyph}[bold]{nid.split('::')[-1]}[/] [dim]{nid.split('::')[0]}[/]{tail}"
+    return f"{glyph}[bold]{node.id.split('::')[-1]}[/] [dim]{node.id.split('::')[0]}[/]{tail}"
 
 
-def _flow_branch(parent: Tree, node: dict[str, Any]) -> None:
-    for child in node.get("children", []):
+def _flow_branch(parent: Tree, node: FlowNode) -> None:
+    for child in node.children:
         _flow_branch(parent.add(_flow_label(child)), child)
 
 
-def render_graph_flow(out: Console, payload: dict[str, Any]) -> None:
-    if not payload:
+def render_graph_flow(out: Console, payload: FlowPayload | None) -> None:
+    if payload is None:
         out.print("[dim]no such symbol[/]")
         return
     out.print(
-        f"[bold {_ACCENT}]{payload.get('resolved', '')}[/] "
-        f"[dim]flow ({payload.get('direction', 'out')})[/]"
+        f"[bold {_ACCENT}]{payload.resolved}[/] "
+        f"[dim]flow ({payload.direction.value})[/]"
     )
-    modules = payload.get("modules", [])
-    if modules:
-        out.print(f"[bold {_ACCENT}]modules[/]  " + " · ".join(modules))
-    ambiguous = payload.get("ambiguous", [])
-    if ambiguous:
-        out.print("[yellow]ambiguous[/], also matched: " + ", ".join(ambiguous))
-    root = payload["root"]
-    tree = Tree(_flow_label(root, root=True))
-    _flow_branch(tree, root)
+    if payload.modules:
+        out.print(f"[bold {_ACCENT}]modules[/]  " + " · ".join(payload.modules))
+    if payload.ambiguous:
+        out.print("[yellow]ambiguous[/], also matched: " + ", ".join(payload.ambiguous))
+    tree = Tree(_flow_label(payload.root, root=True))
+    _flow_branch(tree, payload.root)
     out.print(tree)
-    if payload.get("truncated"):
-        out.print(f"[yellow]truncated[/] at --limit {payload.get('limit')}")
-
-
-def _queue_name(row: dict[str, Any]) -> str:
-    """The called name as written: ``job.handle`` for an attribute call, so two rows on the same
-    method under different receivers are told apart."""
-    name = str(row.get("name", ""))
-    root = row.get("receiver_root")
-    return f"{root}.{name}" if root else name
+    if payload.truncated:
+        out.print(f"[yellow]truncated[/] at --limit {payload.limit}")
 
 
 def render_graph_unresolved(
-    out: Console, payload: list[dict[str, Any]], *, filtered: bool = False
+    out: Console, payload: QueueReport, *, filtered: bool = False
 ) -> None:
-    if not payload:
+    if not payload.root:
         empty = (
             "(no rows matched the filter)"
             if filtered
@@ -233,15 +228,15 @@ def render_graph_unresolved(
     t.add_column("definers", justify="right")
     t.add_column("candidates", justify="right")
     t.add_column("ext-bound", justify="center")
-    for row in payload:
+    for row in payload.root:
         t.add_row(
-            str(row.get("node_id", "")),
-            str(row.get("call_form", "")),
-            _queue_name(row),
-            str(row.get("reason", "")),
-            str(row.get("definers_count", len(row.get("definers", [])))),
-            str(row.get("candidates_count", len(row.get("candidates", [])))),
-            "yes" if row.get("externally_bound") else "",
+            row.node_id,
+            row.call_form.value,
+            row.display_name,
+            row.reason.value,
+            str(row.definers_count),
+            str(row.candidates_count),
+            "yes" if row.externally_bound else "",
         )
     out.print(t)
 
@@ -251,20 +246,20 @@ def render_graph_unresolved(
 # ---------------------------------------------------------------------------
 
 
-def render_rules_list(out: Console, payload: list[dict[str, Any]]) -> None:
+def render_rules_list(out: Console, payload: RulesListReport) -> None:
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("rule_id")
     t.add_column("category")
     t.add_column("severity")
     t.add_column("framework")
     t.add_column("refs")
-    for row in payload:
+    for row in payload.root:
         t.add_row(
-            str(row.get("rule_id", "")),
-            str(row.get("category", "")),
-            str(row.get("default_severity", "")),
-            str(row.get("framework") or ""),
-            ", ".join(row.get("standard_refs", [])),
+            row.rule_id,
+            row.category,
+            row.default_severity,
+            row.framework or "",
+            ", ".join(row.standard_refs),
         )
     out.print(t)
 
@@ -274,46 +269,40 @@ def render_rules_list(out: Console, payload: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_index_add(out: Console, payload: dict[str, Any]) -> None:
-    added: list[str] = payload.get("added", [])
-    out.print(f"[{_ACCENT}]added {len(added)} file(s)[/]")
-    for f in added:
-        out.print(f"  [dim]{f}[/]")
+def render_index_add(out: Console, payload: IndexAddReport) -> None:
+    out.print(f"[{_ACCENT}]added {len(payload.added)} file(s)[/]")
+    for path in payload.added:
+        out.print(f"  [dim]{path}[/]")
 
 
-def render_index_list(out: Console, payload: list[dict[str, Any]]) -> None:
-    if not payload:
+def render_index_list(out: Console, payload: IndexListReport) -> None:
+    if not payload.root:
         out.print("[dim](scope is empty)[/]")
         return
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("file")
     t.add_column("findings", justify="right")
-    for row in payload:
-        t.add_row(
-            str(row.get("path", row.get("file", ""))),
-            str(row.get("finding_count", row.get("findings", ""))),
-        )
+    for entry in payload.root:
+        t.add_row(entry.path, str(sum(entry.counts.values())))
     out.print(t)
 
 
-def render_index_repos(out: Console, payload: list[dict[str, Any]]) -> None:
-    if not payload:
+def render_index_repos(out: Console, payload: IndexReposReport) -> None:
+    if not payload.root:
         out.print("[dim](no repos registered)[/]")
         return
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("repo")
-    for row in payload:
-        t.add_row(str(row.get("repo", "")))
+    for row in payload.root:
+        t.add_row(row.repo)
     out.print(t)
 
 
-def render_index_forget(out: Console, payload: dict[str, Any]) -> None:
-    removed = payload.get("removed", False)
-    repo = payload.get("repo", "")
-    if removed:
-        out.print(f"[{_ACCENT}]removed[/] {repo}")
+def render_index_forget(out: Console, payload: IndexForgetReport) -> None:
+    if payload.removed:
+        out.print(f"[{_ACCENT}]removed[/] {payload.repo}")
     else:
-        out.print(f"[dim]nothing to remove for {repo}[/]")
+        out.print(f"[dim]nothing to remove for {payload.repo}[/]")
 
 
 # ---------------------------------------------------------------------------
@@ -321,17 +310,15 @@ def render_index_forget(out: Console, payload: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_ignore_add(out: Console, payload: dict[str, Any]) -> None:
-    rule_id = payload.get("rule_id", "")
-    scope = payload.get("file") or "repo-wide"
-    note = payload.get("note")
-    out.print(f"[{_ACCENT}]ignore added[/]  [bold]{rule_id}[/]  ({scope})")
-    if note:
-        out.print(f"[yellow]note:[/] {note}")
+def render_ignore_add(out: Console, payload: IgnoreAddReport) -> None:
+    scope = payload.file or "repo-wide"
+    out.print(f"[{_ACCENT}]ignore added[/]  [bold]{payload.rule_id}[/]  ({scope})")
+    if payload.note:
+        out.print(f"[yellow]note:[/] {payload.note}")
 
 
-def render_ignore_list(out: Console, payload: list[dict[str, Any]]) -> None:
-    if not payload:
+def render_ignore_list(out: Console, payload: IgnoreListReport) -> None:
+    if not payload.root:
         out.print("[dim](no ignores)[/]")
         return
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
@@ -340,25 +327,23 @@ def render_ignore_list(out: Console, payload: list[dict[str, Any]]) -> None:
     t.add_column("file")
     t.add_column("line", justify="right")
     t.add_column("reason")
-    for row in payload:
+    for row in payload.root:
         t.add_row(
-            str(row.get("id", "")),
-            str(row.get("rule_id", "")),
-            str(row.get("file") or ""),
-            str(row.get("line") or ""),
-            str(row.get("reason") or ""),
+            str(row.id),
+            row.rule_id,
+            row.file or "",
+            str(row.line) if row.line is not None else "",
+            row.reason or "",
         )
     out.print(t)
 
 
-def render_ignore_rm(out: Console, payload: dict[str, Any]) -> None:
-    selector = payload.get("selector", "")
-    out.print(f"[{_ACCENT}]removed[/] ignore {selector}")
+def render_ignore_rm(out: Console, payload: IgnoreRmReport) -> None:
+    out.print(f"[{_ACCENT}]removed[/] ignore {payload.selector}")
 
 
-def render_ignore_clear(out: Console, payload: dict[str, Any]) -> None:
-    n = payload.get("cleared", 0)
-    out.print(f"[{_ACCENT}]cleared[/] {n} ignore(s)")
+def render_ignore_clear(out: Console, payload: IgnoreClearReport) -> None:
+    out.print(f"[{_ACCENT}]cleared[/] {payload.cleared} ignore(s)")
 
 
 # ---------------------------------------------------------------------------
@@ -366,20 +351,16 @@ def render_ignore_clear(out: Console, payload: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_manifest_list(out: Console, payload: list[dict[str, Any]]) -> None:
-    if not payload:
+def render_manifest_list(out: Console, payload: ManifestReport) -> None:
+    if not payload.root:
         out.print("[dim](no entries)[/]")
         return
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("line", justify="right")
     t.add_column("kind")
     t.add_column("symbol")
-    for row in payload:
-        t.add_row(
-            str(row.get("line", "")),
-            str(row.get("kind", "")),
-            str(row.get("symbol", "")),
-        )
+    for entry in payload.root:
+        t.add_row(str(entry.line), entry.kind.value, entry.symbol)
     out.print(t)
 
 
@@ -388,22 +369,25 @@ def render_manifest_list(out: Console, payload: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_plugins_list(out: Console, payload: dict[str, Any]) -> None:
-    for section in ("detectors", "languages", "reporters"):
-        items: dict[str, dict[str, Any]] = payload.get(section, {})
+def render_plugins_list(out: Console, payload: PluginsReport) -> None:
+    sections = (
+        ("detectors", payload.detectors),
+        ("languages", payload.languages),
+        ("reporters", payload.reporters),
+    )
+    for title, items in sections:
         if not items:
             continue
         t = Table(
-            border_style=_BORDER, show_header=True, header_style="bold", title=section
+            border_style=_BORDER, show_header=True, header_style="bold", title=title
         )
         t.add_column("name")
         t.add_column("source")
-        for name, meta in items.items():
-            t.add_row(name, str(meta.get("source", "")))
+        for name, info in items.items():
+            t.add_row(name, info.source)
         out.print(t)
-    warnings: list[str] = payload.get("warnings", [])
-    for w in warnings:
-        out.print(f"[yellow]warning:[/] {w}")
+    for warning in payload.warnings:
+        out.print(f"[yellow]warning:[/] {warning}")
 
 
 # ---------------------------------------------------------------------------
@@ -411,15 +395,15 @@ def render_plugins_list(out: Console, payload: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_discover(out: Console, payload: list[dict[str, Any]]) -> None:
-    if not payload:
+def render_discover(out: Console, payload: DiscoverReport) -> None:
+    if not payload.root:
         out.print("[dim](no files found)[/]")
         return
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("file")
     t.add_column("role")
-    for row in payload:
-        t.add_row(str(row.get("file", "")), str(row.get("role", "")))
+    for row in payload.root:
+        t.add_row(row.file, row.role.value)
     out.print(t)
 
 
@@ -428,24 +412,24 @@ def render_discover(out: Console, payload: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_config_show(out: Console, payload: dict[str, Any]) -> None:
-    out.print_json(data=payload)
+def render_config_show(out: Console, payload: BaseModel) -> None:
+    """Either settings model, printed as the same JSON ``--json`` would emit."""
+    out.print_json(data=payload.model_dump(mode="json", by_alias=True))
 
 
-def render_config_check(out: Console, payload: dict[str, Any]) -> None:
+def render_config_check(out: Console, payload: ConfigCheckReport) -> None:
     unknown = [
         (kind, key)
         for kind, keys in (
-            ("repo policy", payload.get("policy_unknown", [])),
-            ("user settings", payload.get("user_unknown", [])),
+            ("repo policy", payload.policy_unknown),
+            ("user settings", payload.user_unknown),
         )
         for key in keys
     ]
-    root = payload.get("root", "")
     if not unknown:
-        out.print(f"[{_ACCENT}]config ok:[/] no unknown keys ({root})")
+        out.print(f"[{_ACCENT}]config ok:[/] no unknown keys ({payload.root})")
         return
-    out.print(f"[dim]{root}[/dim]")
+    out.print(f"[dim]{payload.root}[/dim]")
     t = Table(border_style=_BORDER, show_header=True, header_style="bold")
     t.add_column("where")
     t.add_column("unknown key")
@@ -460,9 +444,8 @@ def render_config_check(out: Console, payload: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_crossfile(out: Console, payload: dict[str, Any]) -> None:
-    n = payload.get("cross_file_findings", 0)
-    out.print(f"[{_ACCENT}]cross-file findings:[/] {n}")
+def render_crossfile(out: Console, payload: CrossfileReport) -> None:
+    out.print(f"[{_ACCENT}]cross-file findings:[/] {payload.cross_file_findings}")
 
 
 # ---------------------------------------------------------------------------
@@ -470,39 +453,40 @@ def render_crossfile(out: Console, payload: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_init(out: Console, payload: dict[str, Any]) -> None:
+def render_init(out: Console, payload: InitReport) -> None:
     t = Table.grid(padding=(0, 3))
     t.add_column(style="bold")
     t.add_column(style=_ACCENT)
-    for label, key in (
-        ("home", "home"),
-        ("config", "config"),
-        ("schema", "schema"),
-        ("repo", "repo_dir"),
+    for label, value in (
+        ("home", payload.home),
+        ("config", payload.config),
+        ("schema", payload.schema_path),
+        ("repo", payload.repo_dir),
     ):
-        if payload.get(key):
-            t.add_row(label, str(payload[key]))
-    written = payload.get("written") or []
-    if payload.get("checked"):
+        if value:
+            t.add_row(label, value)
+    if payload.checked:
         state = "not written (--check)"
     else:
-        state = ", ".join(written) if written else "nothing (up to date)"
+        state = (
+            ", ".join(payload.written) if payload.written else "nothing (up to date)"
+        )
     t.add_row("written", state)
     out.print(Panel(t, title="auditor init", border_style=_BORDER))
-    for key in payload.get("unknown_keys") or []:
+    for key in payload.unknown_keys:
         out.print(f"[yellow]unknown key[/yellow] {key}")
-    if payload.get("migrated"):
+    if payload.migrated:
         out.print(
             f"[{_ACCENT}]moved repo:[/] settings were created for "
-            f"{payload['moved_from']}; the breadcrumb now points here"
+            f"{payload.moved_from}; the breadcrumb now points here"
         )
-    elif payload.get("moved_from"):
+    elif payload.moved_from:
         out.print(
-            f"[yellow]moved repo:[/yellow] settings were created for {payload['moved_from']}; "
+            f"[yellow]moved repo:[/yellow] settings were created for {payload.moved_from}; "
             "re-run with --migrate to point them here"
         )
-    if payload.get("legacy_status"):
+    if payload.legacy_status:
         out.print(
-            f"[yellow]leftover status file:[/yellow] {payload['legacy_status']}; "
+            f"[yellow]leftover status file:[/yellow] {payload.legacy_status}; "
             "remove it with --clean-status"
         )

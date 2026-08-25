@@ -13,12 +13,20 @@ from auditor.cli.helpers import (
     run,
 )
 from auditor.cli.options import RootArg, ScopePaths
+from auditor.cli.payloads import (
+    IndexAddReport,
+    IndexForgetReport,
+    IndexListReport,
+    IndexReposReport,
+    RepoRow,
+)
 from auditor.cli.render import (
     render_index_add,
     render_index_forget,
     render_index_list,
     render_index_repos,
 )
+from auditor.models import IndexEntry
 from auditor.paths import repo_key
 
 index_app = typer.Typer(
@@ -38,7 +46,7 @@ def index_add(
         str(p.relative_to(root)) if p.is_relative_to(root) else str(p) for p in paths
     ]
     run(_index_add(root, rels), "registering scope…")
-    present({"added": rels}, render_index_add, as_json=json_)
+    present(IndexAddReport(added=tuple(rels)), render_index_add, as_json=json_)
 
 
 async def _index_add(root: Path, rels: list[str]) -> None:
@@ -53,12 +61,16 @@ def index_list(
 ) -> None:
     """List the registered scope + per-file counts."""
     root = cli_root(target)
-    present(run(_index_list(root), "reading index…"), render_index_list, as_json=json_)
+    present(
+        IndexListReport(tuple(run(_index_list(root), "reading index…"))),
+        render_index_list,
+        as_json=json_,
+    )
 
 
-async def _index_list(root: Path) -> list[dict]:
+async def _index_list(root: Path) -> list[IndexEntry]:
     async with await open_index(root) as index:
-        return [e.model_dump(mode="json") for e in await index.files.list()]
+        return await index.files.list()
 
 
 @index_app.command("repos")
@@ -66,12 +78,16 @@ def index_repos(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List every repo registered in the shared global index (~/.auditor)."""
-    present(run(_index_repos(), "reading index…"), render_index_repos, as_json=json_)
+    present(
+        IndexReposReport(tuple(run(_index_repos(), "reading index…"))),
+        render_index_repos,
+        as_json=json_,
+    )
 
 
-async def _index_repos() -> list[dict]:
+async def _index_repos() -> list[RepoRow]:
     async with await open_shared_index() as index:
-        return await index.repos.list()
+        return [RepoRow.model_validate(row) for row in await index.repos.list()]
 
 
 @index_app.command("forget")
@@ -98,7 +114,7 @@ def index_forget(
         )
     removed = run(_index_forget(root), "forgetting repo…")
     present(
-        {"repo": key, "removed": removed},
+        IndexForgetReport(repo=key, removed=removed),
         render_index_forget,
         as_json=json_,
     )

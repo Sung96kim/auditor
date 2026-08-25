@@ -38,6 +38,7 @@ from auditor.cli.options import (
     FlowSymbol,
     GraphTarget,
 )
+from auditor.cli.payloads import GraphBuildReport
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
@@ -129,7 +130,7 @@ def graph_build(
             return await _build(root, settings, report, lock_held=True)
 
     summary = run_staged(do_build, "building graph…")
-    present(summary, render_graph_build, as_json=json_)
+    present(GraphBuildReport.model_validate(summary), render_graph_build, as_json=json_)
 
 
 def _query_cmd(
@@ -364,7 +365,7 @@ def graph_export(
                     hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
                 ),
             )
-        return to_dot(payload, flow=tree) if tree else None
+        return to_dot(payload, flow=tree.model_dump(mode="json")) if tree else None
 
     dot = run(do_export(), "exporting…")
     if dot is None:

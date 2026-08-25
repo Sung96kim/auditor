@@ -6,7 +6,6 @@ back, so the ``graph`` sub-app stays a one-way dependency.
 
 from functools import partial
 from pathlib import Path
-from typing import Any
 
 import typer
 
@@ -19,12 +18,8 @@ from auditor.cli.options import (
     QueueReason,
 )
 from auditor.cli.render import render_graph_unresolved
-from auditor.graph.model import (
-    QUEUE_ROW_LIMIT,
-    CallForm,
-    UnresolvedReason,
-    capped_row,
-)
+from auditor.graph.model import QUEUE_ROW_LIMIT, CallForm, UnresolvedReason
+from auditor.graph.payloads import QueueReport, QueueRowPayload
 
 
 async def _unresolved_rows(
@@ -34,7 +29,7 @@ async def _unresolved_rows(
     call_forms: list[CallForm] | None,
     limit: int,
     external: bool,
-) -> list[dict[str, Any]]:
+) -> QueueReport:
     """Read the queue in drain order. Both filters and the limit are pushed into the query, so
     the limit always counts rows the caller actually sees and a big queue never lands whole."""
     async with await open_index(root) as index:
@@ -44,7 +39,7 @@ async def _unresolved_rows(
             limit=limit,
             external=external,
         )
-    return [capped_row(r) for r in rows]
+    return QueueReport(tuple(QueueRowPayload.of(r) for r in rows))
 
 
 def graph_unresolved(

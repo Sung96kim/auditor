@@ -8,6 +8,7 @@ import typer
 from auditor.cli.console import err_console
 from auditor.cli.helpers import cli_root, fail, load_settings, present
 from auditor.cli.options import RootArg
+from auditor.cli.payloads import RulesListReport
 from auditor.cli.render import render_rules_list
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
@@ -55,4 +56,4 @@ def rules_list(
             f"unknown framework {framework!r}; choose from {sorted(REGISTRY.frameworks())}"
         )
     rows = REGISTRY.rule_rows(category=category, standard=standard, framework=framework)
-    present([row.model_dump() for row in rows], render_rules_list, as_json=json_)
+    present(RulesListReport(tuple(rows)), render_rules_list, as_json=json_)

@@ -98,6 +98,10 @@ auditr graph export . --format dot > graph.dot
 - `search` matches a substring against node ids, highest rank first. `--limit` defaults to 20.
 - `concept` returns the whole membership of the cluster a term belongs to, matching the cluster
   label first and member names second.
+- `graph concept` prints the cluster's label, its member count and every member's symbol id. The
+  count and the ids were both broken before 0.11: the renderer read keys the query never returned.
+  The MCP `graph_concept` tool still caps its member list at `limit` and reports `member_count` and
+  `shown` alongside.
 - `clusters` lists every concept cluster with its id, label and member count.
 - Worked recipes with real command output live in the plugin's
   [explore-graph recipes](../../plugin/skills/explore-graph/references/recipes.md).

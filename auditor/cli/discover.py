@@ -13,6 +13,7 @@ from auditor.cli.helpers import (
     require_exists,
 )
 from auditor.cli.options import ConfigJson, DirTarget
+from auditor.cli.payloads import DiscoveredFile, DiscoverReport
 from auditor.cli.render import render_discover
 from auditor.discovery import FileDiscovery
 from auditor.roles import RoleClassifier
@@ -30,7 +31,7 @@ def discover(
     root = cli_root(target, overrides=overrides)
     settings = load_settings(root, overrides=overrides)
     classifier = RoleClassifier(settings.role_globs)
-    out = []
+    rows: list[DiscoveredFile] = []
     discovery = FileDiscovery(
         root,
         exclude_globs=tuple(settings.exclude),
@@ -41,5 +42,5 @@ def discover(
         role = classifier.classify(
             rel, path.read_text(encoding="utf-8", errors="replace")
         )
-        out.append({"file": rel, "role": role.value})
-    present(out, render_discover, as_json=json_)
+        rows.append(DiscoveredFile(file=rel, role=role))
+    present(DiscoverReport(tuple(rows)), render_discover, as_json=json_)

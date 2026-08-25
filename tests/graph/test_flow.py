@@ -22,6 +22,7 @@ from auditor.graph.flow import (
     FlowDirection,
     FlowNode,
     FlowOptions,
+    FlowPayload,
     FlowResult,
     HubMark,
     _NodeMarks,
@@ -255,7 +256,7 @@ async def test_neighbors_uses_the_cache_past_depth_one(flow_store, monkeypatch):
 
     monkeypatch.setattr(flow_store.graph, "edges_of", boom)
     hits = await GraphQuery(flow_store).neighbors("main", depth=2)
-    hops = {h["id"]: h["hops"] for h in hits}
+    hops = {h.id: h.hops for h in hits.root}
     assert {nid for nid, hop in hops.items() if hop == 1} == _ONE_HOP_FROM_MAIN
     assert {nid for nid, hop in hops.items() if hop == 2} == {
         "app/base.py::Handler.handle",
@@ -265,7 +266,7 @@ async def test_neighbors_uses_the_cache_past_depth_one(flow_store, monkeypatch):
         "app/loop.py::pong",
         *LEAVES,
     }
-    assert {h["direction"] for h in hits} == {"out", "in"}
+    assert {h.direction for h in hits.root} == {"out", "in"}
 
 
 async def test_neighbors_at_depth_one_does_not_load_the_whole_partition(
@@ -279,10 +280,10 @@ async def test_neighbors_at_depth_one_does_not_load_the_whole_partition(
 
     monkeypatch.setattr(flow_store.graph, "all_edges", boom)
     hits = await GraphQuery(flow_store).neighbors("main", depth=1)
-    assert {h["id"] for h in hits} == _ONE_HOP_FROM_MAIN
-    assert all(h["hops"] == 1 for h in hits)
-    assert {h["direction"] for h in hits} == {"out", "in"}
-    assert {h["kind"] for h in hits} == {"function"}
+    assert {h.id for h in hits.root} == _ONE_HOP_FROM_MAIN
+    assert all(h.hops == 1 for h in hits.root)
+    assert {h.direction for h in hits.root} == {"out", "in"}
+    assert {h.kind for h in hits.root} == {"function"}
 
 
 def _kids(node: FlowNode) -> dict[str, FlowNode]:
@@ -731,15 +732,15 @@ async def test_query_flow_returns_the_payload_shape(flow_store):
     payload = await GraphQuery(flow_store).flow(
         "app/cli.py::main", FlowOptions(depth=2)
     )
-    assert payload["symbol"] == "app/cli.py::main"
-    assert payload["resolved"] == "app/cli.py::main"
-    assert payload["ambiguous"] == []
-    assert payload["direction"] == "out"
-    assert payload["truncated"] is False and payload["limit"] == 200
-    assert payload["modules"][0] == "app/cli.py"
-    assert payload["root"]["id"] == "app/cli.py::main"
-    assert isinstance(payload["root"]["children"], list)
-    assert {c["id"] for c in payload["root"]["children"]} == {
+    assert payload is not None
+    assert payload.symbol == "app/cli.py::main"
+    assert payload.resolved == "app/cli.py::main"
+    assert payload.ambiguous == ()
+    assert payload.direction is FlowDirection.OUT
+    assert payload.truncated is False and payload.limit == 200
+    assert payload.modules[0] == "app/cli.py"
+    assert payload.root.id == "app/cli.py::main"
+    assert {c.id for c in payload.root.children} == {
         "app/engine.py::run",
         "app/hub.py::hub",
         "app/loop.py::ping",
@@ -751,21 +752,23 @@ async def test_the_payload_carries_every_walk_result_field(flow_store):
     payload = await GraphQuery(flow_store).flow(
         "app/cli.py::main", FlowOptions(depth=1)
     )
-    assert set(FlowResult.model_fields) <= set(payload)
+    assert payload is not None
+    assert set(FlowResult.model_fields) <= set(FlowPayload.model_fields)
 
 
 async def test_query_flow_resolves_a_bare_name_and_reports_ambiguity(flow_store):
     """Three methods are named handle; every rank is 0.0, so the sorted first one wins."""
     payload = await GraphQuery(flow_store).flow("handle", FlowOptions(depth=1))
-    assert payload["resolved"] == "app/base.py::Handler.handle"
-    assert payload["ambiguous"] == [
+    assert payload is not None
+    assert payload.resolved == "app/base.py::Handler.handle"
+    assert payload.ambiguous == (
         "app/impl_a.py::AlphaHandler.handle",
         "app/impl_b.py::BetaHandler.handle",
-    ]
+    )
 
 
 async def test_query_flow_unknown_symbol_is_empty(flow_store):
-    assert await GraphQuery(flow_store).flow("does_not_exist") == {}
+    assert await GraphQuery(flow_store).flow("does_not_exist") is None
 
 
 async def test_query_flow_reads_the_queue_for_the_nodes_it_reached(flow_store):
@@ -779,7 +782,8 @@ async def test_query_flow_reads_the_queue_for_the_nodes_it_reached(flow_store):
     payload = await GraphQuery(flow_store).flow(
         "app/engine.py::run", FlowOptions(depth=1)
     )
-    assert payload["root"]["unresolved"] == [
+    assert payload is not None
+    assert [leaf.model_dump(mode="json") for leaf in payload.root.unresolved] == [
         {
             "name": "dispatch",
             "fact_kind": "attr_callee",
@@ -787,10 +791,8 @@ async def test_query_flow_reads_the_queue_for_the_nodes_it_reached(flow_store):
             "external": False,
         }
     ]
-    helper = next(
-        c for c in payload["root"]["children"] if c["id"] == "app/util.py::helper"
-    )
-    assert [(u["name"], u["external"]) for u in helper["unresolved"]] == [
+    helper = next(c for c in payload.root.children if c.id == "app/util.py::helper")
+    assert [(leaf.name, leaf.external) for leaf in helper.unresolved] == [
         ("search", True)
     ]
 
@@ -810,8 +812,9 @@ async def test_query_flow_scopes_the_queue_read_to_the_reached_nodes(
     payload = await GraphQuery(flow_store).flow(
         "app/engine.py::run", FlowOptions(depth=1)
     )
+    assert payload is not None
     assert set(captured["node_ids"]) == {"app/engine.py::run"} | {
-        c["id"] for c in payload["root"]["children"]
+        c.id for c in payload.root.children
     }
 
 
@@ -834,8 +837,9 @@ async def test_query_flow_in_direction(flow_store):
     payload = await GraphQuery(flow_store).flow(
         "app/util.py::helper", FlowOptions(direction=FlowDirection.IN, depth=1)
     )
-    assert payload["direction"] == "in"
-    assert {c["id"] for c in payload["root"]["children"]} == {
+    assert payload is not None
+    assert payload.direction is FlowDirection.IN
+    assert {c.id for c in payload.root.children} == {
         "app/engine.py::run",
         "app/base.py::Handler.handle",
         "app/reg.py",

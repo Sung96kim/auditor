@@ -12,6 +12,28 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from auditor.cli import app
+from auditor.cli.payloads import (
+    ConfigCheckReport,
+    CrossfileReport,
+    DetectorInfo,
+    DiscoveredFile,
+    DiscoverReport,
+    GraphBuildReport,
+    IgnoreAddReport,
+    IgnoreClearReport,
+    IgnoreListReport,
+    IgnoreRmReport,
+    IgnoreRow,
+    IndexAddReport,
+    IndexForgetReport,
+    IndexListReport,
+    IndexReposReport,
+    InitReport,
+    ManifestReport,
+    PluginsReport,
+    RepoRow,
+    RulesListReport,
+)
 from auditor.cli.render import (
     render_config_check,
     render_crossfile,
@@ -37,7 +59,32 @@ from auditor.cli.render import (
     render_plugins_list,
     render_rules_list,
 )
-from auditor.registry import REGISTRY
+from auditor.graph.model import CallForm, FactKind, UnresolvedReason
+from auditor.graph.payloads import (
+    ClusterMember,
+    ClusterRow,
+    ClustersReport,
+    ConceptPayload,
+    NeighborRow,
+    NeighborsReport,
+    QueueReport,
+    QueueRowPayload,
+    RelatedReport,
+    RelatedRow,
+    SearchReport,
+    SearchRow,
+    UsageGroup,
+    UsagesPayload,
+)
+from auditor.models import (
+    FileRole,
+    IndexEntry,
+    ManifestEntry,
+    ManifestEntryKind,
+    Severity,
+    VerdictKind,
+)
+from auditor.registry import REGISTRY, RuleRow
 
 runner = CliRunner()
 
@@ -46,6 +93,12 @@ def _console() -> tuple[Console, io.StringIO]:
     buf = io.StringIO()
     con = Console(file=buf, force_terminal=True, width=100)
     return con, buf
+
+
+def _plain_console() -> tuple[Console, io.StringIO]:
+    """No colour and no highlighter, for assertions on the text rather than the styling."""
+    buf = io.StringIO()
+    return Console(file=buf, width=100, no_color=True, highlight=False), buf
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +157,16 @@ def test_config_show_json_flag(tmp_path):
 def test_render_graph_build_shows_counts():
     con, buf = _console()
     render_graph_build(
-        con, {"nodes": 42, "edges": 99, "clusters": 5, "unresolved": 7, "findings": 3}
+        con,
+        GraphBuildReport(
+            nodes=42,
+            edges=99,
+            clusters=5,
+            unresolved=7,
+            findings=3,
+            refined=0,
+            expired=0,
+        ),
     )
     out = buf.getvalue()
     assert "42" in out
@@ -117,17 +179,22 @@ def test_render_graph_unresolved_shows_the_row():
     con, buf = _console()
     render_graph_unresolved(
         con,
-        [
-            {
-                "node_id": "m.py::use",
-                "call_form": "attr",
-                "name": "handle",
-                "reason": "unimportable_name",
-                "definers": ["helper.py::handle"],
-                "candidates": [],
-                "externally_bound": True,
-            }
-        ],
+        QueueReport(
+            (
+                QueueRowPayload(
+                    node_id="m.py::use",
+                    fact_kind=FactKind.ATTR_CALLEE,
+                    call_form=CallForm.ATTR,
+                    name="handle",
+                    reason=UnresolvedReason.UNIMPORTABLE_NAME,
+                    definers=("helper.py::handle",),
+                    candidates=(),
+                    definers_count=1,
+                    candidates_count=0,
+                    externally_bound=True,
+                ),
+            )
+        ),
     )
     out = buf.getvalue()
     assert "m.py::use" in out
@@ -137,14 +204,17 @@ def test_render_graph_unresolved_shows_the_row():
 
 def test_render_graph_unresolved_empty_queue():
     con, buf = _console()
-    render_graph_unresolved(con, [])
+    render_graph_unresolved(con, QueueReport(()))
     assert "empty" in buf.getvalue()
 
 
 def test_render_graph_related_shows_symbol():
     con, buf = _console()
     render_graph_related(
-        con, [{"id": "fetch_user", "kind": "function", "weight": 0.9, "rank": 1}]
+        con,
+        RelatedReport(
+            (RelatedRow(id="fetch_user", kind="function", weight=0.9, rank=1.0),)
+        ),
     )
     out = buf.getvalue()
     assert "fetch_user" in out
@@ -155,15 +225,13 @@ def test_render_graph_neighbors_shows_direction():
     con, buf = _console()
     render_graph_neighbors(
         con,
-        [
-            {
-                "id": "helper",
-                "kind": "function",
-                "edge": "calls",
-                "direction": "out",
-                "hops": 1,
-            }
-        ],
+        NeighborsReport(
+            (
+                NeighborRow(
+                    id="helper", kind="function", edge="calls", direction="out", hops=1
+                ),
+            )
+        ),
     )
     out = buf.getvalue()
     assert "helper" in out
@@ -171,31 +239,42 @@ def test_render_graph_neighbors_shows_direction():
     assert "out" in out
 
 
-def test_render_graph_concept_shows_label_and_members():
-    con, buf = _console()
+def test_render_graph_concept_counts_and_names_its_members():
+    """Regression: it read `member_count`, which the query never returns, so every concept read
+    `0 members`, and it printed each member row's whole dict instead of the symbol id."""
+    con, buf = _plain_console()
     render_graph_concept(
         con,
-        {
-            "cluster_id": 1,
-            "label": "authentication",
-            "member_count": 3,
-            "members": ["login", "logout", "verify"],
-            "shown": 3,
-        },
+        ConceptPayload(
+            cluster_id=1,
+            label="authentication",
+            members=(
+                ClusterMember(
+                    id="a.py::login", name="login", module="a.py", rank=0.5, refined=0
+                ),
+                ClusterMember(
+                    id="a.py::logout", name="logout", module="a.py", rank=0.4, refined=0
+                ),
+            ),
+        ),
     )
-    out = buf.getvalue()
+    out = " ".join(buf.getvalue().split())
     assert "authentication" in out
-    assert "login" in out
+    assert "2 members" in out
+    assert "a.py::login" in out
+    assert "'name'" not in out  # not a dict repr
 
 
 def test_render_graph_clusters_sorted_by_size():
     con, buf = _console()
     render_graph_clusters(
         con,
-        [
-            {"cluster_id": 1, "label": "small", "member_count": 2},
-            {"cluster_id": 2, "label": "large", "member_count": 50},
-        ],
+        ClustersReport(
+            (
+                ClusterRow(cluster_id=1, label="small", member_count=2),
+                ClusterRow(cluster_id=2, label="large", member_count=50),
+            )
+        ),
     )
     out = buf.getvalue()
     assert "large" in out
@@ -205,8 +284,7 @@ def test_render_graph_clusters_sorted_by_size():
 def test_render_graph_search_shows_symbol():
     con, buf = _console()
     render_graph_search(
-        con,
-        [{"id": "m.py::Foo", "kind": "class", "rank": 0.5}],
+        con, SearchReport((SearchRow(id="m.py::Foo", kind="class", rank=0.5),))
     )
     assert "m.py::Foo" in buf.getvalue()
 
@@ -215,16 +293,14 @@ def test_render_graph_usages_groups_and_counts():
     con, buf = _console()
     render_graph_usages(
         con,
-        {
-            "symbol": "Foo",
-            "resolved": "m.py::Foo",
-            "kind": "class",
-            "ambiguous": ["other.py::Foo"],
-            "used_by": {"inherits": {"count": 3, "sample": ["a.py::Sub"]}},
-            "depends_on": {},
-            "total_in": 3,
-            "total_out": 0,
-        },
+        UsagesPayload(
+            symbol="Foo",
+            resolved="m.py::Foo",
+            kind="class",
+            ambiguous=("other.py::Foo",),
+            used_by={"inherits": UsageGroup(count=3, sample=("a.py::Sub",))},
+            total_in=3,
+        ),
     )
     out = buf.getvalue()
     assert "m.py::Foo" in out and "USED BY" in out
@@ -234,7 +310,7 @@ def test_render_graph_usages_groups_and_counts():
 
 def test_render_graph_usages_empty():
     con, buf = _console()
-    render_graph_usages(con, {})
+    render_graph_usages(con, None)
     assert "no such symbol" in buf.getvalue()
 
 
@@ -242,15 +318,19 @@ def test_render_rules_list_shows_rule_id():
     con, buf = _console()
     render_rules_list(
         con,
-        [
-            {
-                "rule_id": "PY-TEST-RULE",
-                "category": "security",
-                "default_severity": "high",
-                "framework": None,
-                "standard_refs": ["bandit:B001"],
-            }
-        ],
+        RulesListReport(
+            (
+                RuleRow(
+                    rule_id="PY-TEST-RULE",
+                    category="security",
+                    framework=None,
+                    default_severity=Severity.HIGH.value,
+                    verdict_kind=VerdictKind.AUTO.value,
+                    standard_refs=["bandit:B001"],
+                    source="built-in",
+                ),
+            )
+        ),
     )
     out = buf.getvalue()
     assert "PY-TEST-RULE" in out
@@ -259,51 +339,68 @@ def test_render_rules_list_shows_rule_id():
 
 def test_render_index_add_shows_count():
     con, buf = _console()
-    render_index_add(con, {"added": ["src/a.py", "src/b.py"]})
+    render_index_add(con, IndexAddReport(added=("src/a.py", "src/b.py")))
     out = buf.getvalue()
     assert "2" in out
     assert "src/a.py" in out
 
 
+def test_render_index_list_shows_the_finding_count():
+    """Regression: the column read `finding_count`, which IndexEntry has never carried, so it was
+    blank for every file."""
+    con, buf = _console()
+    render_index_list(
+        con,
+        IndexListReport(
+            (
+                IndexEntry(
+                    path="a.py",
+                    sha256="x",
+                    lines=3,
+                    language="python",
+                    role=FileRole.PRODUCTION,
+                    last_scanned=0.0,
+                    counts={Severity.HIGH: 2, Severity.LOW: 1},
+                ),
+            )
+        ),
+    )
+    out = buf.getvalue()
+    assert "a.py" in out
+    assert "3" in out  # 2 high + 1 low
+
+
 def test_render_index_list_empty():
     con, buf = _console()
-    render_index_list(con, [])
+    render_index_list(con, IndexListReport(()))
     assert "empty" in buf.getvalue()
 
 
 def test_render_index_repos_shows_repo():
     con, buf = _console()
-    render_index_repos(con, [{"repo": "myproject"}])
+    render_index_repos(
+        con,
+        IndexReposReport(
+            (RepoRow(repo="myproject", name="myproject", last_scanned=0.0),)
+        ),
+    )
     assert "myproject" in buf.getvalue()
 
 
-def test_render_index_forget_removed():
+@pytest.mark.parametrize(
+    ("removed", "expected"), [(True, "removed"), (False, "nothing")]
+)
+def test_render_index_forget(removed, expected):
     con, buf = _console()
-    render_index_forget(con, {"repo": "myproject", "removed": True})
+    render_index_forget(con, IndexForgetReport(repo="myproject", removed=removed))
     out = buf.getvalue()
-    assert "removed" in out
+    assert expected in out
     assert "myproject" in out
-
-
-def test_render_index_forget_noop():
-    con, buf = _console()
-    render_index_forget(con, {"repo": "myproject", "removed": False})
-    assert "nothing" in buf.getvalue()
 
 
 def test_render_ignore_add_shows_rule():
     con, buf = _console()
-    render_ignore_add(
-        con,
-        {
-            "id": 1,
-            "rule_id": "PY-SEC-EVAL",
-            "file": None,
-            "line": None,
-            "reason": None,
-            "note": None,
-        },
-    )
+    render_ignore_add(con, IgnoreAddReport(id=1, rule_id="PY-SEC-EVAL"))
     assert "PY-SEC-EVAL" in buf.getvalue()
 
 
@@ -311,14 +408,13 @@ def test_render_ignore_add_shows_note():
     con, buf = _console()
     render_ignore_add(
         con,
-        {
-            "id": 1,
-            "rule_id": "PY-SEC-EVAL",
-            "file": "a.py",
-            "line": 99,
-            "reason": None,
-            "note": "no current finding at that line; stored with literal-line fallback",
-        },
+        IgnoreAddReport(
+            id=1,
+            rule_id="PY-SEC-EVAL",
+            file="a.py",
+            line=99,
+            note="no current finding at that line; stored with literal-line fallback",
+        ),
     )
     out = buf.getvalue()
     assert "note" in out
@@ -327,7 +423,7 @@ def test_render_ignore_add_shows_note():
 
 def test_render_ignore_list_empty():
     con, buf = _console()
-    render_ignore_list(con, [])
+    render_ignore_list(con, IgnoreListReport(()))
     assert "no ignores" in buf.getvalue()
 
 
@@ -335,7 +431,18 @@ def test_render_ignore_list_shows_rows():
     con, buf = _console()
     render_ignore_list(
         con,
-        [{"id": 7, "rule_id": "PY-X", "file": "mod.py", "line": 5, "reason": "ok"}],
+        IgnoreListReport(
+            (
+                IgnoreRow(
+                    id=7,
+                    rule_id="PY-X",
+                    file="mod.py",
+                    line=5,
+                    reason="ok",
+                    created_at=0.0,
+                ),
+            )
+        ),
     )
     out = buf.getvalue()
     assert "PY-X" in out
@@ -344,19 +451,24 @@ def test_render_ignore_list_shows_rows():
 
 def test_render_ignore_rm_shows_selector():
     con, buf = _console()
-    render_ignore_rm(con, {"removed": True, "selector": "7"})
+    render_ignore_rm(con, IgnoreRmReport(removed=True, selector="7"))
     assert "7" in buf.getvalue()
 
 
 def test_render_ignore_clear_shows_count():
     con, buf = _console()
-    render_ignore_clear(con, {"cleared": 3})
+    render_ignore_clear(con, IgnoreClearReport(cleared=3))
     assert "3" in buf.getvalue()
 
 
 def test_render_manifest_list_shows_symbol():
     con, buf = _console()
-    render_manifest_list(con, [{"line": 1, "kind": "class", "symbol": "MyClass"}])
+    render_manifest_list(
+        con,
+        ManifestReport(
+            (ManifestEntry(line=1, kind=ManifestEntryKind.CLASS, symbol="MyClass"),)
+        ),
+    )
     out = buf.getvalue()
     assert "MyClass" in out
     assert "class" in out
@@ -364,42 +476,47 @@ def test_render_manifest_list_shows_symbol():
 
 def test_render_manifest_list_empty():
     con, buf = _console()
-    render_manifest_list(con, [])
+    render_manifest_list(con, ManifestReport(()))
     assert "no entries" in buf.getvalue()
 
 
 def test_render_plugins_list_renders_the_registry_snapshot():
-    """Fed the real snapshot, so the source column keeps working when its shape changes."""
+    """Fed the real snapshot, so `extra="forbid"` catches a registry key the models have not
+    declared instead of dropping it on the way to the wire."""
     con, buf = _console()
-    render_plugins_list(con, {**REGISTRY.snapshot(), "warnings": []})
+    render_plugins_list(con, PluginsReport.of(REGISTRY.snapshot(), warnings=()))
     out = buf.getvalue()
     assert "PY-SEC-DANGEROUS-EVAL" in out
     assert "built-in" in out
 
 
-def test_render_plugins_list_shows_detector_and_source():
-    """Renders the registry snapshot shape, so the source column is the recorded source."""
+def test_render_plugins_list_shows_the_source():
+    """Regression: the source column read a top-level `_sources` map the snapshot never emits."""
     con, buf = _console()
     render_plugins_list(
         con,
-        {
-            "detectors": {
-                "PY-SEC-EVAL": {"category": "security", "source": "built-in"},
-                "HOUSE-NO-PRINT": {"category": "house", "source": "house_rules.py"},
+        PluginsReport(
+            detectors={
+                "PY-SEC-EVAL": DetectorInfo(category="security", source="built-in"),
+                "HOUSE-NO-PRINT": DetectorInfo(
+                    category="house", source="house_rules.py"
+                ),
             },
-            "languages": {},
-            "reporters": {},
-            "warnings": [],
-        },
+            warnings=("a plugin failed to load",),
+        ),
     )
     out = buf.getvalue()
     assert "PY-SEC-EVAL" in out and "built-in" in out
     assert "HOUSE-NO-PRINT" in out and "house_rules.py" in out
+    assert "a plugin failed to load" in out
 
 
 def test_render_discover_shows_file_and_role():
     con, buf = _console()
-    render_discover(con, [{"file": "src/main.py", "role": "production"}])
+    render_discover(
+        con,
+        DiscoverReport((DiscoveredFile(file="src/main.py", role=FileRole.PRODUCTION),)),
+    )
     out = buf.getvalue()
     assert "src/main.py" in out
     assert "production" in out
@@ -407,31 +524,23 @@ def test_render_discover_shows_file_and_role():
 
 def test_render_discover_empty():
     con, buf = _console()
-    render_discover(con, [])
+    render_discover(con, DiscoverReport(()))
     assert "no files" in buf.getvalue()
 
 
 def test_render_crossfile_shows_count():
     con, buf = _console()
-    render_crossfile(con, {"cross_file_findings": 7})
+    render_crossfile(con, CrossfileReport(cross_file_findings=7))
     assert "7" in buf.getvalue()
 
 
-def _init_payload(**over) -> dict:
-    payload = {
+def _init_payload(**over) -> InitReport:
+    fields: dict[str, object] = {
         "home": "/home/u/.auditor",
         "config": "/home/u/.auditor/config.json",
-        "schema": "/home/u/.auditor/config.schema.json",
-        "repo_dir": None,
-        "written": [],
-        "checked": False,
-        "unknown_keys": [],
-        "moved_from": None,
-        "migrated": False,
-        "legacy_status": None,
+        "schema_path": "/home/u/.auditor/config.schema.json",
     }
-    payload.update(over)
-    return payload
+    return InitReport(**(fields | over))
 
 
 def test_render_init_marks_a_check_run_as_not_written():
@@ -457,12 +566,9 @@ def test_render_init_still_asks_for_migrate_when_not_migrated():
     assert "re-run with --migrate" in " ".join(buf.getvalue().split())
 
 
-@pytest.mark.parametrize("unknown", [[], ["malware_scan.bogus"]])
+@pytest.mark.parametrize("unknown", [(), ("malware_scan.bogus",)])
 def test_render_config_check_names_the_root(unknown):
     """Which config was checked is the command's whole point, and only --json callers saw it."""
-    buf = io.StringIO()
-    con = Console(file=buf, width=100, no_color=True, highlight=False)
-    render_config_check(
-        con, {"root": "/w/repo", "policy_unknown": unknown, "user_unknown": []}
-    )
+    con, buf = _plain_console()
+    render_config_check(con, ConfigCheckReport(root="/w/repo", policy_unknown=unknown))
     assert "/w/repo" in " ".join(buf.getvalue().split())

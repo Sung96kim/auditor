@@ -7,6 +7,7 @@ import typer
 from auditor.cli.apps import app
 from auditor.cli.helpers import cli_root, load_settings, open_index, present, run
 from auditor.cli.options import DirTarget
+from auditor.cli.payloads import CrossfileReport
 from auditor.cli.render import render_crossfile
 from auditor.crossfile import CrossFileInputs
 from auditor.ignores import IgnoreList
@@ -20,7 +21,7 @@ def crossfile(
     """Recompute cross-file duplicate findings from the index."""
     root = cli_root(target)
     count = run(_crossfile(root), "cross-file pass…")
-    present({"cross_file_findings": count}, render_crossfile, as_json=json_)
+    present(CrossfileReport(cross_file_findings=count), render_crossfile, as_json=json_)
 
 
 async def _crossfile(root: Path) -> int:

@@ -7,6 +7,7 @@ import typer
 from auditor.cli.apps import app
 from auditor.cli.helpers import fail, present, require_file
 from auditor.cli.options import ManifestFile
+from auditor.cli.payloads import ManifestReport
 from auditor.cli.render import render_manifest_list
 from auditor.models import ManifestEntry
 
@@ -24,9 +25,8 @@ def manifest(
         tree = ast.parse(file.read_text(encoding="utf-8", errors="replace"))
     except (SyntaxError, ValueError) as exc:  # ValueError: source contains null bytes
         fail(f"could not parse {file.name}: {exc}")
-    entries = ManifestEntry.from_module(tree)
     present(
-        [e.model_dump(mode="json") for e in entries],
+        ManifestReport(tuple(ManifestEntry.from_module(tree))),
         render_manifest_list,
         as_json=json_,
     )

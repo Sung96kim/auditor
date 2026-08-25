@@ -19,6 +19,7 @@ from auditor.cli.options import (
     InitRepo,
     RootArg,
 )
+from auditor.cli.payloads import InitReport
 from auditor.cli.render import render_init
 from auditor.config_notice import NOTICE, ConfigNotice
 from auditor.paths import (
@@ -140,20 +141,20 @@ def init(
             fail(f"cannot write the auditor home at {home}: {exc}")
 
     present(
-        {
-            "home": str(home),
-            "config": str(user_config_path()),
-            "schema": str(user_schema_path()),
-            "repo_dir": str(directory) if repo else None,
-            "written": written,
-            "checked": check,
+        InitReport(
+            home=str(home),
+            config=str(user_config_path()),
+            schema_path=str(user_schema_path()),
+            repo_dir=str(directory) if repo else None,
+            written=tuple(written),
+            checked=check,
             # Both families, from the notice this command opted out of: reporting only the user
             # half made init the one command that would not mention a [tool.auditor] typo.
-            "unknown_keys": NOTICE.keys(directory=directory),
-            "moved_from": moved,
-            "migrated": migrated,
-            "legacy_status": str(legacy) if had_legacy else None,
-        },
+            unknown_keys=tuple(NOTICE.keys(directory=directory)),
+            moved_from=moved,
+            migrated=migrated,
+            legacy_status=str(legacy) if had_legacy else None,
+        ),
         render_init,
         as_json=json_,
     )

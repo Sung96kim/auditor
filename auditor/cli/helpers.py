@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
 import typer
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from rich.console import Console
 from rich.text import Text
 
@@ -38,15 +38,21 @@ def _echo_json(payload: object) -> None:
 
 
 def present(
-    payload: object,
+    payload: BaseModel | None,
     render: Callable[[Console, Any], None],
     *,
     as_json: bool = False,
 ) -> None:
     """Emit a command result: pretty for a human at a TTY, else raw JSON (so piped/
-    captured/agent callers and --json still get the exact machine-readable output)."""
+    captured/agent callers and --json still get the exact machine-readable output).
+
+    ``None`` is the "nothing found" payload: it serialises as ``{}``, which is the shape the graph
+    queries have always returned, and still reaches the renderer so it can print its own line.
+    """
     if as_json or not console.is_terminal:
-        _echo_json(payload)
+        _echo_json(
+            {} if payload is None else payload.model_dump(mode="json", by_alias=True)
+        )
     else:
         render(console, payload)
 

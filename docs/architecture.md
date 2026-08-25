@@ -76,8 +76,10 @@ Paths are relative to the repo root.
 - `cli/helpers.py`: `present` (pretty at a TTY, raw JSON otherwise), `run` / `run_staged` /
   `run_live` (the asyncio bridge plus the stderr spinner), `emit`, `open_index`, `fail`,
   `load_settings` (the loader with both config failures turned into one line) and `cli_root`, the
-  one root resolution every command goes through. `cli/render.py` holds one `render_*` function per
-  payload; `cli/options.py` holds the shared Typer annotations.
+  one root resolution every command goes through. `cli/payloads.py` holds one frozen model per
+  command payload and `cli/render.py` one `render_*` function per payload, taking that model and
+  never a dict; `cli/options.py` holds the shared Typer annotations. `present` dumps the model, so
+  `--json` and the pretty output cannot drift.
 - `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. `cli_root` records the root
   and `load_settings` hands back the keys the loader already found, so nothing merges a config
   twice. `ConfigNotice.report()` writes the lines and marks the root as reported; the root typer

@@ -22,8 +22,8 @@ from auditor.graph.model import (
     CallForm,
     EdgeKind,
     UnresolvedReason,
-    capped_row,
 )
+from auditor.graph.payloads import QueueRowPayload
 from auditor.graph.query import GraphQuery
 from auditor.mcp.helpers import MUTATING, READ_ONLY, open_index, tool_config
 from auditor.mcp.server import mcp
@@ -49,7 +49,9 @@ async def graph_related(symbol: str, path: str = ".", limit: int = 10) -> list[d
     """Top semantic neighbors (name + usage) of a symbol, ranked."""
     root = find_root(Path(path))
     async with await open_index(root) as index:
-        return await GraphQuery(index).related(symbol, limit=limit)
+        return (await GraphQuery(index).related(symbol, limit=limit)).model_dump(
+            mode="json"
+        )
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -61,7 +63,7 @@ async def graph_neighbors(
     root = find_root(Path(path))
     async with await open_index(root) as index:
         hits = await GraphQuery(index).neighbors(symbol, depth=depth)
-    return hits[:limit]
+    return hits.model_dump(mode="json")[:limit]
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -72,17 +74,7 @@ async def graph_concept(term: str, path: str = ".", limit: int = 25) -> dict:
     root = find_root(Path(path))
     async with await open_index(root) as index:
         concept = await GraphQuery(index).concept(term)
-    if not concept:
-        return {}
-    members = concept.get("members", [])
-    capped = members[:limit]
-    return {
-        "cluster_id": concept["cluster_id"],
-        "label": concept["label"],
-        "member_count": len(members),
-        "members": capped,
-        "shown": len(capped),
-    }
+    return concept.capped(limit).model_dump(mode="json") if concept else {}
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -90,7 +82,7 @@ async def graph_clusters(path: str = ".") -> list[dict]:
     """List concept clusters (label + size), largest first."""
     root = find_root(Path(path))
     async with await open_index(root) as index:
-        return await GraphQuery(index).clusters()
+        return (await GraphQuery(index).clusters()).model_dump(mode="json")
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -100,7 +92,9 @@ async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict
     """
     root = find_root(Path(path))
     async with await open_index(root) as index:
-        return await GraphQuery(index).search(term, limit=limit)
+        return (await GraphQuery(index).search(term, limit=limit)).model_dump(
+            mode="json"
+        )
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -112,7 +106,8 @@ async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
     for 'how is X used': neighbors truncates silently with no totals."""
     root = find_root(Path(path))
     async with await open_index(root) as index:
-        return await GraphQuery(index).usages(symbol, sample=sample)
+        usages = await GraphQuery(index).usages(symbol, sample=sample)
+    return usages.model_dump(mode="json") if usages else {}
 
 
 def _filter_values(
@@ -160,7 +155,7 @@ async def graph_flow(
     symbols, ``expand_hubs`` opens the nodes the hub rule collapsed."""
     root = find_root(Path(path))
     async with await open_index(root) as index:
-        return await GraphQuery(index).flow(
+        payload = await GraphQuery(index).flow(
             symbol,
             FlowOptions(
                 direction=FlowDirection(direction),
@@ -173,6 +168,7 @@ async def graph_flow(
                 hub_fan_in=tool_config(root).graph.flow_hub_fan_in,
             ),
         )
+    return payload.model_dump(mode="json") if payload else {}
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -240,4 +236,4 @@ async def graph_unresolved(
             limit=max(1, limit),
             external=external,
         )
-    return [capped_row(r) for r in rows]
+    return [QueueRowPayload.of(r).model_dump(mode="json") for r in rows]
