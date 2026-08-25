@@ -1,39 +1,14 @@
-"""The wire models for a `RefinementService` result (spec 9.1, spec 12.3).
+"""The wire model for a `RefinementService` report (spec 9.1, spec 12.3).
 
 Separate from `auditor/graph/payloads.py`: this module reaches the service, and therefore the graph
-build and numpy, which no fast CLI command may load. `Verdict` is emitted as itself.
+build and numpy, which no fast CLI command may load. `Verdict` and `CommitResult` are emitted as
+themselves; only a `RunReport`, which carries a whole 30-field `Run`, needs narrowing.
 """
 
-from auditor.graph.payloads import GraphBuildReport, RunRowPayload
+from auditor.graph.payloads import RunRowPayload
 from auditor.graph.refine.models import RefinementCounts
-from auditor.graph.refine.service import CommitResult, RunReport, Verdict
+from auditor.graph.refine.service import RunReport, Verdict
 from auditor.payload import WirePayload
-
-
-class CommitPayload(WirePayload):
-    """One `graph_refine_commit` answer: what landed, what did not, and the build that followed.
-
-    ``build`` is null and ``rebuilt`` false for a run that staged nothing: there was no insert, so
-    there was no queue row to retire and no reason to hold the rebuild lock.
-    """
-
-    run_id: str
-    committed: tuple[Verdict, ...] = ()
-    rejected: tuple[Verdict, ...] = ()
-    landed: int = 0
-    rebuilt: bool = True
-    build: GraphBuildReport | None = None
-
-    @classmethod
-    def of(cls, result: CommitResult) -> "CommitPayload":
-        return cls(
-            run_id=result.run_id,
-            committed=result.committed,
-            rejected=result.rejected,
-            landed=result.landed,
-            rebuilt=result.rebuilt,
-            build=result.build,
-        )
 
 
 class RunReportPayload(WirePayload):

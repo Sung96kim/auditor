@@ -18,7 +18,7 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     TriggerKind,
 )
-from auditor.graph.refine.payloads import CommitPayload, RunReportPayload
+from auditor.graph.refine.payloads import RunReportPayload
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.mcp.helpers import (
     MUTATING,
@@ -127,7 +127,9 @@ async def graph_refine_propose(
     name, reason_code). ``edge_kind`` is one of calls, references_type, callback_arg, inherits,
     overrides. ``reason`` is required on every kind.
 
-    ``confidence`` is a 0 to 1 scale, recorded with the row as provenance; no gate reads it.
+    ``confidence`` is a 0 to 1 scale, recorded with the row as provenance; no gate reads it. The
+    parameters are flat, one per field, and this tool regroups them into the target and payload
+    spec 5.4 stores: a flat schema is what documents each field to a caller.
 
     Returns {outcome, kind, tier, status, verify, refusal, detail, refinement_id}. ``outcome`` is
     "staged" or "rejected"; ``verify`` says which check failed, and ``refusal`` is set instead when
@@ -196,7 +198,7 @@ async def graph_refine_commit(path: str = ".", run_id: str | None = None) -> dic
             result = await service.commit(_run_id(run_id))
         except RefinementRefused as exc:
             raise ToolError(str(exc)) from exc
-    return CommitPayload.of(result).model_dump(mode="json")
+    return result.model_dump(mode="json")
 
 
 @mcp.tool(annotations=MUTATING)

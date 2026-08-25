@@ -1,6 +1,6 @@
 """The wire models the refinement CLI and the refinement MCP tools share."""
 
-import time
+from datetime import datetime
 
 import pytest
 
@@ -184,9 +184,16 @@ def test_a_duration_since_is_a_cutoff_in_the_past(raw: str, seconds: int):
     assert parse_since(raw, now=now) == pytest.approx(now - seconds)
 
 
-@pytest.mark.parametrize("raw", ["2026-08-20", "2026-08-20T14:00:00"])
-def test_an_iso_since_is_that_instant(raw: str):
-    assert parse_since(raw) < time.time()
+@pytest.mark.parametrize(
+    ("raw", "stamp"),
+    [
+        ("2026-08-20", datetime(2026, 8, 20).timestamp()),
+        ("2026-08-20T14:00:00", datetime(2026, 8, 20, 14).timestamp()),
+    ],
+)
+def test_an_iso_since_is_that_instant(raw: str, stamp: float):
+    """The instant itself, not merely "in the past": a `parse_since` that answered 0.0 passed."""
+    assert parse_since(raw) == stamp
 
 
 @pytest.mark.parametrize("raw", ["yesterday", "2h30m", "", "7w", "2026-13-01"])

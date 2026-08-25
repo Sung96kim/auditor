@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
@@ -241,6 +242,14 @@ def assert_no_escape(result) -> None:
     assert escaped is None or isinstance(escaped, SystemExit), (
         f"{type(escaped).__name__}: {escaped}"
     )
+
+
+def tool_data(result: Any) -> Any:
+    """The payload of one MCP tool call, whichever shape this fastmcp returns.
+
+    Defined once: three test modules had their own copy, each with the same untyped fallback.
+    """
+    return result.data if hasattr(result, "data") else result
 
 
 def cli_json(result):

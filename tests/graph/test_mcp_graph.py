@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from _support import tool_data
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from typer.testing import CliRunner
@@ -18,16 +19,12 @@ from auditor.mcp_server import mcp
 from auditor.models import Category, Finding, Severity, VerdictKind
 
 
-def _data(result):
-    return result.data if hasattr(result, "data") else result
-
-
 async def test_graph_build_then_related(graph_repo: Path):
     await audit_target(graph_repo, incremental=True)  # populate facts
     async with Client(mcp) as c:
-        built = _data(await c.call_tool("graph_build", {"path": str(graph_repo)}))
+        built = tool_data(await c.call_tool("graph_build", {"path": str(graph_repo)}))
         assert built["nodes"] >= 2
-        rel = _data(
+        rel = tool_data(
             await c.call_tool(
                 "graph_related", {"symbol": "get_user", "path": str(graph_repo)}
             )
@@ -38,7 +35,7 @@ async def test_graph_build_then_related(graph_repo: Path):
 async def test_graph_build_autoscans(graph_repo_unconfigured: Path):
     """No graph config + no prior scan → graph_build forces the scan and populates nodes."""
     async with Client(mcp) as c:
-        built = _data(
+        built = tool_data(
             await c.call_tool("graph_build", {"path": str(graph_repo_unconfigured)})
         )
         assert built["nodes"] > 0
@@ -47,7 +44,7 @@ async def test_graph_build_autoscans(graph_repo_unconfigured: Path):
 async def test_graph_build_no_scan_on_fresh_index(graph_repo_unconfigured: Path):
     """scan=False on a fresh (un-scanned) index builds from nothing → zero nodes."""
     async with Client(mcp) as c:
-        built = _data(
+        built = tool_data(
             await c.call_tool(
                 "graph_build", {"path": str(graph_repo_unconfigured), "scan": False}
             )
@@ -59,10 +56,12 @@ async def test_graph_concept_is_capped(graph_repo: Path):
     await audit_target(graph_repo, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": str(graph_repo)})
-        clusters = _data(await c.call_tool("graph_clusters", {"path": str(graph_repo)}))
+        clusters = tool_data(
+            await c.call_tool("graph_clusters", {"path": str(graph_repo)})
+        )
         assert clusters, "expected at least one cluster"
         biggest = max(clusters, key=lambda c: c["member_count"])
-        concept = _data(
+        concept = tool_data(
             await c.call_tool(
                 "graph_concept",
                 {"term": biggest["label"], "path": str(graph_repo), "limit": 1},
@@ -80,11 +79,11 @@ async def test_graph_neighbors_is_capped(graph_repo_with_calls: Path):
     await audit_target(graph_repo_with_calls, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": path})
-        every = _data(
+        every = tool_data(
             await c.call_tool("graph_neighbors", {"symbol": "load_user", "path": path})
         )
         assert len(every) > 1, every
-        capped = _data(
+        capped = tool_data(
             await c.call_tool(
                 "graph_neighbors", {"symbol": "load_user", "path": path, "limit": 1}
             )
@@ -96,7 +95,7 @@ async def test_graph_overview_shape(graph_repo: Path):
     await audit_target(graph_repo, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": str(graph_repo)})
-        ov = _data(await c.call_tool("graph_overview", {"path": str(graph_repo)}))
+        ov = tool_data(await c.call_tool("graph_overview", {"path": str(graph_repo)}))
     assert isinstance(ov["nodes"], int) and ov["nodes"] > 0
     assert isinstance(ov["edges"], int)
     assert isinstance(ov["clusters"], int)
@@ -115,7 +114,7 @@ async def test_graph_overview_splits_the_hub_lists_by_subkind(
     between the lists. Both lists must be non-empty or the assertions below are vacuous."""
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": str(graph_repo_god_concepts)})
-        ov = _data(
+        ov = tool_data(
             await c.call_tool("graph_overview", {"path": str(graph_repo_god_concepts)})
         )
     async with await open_repo_index(graph_repo_god_concepts) as index:
@@ -150,7 +149,7 @@ async def test_an_unknown_subkind_is_not_silently_dropped(
         async with await open_repo_index(graph_repo_god_concepts) as index:
             await index.findings.add("m.py", [unknown])
             rows = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
-        ov = _data(
+        ov = tool_data(
             await c.call_tool("graph_overview", {"path": str(graph_repo_god_concepts)})
         )
     assert ov["god_concept_count"] + ov["bottleneck_count"] < len(rows)
@@ -166,19 +165,21 @@ async def test_graph_unresolved_lists_the_queue(graph_repo: Path):
     await audit_target(graph_repo, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": str(graph_repo)})
-        rows = _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
+        rows = tool_data(
+            await c.call_tool("graph_unresolved", {"path": str(graph_repo)})
+        )
         by_key = {(r["node_id"], r["name"]): r for r in rows}
         row = by_key["caller.py::use", "handle"]
         assert row["definers"] == ["helper.py::handle"]
         assert row["definers_count"] == 1  # capped list, true total alongside
         assert row["candidates"] == [] and row["candidates_count"] == 0
-        only_sparse = _data(
+        only_sparse = tool_data(
             await c.call_tool(
                 "graph_unresolved", {"path": str(graph_repo), "reason": ["text_sparse"]}
             )
         )
         assert only_sparse and all(r["reason"] == "text_sparse" for r in only_sparse)
-        attr = _data(
+        attr = tool_data(
             await c.call_tool(
                 "graph_unresolved", {"path": str(graph_repo), "call_form": ["attr"]}
             )
@@ -187,7 +188,7 @@ async def test_graph_unresolved_lists_the_queue(graph_repo: Path):
         assert ("attr_caller.py::go", "handle") in {
             (r["node_id"], r["name"]) for r in attr
         }
-        both = _data(
+        both = tool_data(
             await c.call_tool(
                 "graph_unresolved",
                 {
@@ -199,7 +200,7 @@ async def test_graph_unresolved_lists_the_queue(graph_repo: Path):
         assert both and all(
             r["reason"] in ("ambiguous_name", "unimportable_name") for r in both
         )
-        capped = _data(
+        capped = tool_data(
             await c.call_tool("graph_unresolved", {"path": str(graph_repo), "limit": 1})
         )
         assert len(capped) == 1
@@ -231,7 +232,9 @@ async def test_graph_unresolved_caps_the_id_lists_at_the_shared_cap(graph_repo: 
     await audit_target(graph_repo, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": str(graph_repo)})
-        rows = _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
+        rows = tool_data(
+            await c.call_tool("graph_unresolved", {"path": str(graph_repo)})
+        )
     row = next(
         r for r in rows if (r["node_id"], r["name"]) == ("caller.py::use", "handle")
     )
@@ -247,8 +250,10 @@ async def test_graph_unresolved_can_drop_the_externally_bound_rows(graph_repo: P
     await audit_target(graph_repo, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": str(graph_repo)})
-        shown = _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
-        hidden = _data(
+        shown = tool_data(
+            await c.call_tool("graph_unresolved", {"path": str(graph_repo)})
+        )
+        hidden = tool_data(
             await c.call_tool(
                 "graph_unresolved", {"path": str(graph_repo), "external": False}
             )
@@ -260,7 +265,7 @@ async def test_graph_unresolved_can_drop_the_externally_bound_rows(graph_repo: P
 async def test_graph_unresolved_before_a_build_is_empty(graph_repo: Path):
     async with Client(mcp) as c:
         assert (
-            _data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
+            tool_data(await c.call_tool("graph_unresolved", {"path": str(graph_repo)}))
             == []
         )
 
@@ -270,7 +275,7 @@ async def test_graph_flow_returns_a_nested_tree(graph_repo_flow: Path):
     await audit_target(graph_repo_flow, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": path})
-        payload = _data(
+        payload = tool_data(
             await c.call_tool(
                 "graph_flow", {"symbol": "entry", "path": path, "depth": 2}
             )
@@ -288,13 +293,13 @@ async def test_graph_flow_in_direction_and_limit(graph_repo_flow: Path):
     await audit_target(graph_repo_flow, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": path})
-        inward = _data(
+        inward = tool_data(
             await c.call_tool(
                 "graph_flow",
                 {"symbol": "leaf", "path": path, "direction": "in", "depth": 2},
             )
         )
-        capped = _data(
+        capped = tool_data(
             await c.call_tool(
                 "graph_flow", {"symbol": "entry", "path": path, "depth": 2, "limit": 1}
             )
@@ -313,7 +318,7 @@ async def test_graph_flow_clamps_the_limit_at_both_ends(
     await audit_target(graph_repo_flow, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": path})
-        payload = _data(
+        payload = tool_data(
             await c.call_tool(
                 "graph_flow", {"symbol": "entry", "path": path, "limit": sent}
             )
@@ -404,7 +409,7 @@ async def test_graph_flow_takes_the_walk_pruning_knobs(graph_repo_flow_hub: Path
     await audit_target(graph_repo_flow_hub, incremental=True)
     async with Client(mcp) as c:
         await c.call_tool("graph_build", {"path": path})
-        stopped = _data(
+        stopped = tool_data(
             await c.call_tool(
                 "graph_flow",
                 {
@@ -416,7 +421,7 @@ async def test_graph_flow_takes_the_walk_pruning_knobs(graph_repo_flow_hub: Path
                 },
             )
         )
-        with_tests = _data(
+        with_tests = tool_data(
             await c.call_tool(
                 "graph_flow",
                 {

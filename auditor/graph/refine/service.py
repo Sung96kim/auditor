@@ -17,7 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_field
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
@@ -59,6 +59,7 @@ from auditor.graph.refine.verify import (
     VerifyStatus,
 )
 from auditor.graph.resolve_edges import NameBindings
+from auditor.payload import WirePayload
 from auditor.roles import RoleClassifier
 from auditor.user_settings import LimitsConfig, UserSettings
 
@@ -136,14 +137,13 @@ class Verdict(BaseModel):
     refinement_id: int = 0
 
 
-class CommitResult(BaseModel):
-    """What one commit landed, and the build that followed it.
+class CommitResult(WirePayload):
+    """What one commit landed, and the build that followed it. This is the wire shape too, so
+    `graph_refine_commit` has no second copy of it to keep in step.
 
     ``rebuilt`` is false, and ``build`` ``None``, for a run that staged nothing: there is no insert,
     so there is no queue row to retire and nothing for a build to merge.
     """
-
-    model_config = ConfigDict(frozen=True)
 
     run_id: str
     committed: tuple[Verdict, ...] = ()
@@ -151,6 +151,7 @@ class CommitResult(BaseModel):
     rebuilt: bool = True
     build: GraphBuildReport | None = None
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def landed(self) -> int:
         """How many refinement rows this commit inserted."""

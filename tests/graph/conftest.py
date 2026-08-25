@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, ConfigDict
+from typer.testing import CliRunner
 
+from auditor.cli import app
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.graph.build import GraphBuilder
@@ -374,6 +376,24 @@ async def refine_service_other(refine_service: RefinementService) -> RefinementS
         refine_service.user,
         registry=RunRegistry(),
     )
+
+
+#: a bare call the resolver cannot place: `caller.main` calls a name `helper` defines
+QUEUED_HELPER = "def read_event():\n    return {}\n"
+QUEUED_CALLER = "def main():\n    return read_event()\n"
+
+
+@pytest.fixture
+def refine_repo(graph_repo: Path, process_runs: dict[str, RunRegistry]) -> Path:
+    """The one-module repo plus a queue row the refinement surfaces answer, scanned and built.
+
+    One fixture for both surfaces: the CLI and the MCP tests were building the same repo two ways.
+    Taking `process_runs` empties every per-identity registry around each test that uses it.
+    """
+    (graph_repo / "helper.py").write_text(QUEUED_HELPER)
+    (graph_repo / "caller.py").write_text(QUEUED_CALLER)
+    assert CliRunner().invoke(app, ["graph", "build", str(graph_repo)]).exit_code == 0
+    return graph_repo
 
 
 @pytest.fixture
