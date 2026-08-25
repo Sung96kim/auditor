@@ -218,7 +218,7 @@ def test_the_log_filter_validates_status_against_the_view_it_shows():
     assert runs.view is LogView.RUNS
     assert [s.value for s in runs.run_statuses or []] == ["succeeded"]
     assert runs.refinement_statuses is None
-    assert runs.filtered is True
+    assert runs.narrowed_by == (LogNarrowing.STATUS,)
 
     refinements = LogFilter.of(
         view="refinements", status=["active"], since=None, skipped=False, limit=10
@@ -248,21 +248,20 @@ def test_an_unknown_view_is_an_error():
 
 
 def test_the_view_s_own_hiding_is_not_a_narrowing_the_caller_asked_for():
-    """Two questions, two fields. `filtered` answers "did the caller narrow this page", which the
-    default view must not set, and `excluded_run_statuses` answers "what did the view hide"."""
+    """Two questions, two fields. `narrowed_by` answers "what did the caller filter", which the
+    default view must leave empty, and `excluded_run_statuses` answers "what did the view hide"."""
     default = LogFilter.of(
         view="runs", status=None, since=None, skipped=False, limit=10
     )
     assert default.run_statuses is None
     assert default.excluded_run_statuses == (RunStatus.SKIPPED,)
     assert default.narrowed_by == ()
-    assert default.filtered is False
     everything = LogFilter.of(
         view="runs", status=None, since=None, skipped=True, limit=10
     )
     assert everything.run_statuses is None
     assert everything.excluded_run_statuses == ()
-    assert everything.filtered is False
+    assert everything.narrowed_by == ()
 
 
 @pytest.mark.parametrize(
@@ -283,7 +282,6 @@ def test_the_filter_names_the_narrowings_the_caller_set(
         view="runs", status=status, since=since, skipped=False, limit=10
     )
     assert spec.narrowed_by == expected
-    assert spec.filtered is bool(expected)
 
 
 def test_skipped_is_refused_in_the_view_it_cannot_mean_anything_in():

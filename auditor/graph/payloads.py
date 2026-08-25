@@ -484,11 +484,6 @@ class LogFilter(WirePayload):
             if set_by_caller
         )
 
-    @property
-    def filtered(self) -> bool:
-        """Whether the caller narrowed this page themselves."""
-        return bool(self.narrowed_by)
-
 
 class LogReport(WirePayload):
     """One page of the provenance log: one view, what produced it, and what it did not show.
@@ -515,7 +510,7 @@ class LogReport(WirePayload):
         return bool(self.narrowed_by)
 
     @property
-    def rows(self) -> tuple[WirePayload, ...]:
+    def rows(self) -> tuple[RunRowPayload, ...] | tuple[RefinementRowPayload, ...]:
         """The rows of whichever view this page carries, so a reader needs no view branch."""
         return self.runs if self.view is LogView.RUNS else self.refinements
 

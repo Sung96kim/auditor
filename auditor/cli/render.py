@@ -261,9 +261,11 @@ def _proposed_values(payload: RefinementRowPayload) -> list[tuple[str, str]]:
     ]
 
 
-#: the corrections view, shared so `graph refinements list` and `graph log --refinements` cannot
-#: show the same row two ways; the log prepends its own `when`
+#: shared so `graph refinements list` and `graph log --refinements` cannot show one row two ways;
+#: the log prepends its own `when`
 _REFINEMENT_COLUMNS = ("id", "kind", "tier", "status", "target")
+
+#: the decisions view, which only the log has
 _RUN_COLUMNS = ("when", "producer", "runner", "trigger", "status", "n", "summary")
 
 
@@ -281,8 +283,11 @@ def _note_row(columns: tuple[str, ...], note: str) -> tuple[str, ...]:
 
 
 def _truncated_note(shown: int, total: int) -> str:
-    """What a capped page left behind, and whether the cap can be raised: at ``MAX_LOG_ROWS`` the
-    CLI refuses a larger ``--limit``, so telling a reader to raise it would be advice to an error."""
+    """What a capped page left behind, and whether the cap can be raised.
+
+    At ``MAX_LOG_ROWS`` the CLI refuses a larger ``--limit``, so telling a reader to raise it
+    would be advice to a usage error.
+    """
     room = (
         "raise --limit for more"
         if shown < MAX_LOG_ROWS

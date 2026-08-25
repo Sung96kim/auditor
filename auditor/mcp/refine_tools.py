@@ -237,13 +237,12 @@ async def graph_refinements(
     rows a human still has to judge rather than the superseded ones. This is the corrections
     listing and takes ``status`` alone; ``graph_log(view="refinements")`` pages the same rows
     through the same ``LogQuery``, adds a time window, and has the runs that made them in its
-    other view. Filter with ``status``
-    (pending | active | stale | redundant | reverted | pinned | superseded | rejected), a
-    repeatable list; an unknown value is an error. Returns {rows, filtered, refinement_count,
-    truncated}; ``filtered`` says whether an empty list means "nothing matched" rather than
-    "nothing recorded", and ``refinement_count`` is how many rows the same filters match in all. A
-    ``pending`` row is waiting on a human running `auditr graph refinements accept <id>`; no tool
-    here can activate one."""
+    other view. Filter with ``status`` (pending | active | stale | redundant | reverted | pinned
+    | superseded | rejected), a repeatable list; an unknown value is an error.
+    Returns {rows, filtered, refinement_count, truncated}; ``filtered`` says whether an empty
+    list means "nothing matched" rather than "nothing recorded", and ``refinement_count`` is how
+    many rows the same filters match in all. A ``pending`` row is waiting on a human running
+    `auditr graph refinements accept <id>`; no tool here can activate one."""
     async with tool_repo(path) as repo:
         try:
             statuses = enum_values(status, RefinementStatus, "status")
@@ -267,8 +266,8 @@ async def graph_log(
     """The provenance log: every decision (``view="runs"``) or every correction
     (``view="refinements"``), newest first. This is the time-windowed view over both halves;
     ``graph_refinements`` is the same corrections page without the window and without the runs.
-    ``status`` is validated against whichever view you
-    chose, so a run status is an error in the refinements view and the message names the valid set.
+    ``status`` is validated against whichever view you chose, so a run status is an error in the
+    refinements view and the message names the valid set.
     ``since`` takes a duration (90s, 45m, 2h, 7d) or an ISO date, never a git ref. Assessment-only
     runs are hidden by default; ``skipped=true`` or ``status=["skipped"]`` shows them, and
     ``skipped`` is a runs-view filter that the refinements view refuses. Returns {view, runs,
