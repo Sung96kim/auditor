@@ -1,7 +1,13 @@
 """Shared private helpers used by more than one tool module."""
 
+from pathlib import Path
+
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
+
+from auditor.database import IndexStore, open_repo_index
+from auditor.database.base import UnmigratableColumn
+from auditor.paths import index_db_path
 
 # Behaviour hints surfaced to clients at no token cost: clients skip confirmation prompts for
 # read-only tools and can cache idempotent ones. All auditor tools work on the local repo only,
@@ -18,3 +24,15 @@ def validate_detail(detail: str) -> None:
         raise ToolError(
             f"detail must be one of: summary, compact, full (got {detail!r})"
         )
+
+
+async def open_index(root: Path) -> IndexStore:
+    """``open_repo_index`` with an unmigratable schema surfaced as a tool error rather than a
+    traceback, which is the MCP half of what ``cli.helpers.open_index`` does."""
+    try:
+        return await open_repo_index(root)
+    except UnmigratableColumn as exc:
+        raise ToolError(
+            f"the index cannot be upgraded: {exc}. Delete it and re-scan: "
+            f"rm {index_db_path()}"
+        ) from exc

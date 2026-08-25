@@ -60,12 +60,22 @@ auditr graph export . --format dot > graph.dot
 - `--no-scan` builds from cached facts only. Use it when a scan just ran and nothing changed since.
 - `--rebuild` discards the cached graph facts and re-extracts from scratch. Facts are keyed by file
   content, so an extractor change does not invalidate facts already cached under the same hash; run
-  `--rebuild` after upgrading auditor.
+  `--rebuild` after upgrading auditor. It is refused with `--no-scan`, which would leave nothing to
+  build from.
+- `--rebuild` holds the rebuild lock across the clear, the rescan and the build, so no other build
+  can see the half-rescanned graph.
 - Routine staleness needs neither flag: the default auto-scan already picks up edited files.
 - Setting `enabled = true` under `[tool.auditor.graph]` also makes a plain `auditr scan -i` populate
   graph facts. See [configuration.md](configuration.md).
 - The build runs the `GRAPH-*` detectors, described below.
-- The build reports five counts: `nodes`, `edges`, `clusters`, `unresolved` and `findings`.
+- The build reports `nodes`, `edges`, `clusters`, `unresolved`, `findings`, `refined` (the
+  refinements it applied) and `expired` (the ones it wrote a new status for).
+- A build takes a lock at `$AUDITOR_HOME/observer/locks/<key>.lock`, one per checkout, so two
+  builds of the same repo never interleave and builds of different repos never wait on each other.
+  If another process is mid-build, `graph build` prints `waiting for the observer's rebuild` and
+  then proceeds.
+- The lock is released when the holding process exits, so a crashed build never leaves one behind
+  and no lock file ever needs deleting.
 
 ## Querying
 
@@ -210,6 +220,47 @@ auditr graph unresolved . --json --limit 500
 - The queue is empty until `graph build` has run. This release bumps the index schema, so the
   cached facts are dropped on first use and the next `graph build` re-extracts every file. No
   `--rebuild` is needed.
+
+## Refinement overlay
+
+- The graph the query commands read is the deterministic build plus an overlay of active
+  refinements. There is no CLI for refinements yet; this section describes what a build does with
+  the rows once something puts them there.
+- A refinement is recorded against a repo *identity* (the git common dir), not a scan partition, so
+  every worktree of one checkout shares them.
+- Every edge carries a provenance: `deterministic` when the resolver produced it, `refined` when an
+  active refinement did. The visualization payload and the flow tree carry it as a field, and both
+  `graph export` DOT paths draw a `refined` edge dashed.
+- The deterministic edge set is never rewritten. An overlay edge is an addition, and a
+  `retarget_edge` is the only kind that moves one, by replacing it with a `refined` edge.
+- The `GRAPH-*` detectors run on a graph no refinement touched: the edge list captured before the
+  overlay, re-ranked and re-clustered over that list, and the nodes that second pass stamps rather
+  than the overlaid ones. A refinement can never create or silence a finding, and can never move
+  which symbol one is reported on. A build in which the overlay placed no edge and moved no node
+  skips the second pass, because it would reproduce the merged one exactly.
+- A refinement expires on its own:
+  - `stale` when a node it is anchored to is gone or its structural facts changed, or when it had
+    no effect for `refine_max_noop_builds` consecutive builds.
+  - `redundant` when the resolver starts producing the same edge. That is the success case, and it
+    is decided against the resolver's own edges only: an edge another refinement placed in the same
+    build makes this one applied with nothing to add, so reverting the first cannot lose the second.
+  - `pinned` refinements are never auto-staled by any path; a moved anchor marks them `drifted`
+    instead, and the no-op counter still advances so a long-dead pin stays visible.
+  - `drifted` is rewritten on every build, so a restored anchor clears it.
+- A refinement whose ids belong to a different partition of the same checkout is skipped in
+  silence: not applied there, and not staled there either.
+- A build that holds no cached facts for a file the refinement names gives it no verdict at all:
+  not applied, not staled, not counted. A rescan in flight is not a deleted symbol.
+- Cluster refinements record the member set they were made against and re-attach to whichever
+  cluster still overlaps it by at least `refine_cluster_jaccard`. Below that they go `stale`. A
+  member another partition owns lowers the overlap rather than putting the whole refinement out of
+  scope, and a cluster a `move_node` empties is dropped rather than shipped with no members.
+- Queue rows retire two ways. A refinement the build applied removes exactly its own
+  `(node_id, name)` row, as does an `unresolvable`, which answers by declaring the pair
+  unanswerable; a refinement the build staled or scored a no-op leaves its row, so the fact stays
+  briefable until something replaces it. The build-pass rows (`generic_label`,
+  `singleton_cluster`, `text_sparse`) are rebuilt from the overlaid clustering instead, so a
+  `relabel_cluster` or a `move_node` stops producing them without any retirement step.
 
 ## Graph findings
 

@@ -6,10 +6,18 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from auditor.database import IndexStore
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
+from auditor.graph.refine.models import (
+    Refinement,
+    RefinementKind,
+    RefinementStatus,
+    RefinementTarget,
+    Run,
+)
 
 GRAPH_CONFIG = "[tool.auditor.graph]\nenabled=true\nname_similarity_threshold=0.2\n"
 SIMILAR_NAMES = (
@@ -212,18 +220,69 @@ async def viz_store(graph_store: IndexStore) -> IndexStore:
     return graph_store
 
 
+_FACTS_FILES = (
+    ("base.py", BASE_SRC, "h1"),
+    ("impl.py", IMPL_SRC, "h2"),
+    ("svc.py", SVC_SRC, "h3"),
+)
+
+
+async def _cache_facts(store: IndexStore, paths: tuple[str, ...]) -> None:
+    for path, src, digest in _FACTS_FILES:
+        if path in paths:
+            await store.graph.set_facts(
+                path,
+                extract_file_facts(path, src, "production").model_dump_json(),
+                digest,
+            )
+
+
 @pytest.fixture
 async def facts_store(graph_store: IndexStore) -> IndexStore:
     """Cached facts for a base/impl/svc trio, so ``GraphBuilder.run`` has something to build and
     exactly one call it cannot place: ``Impl.run`` calls ``svc.load_user`` without importing it."""
-    for path, src, digest in (
-        ("base.py", BASE_SRC, "h1"),
-        ("impl.py", IMPL_SRC, "h2"),
-        ("svc.py", SVC_SRC, "h3"),
-    ):
-        await graph_store.graph.set_facts(
-            path,
-            extract_file_facts(path, src, "production").model_dump_json(),
-            digest,
-        )
+    await _cache_facts(graph_store, tuple(p for p, _, _ in _FACTS_FILES))
     return graph_store
+
+
+class RefinedStore(BaseModel):
+    """A connected store plus the refinement id the fixture inserted into it, so no test has to
+    assume its row is the first insert."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    store: IndexStore
+    refinement_id: int
+
+
+@pytest.fixture
+async def refined_facts_store(facts_store: IndexStore) -> RefinedStore:
+    """`facts_store` plus one active `add_edge` refinement for the call the resolver cannot place:
+    `impl.py::Impl.run` calls `load_user`, which lives in `svc.py`."""
+    run_id = await facts_store.runs.add_run(
+        Run(repo_identity=facts_store.partition.identity, started_at=1.0)
+    )
+    rid = await facts_store.refinements.add_refinement(
+        Refinement(
+            run_id=run_id,
+            repo_identity=facts_store.partition.identity,
+            kind=RefinementKind.ADD_EDGE,
+            target=RefinementTarget(
+                src="impl.py::Impl.run",
+                dst="svc.py::load_user",
+                edge_kind=EdgeKind.CALLS,
+                name="load_user",  # the queue row this answers (spec 5.7)
+            ),
+            status=RefinementStatus.ACTIVE,
+        )
+    )
+    return RefinedStore(store=facts_store, refinement_id=rid)
+
+
+@pytest.fixture
+async def half_scanned_refined_store(refined_facts_store: RefinedStore) -> RefinedStore:
+    """`refined_facts_store` as a build landing mid-``--rebuild`` sees it: the cache was cleared
+    and the rescan has reached `impl.py` but not `svc.py`, the refinement's destination file."""
+    await refined_facts_store.store.graph.clear_facts()
+    await _cache_facts(refined_facts_store.store, ("base.py", "impl.py"))
+    return refined_facts_store

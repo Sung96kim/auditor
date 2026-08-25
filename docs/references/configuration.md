@@ -193,6 +193,13 @@ Opt-in per repo, but no extra to install: the graph libraries ship in the core d
   (dispatch children included) and how many children it would emit. Either one crossing makes it a
   hub, which is why a helper called from 90 places collapses even though it calls one thing.
   `--expand-hubs` ignores the floor for one run.
+- `refine_cluster_jaccard` (default `0.5`, 0 to 1): how much of a cluster refinement's recorded
+  member set must still be in one cluster for it to re-attach. Below the floor the refinement goes
+  `stale`.
+- `refine_max_noop_builds` (default `3`, `ge=1`): consecutive builds a refinement may have no
+  effect on before it goes `stale`. A `pinned` refinement counts but never expires.
+- `rebuild_lock_poll_seconds` (default `0.25`, `gt=0`): how often a build blocked on another
+  process's rebuild lock retries.
 
 ### Malware scan (`[tool.auditor.malware_scan]`, `MalwareScanConfig`)
 

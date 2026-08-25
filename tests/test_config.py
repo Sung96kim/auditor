@@ -520,8 +520,18 @@ def test_unknown_keys_in_a_union_field_check_every_member():
     assert unknown_config_keys({"field": {"nope": 1}}, _Holder) == ["field.nope"]
 
 
-def test_graph_flow_hub_fan_in_is_configurable(tmp_path):
+@pytest.mark.parametrize(
+    "key, literal, expected",
+    [
+        ("flow_hub_fan_in", "12", 12),
+        ("refine_cluster_jaccard", "0.75", 0.75),
+        ("refine_max_noop_builds", "9", 9),
+        ("rebuild_lock_poll_seconds", "0.05", 0.05),
+    ],
+)
+def test_a_graph_knob_is_repo_configurable(tmp_path, key, literal, expected):
+    """The refinement thresholds are policy, not invariants: spec 5.7 puts them on GraphConfig."""
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname="x"\nversion="0"\n[tool.auditor.graph]\nflow_hub_fan_in=12\n'
+        f'[project]\nname="x"\nversion="0"\n[tool.auditor.graph]\n{key}={literal}\n'
     )
-    assert load_config(tmp_path).graph.flow_hub_fan_in == 12
+    assert getattr(load_config(tmp_path).graph, key) == expected

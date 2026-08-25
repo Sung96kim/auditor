@@ -15,7 +15,14 @@ import typer
 
 from auditor.cli.console import ACCENT, err_console
 from auditor.cli.graph_refine import register as register_refine
-from auditor.cli.helpers import fail, present, run, run_staged, warn_unknown_config
+from auditor.cli.helpers import (
+    fail,
+    open_index,
+    present,
+    run,
+    run_staged,
+    warn_unknown_config,
+)
 from auditor.cli.lazy import GRAPH_HELP
 from auditor.cli.options import (
     ExportDepth,
@@ -39,8 +46,7 @@ from auditor.cli.render import (
     render_graph_search,
     render_graph_usages,
 )
-from auditor.config import load_config, unknown_repo_keys
-from auditor.database import IndexStore
+from auditor.config import AuditorSettings, load_config, unknown_repo_keys
 from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
@@ -48,8 +54,8 @@ from auditor.graph.build import GraphBuilder
 from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import DEFAULT_FLOW_LIMIT, EdgeKind
 from auditor.graph.query import GraphQuery
+from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.viz import build_payload, render_app, to_dot
-from auditor.paths import index_db_path, repo_key
 from auditor.serve import ReportServer
 
 graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
@@ -60,11 +66,20 @@ async def _autoscan(root: Path) -> None:
     await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
 
 
-async def _build(root: Path, progress: Callable[[str], None] | None = None) -> dict:
-    settings = load_config(root)
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+async def _build(
+    root: Path,
+    settings: AuditorSettings,
+    progress: Callable[[str], None] | None = None,
+    *,
+    lock_held: bool = False,
+) -> dict:
+    """Rebuild ``root``'s graph. ``lock_held`` when the caller already took the rebuild lock, so
+    a clear plus a rescan plus this build stay one hold."""
+    async with await open_index(root) as index:
         await index.repos.register(time.time())
-        return await GraphBuilder().run(index, settings, progress=progress)
+        return await GraphBuilder().rebuild(
+            index, settings, progress=progress, lock_held=lock_held
+        )
 
 
 @graph_app.command("build")
@@ -84,21 +99,34 @@ def graph_build(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
+    if rebuild and no_scan:
+        raise typer.BadParameter(
+            "--rebuild discards the cached facts, so --no-scan would build an empty graph and "
+            "clear the queue with it. Drop one of them."
+        )
     root = find_root(target)
     warn_unknown_config(unknown_repo_keys(root))
+    settings = load_config(root)
 
     async def do_build(report: Callable[[str], None]) -> dict:
-        if rebuild:
-            report("clearing cached facts…")
-            async with await IndexStore.connect(
-                index_db_path(), repo_key(root)
-            ) as index:
-                await index.graph.clear_facts()
-        if not no_scan:
-            report("scanning repository…")
-            await _autoscan(root)
-        report("building graph…")
-        return await _build(root, report)
+        async with await open_index(root) as index:
+            identity = index.partition.identity
+        # one hold across clear, scan and build: a build landing on the half-rescanned graph
+        # cannot tell a file being re-extracted from a symbol that was deleted
+        async with rebuild_lock(
+            identity,
+            waiting=lambda: report("waiting for the observer's rebuild"),
+            poll=settings.graph.rebuild_lock_poll_seconds,
+        ):
+            if rebuild:
+                report("clearing cached facts…")
+                async with await open_index(root) as index:
+                    await index.graph.clear_facts()
+            if not no_scan:
+                report("scanning repository…")
+                await _autoscan(root)
+            report("building graph…")
+            return await _build(root, settings, report, lock_held=True)
 
     present(run_staged(do_build, "building graph…"), render_graph_build, as_json=json_)
 
@@ -107,7 +135,7 @@ def _query_cmd(
     fn_name: str,
 ) -> Callable[..., Coroutine[Any, Any, Any]]:
     async def runner(root: Path, **kw: Any) -> Any:
-        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        async with await open_index(root) as index:
             return await getattr(GraphQuery(index), fn_name)(**kw)
 
     return runner
@@ -256,15 +284,15 @@ async def _serve_html(
 ) -> str:
     """Render the graph UI HTML. Reuses the already-built graph (fast) unless it's missing or
     ``rebuild`` is set — only then does it pay the scan + build cost."""
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         has_graph = bool(await index.graph.nodes())
     if rebuild or not has_graph:
         report("scanning repository…")
         await _autoscan(root)
         report("building graph…")
-        await _build(root, report)
+        await _build(root, load_config(root), report)
     report("preparing UI…")
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return render_app(await build_payload(index))
 
 
@@ -315,7 +343,7 @@ def graph_export(
 
     async def do_export() -> str | None:
         """``None`` when --flow named a symbol the graph does not hold."""
-        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+        async with await open_index(root) as index:
             payload = await build_payload(index)
             if flow is None:
                 return to_dot(

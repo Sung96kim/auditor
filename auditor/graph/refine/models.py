@@ -3,6 +3,7 @@ in both directions, so every JSON column has a model rather than a raw dict."""
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Any
 
@@ -81,6 +82,18 @@ class Tier(StrEnum):
 
 #: statuses a build applies. `pinned` is never auto-staled, only marked `drifted` (spec 5.7).
 ACTIVE_STATUSES = frozenset({RefinementStatus.ACTIVE, RefinementStatus.PINNED})
+
+#: the only edge kinds a proposal may name (spec 9.2). The overlay's collision index is built from
+#: structural edges alone, so a similarity kind would slip past it and collapse a real row.
+REFINABLE_EDGE_KINDS = frozenset(
+    {
+        EdgeKind.CALLS,
+        EdgeKind.REFERENCES_TYPE,
+        EdgeKind.CALLBACK_ARG,
+        EdgeKind.INHERITS,
+        EdgeKind.OVERRIDES,
+    }
+)
 
 
 class Evidence(BaseModel):
@@ -294,12 +307,36 @@ class Refinement(BaseModel):
         ]
         if missing:
             raise ValueError(f"{self.kind.value} target is missing {missing}")
+        edge_kind = self.target.edge_kind
+        if edge_kind is not None and edge_kind not in REFINABLE_EDGE_KINDS:
+            raise ValueError(
+                f"{edge_kind.value} is not an edge kind a proposal may name"
+            )
+        src, dst = self.edge_pair()
+        if src is not None and src == dst:
+            raise ValueError(f"{self.kind.value} would point {src} at itself")
         return self
 
     def _required(self, path: str) -> object:
         """One required field, read from the target unless ``path`` names the payload half."""
         owner, _, name = path.rpartition(".")
         return getattr(self.payload if owner == "payload" else self.target, name)
+
+    def edge_pair(self) -> tuple[str | None, str | None]:
+        """The ``(src, dst)`` this refinement would put in the graph, toplevel-relative.
+
+        `resolve_ambiguous` names its node in ``target.node_id`` and its chosen dst in
+        ``payload.candidate``; `retarget_edge` means its ``to_dst``. The node kinds mean nothing
+        here and answer ``(None, None)``.
+        """
+        target = self.target
+        if self.kind is RefinementKind.RESOLVE_AMBIGUOUS:
+            return target.node_id, self.payload.candidate
+        if self.kind is RefinementKind.RETARGET_EDGE:
+            return target.src, target.to_dst
+        if self.kind in (RefinementKind.ADD_EDGE, RefinementKind.CONFIRM_EDGE):
+            return target.src, target.dst
+        return None, None
 
 
 class Anchor(BaseModel):
@@ -371,3 +408,14 @@ class EvalRow(BaseModel):
     cost_usd: float = 0.0
     num_turns: int = 0
     created_at: float = Field(default_factory=time.time)
+
+
+class SnapshotPhase(StrEnum):
+    """Which side of a build's persist a snapshot is being taken on (spec 8.6 stage 2)."""
+
+    BEFORE = "before"
+    AFTER = "after"
+
+
+#: What a rebuild calls twice inside its lock, so an assessment sees exactly one build's delta.
+Snapshot = Callable[[SnapshotPhase], Awaitable[None]]

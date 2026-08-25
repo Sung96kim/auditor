@@ -27,7 +27,15 @@ def render_graph_build(out: Console, payload: dict[str, Any]) -> None:
     t = Table.grid(padding=(0, 3))
     t.add_column(style="bold")
     t.add_column(justify="right", style=_ACCENT)
-    for key in ("nodes", "edges", "clusters", "unresolved", "findings"):
+    for key in (
+        "nodes",
+        "edges",
+        "clusters",
+        "unresolved",
+        "findings",
+        "refined",
+        "expired",
+    ):
         if key in payload:
             t.add_row(key, str(payload[key]))
     out.print(Panel(t, title="graph built", border_style=_BORDER))

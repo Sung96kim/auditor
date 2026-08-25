@@ -136,20 +136,22 @@ def _partition_for(root: Path) -> Partition:
     return Partition(identity=identity, prefix=f"{PurePosixPath(rel)}/")
 
 
-def _key_for(identity: str) -> str:
+def identity_key(identity: str) -> str:
+    """Filesystem-safe key for one repo identity: the sha1 both ``repos/<key>`` and the rebuild
+    lock file are named after."""
     return hashlib.sha1(identity.encode(), usedforsecurity=False).hexdigest()
 
 
 def repo_dir_key(root: Path) -> str:
     """Directory name for this repo's user state: sha1 of :func:`repo_identity`. Keyed on the
     identity rather than the path so a symlink or a second worktree lands in the same place."""
-    return _key_for(repo_identity(root))
+    return identity_key(repo_identity(root))
 
 
 def repo_dir_for_identity(identity: str) -> Path:
     """Where an already-resolved identity's per-user state lives. The one owner of the
     ``repos/<key>`` layout, for callers holding an identity that cost a git subprocess."""
-    return auditor_home() / "repos" / _key_for(identity)
+    return auditor_home() / "repos" / identity_key(identity)
 
 
 def repo_dir(root: Path) -> Path:
