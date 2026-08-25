@@ -342,6 +342,23 @@ class StagedRun(BaseModel):
         """
         return all(under_scope(i, self.scope) for i in proposal.anchored_ids())
 
+    def require_open(self) -> None:
+        """Refuse a run another caller in this process already finished, by what happened to it."""
+        if self.closed:
+            raise RefinementRefused(
+                f"run {self.run.run_id} is already closed in this process: it was committed, "
+                "aborted or evicted"
+            )
+
+    def partition_moved(self, current: tuple[str, str]) -> str | None:
+        """Whether this call resolves the partition the run's ids were rebased with."""
+        if current == self.partition:
+            return None
+        return (
+            f"this run was opened against partition {self.partition} and this call resolved "
+            f"{current}; commit from the same root you began on"
+        )
+
     def holds(self, proposal: Proposal) -> bool:
         """Whether this run already staged exactly this proposal.
 
@@ -534,14 +551,6 @@ class RefinementService:
         """What every stored id in a run is relative to: a commit must resolve the same pair."""
         return (self.identity, self.prefix)
 
-    def _still_open(self, staged: StagedRun) -> None:
-        """Refuse a run another caller in this process already finished, by what happened to it."""
-        if staged.closed:
-            raise RefinementRefused(
-                f"run {staged.run.run_id} is already closed in this process: it was committed, "
-                "aborted or evicted"
-            )
-
     async def begin(
         self,
         *,
@@ -594,7 +603,7 @@ class RefinementService:
         """
         staged = self.registry.require(run_id)
         async with staged.lock:
-            self._still_open(staged)
+            staged.require_open()
             return await self._judge(staged, proposal)
 
     async def _judge(
@@ -666,8 +675,8 @@ class RefinementService:
         """
         staged = self.registry.require(run_id)
         async with staged.lock:
-            self._still_open(staged)
-            moved = self._partition_moved(staged)
+            staged.require_open()
+            moved = staged.partition_moved(self.partition)
             if moved is not None:
                 raise RefinementRefused(moved)
             staged.closed = True
@@ -763,7 +772,7 @@ class RefinementService:
         """Drop this run's staging and stamp it aborted (spec 9.1). Nothing was stored."""
         staged = self.registry.require(run_id)
         async with staged.lock:
-            self._still_open(staged)
+            staged.require_open()
             staged.closed = True
             self.registry.close(run_id)
             await self._finish(run_id, RunStatus.ABORTED, error=reason)
@@ -838,15 +847,6 @@ class RefinementService:
                     refusal=RefusalKind.OUT_OF_PARTITION,
                 )
         return None
-
-    def _partition_moved(self, staged: StagedRun) -> str | None:
-        """Whether this handle resolves the partition the run's ids were rebased with."""
-        if self.partition == staged.partition:
-            return None
-        return (
-            f"this run was opened against partition {staged.partition} and this call resolved "
-            f"{self.partition}; commit from the same root you began on"
-        )
 
     async def _policy(self, run: Run) -> TierPolicy:
         """This repo's activation policy for the run's runner and model (spec 10.3)."""
