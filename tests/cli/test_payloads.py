@@ -8,9 +8,15 @@ import json
 
 import pytest
 from _support import cli_json, invoke
+from pydantic import ValidationError
 
 from auditor.cli.helpers import present
-from auditor.cli.payloads import CrossfileReport
+from auditor.cli.payloads import (
+    CrossfileReport,
+    DetectorInfo,
+    PluginsReport,
+    SourceInfo,
+)
 
 
 @pytest.fixture
@@ -204,3 +210,23 @@ def test_plugins_list_detector_entry_keys_are_unchanged(plain_repo):
     payload = cli_json(invoke("plugins", "list", "-r", str(plain_repo), "--json"))
     first = payload["detectors"][next(iter(payload["detectors"]))]
     assert sorted(first) == ["category", "framework", "source"]
+
+
+@pytest.mark.parametrize(
+    ("model", "raw", "unknown"),
+    [
+        (DetectorInfo, {"category": "security", "source": "built-in"}, "hits"),
+        (SourceInfo, {"source": "built-in"}, "hits"),
+        (
+            PluginsReport,
+            {"detectors": {}, "languages": {}, "reporters": {}},
+            "formatters",
+        ),
+    ],
+)
+def test_a_registry_key_no_model_declares_fails_loudly(model, raw, unknown):
+    """`extra="forbid"` is the whole guard: `REGISTRY.snapshot()` is untyped, so a section or an
+    entry field it gains has to raise here rather than be dropped on the way to the wire."""
+    assert model.model_validate(raw)  # the declared shape still validates
+    with pytest.raises(ValidationError, match=unknown):
+        model.model_validate({**raw, unknown: {}})

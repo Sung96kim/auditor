@@ -158,7 +158,13 @@ class SourceInfo(WirePayload):
 
 
 class PluginsReport(WirePayload):
-    """``auditor plugins list``: the registry snapshot plus the loader's warnings."""
+    """``auditor plugins list``: the registry snapshot plus the loader's warnings.
+
+    ``extra="forbid"`` for the reason the entries carry it, one level up: a section the registry
+    gains has to be declared here or fail loudly, never vanish between the snapshot and the wire.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     detectors: dict[str, DetectorInfo] = Field(default_factory=dict)
     languages: dict[str, SourceInfo] = Field(default_factory=dict)

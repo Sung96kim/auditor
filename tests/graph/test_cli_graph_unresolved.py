@@ -5,13 +5,14 @@ from pathlib import Path
 
 import pytest
 from _support import cli_json
+from pydantic import ValidationError
 from rich.console import Console
 from typer.testing import CliRunner
 
 from auditor.cli import app
 from auditor.cli.render import render_graph_unresolved
 from auditor.graph.model import QUEUE_ID_CAP
-from auditor.graph.payloads import QueueReport
+from auditor.graph.payloads import QueueReport, QueueRowPayload
 
 runner = CliRunner()
 
@@ -155,6 +156,20 @@ def test_the_id_lists_are_capped_with_their_true_totals(graph_repo: Path):
     )
     assert len(row["definers"]) == QUEUE_ID_CAP
     assert row["definers_count"] == definers
+
+
+def test_a_queue_column_no_model_declares_fails_loudly(graph_repo: Path):
+    """`graph_unresolved` is read with `SELECT *`, so `extra="forbid"` is what stops a new column
+    being dropped between the table and both surfaces."""
+    rows = cli_json(
+        runner.invoke(
+            app, ["graph", "unresolved", str(_queue_repo(graph_repo)), "--json"]
+        )
+    )
+    assert rows, "the fixture repo produced no unresolved rows"
+    assert QueueRowPayload.of(rows[0])  # the stored shape still validates
+    with pytest.raises(ValidationError, match="run_id"):
+        QueueRowPayload.of({**rows[0], "run_id": 7})
 
 
 def test_an_empty_queue_and_an_empty_filter_read_differently():

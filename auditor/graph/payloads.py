@@ -7,7 +7,7 @@ and neither imports the other.
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from auditor.graph.model import QUEUE_ID_CAP, UnresolvedRow
 from auditor.payload import WirePayload, WireRows
@@ -125,7 +125,13 @@ class UsagesPayload(WirePayload):
 
 
 class QueueRowPayload(UnresolvedRow):
-    """One queue row on the wire: the two id lists capped, their true totals alongside."""
+    """One queue row on the wire: the two id lists capped, their true totals alongside.
+
+    ``extra="forbid"``: the queue is read with ``SELECT *``, so a column the table gains has to be
+    declared here or fail loudly, never be dropped on the way to the CLI and the MCP tool.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     definers_count: int = 0
     candidates_count: int = 0
