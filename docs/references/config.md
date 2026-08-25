@@ -69,6 +69,9 @@ auditr config check
 - A profile name that is neither a built-in nor a readable `.toml` path fails the same way, naming
   the built-ins. It applies to `--profile`, to `extends` in the repo's TOML, and to an `extends`
   passed through `--config-json`.
+- So do the other two ways a config can be found and still be unusable: an `extends` chain that
+  leads back to a profile already being loaded, and a config or profile file that does not parse
+  as TOML, which names the file. Every command surface catches the three of them together.
 - A value that fails validation fails the same way, naming the offending field and the reason.
 - Rule ids and categories in the config are validated against the runtime registry, so plugin
   rules are admissible; see [plugins.md](plugins.md).

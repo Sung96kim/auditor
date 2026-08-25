@@ -277,44 +277,44 @@ class UserKeyReport(BaseModel):
     unknown: tuple[str, ...] = ()
     moved: tuple[tuple[str, str], ...] = ()
 
+    @classmethod
+    def of(cls, layers: dict[str, object]) -> "UserKeyReport":
+        """What a version-2 model makes of one merged settings dict.
+
+        A key the version bump moved is reported as a move rather than a typo: calling it unknown
+        tells the user they mistyped something they got right in an older release.
+        """
+        observer = layers.get("observer")
+        table = observer if isinstance(observer, dict) else {}
+        moved = tuple(
+            (f"observer.{old}", f"observer.{new}")
+            for old, new in MOVED_OBSERVER_KEYS.items()
+            # `runner` and `tuning` name tables now, so each counts as moved only while it still
+            # holds the scalar version 1 put there.
+            if old in table
+            and not (
+                old in ObserverConfig.model_fields and isinstance(table[old], dict)
+            )
+        )
+        renamed = {old for old, _ in moved}
+        return cls(
+            unknown=tuple(
+                key
+                for key in unknown_config_keys(layers, UserSettings)
+                if key not in renamed
+            ),
+            moved=moved,
+        )
+
     def moves(self) -> list[str]:
         """Each moved key as ``old -> new``, for a message or a payload."""
         return [f"{old} -> {new}" for old, new in self.moved]
 
 
 def user_key_report(root: Path, *, directory: Path | None = None) -> UserKeyReport:
-    """Read the two JSON layers once and say what a version-2 model makes of them.
+    """Read this repo's two JSON settings layers and report on them, in one pass.
 
-    A key the version bump moved is reported as a move rather than a typo: naming it unknown
-    tells the user they mistyped something they got right in an older release.
+    The user-settings counterpart of :func:`load_user_settings`: same layers, but what the model
+    rejects rather than what it accepts.
     """
-    layers = user_json_layers(root, directory=directory)
-    moved = _moved_observer_keys(layers)
-    renamed = {old for old, _ in moved}
-    return UserKeyReport(
-        unknown=tuple(
-            key
-            for key in unknown_config_keys(layers, UserSettings)
-            if key not in renamed
-        ),
-        moved=moved,
-    )
-
-
-def _moved_observer_keys(
-    layers: dict[str, object],
-) -> tuple[tuple[str, str], ...]:
-    """The pre-2 observer keys ``layers`` still holds, each with its new dotted path.
-
-    A name version 2 reused for a table (``runner``, ``tuning``) counts as moved only while it
-    still holds the old scalar.
-    """
-    observer = layers.get("observer")
-    if not isinstance(observer, dict):
-        return ()
-    return tuple(
-        (f"observer.{old}", f"observer.{new}")
-        for old, new in MOVED_OBSERVER_KEYS.items()
-        if old in observer
-        and not (old in ObserverConfig.model_fields and isinstance(observer[old], dict))
-    )
+    return UserKeyReport.of(user_json_layers(root, directory=directory))
