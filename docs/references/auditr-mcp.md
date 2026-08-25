@@ -119,9 +119,13 @@ args = ["run", "-i", "--rm",
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
   `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them
   work on the local repo.
-- Every tool resolves its project root and opens the shared index through one seam, so a tool always
-  addresses the same checkout identity the CLI does. A repo whose configuration does not load comes
-  back as a one-line tool error naming the offending key, never a traceback.
+- Every tool resolves its project root, loads the repo policy and opens the shared index through
+  one seam, so a tool always addresses the same checkout identity the CLI does. A repo whose
+  configuration does not load comes back as a one-line tool error naming the offending key, never a
+  traceback.
+- `graph_build` waits at most `graph.rebuild_lock_timeout_seconds` for another process's build
+  before it comes back as a tool error naming the lock file, so a wedged build is never a hung tool
+  call.
 - `scan` takes the same scoping the CLI does, including `severity`, `rule`, `since` (audit only
   what changed against a git ref, with the whole repo still scanned so cross-file rules hold),
   `profile`, `isolated`, `malware`, `fail_on` and a `config` override dict.

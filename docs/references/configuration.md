@@ -203,6 +203,9 @@ Opt-in per repo, but no extra to install: the graph libraries ship in the core d
   effect on before it goes `stale`. A `pinned` refinement counts but never expires.
 - `rebuild_lock_poll_seconds` (default `0.25`, `gt=0`): how often a build blocked on another
   process's rebuild lock retries.
+- `rebuild_lock_timeout_seconds` (default `120.0`, `gt=0`): how long a caller that will not wait
+  for ever gives another process's build before it refuses. Read by `graph_refine_commit`,
+  `RefinementService.rebuild` and the MCP `graph_build` tool; `auditr graph build` waits instead.
 
 ### Malware scan (`[tool.auditor.malware_scan]`, `MalwareScanConfig`)
 
@@ -350,6 +353,8 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `max_turns` (default `20`): agent turns before a run is cut off.
 - `max_nodes_per_run` (default `12`): graph nodes one run may look at.
 - `max_changes_per_run` (default `25`): proposals one run may commit.
+- `max_open_runs` (default `8`): runs one process may hold staged at once. The oldest is evicted to
+  make room, its `graph_runs` row finished `skipped` and its staging stored as rejections.
 
 `observer.scheduling` (`SchedulingConfig`):
 

@@ -305,23 +305,39 @@ flowchart TB
   it started against; `propose` validates the shape, verifies the facts, assigns a tier and stages
   the proposal in memory, storing a rejection immediately so an aborted run still explains itself;
   `commit` takes this checkout's rebuild lock once and does the git guard, the conflict checks, the
-  inserts and `GraphBuilder.rebuild(lock_held=True)` inside it. `accept`, `revert` and `pin` are
-  status transitions only, because the build is the one merge point.
+  inserts and `GraphBuilder.rebuild(lock_held=True)` inside it. The whole batch is decided before
+  anything is written and inserted as one `IndexStore.transaction`, and a rebuild that fails after
+  it rejects every row the commit inserted, so a run that dies leaves nothing a later `accept`
+  could activate and a retry cannot land the same change twice.
+- `RefinementLedger` is the by-hand half over the index handle alone: `accept`, `revert` and `pin`
+  are status transitions, because the build is the one merge point, and `prune` is the retention
+  sweep. It needs no run registry, no checkout root and no git guard, which is what a
+  `graph refinements accept <id>` surface has to work without. `RefinementService` composes it.
+- `FactReader` does the three reads a proposal is judged against (its queue row, the role-filtered
+  definers of the name, a verifier over the files it names). `verify.FactVerifier` is pure by
+  contract, so the reading has an object of its own.
 - A proposal is refused before any file is read when it is not a legal `Proposal` (the model's own
   validators own that rule), when the run is at `max_changes_per_run`, when it names ids outside
   the run's scope or outside this partition, when the run already staged it, or when the run
   already answers that queue name with another destination. Every one of those is stored, so an
   aborted run still explains itself.
-- Staged proposals never reach the database. `RunRegistry` is process-local and bounded, so a run
-  whose process dies loses exactly the work that was never promised, and `graph_refine_status`
-  reports `staged_here: false` in any other process rather than an empty list. Evicting a run to
-  make room finishes its `graph_runs` row `skipped` and stores its staging as rejections, so no row
-  is left `queued`.
+- Staged proposals never reach the database. `RunRegistry.process()` is the one registry a process
+  stages into, so a service built per tool call finds the run the call before it opened; it is
+  bounded by `observer.limits.max_open_runs`, so a run whose process dies loses exactly the work
+  that was never promised, and `graph_refine_status` reports `staged_here: false` in any other
+  process rather than an empty list. Evicting a run to make room finishes its `graph_runs` row
+  `skipped` and stores its staging as rejections, so no row is left `queued`; `prune_skipped_runs`
+  reaps such a run together with those rejections, and keeps any skipped run that owns a refinement
+  which is still live.
 - One run is one critical section. Each `StagedRun` owns an `asyncio.Lock` held for the whole body
   of `propose`, `commit` and `abort`, and both terminal methods close the run before their first
   real await, so a second `commit` is refused rather than inserting the same rows twice. The
-  rebuild lock is taken with a bounded timeout: a build holding it becomes a refusal naming the
-  lock file, never a hung tool call, and any failure inside it finishes the run `failed`.
+  rebuild lock is taken with a bounded timeout by every surface that does not want to wait for
+  ever: `RefinementService.commit`, `RefinementService.rebuild` and the MCP `graph_build` tool all
+  pass `graph.rebuild_lock_timeout_seconds`, so a build holding it becomes a refusal naming the
+  lock file, never a hung tool call, and any failure inside it finishes the run `failed`. The CLI
+  `auditr graph build` still waits, printing that it is waiting: it is interactive and
+  interruptible.
 - A commit that staged nothing takes no lock and runs no build. Spec 6 requires the queue rows to
   be retired in the same lock as the insert; with no insert there is nothing to retire.
 - `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
@@ -460,10 +476,12 @@ flowchart TB
   `AUDITOR_CODE_MODE` is set.
 - `mcp/helpers.py` owns the preamble every tool shares. `tool_repo(path)` resolves the root and
   yields a `ToolRepo` holding an index handle bound to that root's partition and identity;
-  `tool_repo_at(root)` is the same for a tool that resolved the root from a file, and
-  `ToolRepo.settings()` is `tool_config`, so one bad config reads the same from every tool. No tool
-  module calls `IndexStore.connect` or `open_repo_index`, and
-  `tests/graph/test_mcp_preamble.py` parses each one to keep it that way.
+  `tool_repo_at(root)` is the same for a tool that resolved the root from a file. The preamble
+  loads the repo policy first and once, so `ToolRepo.settings` is already validated and one bad
+  config reads the same from every tool it covers. No tool module calls `IndexStore.connect` or
+  `open_repo_index`, and none holds its handle across an `audit_target` scan, which opens its own
+  connection to the same database; `tests/graph/test_mcp_preamble.py` parses each one to keep it
+  that way and drives all fifteen against three broken configs.
 - Two things sit outside that seam on purpose. `rules_list` is synchronous, so it cannot hold an
   async context manager and calls `tool_config(find_root(path))` directly. `server.py`'s
   `ConfigNoticeMiddleware` resolves its own root for the config notice, so a tool call resolves one
