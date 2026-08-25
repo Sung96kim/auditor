@@ -119,10 +119,20 @@ def render_text(
     payload: PayloadT,
     *,
     width: int = 120,
+    color: bool = False,
 ) -> str:
-    """One payload through its own renderer, as plain text at a fixed console width."""
+    """One payload through its own renderer, as text at a fixed console width.
+
+    ``color`` forces the ANSI codes a real terminal would get: off a TTY rich drops every style,
+    so a cell that is styled apart from its neighbours is invisible without it.
+    """
     buf = io.StringIO()
-    render(Console(file=buf, width=width), payload)
+    console = (
+        Console(file=buf, width=width, force_terminal=True, color_system="standard")
+        if color
+        else Console(file=buf, width=width)
+    )
+    render(console, payload)
     return buf.getvalue()
 
 

@@ -22,7 +22,7 @@ from typer.testing import CliRunner
 from auditor.cli import app
 from auditor.cli.render import render_graph_log
 from auditor.database import open_repo_index
-from auditor.graph.model import EdgeKind
+from auditor.graph.model import MAX_LOG_ROWS, EdgeKind
 from auditor.graph.payloads import (
     LogReport,
     LogView,
@@ -370,6 +370,67 @@ def test_the_tool_reports_the_same_three_causes(
     payload = tool_log(refine_repo, **kwargs)
     assert payload["runs"] == []
     assert {key: payload[key] for key in expected} == expected
+
+
+def test_a_window_that_missed_outranks_the_hiding_the_view_does_anyway(
+    refine_repo: Path,
+):
+    """Both causes are live at once: the window emptied the page and the view is also hiding a
+    row. Naming the hiding sends a reader to `--skipped`, which reveals nothing they asked for."""
+    add_observer_run(refine_repo, status=RunStatus.SUCCEEDED, age_seconds=30 * 86400)
+    add_observer_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=0)
+    payload = cli_json(
+        runner.invoke(
+            app, ["graph", "log", str(refine_repo), "--since", "2h", "--json"]
+        )
+    )
+    assert payload["runs"] == []
+    assert payload["narrowed_by"] == ["since"]
+    assert payload["hidden_count"] == 1
+    printed = render_text(render_graph_log, LogReport.model_validate(payload))
+    assert "nothing matched --since" in printed
+    assert "hidden" not in printed
+
+
+def test_a_page_at_the_cap_does_not_advise_a_limit_the_cli_would_refuse(
+    logged_repo: Path,
+):
+    """`--limit` is bounded at `MAX_LOG_ROWS`, so "raise --limit for more" on a page that size is
+    advice to a usage error."""
+    row = RunRowPayload.of(Run(repo_identity="/repo/.git", started_at=_STARTED))
+    capped = LogReport(
+        view=LogView.RUNS,
+        runs=(row,) * MAX_LOG_ROWS,
+        run_count=MAX_LOG_ROWS + 1,
+        truncated=True,
+    )
+    at_cap = render_text(render_graph_log, capped)
+    assert f"{MAX_LOG_ROWS} is the cap" in at_cap
+    assert "raise --limit" not in at_cap
+    under = LogReport(
+        view=LogView.RUNS, runs=(row,), run_count=MAX_LOG_ROWS, truncated=True
+    )
+    assert "raise --limit for more" in render_text(render_graph_log, under)
+
+
+def test_a_failed_run_marks_its_reason_apart_from_a_summary(logged_repo: Path):
+    """Two sources share the `summary` column, and an unmarked failure reason reads as one."""
+    report = LogReport(
+        view=LogView.RUNS,
+        runs=(
+            RunRowPayload.of(
+                Run(
+                    repo_identity="/repo/.git",
+                    status=RunStatus.FAILED,
+                    error="the runner died",
+                    started_at=_STARTED,
+                )
+            ),
+        ),
+        run_count=1,
+    )
+    out = render_text(render_graph_log, report, color=True)
+    assert "\x1b[31mthe runner died" in out  # red, where a real summary is unstyled
 
 
 def test_the_empty_line_reads_the_hidden_set_rather_than_naming_one(logged_repo: Path):
