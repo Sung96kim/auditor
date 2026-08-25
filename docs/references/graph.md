@@ -350,7 +350,8 @@ auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json
   is dashed, a cycle is orange, an already-shown node is dotted, and a node with unplaced calls
   gets a `? N` second line in its label.
 - The modes pick different node sets, so combining them is an error rather than a silent
-  preference: `--flow` with `--symbol` or `--cluster`, `--symbol` with `--cluster`, and `--in`
-  without `--flow`. A `--flow` symbol the graph does not hold is an error too, not an empty DOT.
+  preference: `--flow` with `--symbol` or `--cluster`, `--symbol` with `--cluster`, and any
+  walk-only knob without `--flow` (see the flow section above for the list). A `--flow` symbol
+  the graph does not hold is an error too, not an empty DOT.
 - `--limit` caps the flow walk (default 200 nodes, 1 to 1000) and the DOT records the cap in a
   comment on the second line, with `truncated` when it was hit.

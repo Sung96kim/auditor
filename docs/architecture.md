@@ -78,8 +78,12 @@ Paths are relative to the repo root.
   `load_settings` (the loader with both config failures turned into one line) and `cli_root`, the
   one root resolution every command goes through. `cli/payloads.py` holds one frozen model per
   command payload and `cli/render.py` one `render_*` function per payload, taking that model and
-  never a dict; `cli/options.py` holds the shared Typer annotations. `present` dumps the model, so
-  `--json` and the pretty output cannot drift.
+  never a dict; `cli/options.py` holds the shared Typer annotations. `present` is generic over the
+  payload, so it dumps the model and a renderer paired with the wrong one is a type error.
+- `payload.py`: the two shells both payload modules build on, `WirePayload` (a frozen object) and
+  `WireRows` (a frozen array of one row model), so each payload declares only its own fields. The
+  graph query payloads live in `graph/payloads.py` instead, beside the query, so the CLI and the
+  MCP tools read the same shape without importing each other.
 - `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. `cli_root` records the root
   and `load_settings` hands back the keys the loader already found, so nothing merges a config
   twice. `ConfigNotice.report()` writes the lines and marks the root as reported; the root typer
