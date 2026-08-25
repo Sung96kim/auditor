@@ -19,7 +19,7 @@ from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
 from auditor.config import AuditorSettings, ConfigError, load_config
-from auditor.config_notice import NOTICE, ConfigNotice
+from auditor.config_notice import NOTICE
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
 from auditor.discovery import find_root
@@ -98,12 +98,16 @@ def cli_root(
 
 
 def flush_config_notice() -> None:
-    """Print this invocation's unknown-config-key block on stderr, so stdout stays parseable."""
-    keys = NOTICE.reportable()
-    for key in keys:
-        err_console.print(f"[yellow]warning:[/yellow] unknown config key: {key}")
-    if keys:
-        err_console.print(f"[dim]{ConfigNotice.HINT}[/dim]")
+    """Print this invocation's config notice on stderr, so stdout stays parseable.
+
+    The notice writes the lines; this only chooses the sink and the styling, with its closing
+    advice dimmed.
+    """
+    lines = NOTICE.report()
+    for line in lines[:-1]:
+        err_console.print(f"[yellow]warning:[/yellow] {line}")
+    for line in lines[-1:]:
+        err_console.print(f"[dim]{line}[/dim]")
 
 
 # pydantic appends these when the failure is a dict *key*; neither names a field.
@@ -151,13 +155,15 @@ def load_settings(
     edge is where a traceback becomes a message.
     """
     with config_errors_as_one_line():
-        return load_config(
+        settings = load_config(
             root,
             profile=profile,
             allow_local_plugins=allow_local_plugins,
             loader=loader,
             overrides=overrides,
         )
+    NOTICE.record_policy(settings.unknown_keys)
+    return settings
 
 
 def require_exists(path: Path) -> None:

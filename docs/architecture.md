@@ -78,9 +78,11 @@ Paths are relative to the repo root.
   `load_settings` (the loader with both config failures turned into one line) and `cli_root`, the
   one root resolution every command goes through. `cli/render.py` holds one `render_*` function per
   payload; `cli/options.py` holds the shared Typer annotations.
-- `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. `cli_root` records the root;
-  the root typer callback in `cli/apps.py` flushes one stderr block per invocation and the MCP
-  server's `ConfigNoticeMiddleware` prints one line per process. No command formats the warning.
+- `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. `cli_root` records the root
+  and `load_settings` hands back the keys the loader already found, so nothing merges a config
+  twice. `ConfigNotice.report()` writes the lines and marks the root as reported; the root typer
+  callback in `cli/apps.py` flushes them as one stderr block per invocation, and the MCP server's
+  `ConfigNoticeMiddleware` prints them once per repo. No command formats the warning.
 
 ## scan
 

@@ -2,6 +2,7 @@
 registered here: see ``auditor.mcp`` (the composition root) and the ``*_tools`` modules for those.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddleware
 from fastmcp.tools.base import ToolResult
 
-from auditor.config_notice import NOTICE, ConfigNotice
+from auditor.config_notice import NOTICE
 from auditor.discovery import find_root
 
 # Backstop so no single tool call can flood an agent's context. The per-tool bounds keep
@@ -33,35 +34,56 @@ mcp: FastMCP = FastMCP(
 )
 
 
+# The parameter a tool names its repo with, most specific first. A tool that declares none of
+# them (malware_status, malware_install) can never point the notice at the server's own cwd.
+REPO_PARAMETERS = ("path", "file", "root")
+
+
+def notice_lines(named: str) -> list[str]:
+    """This process's notice for the repo a tool call named, empty when it has nothing to add.
+
+    Blocking by nature: a git call and up to two config merges, so the caller runs it in a worker
+    thread rather than on the event loop.
+    """
+    NOTICE.record(find_root(Path(named)))
+    return NOTICE.report()
+
+
 class ConfigNoticeMiddleware(Middleware):
-    """Note the config keys no model declares, once per server process, on stderr.
+    """Note the config keys no model declares on stderr, once per repo the server is asked about.
 
     stdout carries the MCP protocol, so the note can only go there; a long-lived server must not
-    repeat it on every call, and the repo comes from the first tool call that names one.
+    repeat it on every call, and a session that moves between repos hears about each of them.
     """
-
-    def __init__(self) -> None:
-        self.noted = False
 
     async def on_call_tool(
         self,
         context: MiddlewareContext[mt.CallToolRequestParams],
         call_next: CallNext[mt.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
-        arguments = context.message.arguments or {}
-        # six tools take neither: rules_list, malware_status, malware_install take nothing,
-        # manifest/report/finding_detail take `file`. Only a call that names a repo may latch.
-        named = arguments.get("path") or arguments.get("file")
-        if named is not None and not self.noted:
-            self.noted = True
-            NOTICE.record(find_root(Path(str(named))))
-            keys = NOTICE.reportable()
-            if keys:
-                print(
-                    f"auditr: ignoring unknown config key(s) {', '.join(keys)}; {ConfigNotice.HINT}",
-                    file=sys.stderr,
-                )
+        named = await self.repo_argument(context)
+        if named is not None:
+            lines = await asyncio.to_thread(notice_lines, named)
+            if lines:
+                print(f"auditr: {'; '.join(lines)}", file=sys.stderr)
         return await call_next(context)
+
+    async def repo_argument(
+        self, context: MiddlewareContext[mt.CallToolRequestParams]
+    ) -> str | None:
+        """The repo this call works on, falling back to the parameter's own default.
+
+        The raw request carries only what the client sent, and ``path: str = "."`` is the shape
+        agents actually call, so the declared default is where most calls name their repo.
+        """
+        tool = await context.fastmcp_context.fastmcp.get_tool(context.message.name)
+        declared = tool.parameters.get("properties", {}) if tool is not None else {}
+        arguments = context.message.arguments or {}
+        for name in REPO_PARAMETERS:
+            if name in declared:
+                value = arguments.get(name, declared[name].get("default"))
+                return None if value is None else str(value)
+        return None
 
 
 CONFIG_NOTICE_MIDDLEWARE = ConfigNoticeMiddleware()

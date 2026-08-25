@@ -44,6 +44,16 @@ def warning_log() -> Iterator[list[str]]:
 
 
 @pytest.fixture
+def bad_config(tmp_path: Path) -> Path:
+    """A repo whose config carries exactly one key no model declares."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nbogus = 1\n'
+    )
+    (tmp_path / "a.py").write_text("x = 1\n")
+    return tmp_path
+
+
+@pytest.fixture
 def git_repo(tmp_path: Path) -> Path:
     """A one-commit git repo. The identity helpers need a real .git, and `worktree add` needs
     a HEAD to branch from."""

@@ -11,8 +11,9 @@ env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus the one `AUD
 - The CLI prints the ignored keys once per invocation, from the root callback, on stderr, so
   machine output on stdout stays parseable. Both families are covered: repo policy and user
   settings. `auditr config check` and `auditr init` print their own list instead.
-- The MCP server prints one line naming them on stderr, once per server process, on the first tool
-  call that names a repo through `path` or `file`.
+- The MCP server prints one line naming them on stderr, once per repo it is asked about. It reads
+  the repo from a call's `path`, `file` or `root` argument, or from that argument's own default
+  when the call leaves it out.
 - A key with an invalid value still fails: the command prints one line and exits non-zero.
 
 ## `[tool.auditor]` in `pyproject.toml`

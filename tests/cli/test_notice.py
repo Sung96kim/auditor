@@ -3,11 +3,12 @@ command, and none at all from the commands that never load config."""
 
 import click
 import pytest
-from _support import cli_json, invoke
+from _support import assert_no_escape, cli_json, invoke
 from typer.core import TyperGroup
 from typer.main import get_group
 
 import auditor.config
+import auditor.config_notice
 from auditor.cli import app
 from auditor.paths import user_config_path
 
@@ -77,16 +78,6 @@ def _command_paths() -> set[tuple[str, ...]]:
     return out
 
 
-@pytest.fixture
-def bad_config(tmp_path):
-    """A repo whose config carries exactly one key no model declares."""
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nbogus = 1\n'
-    )
-    (tmp_path / "a.py").write_text("x = 1\n")
-    return tmp_path
-
-
 def test_the_command_registry_is_fully_classified():
     """A new command has to be put in one bucket or the other, so it cannot ship undecided."""
     assert _command_paths() == WARNING_COMMANDS | SILENT_COMMANDS
@@ -132,6 +123,76 @@ def test_a_user_settings_typo_is_reported_too(bad_config):
     result = invoke("discover", str(bad_config))
     assert "unknown config key: bogus" in result.stderr
     assert "unknown config key: observer.runer" in result.stderr
+
+
+def test_a_repo_policy_that_cannot_be_read_still_reports_the_user_keys(bad_config):
+    """The two sources are independent. Concatenating them inside one guard meant an unrelated
+    repo's `extends` typo decided whether the user heard about their own."""
+    (bad_config / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends = "nope"\n'
+    )
+    user_config_path().parent.mkdir(parents=True, exist_ok=True)
+    user_config_path().write_text('{"observer": {"runer": "claude"}}')
+
+    result = invoke("index", "list", "-r", str(bad_config))
+
+    assert result.exit_code == 0, result.output
+    assert "unknown config key: observer.runer" in result.stderr
+
+
+def test_a_user_layer_that_cannot_be_read_still_reports_the_repo_keys(
+    bad_config, monkeypatch
+):
+    """The other direction of the same guard."""
+
+    def _boom(*args, **kwargs):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(auditor.config_notice, "unknown_user_keys", _boom)
+    result = invoke("discover", str(bad_config))
+    assert "unknown config key: bogus" in result.stderr
+
+
+def test_a_command_that_never_loads_policy_stays_clean_on_a_bad_profile(bad_config):
+    """`graph clusters` resolves a root but never loads policy, so the notice swallowing the
+    profile error is the only thing between it and a traceback while the context closes."""
+    (bad_config / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends = "nope"\n'
+    )
+    result = invoke("graph", "clusters", str(bad_config))
+    assert result.exit_code == 0, result.output
+    assert_no_escape(result)
+
+
+def test_each_repo_gets_its_own_notice_in_one_process(bad_config, tmp_path):
+    """Two invocations in one interpreter: the second must not inherit the first's report."""
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nalso_bogus = 1\n'
+    )
+
+    first = invoke("index", "list", "-r", str(bad_config))
+    second = invoke("index", "list", "-r", str(other))
+
+    assert "unknown config key: bogus" in first.stderr
+    assert "unknown config key: also_bogus" in second.stderr
+
+
+def test_a_loaded_config_is_not_merged_a_second_time(bad_config, monkeypatch):
+    """The loader already collected the unknown keys; the notice reads them off the settings
+    instead of paying for the whole profile chain and both repo TOMLs again."""
+    merges: list[str] = []
+    monkeypatch.setattr(
+        auditor.config_notice,
+        "unknown_repo_keys",
+        lambda *args, **kwargs: merges.append("merged") or [],
+    )
+
+    result = invoke("config", "show", "-r", str(bad_config))
+
+    assert "unknown config key: bogus" in result.stderr
+    assert merges == []
 
 
 def test_config_check_owns_its_own_report(bad_config):

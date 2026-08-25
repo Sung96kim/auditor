@@ -138,10 +138,12 @@ args = ["run", "-i", "--rm",
   `suggestion` and `standard_refs` after compact mode dropped them.
 - `aggregate` also returns a `ResourceLink` rather than the markdown inline.
 - A response-limiting middleware caps any single tool response at 500,000 bytes as a backstop.
-- A second middleware notes the config keys no model declares once per server process, on stderr.
-  It never writes to stdout, where the protocol lives, and never fails a tool call. It reads the
-  repo from the first call that passes `path` or `file`; a call that names neither is skipped.
   Resource reads, where the full artifacts live, are never truncated.
+- A second middleware notes the config keys no model declares on stderr, once per repo the server
+  is asked about. It never writes to stdout, where the protocol lives, and never fails a tool
+  call. It reads the repo from the call's `path`, `file` or `root` argument, falling back to that
+  argument's own default, so a call that leaves it out is still covered; a tool that declares none
+  of them (`malware_status`, `malware_install`) is skipped.
 - The CLI's own JSON (`auditr scan -f json`) is unaffected by any of this.
 
 ## Code mode
