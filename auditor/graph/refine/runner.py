@@ -27,7 +27,11 @@ from auditor.graph.refine.models import (
     TriggerKind,
 )
 from auditor.graph.refine.prompts import GRAPH_SERVER, RunAnswer
-from auditor.graph.refine.service import RefinementRefused, RefinementService
+from auditor.graph.refine.service import (
+    CommitResult,
+    RefinementRefused,
+    RefinementService,
+)
 
 #: the in-process tool a proposal arrives through, as the trace names it
 PROPOSE_TOOL = f"mcp__{GRAPH_SERVER}__propose"
@@ -52,6 +56,24 @@ class RefinementJob(BaseModel):
     model: str | None = None
 
 
+class RunProduct(BaseModel):
+    """Everything one run produced: the row it opened, the brief it worked from, how it ended, and
+    what its commit landed.
+
+    One frozen answer rather than state left on the runner, because both surfaces need the run row
+    and the brief as well as the outcome, and a runner that remembered its last call could only
+    ever drive one.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run: Run
+    brief: Brief
+    outcome: RunOutcome
+    #: ``None`` unless the run committed: an aborted or failed run lands nothing
+    landed: CommitResult | None = None
+
+
 class RefinementRunner(ABC):
     """One producer of refinements (spec 9.5): open, work, close.
 
@@ -68,8 +90,8 @@ class RefinementRunner(ABC):
         self.client_factory = client_factory
 
     @abstractmethod
-    async def run(self, job: RefinementJob) -> RunOutcome:
-        """Drive one run from `begin` to its terminal state, and return that state."""
+    async def run(self, job: RefinementJob) -> RunProduct:
+        """Drive one run from `begin` to its terminal state, and report what it produced."""
 
     async def _open(self, job: RefinementJob) -> tuple[Run, Brief]:
         """Open the run and record the brief on its row before any work happens."""
@@ -87,35 +109,50 @@ class RefinementRunner(ABC):
 
     async def _close(
         self,
-        run_id: str,
+        run: Run,
+        brief: Brief,
         *,
-        ok: bool,
+        status: RunStatus,
         reason: str,
         attribution: RunAttribution,
-    ) -> RunOutcome:
+    ) -> RunProduct:
         """Land or abandon the run, and answer with what the producer made of it.
 
-        ``reason`` is the run's own summary on the way out and the abort reason on the way down.
-        The stored row keeps the service's counted summary, which is the one every other surface
+        ``reason`` is the run's own summary when it succeeded and why it stopped otherwise. The
+        stored row keeps the service's counted summary, which is the one every other surface
         reads; this outcome carries the producer's.
 
         A `commit` that refuses has already stamped the row through `_retire` and closed the run,
         so it is never followed by an `abort`: that would raise "not open in this process" out of
         this handler.
         """
-        if not ok:
-            await self.service.abort(run_id, reason, attribution=attribution)
-            return RunOutcome.of(
-                RunStatus.ABORTED, error=reason, attribution=attribution
+        if status is not RunStatus.SUCCEEDED:
+            terminate = (
+                self.service.fail if status is RunStatus.FAILED else self.service.abort
+            )
+            await terminate(run.run_id, reason, attribution=attribution)
+            return RunProduct(
+                run=run,
+                brief=brief,
+                outcome=RunOutcome.of(status, error=reason, attribution=attribution),
             )
         try:
-            await self.service.commit(run_id, attribution=attribution)
+            landed = await self.service.commit(run.run_id, attribution=attribution)
         except RefinementRefused as exc:
-            return RunOutcome.of(
-                RunStatus.FAILED, error=str(exc), attribution=attribution
+            return RunProduct(
+                run=run,
+                brief=brief,
+                outcome=RunOutcome.of(
+                    RunStatus.FAILED, error=str(exc), attribution=attribution
+                ),
             )
-        return RunOutcome.of(
-            RunStatus.SUCCEEDED, summary=reason, attribution=attribution
+        return RunProduct(
+            run=run,
+            brief=brief,
+            outcome=RunOutcome.of(
+                RunStatus.SUCCEEDED, summary=reason, attribution=attribution
+            ),
+            landed=landed,
         )
 
 
@@ -138,8 +175,8 @@ class FakeRunner(RefinementRunner):
         self.answer = answer
         self.fail_with = fail_with
 
-    async def run(self, job: RefinementJob) -> RunOutcome:
-        run, _brief = await self._open(job)
+    async def run(self, job: RefinementJob) -> RunProduct:
+        run, brief = await self._open(job)
         trace: list[ToolCall] = []
         for proposal in self.script:
             verdict = await self.service.propose(run.run_id, proposal)
@@ -157,8 +194,9 @@ class FakeRunner(RefinementRunner):
             else f"{len(self.script)} proposed"
         )
         return await self._close(
-            run.run_id,
-            ok=self.fail_with is None,
+            run,
+            brief,
+            status=RunStatus.SUCCEEDED if self.fail_with is None else RunStatus.ABORTED,
             reason=self.fail_with or summary,
             attribution=attribution,
         )

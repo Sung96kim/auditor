@@ -38,7 +38,7 @@ async def test_a_scripted_run_lands_its_proposal_and_records_how(
     refine_service: RefinementService,
 ):
     runner = FakeRunner(refine_service, script=[GOOD])
-    outcome = await runner.run(RefinementJob())
+    outcome = (await runner.run(RefinementJob())).outcome
     (row,) = await refine_service.index.runs.runs()
     assert outcome.status is RunStatus.SUCCEEDED
     assert (row.status, row.runner) == (RunStatus.SUCCEEDED, RunnerKind.FAKE)
@@ -69,7 +69,7 @@ async def test_an_empty_script_commits_without_locking_or_rebuilding(
         raise AssertionError("an empty run took the rebuild lock")
 
     monkeypatch.setattr("auditor.graph.refine.service.rebuild_lock", refuse)
-    outcome = await FakeRunner(refine_service).run(RefinementJob())
+    outcome = (await FakeRunner(refine_service).run(RefinementJob())).outcome
     assert outcome.status is RunStatus.SUCCEEDED
     assert outcome.summary == "0 proposed"
     assert outcome.usage.num_turns == 1
@@ -79,9 +79,10 @@ async def test_the_models_own_summary_is_what_the_outcome_carries(
     refine_service: RefinementService,
 ):
     answer = RunAnswer(summary="one edge", proposed=1, stopped_because="done")
-    outcome = await FakeRunner(refine_service, script=[GOOD], answer=answer).run(
+    product = await FakeRunner(refine_service, script=[GOOD], answer=answer).run(
         RefinementJob()
     )
+    outcome = product.outcome
     assert outcome.summary == "one edge"
 
 
@@ -90,9 +91,10 @@ async def test_a_runner_that_gives_up_aborts_the_run_and_stores_nothing(
 ):
     """Invariant 2: the row exists with its cost, but `abort` promises nothing, so it keeps
     nothing."""
-    outcome = await FakeRunner(refine_service, script=[GOOD], fail_with="boom").run(
+    product = await FakeRunner(refine_service, script=[GOOD], fail_with="boom").run(
         RefinementJob()
     )
+    outcome = product.outcome
     (row,) = await refine_service.index.runs.runs()
     assert (outcome.status, outcome.error) == (RunStatus.ABORTED, "boom")
     assert (row.status, row.error) == (RunStatus.ABORTED, "boom")
@@ -104,7 +106,8 @@ async def test_a_refused_proposal_is_stored_and_the_run_still_succeeds(
     refine_service: RefinementService,
 ):
     """Spec 9.2 stores every rejection, and one bad proposal is not a failed run."""
-    outcome = await FakeRunner(refine_service, script=[INVALID]).run(RefinementJob())
+    product = await FakeRunner(refine_service, script=[INVALID]).run(RefinementJob())
+    outcome = product.outcome
     (row,) = await refine_service.index.runs.runs()
     assert outcome.status is RunStatus.SUCCEEDED
     stored = await refine_service.index.refinements.of_run(row.run_id)
@@ -126,10 +129,10 @@ async def test_a_commit_the_service_refuses_is_not_followed_by_an_abort(
 
     monkeypatch.setattr(refine_service, "abort", spy)
     async with rebuild_lock(refine_service.identity):
-        outcome = await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
+        product = await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
-    assert outcome.status is RunStatus.FAILED
-    assert "rebuild lock" in (outcome.error or "")
+    assert product.outcome.status is RunStatus.FAILED
+    assert "rebuild lock" in (product.outcome.error or "")
     assert row.status is RunStatus.FAILED
     assert aborted == []
 
@@ -170,3 +173,23 @@ async def test_a_job_without_a_model_takes_the_configured_one(
     await FakeRunner(refine_service).run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
     assert row.model == refine_service.user.observer.runner.model
+
+
+async def test_the_product_carries_what_the_commit_landed(
+    refine_service: RefinementService,
+):
+    """Both surfaces report the verdicts, so the commit result travels with the outcome rather
+    than being re-derived from the stored rows, which keep no verify status."""
+    product = await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
+    assert product.landed is not None
+    assert product.landed.landed == 1
+    assert [v.kind for v in product.landed.committed] == [RefinementKind.ADD_EDGE]
+
+
+async def test_a_run_that_did_not_commit_landed_nothing(
+    refine_service: RefinementService,
+):
+    product = await FakeRunner(refine_service, script=[GOOD], fail_with="boom").run(
+        RefinementJob()
+    )
+    assert product.landed is None

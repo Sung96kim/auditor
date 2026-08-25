@@ -736,18 +736,41 @@ class RefinementService:
         The cost survives: a run that stopped at its turn or budget cap still spent what it spent,
         and only the proposals it never promised are lost.
         """
+        return await self._terminate(
+            run_id, RunStatus.ABORTED, reason, attribution=attribution
+        )
+
+    async def _terminate(
+        self,
+        run_id: str,
+        status: RunStatus,
+        reason: str,
+        *,
+        attribution: RunAttribution | None,
+    ) -> Run:
+        """Close an open run under its own lock and stamp it, dropping whatever it staged."""
         staged = self.registry.require(run_id)
         async with staged.lock:
             staged.require_open()
             staged.closed = True
             self.registry.close(run_id)
-            await self._finish(
-                run_id, RunStatus.ABORTED, error=reason, attribution=attribution
-            )
+            await self._finish(run_id, status, error=reason, attribution=attribution)
         run = await self.index.runs.run(run_id)
         if run is None:  # the row was written by `begin`, so this cannot happen
             raise RefinementRefused.no_such_run(run_id)
         return run
+
+    async def fail(
+        self, run_id: str, reason: str, *, attribution: RunAttribution | None = None
+    ) -> Run:
+        """Stamp an open run `failed`: the producer broke, rather than deciding to stop.
+
+        The twin of `abort`, which spec 5.3 reserves for a run that hit its turn or budget cap. A
+        producer that lost its client, or answered nothing, is not a run that chose to stop.
+        """
+        return await self._terminate(
+            run_id, RunStatus.FAILED, reason, attribution=attribution
+        )
 
     async def prune(self) -> PruneOutcome:
         """The ledger's retention sweep at this user's configured windows (spec 5.1, 5.7)."""

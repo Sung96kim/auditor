@@ -8,13 +8,14 @@ import asyncio
 import io
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, TypeVar
 
 from _support import tool_data
 from fastmcp import Client
+from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from auditor.database import open_repo_index
@@ -158,3 +159,131 @@ def with_lock_timeout(service: RefinementService, seconds: float) -> RefinementS
         }
     )
     return service
+
+
+class Init(BaseModel):
+    """A `SystemMessage(subtype="init")` as the runner duck-types it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    data: dict[str, Any]
+    subtype: str = "init"
+
+
+class Tick(BaseModel):
+    """Any other `SystemMessage`: a progress tick the runner must skip past."""
+
+    model_config = ConfigDict(frozen=True)
+
+    subtype: str = "thinking_tokens"
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class Assistant(BaseModel):
+    """An `AssistantMessage`, with the tool calls the fake client will actually make."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: str = "claude-haiku-4-5-20251001"
+    content: tuple[str, ...] = ()
+    error: str | None = None
+    #: (tool name, arguments) per call, replayed against the bound tools
+    tool_calls: tuple[tuple[str, Mapping[str, Any]], ...] = ()
+
+
+class Limit(BaseModel):
+    """A `RateLimitEvent`, whose `rate_limit_info` the runner reads by attribute."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rate_limit_info: "LimitInfo"
+
+
+class LimitInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: str = "allowed_warning"
+    resets_at: int | None = None
+
+
+class Result(BaseModel):
+    """A `ResultMessage`, carrying only the fields the outcome mapping reads."""
+
+    model_config = ConfigDict(frozen=True)
+
+    subtype: str = "success"
+    num_turns: int = 3
+    total_cost_usd: float | None = 0.004
+    session_id: str = "sdk-session"
+    model_usage: dict[str, dict[str, Any]] | None = None
+    usage: dict[str, Any] | None = None
+    structured_output: Any = None
+    errors: tuple[str, ...] | None = None
+
+
+def init_data(**overrides: Any) -> dict[str, Any]:
+    """An init payload the check accepts, before the test spoils one field of it."""
+    return {
+        "mcp_servers": [{"name": "graph", "status": "connected"}],
+        "plugins": [],
+        "tools": ["Read", "Grep", "Glob", "StructuredOutput", "mcp__graph__propose"],
+        "permissionMode": "dontAsk",
+        "model": "claude-haiku-4-5-20251001",
+        "session_id": "sdk-session",
+        "claude_code_version": "2.1.239",
+        **overrides,
+    }
+
+
+class FakeClient:
+    """A `ClientSession` that replays scripted messages and really calls the bound tools.
+
+    An assistant message's `tool_calls` are awaited against `BoundTools` and fed to its hook, so a
+    scripted run proposes through the service exactly as a real one does.
+    """
+
+    def __init__(self, messages: Sequence[Any], tools: Any) -> None:
+        self.messages = messages
+        self.tools = tools
+        self.prompt: str | None = None
+
+    async def __aenter__(self) -> "FakeClient":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def query(self, prompt: str) -> None:
+        self.prompt = prompt
+
+    async def _replay(self, message: Any) -> None:
+        for name, args in message.tool_calls:
+            bound = getattr(self.tools, name.rsplit("__", 1)[-1], None)
+            response = await bound(args) if bound is not None else {}
+            await self.tools.record(
+                {
+                    "tool_name": name,
+                    "tool_input": args,
+                    "duration_ms": 5,
+                    "tool_response": response,
+                }
+            )
+
+    async def receive_response(self) -> AsyncIterator[Any]:
+        for message in self.messages:
+            if isinstance(message, Assistant) and message.tool_calls:
+                await self._replay(message)
+            yield message
+
+
+def fake_factory(
+    messages: Sequence[Any], seen: list[Any] | None = None
+) -> Callable[..., Any]:
+    """A client factory over one scripted message list, recording the options it was handed."""
+
+    def factory(options: Any, tools: Any) -> FakeClient:
+        if seen is not None:
+            seen.append(options)
+        return FakeClient(messages, tools)
+
+    return factory
