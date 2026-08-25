@@ -10,7 +10,7 @@ from typing import Any
 
 import typer
 
-from auditor.cli.helpers import open_index, present, run
+from auditor.cli.helpers import cli_root, open_index, present, run
 from auditor.cli.options import (
     GraphTarget,
     QueueCallForm,
@@ -19,7 +19,6 @@ from auditor.cli.options import (
     QueueReason,
 )
 from auditor.cli.render import render_graph_unresolved
-from auditor.discovery import find_root
 from auditor.graph.model import (
     QUEUE_ROW_LIMIT,
     CallForm,
@@ -57,7 +56,7 @@ def graph_unresolved(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Facts the deterministic resolver could not place, worst-first."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(
             _unresolved_rows(

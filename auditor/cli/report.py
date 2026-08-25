@@ -7,13 +7,13 @@ from pydantic import ValidationError
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
     check_format,
+    cli_root,
     emit,
     fail,
     format_config_error,
     parse_config_json,
     require_file,
     run,
-    warn_unknown_config,
 )
 from auditor.cli.options import (
     ConfigJson,
@@ -23,8 +23,7 @@ from auditor.cli.options import (
     ReportFile,
     ShowIgnored,
 )
-from auditor.config import UnknownProfile, unknown_repo_keys
-from auditor.discovery import find_root
+from auditor.config import UnknownProfile
 from auditor.engine import audit_target
 from auditor.reporters import render
 
@@ -42,9 +41,9 @@ def report(
     require_file(file)
     check_format(fmt)
     overrides = parse_config_json(config_json)
-    warn_unknown_config(
-        unknown_repo_keys(find_root(file), profile=profile, overrides=overrides)
-    )
+    cli_root(
+        file, profile=profile, overrides=overrides
+    )  # the notice reports on this root
     try:
         results = run(
             audit_target(

@@ -6,16 +6,16 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from auditor.cli.helpers import (
+    cli_root,
     fail,
     format_config_error,
     load_settings,
     parse_config_json,
     present,
-    warn_unknown_config,
 )
 from auditor.cli.options import ConfigJson, RootArg, UserConfig
 from auditor.cli.render import render_config_check, render_config_show
-from auditor.discovery import find_root
+from auditor.config_notice import NOTICE
 from auditor.user_settings import load_user_settings, unknown_user_keys
 
 config_app = typer.Typer(no_args_is_help=True, help="Inspect resolved configuration.")
@@ -29,10 +29,11 @@ def config_show(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Print the resolved configuration (repo policy, or --user for the user settings)."""
-    root = find_root(target)
+    overrides = parse_config_json(config_json)
+    root = cli_root(target, overrides=overrides)
     settings: BaseModel
     if user:
-        if config_json is not None:
+        if overrides is not None:
             fail(
                 "--config-json applies to repo policy; it cannot be combined with --user"
             )
@@ -40,10 +41,8 @@ def config_show(
             settings = load_user_settings(root)
         except ValidationError as exc:
             fail(f"invalid user config — {format_config_error(exc)}")
-        warn_unknown_config(unknown_user_keys(root))
     else:
-        settings = load_settings(root, overrides=parse_config_json(config_json))
-        warn_unknown_config(settings.unknown_keys)
+        settings = load_settings(root, overrides=overrides)
     present(settings.model_dump(mode="json"), render_config_show, as_json=json_)
 
 
@@ -54,14 +53,14 @@ def config_check(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Report config keys no model declares. Exits non-zero when a value fails validation."""
-    root = find_root(target)
     overrides = parse_config_json(config_json)
+    root = cli_root(target, overrides=overrides)
+    NOTICE.owned()  # the unknown keys are this command's payload; a stderr block would repeat it
     settings = load_settings(root, overrides=overrides)
     try:
         load_user_settings(root)
     except ValidationError as exc:
         fail(f"invalid user config — {format_config_error(exc)}")
-    # The unknown keys are this command's payload, so it never also calls warn_unknown_config.
     present(
         {
             "root": str(root),

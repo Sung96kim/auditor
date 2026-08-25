@@ -10,10 +10,10 @@ from pathlib import Path
 import typer
 
 from auditor.cli.apps import app
-from auditor.cli.helpers import fail, present
+from auditor.cli.helpers import cli_root, fail, present
 from auditor.cli.options import CleanStatus, InitCheck, InitMigrate, InitRepo, RootArg
 from auditor.cli.render import render_init
-from auditor.discovery import find_root
+from auditor.config_notice import NOTICE
 from auditor.paths import (
     auditor_home,
     ensure_repo_dir,
@@ -78,7 +78,8 @@ def init(
     for flag, name in ((migrate, "--migrate"), (clean_status, "--clean-status")):
         if flag and check:
             fail(f"{name} writes; it cannot be combined with --check")
-    root = find_root(target)
+    root = cli_root(target)
+    NOTICE.owned()  # render_init lists the unknown user keys and --json carries them
     home = auditor_home()
     identity = repo_identity(root)
     directory = repo_dir_for_identity(identity)

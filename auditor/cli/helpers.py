@@ -7,7 +7,7 @@ import asyncio
 import difflib
 import json
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
@@ -18,8 +18,10 @@ from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
 from auditor.config import AuditorSettings, UnknownProfile, load_config
+from auditor.config_notice import NOTICE, ConfigNotice
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
+from auditor.discovery import find_root
 from auditor.paths import index_db_path
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
@@ -74,17 +76,33 @@ def parse_config_json(raw: str | None) -> dict | None:
     return value
 
 
-def warn_unknown_config(keys: Sequence[str]) -> None:
-    """Report config keys no model declares, on stderr so machine output on stdout still parses.
+def cli_root(
+    target: Path,
+    pinned: Path | None = None,
+    *,
+    profile: str | None = None,
+    overrides: dict[str, object] | None = None,
+) -> Path:
+    """The project root for a CLI target, recorded so the root callback reports the config keys no
+    model declares exactly once.
 
-    Unknown keys are ignored at load time (D8), so this is the only place a typo surfaces. Call it
-    once per invocation: the loader itself never warns, and `config check` prints its own list.
+    ``pinned`` short-circuits the search (``scan --root``). ``profile`` and ``overrides`` are the
+    run's extra config layers, so a typo in ``--config-json`` is reported like one in the TOML.
     """
-    if not keys:
-        return
+    return NOTICE.record(
+        find_root(target) if pinned is None else pinned,
+        profile=profile,
+        overrides=overrides,
+    )
+
+
+def flush_config_notice() -> None:
+    """Print this invocation's unknown-config-key block on stderr, so stdout stays parseable."""
+    keys = NOTICE.reportable()
     for key in keys:
         err_console.print(f"[yellow]warning:[/yellow] unknown config key: {key}")
-    err_console.print("[dim]unknown keys are ignored — run `auditr config check`[/dim]")
+    if keys:
+        err_console.print(f"[dim]{ConfigNotice.HINT}[/dim]")
 
 
 # pydantic appends these when the failure is a dict *key*; neither names a field.

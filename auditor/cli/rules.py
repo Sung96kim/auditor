@@ -6,10 +6,9 @@ from typing import Annotated
 import typer
 
 from auditor.cli.console import err_console
-from auditor.cli.helpers import fail, load_settings, present
+from auditor.cli.helpers import cli_root, fail, load_settings, present
 from auditor.cli.options import RootArg
 from auditor.cli.render import render_rules_list
-from auditor.discovery import find_root
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
@@ -42,7 +41,7 @@ def rules_list(
     """List every registered detector rule, plus the target repo's trusted plugin rules."""
     loader = PluginLoader()
     # loads the repo's plugins as a side effect, so their rules are registered before we list
-    load_settings(find_root(target), loader=loader)
+    load_settings(cli_root(target), loader=loader)
     for warning in loader.warnings:
         err_console.print(f"[yellow]warning:[/] {warning}")
     if category is not None and category not in REGISTRY.categories():

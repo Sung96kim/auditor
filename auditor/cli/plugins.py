@@ -4,10 +4,9 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import load_settings, present, warn_unknown_config
+from auditor.cli.helpers import cli_root, load_settings, present
 from auditor.cli.options import RootArg
 from auditor.cli.render import render_plugins_list
-from auditor.discovery import find_root
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
@@ -21,8 +20,9 @@ def plugins_list(
 ) -> None:
     """Show every loaded detector/language auditor/reporter and its source."""
     loader = PluginLoader()
-    settings = load_settings(find_root(target), loader=loader)
-    warn_unknown_config(settings.unknown_keys)
+    load_settings(
+        cli_root(target), loader=loader
+    )  # registers every plugin so REGISTRY.snapshot() below sees them
     payload = REGISTRY.snapshot()
     payload["warnings"] = loader.warnings
     present(payload, render_plugins_list, as_json=json_)

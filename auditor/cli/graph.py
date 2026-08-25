@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from auditor.cli.console import ACCENT, err_console
 from auditor.cli.graph_refine import register as register_refine
 from auditor.cli.helpers import (
+    cli_root,
     fail,
     format_config_error,
     load_settings,
@@ -24,7 +25,6 @@ from auditor.cli.helpers import (
     present,
     run,
     run_staged,
-    warn_unknown_config,
 )
 from auditor.cli.lazy import GRAPH_HELP
 from auditor.cli.options import (
@@ -49,8 +49,7 @@ from auditor.cli.render import (
     render_graph_search,
     render_graph_usages,
 )
-from auditor.config import AuditorSettings, UnknownProfile, unknown_repo_keys
-from auditor.discovery import find_root
+from auditor.config import AuditorSettings, UnknownProfile
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
@@ -107,8 +106,7 @@ def graph_build(
             "--rebuild discards the cached facts, so --no-scan would build an empty graph and "
             "clear the queue with it. Drop one of them."
         )
-    root = find_root(target)
-    warn_unknown_config(unknown_repo_keys(root))
+    root = cli_root(target)
     settings = load_settings(root)
 
     async def do_build(report: Callable[[str], None]) -> dict:
@@ -156,7 +154,7 @@ def graph_related(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Top semantic neighbors of a symbol (name + usage), ranked."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(_query_cmd("related")(root, symbol=symbol, limit=limit), "querying…"),
         render_graph_related,
@@ -172,7 +170,7 @@ def graph_neighbors(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Structural neighbors (calls/overrides/...) up to a depth."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(_query_cmd("neighbors")(root, symbol=symbol, depth=depth), "querying…"),
         render_graph_neighbors,
@@ -187,7 +185,7 @@ def graph_concept(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Symbols in the concept cluster matching a term."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(_query_cmd("concept")(root, term=term), "querying…"),
         render_graph_concept,
@@ -201,7 +199,7 @@ def graph_clusters(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List concept clusters (label + size)."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(_query_cmd("clusters")(root), "querying…"),
         render_graph_clusters,
@@ -217,7 +215,7 @@ def graph_search(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Find symbols whose id contains the term (highest-rank first)."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(_query_cmd("search")(root, term=term, limit=limit), "searching…"),
         render_graph_search,
@@ -234,7 +232,7 @@ def graph_usages(
 ) -> None:
     """How a symbol is used/connected: edges grouped by kind with full counts (used_by vs
     depends_on)."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(_query_cmd("usages")(root, symbol=symbol, sample=sample), "querying…"),
         render_graph_usages,
@@ -268,7 +266,7 @@ def graph_flow(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Read a code path from a symbol: what it calls, or with --in what reaches it."""
-    root = find_root(target)
+    root = cli_root(target)
     options = FlowOptions(
         direction=FlowDirection.IN if inbound else FlowDirection.OUT,
         depth=depth,
@@ -317,7 +315,7 @@ def graph_serve(
 ) -> None:
     """Serve the interactive graph UI. Serves the already-built graph when present (fast); only
     scans + builds when it's missing. Pass --rebuild to force a fresh build."""
-    root = find_root(target)
+    root = cli_root(target)
     try:
         html = run_staged(
             lambda report: _serve_html(root, rebuild=rebuild, report=report),
@@ -343,7 +341,7 @@ def graph_export(
     inbound: FlowIn = False,
 ) -> None:
     """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego/flow."""
-    root = find_root(target)
+    root = cli_root(target)
     if flow is not None and (symbol is not None or cluster is not None):
         raise typer.BadParameter("--flow cannot be combined with --symbol or --cluster")
     if symbol is not None and cluster is not None:

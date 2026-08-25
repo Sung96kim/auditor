@@ -11,12 +11,12 @@ from pathlib import Path
 import typer
 
 from auditor.cli.helpers import (
+    cli_root,
     fail,
     load_settings,
     open_index,
     present,
     run,
-    warn_unknown_config,
 )
 from auditor.cli.options import (
     AllowLocalPlugins,
@@ -34,8 +34,6 @@ from auditor.cli.render import (
     render_ignore_list,
     render_ignore_rm,
 )
-from auditor.config import unknown_repo_keys
-from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
 from auditor.registry import REGISTRY
@@ -59,9 +57,10 @@ def ignore_add(
     """Ignore a rule repo-wide (no scope), in a file (--file), or at one line (--file --line)."""
     if line is not None and file is None:
         fail("--line requires --file")
-    root = find_root(target)
-    settings = load_settings(root, allow_local_plugins=allow_local_plugins)
-    warn_unknown_config(settings.unknown_keys)
+    root = cli_root(target)
+    load_settings(
+        root, allow_local_plugins=allow_local_plugins
+    )  # registers plugin rules for the id check
     if not force and rule_id not in REGISTRY.rule_ids():
         fail(
             f"unknown rule_id {rule_id!r}; run `auditor rules list` to see rules "
@@ -105,7 +104,7 @@ def ignore_list(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List the ignores recorded for this repo (with their ids)."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
         run(_ignore_list(root), "reading ignores…"), render_ignore_list, as_json=json_
     )
@@ -125,8 +124,7 @@ def ignore_rm(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Remove an ignore by id (`ignore rm 7`) or by selector (`ignore rm <rule_id> --file …`)."""
-    root = find_root(target)
-    warn_unknown_config(unknown_repo_keys(root))
+    root = cli_root(target)
     removed = run(_ignore_rm(root, selector, file, line), "removing ignore…")
     if not removed:
         fail(f"no matching ignore for {selector!r}")
@@ -148,8 +146,7 @@ def ignore_clear(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Remove every ignore for this repo."""
-    root = find_root(target)
-    warn_unknown_config(unknown_repo_keys(root))
+    root = cli_root(target)
     present(
         {"cleared": run(_ignore_clear(root), "clearing ignores…")},
         render_ignore_clear,

@@ -6,15 +6,15 @@ import typer
 
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
+    cli_root,
     load_settings,
     parse_config_json,
     present,
     require_exists,
-    warn_unknown_config,
 )
 from auditor.cli.options import ConfigJson, DirTarget
 from auditor.cli.render import render_discover
-from auditor.discovery import FileDiscovery, find_root
+from auditor.discovery import FileDiscovery
 from auditor.roles import RoleClassifier
 
 
@@ -26,9 +26,9 @@ def discover(
 ) -> None:
     """List auditable files with their classified role."""
     require_exists(target)
-    root = find_root(target)
-    settings = load_settings(root, overrides=parse_config_json(config_json))
-    warn_unknown_config(settings.unknown_keys)
+    overrides = parse_config_json(config_json)
+    root = cli_root(target, overrides=overrides)
+    settings = load_settings(root, overrides=overrides)
     classifier = RoleClassifier(settings.role_globs)
     out = []
     discovery = FileDiscovery(

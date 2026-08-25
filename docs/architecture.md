@@ -74,9 +74,13 @@ Paths are relative to the repo root.
 - Library entry points: `engine.audit_target` and `reporters.render`, both re-exported from
   `auditor`. See [python-api.md](references/python-api.md).
 - `cli/helpers.py`: `present` (pretty at a TTY, raw JSON otherwise), `run` / `run_staged` /
-  `run_live` (the asyncio bridge plus the stderr spinner), `emit`, `open_index`, `fail`.
-  `cli/render.py` holds one `render_*` function per payload; `cli/options.py` holds the shared
-  Typer annotations.
+  `run_live` (the asyncio bridge plus the stderr spinner), `emit`, `open_index`, `fail`,
+  `load_settings` (the loader with both config failures turned into one line) and `cli_root`, the
+  one root resolution every command goes through. `cli/render.py` holds one `render_*` function per
+  payload; `cli/options.py` holds the shared Typer annotations.
+- `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. `cli_root` records the root;
+  the root typer callback in `cli/apps.py` flushes one stderr block per invocation and the MCP
+  server's `ConfigNoticeMiddleware` prints one line per process. No command formats the warning.
 
 ## scan
 

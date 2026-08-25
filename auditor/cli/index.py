@@ -4,7 +4,14 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import fail, open_index, open_shared_index, present, run
+from auditor.cli.helpers import (
+    cli_root,
+    fail,
+    open_index,
+    open_shared_index,
+    present,
+    run,
+)
 from auditor.cli.options import RootArg, ScopePaths
 from auditor.cli.render import (
     render_index_add,
@@ -12,7 +19,6 @@ from auditor.cli.render import (
     render_index_list,
     render_index_repos,
 )
-from auditor.discovery import find_root
 from auditor.paths import repo_key
 
 index_app = typer.Typer(
@@ -27,7 +33,7 @@ def index_add(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Register files as the audit scope."""
-    root = find_root(target)
+    root = cli_root(target)
     rels = [
         str(p.relative_to(root)) if p.is_relative_to(root) else str(p) for p in paths
     ]
@@ -46,7 +52,7 @@ def index_list(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List the registered scope + per-file counts."""
-    root = find_root(target)
+    root = cli_root(target)
     present(run(_index_list(root), "reading index…"), render_index_list, as_json=json_)
 
 
@@ -81,7 +87,7 @@ def index_forget(
     The cascade takes the repo's persistent ignores with the cached rows, so the command
     refuses without --yes whenever this repo has any.
     """
-    root = find_root(target)
+    root = cli_root(target)
     key = repo_key(root)
     ignores = run(_repo_ignores(root), "reading index…")
     if ignores and not yes:

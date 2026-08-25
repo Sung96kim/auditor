@@ -12,6 +12,7 @@ from auditor.cli.apps import app
 from auditor.cli.console import err_console
 from auditor.cli.helpers import (
     check_format,
+    cli_root,
     emit,
     fail,
     format_config_error,
@@ -20,7 +21,6 @@ from auditor.cli.helpers import (
     require_exists,
     run_live,
     suggest,
-    warn_unknown_config,
 )
 from auditor.cli.options import (
     AllowLocalPlugins,
@@ -52,8 +52,8 @@ from auditor.cli.options import (
     WriteBaseline,
 )
 from auditor.cli.summary import print_summary
-from auditor.config import UnknownProfile, is_configured, unknown_repo_keys
-from auditor.discovery import default_base_ref, find_root, git_changed_files
+from auditor.config import UnknownProfile, is_configured
+from auditor.discovery import default_base_ref, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity as _check_severity
 from auditor.gate import gate_tripped as _gate_tripped
@@ -123,12 +123,11 @@ def _diff_report_only(
     since: str | None,
     changed: bool,
     vs_base: bool,
-    root: Path | None = None,
+    root: Path,
 ) -> set[str] | None:
     """Resolve the git diff ref (--since / --changed / --vs-base) and return the changed-file
     set to scope the output to, or None if no diff mode was requested. Exits cleanly on error.
     """
-    root = root or find_root(target)
     ref: str | None = None
     if vs_base:
         ref = load_settings(root).diff_base or default_base_ref(root)
@@ -188,11 +187,6 @@ def scan(
         check_format(fmt)  # fail fast on a bad --format, before the scan
     configure_logging(verbose)
 
-    report_only = _diff_report_only(target, since, changed, vs_base, root)
-    root = root or find_root(target)
-    if report_only is not None and not no_index:
-        incremental = True  # whole-repo scan stays fast via the cache
-
     overrides = parse_config_json(config_json)
     if malware is not None:
         if malware and not (
@@ -207,7 +201,10 @@ def scan(
         merged = dict(overrides or {})
         merged["malware_scan"] = {**merged.get("malware_scan", {}), "enabled": malware}
         overrides = merged
-    warn_unknown_config(unknown_repo_keys(root, profile=profile, overrides=overrides))
+    root = cli_root(target, root, profile=profile, overrides=overrides)
+    report_only = _diff_report_only(target, since, changed, vs_base, root)
+    if report_only is not None and not no_index:
+        incremental = True  # whole-repo scan stays fast via the cache
     # "." renders as ".…" against the ellipsis — show the directory's name instead.
     target_label = target.resolve().name if str(target) == "." else target
     try:
