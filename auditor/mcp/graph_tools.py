@@ -41,7 +41,7 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     settings = tool_config(root)
     async with await open_index(root) as index:
         await index.repos.register(time.time())
-        return await GraphBuilder().rebuild(index, settings)
+        return (await GraphBuilder().rebuild(index, settings)).model_dump(mode="json")
 
 
 @mcp.tool(annotations=READ_ONLY)

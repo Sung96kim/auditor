@@ -177,16 +177,3 @@ class PluginsReport(WirePayload):
     ) -> "PluginsReport":
         """Validate a ``Registry.snapshot()`` and the loader's warnings into one payload."""
         return cls.model_validate({**snapshot, "warnings": tuple(warnings)})
-
-
-class GraphBuildReport(WirePayload):
-    """``auditor graph build``: what the build landed. Validated from ``GraphBuilder.rebuild``'s
-    summary, which the MCP tool returns as-is."""
-
-    nodes: int
-    edges: int
-    clusters: int
-    unresolved: int
-    findings: int
-    refined: int
-    expired: int

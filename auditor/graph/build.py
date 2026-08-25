@@ -23,6 +23,7 @@ from auditor.graph.model import (
     UnresolvedRow,
 )
 from auditor.graph.naming import name_similar_edges
+from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.rank import pagerank
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.refine.models import (
@@ -254,7 +255,7 @@ class GraphWrite(BaseModel):
 
     async def persist(
         self, index: IndexStore, snapshot: Snapshot | None = None
-    ) -> dict[str, int]:
+    ) -> GraphBuildReport:
         """Land this build as one commit and report what it wrote (spec section 6 step 8).
 
         ``snapshot`` sees the queue immediately before and immediately after that commit, which
@@ -267,17 +268,17 @@ class GraphWrite(BaseModel):
             await snapshot(SnapshotPhase.AFTER)
         return self.summary()
 
-    def summary(self) -> dict[str, int]:
+    def summary(self) -> GraphBuildReport:
         """What the CLI and the MCP tool report; the one place the counts are named."""
-        return {
-            "nodes": len(self.nodes),
-            "edges": len(self.edges),
-            "clusters": len(self.clusters),
-            "unresolved": len(self.unresolved),
-            "findings": sum(len(f) for f in self.findings.values()),
-            "refined": sum(1 for o in self.outcomes if o.applied),
-            "expired": sum(1 for o in self.outcomes if o.status is not None),
-        }
+        return GraphBuildReport(
+            nodes=len(self.nodes),
+            edges=len(self.edges),
+            clusters=len(self.clusters),
+            unresolved=len(self.unresolved),
+            findings=sum(len(f) for f in self.findings.values()),
+            refined=sum(1 for o in self.outcomes if o.applied),
+            expired=sum(1 for o in self.outcomes if o.status is not None),
+        )
 
 
 class GraphBuilder:
@@ -290,7 +291,7 @@ class GraphBuilder:
         *,
         progress: Callable[[str], None] | None = None,
         snapshot: Snapshot | None = None,
-    ) -> dict[str, int]:
+    ) -> GraphBuildReport:
         cfg = settings.graph
         report = progress or (lambda _m: None)
         report("loading cached facts")
@@ -373,7 +374,7 @@ class GraphBuilder:
         progress: Callable[[str], None] | None = None,
         lock_held: bool = False,
         snapshot: Snapshot | None = None,
-    ) -> dict[str, int]:
+    ) -> GraphBuildReport:
         """:meth:`run` under this checkout's rebuild lock. Pass ``lock_held`` when the caller
         already holds it, and ``snapshot`` to see the queue immediately before and after the write
         without another build landing in between."""

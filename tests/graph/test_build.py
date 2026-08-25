@@ -23,6 +23,7 @@ from auditor.graph.model import (
     Provenance,
     UnresolvedReason,
 )
+from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.refine.models import (
     Anchor,
     Refinement,
@@ -68,7 +69,7 @@ async def test_build_writes_nodes_edges_clusters(facts_store):
         graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
     )
     summary = await GraphBuilder().run(facts_store, settings)
-    assert summary["nodes"] >= 4
+    assert summary.nodes >= 4
     # override edge survived the repo pass
     over = await facts_store.graph.edges_of("impl.py::Impl.run", ["overrides"])
     assert any(e["dst"] == "base.py::Base.run" for e in over)
@@ -173,14 +174,13 @@ async def test_build_runs_detectors_and_persists(graph_store):
         graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=True)
     )
     summary = await GraphBuilder().run(graph_store, settings)
-    assert "findings" in summary
-    assert summary["findings"] >= 0
+    assert summary.findings >= 0
     # detect=False clears graph findings and adds none
     settings_off = AuditorSettings(
         graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=False)
     )
     summary_off = await GraphBuilder().run(graph_store, settings_off)
-    assert summary_off["findings"] == 0
+    assert summary_off.findings == 0
 
 
 async def test_dedup_property_getter_setter(graph_store):
@@ -209,7 +209,7 @@ async def test_build_reports_and_persists_the_unresolved_count(facts_store):
     )
     summary = await GraphBuilder().run(facts_store, settings)
     rows = await facts_store.graph.unresolved()
-    assert summary["unresolved"] == len(rows)
+    assert summary.unresolved == len(rows)
     assert ("impl.py::Impl.run", "load_user") in {
         (r["node_id"], r["name"]) for r in rows
     }
@@ -253,21 +253,21 @@ async def test_build_replaces_the_queue_rather_than_appending(facts_store):
     )
     first = await GraphBuilder().run(facts_store, settings)
     second = await GraphBuilder().run(facts_store, settings)
-    assert first["unresolved"] == second["unresolved"]
-    assert len(await facts_store.graph.unresolved()) == second["unresolved"]
+    assert first.unresolved == second.unresolved
+    assert len(await facts_store.graph.unresolved()) == second.unresolved
 
 
 async def test_build_with_no_facts_reports_an_empty_queue(graph_store):
     settings = AuditorSettings(graph=GraphConfig(enabled=True))
-    assert await GraphBuilder().run(graph_store, settings) == {
-        "nodes": 0,
-        "edges": 0,
-        "clusters": 0,
-        "unresolved": 0,
-        "findings": 0,
-        "refined": 0,
-        "expired": 0,
-    }
+    assert await GraphBuilder().run(graph_store, settings) == GraphBuildReport(
+        nodes=0,
+        edges=0,
+        clusters=0,
+        unresolved=0,
+        findings=0,
+        refined=0,
+        expired=0,
+    )
     assert await graph_store.graph.unresolved() == []
 
 
@@ -342,15 +342,15 @@ async def test_an_emptied_repo_clears_the_previous_graph_findings(facts_store):
     await facts_store.graph.clear_facts()
     summary = await GraphBuilder().run(facts_store, settings)
 
-    assert summary == {
-        "nodes": 0,
-        "edges": 0,
-        "clusters": 0,
-        "unresolved": 0,
-        "findings": 0,
-        "refined": 0,
-        "expired": 0,
-    }
+    assert summary == GraphBuildReport(
+        nodes=0,
+        edges=0,
+        clusters=0,
+        unresolved=0,
+        findings=0,
+        refined=0,
+        expired=0,
+    )
     stored = await facts_store.findings.all()
     assert [f for f in stored if f.rule_id in _GRAPH_RULE_IDS] == []
     assert await facts_store.graph.nodes() == []
@@ -376,15 +376,15 @@ def test_the_summary_counts_what_the_write_carries():
         edges=(GraphEdge(src="m.py::a", dst="m.py::b", kind=EdgeKind.CALLS),),
         findings={"m.py": [_graph_finding(), _graph_finding()]},
     )
-    assert write.summary() == {
-        "nodes": 1,
-        "edges": 1,
-        "clusters": 0,
-        "unresolved": 0,
-        "findings": 2,
-        "refined": 0,
-        "expired": 0,
-    }
+    assert write.summary() == GraphBuildReport(
+        nodes=1,
+        edges=1,
+        clusters=0,
+        unresolved=0,
+        findings=2,
+        refined=0,
+        expired=0,
+    )
 
 
 def _node(node_id: str) -> GraphNode:
@@ -493,15 +493,15 @@ async def test_the_build_summary_reports_what_the_overlay_did(refined_facts_stor
     store, rid = refined_facts_store.store, refined_facts_store.refinement_id
     settings = AuditorSettings()
     settings.graph.enabled = True
-    assert (await GraphBuilder().run(store, settings))["refined"] == 1
+    assert (await GraphBuilder().run(store, settings)).refined == 1
     await store.refinements.set_status(rid, RefinementStatus.REVERTED)
-    assert (await GraphBuilder().run(store, settings))["refined"] == 0
+    assert (await GraphBuilder().run(store, settings)).refined == 0
 
 
 def test_the_docs_list_every_summary_key():
     """The keys are named in the reference, never counted, so adding one cannot leave it stale."""
     prose = Path("docs/references/graph.md").read_text(encoding="utf-8")
-    assert all(f"`{key}`" in prose for key in GraphWrite().summary())
+    assert all(f"`{key}`" in prose for key in GraphBuildReport.model_fields)
 
 
 async def test_the_outcome_timestamp_is_the_builds_not_the_writers(refined_facts_store):

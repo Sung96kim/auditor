@@ -13,6 +13,18 @@ from auditor.graph.model import QUEUE_ID_CAP, GraphCluster, UnresolvedRow
 from auditor.payload import WirePayload, WireRows
 
 
+class GraphBuildReport(WirePayload):
+    """What one build landed, as ``graph build`` and the MCP tool report it."""
+
+    nodes: int
+    edges: int
+    clusters: int
+    unresolved: int
+    findings: int
+    refined: int
+    expired: int
+
+
 class RelatedRow(WirePayload):
     """One semantic neighbour of a symbol, with the edge weight that found it."""
 

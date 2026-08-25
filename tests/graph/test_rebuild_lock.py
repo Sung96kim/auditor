@@ -147,7 +147,7 @@ async def test_the_empty_build_takes_the_same_write_path(graph_store):
     settings.graph.enabled = True
     summary = await GraphBuilder().rebuild(graph_store, settings, snapshot=snapshot)
     assert seen == [SnapshotPhase.BEFORE, SnapshotPhase.AFTER]
-    assert summary["nodes"] == 0
+    assert summary.nodes == 0
 
 
 async def test_rebuild_returns_the_same_summary_as_run(facts_store):

@@ -17,7 +17,6 @@ from auditor.cli.payloads import (
     ConfigCheckReport,
     CrossfileReport,
     DiscoverReport,
-    GraphBuildReport,
     IgnoreAddReport,
     IgnoreClearReport,
     IgnoreListReport,
@@ -35,6 +34,7 @@ from auditor.graph.flow import FlowNode, FlowPayload
 from auditor.graph.payloads import (
     ClustersReport,
     ConceptPayload,
+    GraphBuildReport,
     NeighborsReport,
     QueueReport,
     RelatedReport,

@@ -1,13 +1,15 @@
 """Visualization data contract: build the graph payload the UI consumes.
 
-Stdlib only — pure mapping over the persisted graph (auditor/graph/ui/ renders it).
+Pure mapping over the persisted graph (auditor/graph/ui/ renders it). Stdlib, plus the flow
+models, so the DOT export reads the walk result rather than a dump of it.
 """
 
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from auditor.graph.model import DEFAULT_FLOW_LIMIT, NodeKind, Provenance
+from auditor.graph.flow import FlowNode, FlowPayload
+from auditor.graph.model import NodeKind, Provenance
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -148,48 +150,36 @@ _FLOW_DOT_STYLE = {
 }
 
 
-def _flow_declare(node: dict, nodes: dict[str, dict]) -> str:
+def _flow_declare(node: FlowNode, nodes: dict[str, dict]) -> str:
     """One DOT node line carrying the tree's ⊕/⊣/↺ marks and its unresolved count, so a pruned
     branch cannot read as an ordinary leaf."""
-    nid = node["id"]
-    label = nodes.get(nid, {}).get("label") or nid.split("::")[-1]
-    queued = len(node.get("unresolved") or ())
-    if queued:
-        label = f"{label}\\n? {queued}"
-    marks = "".join(a for mark, a in _FLOW_DOT_STYLE.items() if node.get(mark))
-    return f'  "{nid}" [label="{label}"{marks}];'
+    label = nodes.get(node.id, {}).get("label") or node.id.split("::")[-1]
+    if node.unresolved:
+        label = f"{label}\\n? {len(node.unresolved)}"
+    marks = "".join(a for mark, a in _FLOW_DOT_STYLE.items() if getattr(node, mark))
+    return f'  "{node.id}" [label="{label}"{marks}];'
 
 
-def _flow_dot(flow: dict, nodes: dict[str, dict]) -> str:
+def _flow_dot(flow: FlowPayload, nodes: dict[str, dict]) -> str:
     """A flow tree as DOT: one ``rank=same`` row per depth, edges labelled by relation, nodes
     carrying the same marks the tree renderer shows."""
     declared: dict[str, str] = {}
     levels: dict[int, list[str]] = {}
     links: set[tuple[str, str, str, str]] = set()
 
-    def walk(node: dict) -> None:
-        if node["id"] not in declared:  # a revisited node keeps its first-seen row
-            declared[node["id"]] = _flow_declare(node, nodes)
-            levels.setdefault(node["depth"], []).append(node["id"])
-        for child in node.get("children", []):
-            links.add(
-                (
-                    node["id"],
-                    child["id"],
-                    child.get("edge") or "",
-                    str(child.get("source", "")),
-                )
-            )
+    def walk(node: FlowNode) -> None:
+        if node.id not in declared:  # a revisited node keeps its first-seen row
+            declared[node.id] = _flow_declare(node, nodes)
+            levels.setdefault(node.depth, []).append(node.id)
+        for child in node.children:
+            links.add((node.id, child.id, child.edge or "", child.source))
             walk(child)
 
-    root = flow.get("root")
-    if root is not None:
-        walk(root)
-    cap = flow.get("limit", DEFAULT_FLOW_LIMIT)
-    cut = ", truncated" if flow.get("truncated") else ""
+    walk(flow.root)
+    cut = ", truncated" if flow.truncated else ""
     lines = [
         "digraph flow {",
-        f"  // {flow.get('direction', 'out')}, at most {cap} nodes{cut}",
+        f"  // {flow.direction.value}, at most {flow.limit} nodes{cut}",
         "  rankdir=LR;",
         "  node [shape=box, style=rounded];",
     ]
@@ -212,7 +202,7 @@ def to_dot(
     cluster: str | None = None,
     symbol: str | None = None,
     depth: int = 1,
-    flow: dict | None = None,
+    flow: FlowPayload | None = None,
 ) -> str:
     """Return a deterministic Graphviz DOT string for the payload.
 

@@ -38,7 +38,6 @@ from auditor.cli.options import (
     FlowSymbol,
     GraphTarget,
 )
-from auditor.cli.payloads import GraphBuildReport
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
@@ -55,6 +54,7 @@ from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import DEFAULT_FLOW_DEPTH, DEFAULT_FLOW_LIMIT, EdgeKind
+from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.viz import build_payload, render_app, to_dot
@@ -74,7 +74,7 @@ async def _build(
     progress: Callable[[str], None] | None = None,
     *,
     lock_held: bool = False,
-) -> dict:
+) -> GraphBuildReport:
     """Rebuild ``root``'s graph. ``lock_held`` when the caller already took the rebuild lock, so
     a clear plus a rescan plus this build stay one hold."""
     async with await open_index(root) as index:
@@ -109,7 +109,7 @@ def graph_build(
     root = cli_root(target)
     settings = load_settings(root)
 
-    async def do_build(report: Callable[[str], None]) -> dict:
+    async def do_build(report: Callable[[str], None]) -> GraphBuildReport:
         async with await open_index(root) as index:
             identity = index.partition.identity
         # one hold across clear, scan and build: a build landing on the half-rescanned graph
@@ -129,8 +129,7 @@ def graph_build(
             report("building graph…")
             return await _build(root, settings, report, lock_held=True)
 
-    summary = run_staged(do_build, "building graph…")
-    present(GraphBuildReport.model_validate(summary), render_graph_build, as_json=json_)
+    present(run_staged(do_build, "building graph…"), render_graph_build, as_json=json_)
 
 
 def _query_cmd(
@@ -418,7 +417,7 @@ def graph_export(
                     depth=1 if depth is None else depth,
                 )
             tree = await GraphQuery(index).flow(*walk)
-        return to_dot(payload, flow=tree.model_dump(mode="json")) if tree else None
+        return to_dot(payload, flow=tree) if tree else None
 
     dot = run(do_export(), "exporting…")
     if dot is None:
