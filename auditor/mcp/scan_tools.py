@@ -12,16 +12,21 @@ from pydantic import ValidationError
 
 from auditor.aggregate import AuditAggregator
 from auditor.config import ConfigError
-from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity, gate_tripped
 from auditor.malware.tools import resolve_tool
 from auditor.mcp.artifacts import publish
-from auditor.mcp.helpers import READ_ONLY, config_error, tool_config, validate_detail
+from auditor.mcp.helpers import (
+    READ_ONLY,
+    config_error,
+    tool_config,
+    tool_repo,
+    tool_repo_at,
+    validate_detail,
+)
 from auditor.mcp.server import mcp
 from auditor.models import ManifestEntry, ScanResult
-from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 from auditor.reporters.json_reporter import payload as json_payload
 from auditor.roles import RoleClassifier
@@ -180,16 +185,15 @@ async def finding_detail(file: str, rule_id: str, line: int) -> dict:
     single-file re-scan so it works whether or not the scan was incremental. The index record may
     reflect a prior scan if the file was edited since it was indexed."""
     path = _require_file(file)
-    root = find_root(path)
-    try:
-        rel = str(path.resolve().relative_to(root.resolve()))
-    except ValueError:
-        rel = str(path)
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        for f in await index.findings.cached(rel, rule_id):
+    async with tool_repo_at(find_root(path)) as repo:
+        try:
+            rel = str(path.resolve().relative_to(repo.root.resolve()))
+        except ValueError:
+            rel = str(path)
+        for f in await repo.index.findings.cached(rel, rule_id):
             if f.line == line:
                 return f.model_dump(mode="json")
-    results = await audit_target(path, root=root, apply_ignores=False)
+        results = await audit_target(path, root=repo.root, apply_ignores=False)
     for r in results:
         for f in r.findings:
             if f.rule_id == rule_id and f.line == line:
@@ -261,9 +265,9 @@ async def aggregate(path: str = ".") -> ResourceLink:
     """Roll up the index into a consolidated AUDIT.md (run scan with incremental=True first).
     The report is large, so it is returned as a ResourceLink; read that resource for the
     markdown rather than receiving it inline."""
-    root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        markdown = await AuditAggregator(index).markdown()
+    async with tool_repo(path) as repo:
+        markdown = await AuditAggregator(repo.index).markdown()
+        root = repo.root
     return publish(
         "audit",
         str(root),

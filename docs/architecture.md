@@ -435,6 +435,17 @@ flowchart TB
   arrives in one piece.
 - `mcp/code_mode.py` stays off unless both the `code-mode` extra is installed and
   `AUDITOR_CODE_MODE` is set.
+- `mcp/helpers.py` owns the preamble every tool shares. `tool_repo(path)` resolves the root and
+  yields a `ToolRepo` holding an index handle bound to that root's partition and identity;
+  `tool_repo_at(root)` is the same for a tool that resolved the root from a file, and
+  `ToolRepo.settings()` is `tool_config`, so one bad config reads the same from every tool. No tool
+  module calls `IndexStore.connect` or `open_repo_index`, and
+  `tests/graph/test_mcp_preamble.py` parses each one to keep it that way.
+- Two things sit outside that seam on purpose. `rules_list` is synchronous, so it cannot hold an
+  async context manager and calls `tool_config(find_root(path))` directly. `server.py`'s
+  `ConfigNoticeMiddleware` resolves its own root for the config notice, so a tool call resolves one
+  twice: once in the middleware and once in the preamble. Both are cheap path walks, and the guard
+  covers tool modules, not the server.
 
 ## Claude Code plugin
 

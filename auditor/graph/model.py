@@ -1,5 +1,6 @@
 """Pure data model for the semantic graph — stdlib only (no numpy/sklearn)."""
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -195,6 +196,22 @@ class CallForm(StrEnum):
     ATTR = "attr"
 
 
+def enum_values(
+    raw: Sequence[str] | None, enum: type[StrEnum], field: str
+) -> list[str] | None:
+    """Validate a repeatable filter against its enum, so a typo is an error rather than an empty
+    page the caller reads as an empty result."""
+    if not raw:
+        return None
+    allowed = [e.value for e in enum]
+    unknown = [v for v in raw if v not in allowed]
+    if unknown:
+        raise ValueError(
+            f"unknown {field}: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
+        )
+    return list(raw)
+
+
 def unresolved_priority(reason: UnresolvedReason, call_form: CallForm) -> int:
     """Drain order for the queue (spec §8.3 item 3), lowest first. 0 is reserved for the
     ``flow_leaf`` bump a flow request applies in S3."""
@@ -249,6 +266,8 @@ class UnresolvedRow(BaseModel):
 # Queue display policy, shared by every surface so the CLI and the MCP tool cannot drift apart.
 QUEUE_ROW_LIMIT = 50
 QUEUE_ID_CAP = 10
+#: default row cap for `graph log` and `graph refinements` (S5c reads it; nothing here does)
+LOG_ROW_LIMIT = 50
 
 # Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
 DEFAULT_FLOW_LIMIT = 200

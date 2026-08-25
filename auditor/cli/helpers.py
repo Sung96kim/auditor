@@ -19,7 +19,7 @@ from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
 from auditor.config import AuditorSettings, ConfigError, load_config
-from auditor.config_notice import NOTICE, ConfigNotice
+from auditor.config_notice import NOTICE, ConfigNotice, format_config_error
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
 from auditor.discovery import find_root
@@ -117,24 +117,6 @@ def flush_config_notice() -> None:
             err_console.print(f"[dim]{line}[/dim]")
         else:
             err_console.print(f"[yellow]warning:[/yellow] {line}")
-
-
-# pydantic appends these when the failure is a dict *key*; neither names a field.
-_NON_FIELD_LOC = ("", "[key]")
-
-
-def format_config_error(exc: ConfigError | ValidationError) -> str:
-    """One line naming what is wrong with the configuration, for a failure with no traceback.
-
-    A bad profile, a cycle and unparseable TOML speak for themselves; a validation error becomes
-    ``'<dotted loc>: <msg>'`` with the parts that name no field dropped, so a bad role or category
-    key reads ``roles.tets`` rather than ``roles.tets.``.
-    """
-    if isinstance(exc, ConfigError):
-        return str(exc)
-    err = exc.errors()[0]
-    loc = ".".join(str(p) for p in err["loc"] if str(p) not in _NON_FIELD_LOC)
-    return f"{loc}: {err['msg']}" if loc else err["msg"]
 
 
 @contextmanager

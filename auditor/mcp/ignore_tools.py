@@ -2,17 +2,13 @@
 """ignore_add / ignore_list / ignore_remove — the persistent-ignore MCP tools."""
 
 import time
-from pathlib import Path
 
 from fastmcp.exceptions import ToolError
 
-from auditor.database import IndexStore
-from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
-from auditor.mcp.helpers import DESTRUCTIVE, MUTATING, READ_ONLY, tool_config
+from auditor.mcp.helpers import DESTRUCTIVE, MUTATING, READ_ONLY, tool_repo
 from auditor.mcp.server import mcp
-from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 
 
@@ -30,20 +26,17 @@ async def ignore_add(
     (its offending text is snapshotted so the ignore follows the code when lines shift). Keyed by
     ``rule_id`` (must be a known rule unless ``force``, e.g. an untrusted local plugin rule).
     Idempotent per scope."""
-    root = find_root(Path(path))
-    tool_config(
-        root
-    )  # register the repo's entry-point/config plugins so their rules validate
-    if not force and rule_id not in REGISTRY.rule_ids():
-        raise ToolError(
-            f"unknown rule_id {rule_id!r}; use rules_list to see rules (or force=true)"
-        )
-    ev_hash = None
-    if line is not None and file is not None:
-        evidence = await finding_evidence_at(root, file, rule_id, line)
-        ev_hash = evidence_hash(evidence) if evidence is not None else None
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        ignore_id = await index.ignores.add(
+    async with tool_repo(path) as repo:
+        repo.settings()  # register the repo's plugins so their rules validate
+        if not force and rule_id not in REGISTRY.rule_ids():
+            raise ToolError(
+                f"unknown rule_id {rule_id!r}; use rules_list to see rules (or force=true)"
+            )
+        ev_hash = None
+        if line is not None and file is not None:
+            evidence = await finding_evidence_at(repo.root, file, rule_id, line)
+            ev_hash = evidence_hash(evidence) if evidence is not None else None
+        ignore_id = await repo.index.ignores.add(
             rule_id, file, line, ev_hash, reason, time.time()
         )
     return {"id": ignore_id, "rule_id": rule_id, "file": file, "line": line}
@@ -52,15 +45,13 @@ async def ignore_add(
 @mcp.tool(annotations=READ_ONLY)
 async def ignore_list(path: str = ".") -> list[dict]:
     """List the persistent ignores recorded for this repo (with their ids)."""
-    root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        return await index.ignores.list()
+    async with tool_repo(path) as repo:
+        return await repo.index.ignores.list()
 
 
 @mcp.tool(annotations=DESTRUCTIVE)
 async def ignore_remove(id: int, path: str = ".") -> dict:
     """Remove (unignore) a persistent ignore by its id (from ignore_list)."""
-    root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        removed = await index.ignores.remove_by_id(id)
+    async with tool_repo(path) as repo:
+        removed = await repo.index.ignores.remove_by_id(id)
     return {"removed": removed, "id": id}

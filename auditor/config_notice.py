@@ -17,6 +17,23 @@ from auditor.user_settings import UserKeyReport, user_key_report
 # run with its own one-line message, or it is a file this command never loads.
 _UNREADABLE = (OSError, ConfigError, ValidationError)
 
+# pydantic appends these when the failure is a dict *key*; neither names a field.
+_NON_FIELD_LOC = ("", "[key]")
+
+
+def format_config_error(exc: ConfigError | ValidationError) -> str:
+    """One line naming what is wrong with the configuration, for a failure with no traceback.
+
+    A bad profile, a cycle and unparseable TOML speak for themselves; a validation error becomes
+    ``'<dotted loc>: <msg>'`` with the parts that name no field dropped, so a bad role or category
+    key reads ``roles.tets`` rather than ``roles.tets.``.
+    """
+    if isinstance(exc, ConfigError):
+        return str(exc)
+    err = exc.errors()[0]
+    loc = ".".join(str(p) for p in err["loc"] if str(p) not in _NON_FIELD_LOC)
+    return f"{loc}: {err['msg']}" if loc else err["msg"]
+
 
 class ConfigNotice(BaseModel):
     """One run's resolved root and extra config layers, plus whether the run reports the keys

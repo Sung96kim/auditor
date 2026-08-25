@@ -4,12 +4,9 @@ tools register unconditionally."""
 
 import time
 from collections import defaultdict
-from enum import StrEnum
-from pathlib import Path
 
 from loguru import logger
 
-from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
@@ -22,10 +19,11 @@ from auditor.graph.model import (
     CallForm,
     EdgeKind,
     UnresolvedReason,
+    enum_values,
 )
 from auditor.graph.payloads import NeighborsReport, QueueRowPayload
 from auditor.graph.query import GraphQuery
-from auditor.mcp.helpers import MUTATING, READ_ONLY, open_index, tool_config
+from auditor.mcp.helpers import MUTATING, READ_ONLY, tool_repo
 from auditor.mcp.server import mcp
 
 
@@ -35,21 +33,22 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     extraction on) so it works even if the repo never enabled the [graph] config; pass
     scan=False to build from existing cached facts only. Returns {nodes, edges, clusters,
     unresolved, findings, refined, expired}."""
-    root = find_root(Path(path))
-    if scan:
-        await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
-    settings = tool_config(root)
-    async with await open_index(root) as index:
-        await index.repos.register(time.time())
-        return (await GraphBuilder().rebuild(index, settings)).model_dump(mode="json")
+    async with tool_repo(path) as repo:
+        if scan:
+            await audit_target(
+                repo.root, incremental=True, config_overrides=GRAPH_OVERRIDE
+            )
+        await repo.index.repos.register(time.time())
+        return (await GraphBuilder().rebuild(repo.index, repo.settings())).model_dump(
+            mode="json"
+        )
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def graph_related(symbol: str, path: str = ".", limit: int = 10) -> list[dict]:
     """Top semantic neighbors (name + usage) of a symbol, ranked."""
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        return (await GraphQuery(index).related(symbol, limit=limit)).model_dump(
+    async with tool_repo(path) as repo:
+        return (await GraphQuery(repo.index).related(symbol, limit=limit)).model_dump(
             mode="json"
         )
 
@@ -60,9 +59,8 @@ async def graph_neighbors(
 ) -> list[dict]:
     """Structural neighbors (calls/overrides/inherits/...) up to a depth. Capped at ``limit``
     (closest hops first) to keep responses small."""
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        hits = await GraphQuery(index).neighbors(symbol, depth=depth)
+    async with tool_repo(path) as repo:
+        hits = await GraphQuery(repo.index).neighbors(symbol, depth=depth)
     return NeighborsReport(hits.root[:limit]).model_dump(mode="json")
 
 
@@ -71,18 +69,16 @@ async def graph_concept(term: str, path: str = ".", limit: int = 25) -> dict:
     """The concept cluster best matching a term. Members (rank-ordered) are capped at
     ``limit``; ``member_count`` is the true total. Returns {cluster_id, label, member_count,
     members, shown}."""
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        concept = await GraphQuery(index).concept(term)
+    async with tool_repo(path) as repo:
+        concept = await GraphQuery(repo.index).concept(term)
     return concept.capped(limit).model_dump(mode="json") if concept else {}
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def graph_clusters(path: str = ".") -> list[dict]:
     """List concept clusters (label + size), largest first."""
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        return (await GraphQuery(index).clusters()).model_dump(mode="json")
+    async with tool_repo(path) as repo:
+        return (await GraphQuery(repo.index).clusters()).model_dump(mode="json")
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -90,9 +86,8 @@ async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict
     """Find graph symbols whose id contains ``term`` (case-insensitive), highest-rank
     first. Use to locate the exact symbol name before graph_usages/graph_neighbors.
     """
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        return (await GraphQuery(index).search(term, limit=limit)).model_dump(
+    async with tool_repo(path) as repo:
+        return (await GraphQuery(repo.index).search(term, limit=limit)).model_dump(
             mode="json"
         )
 
@@ -104,26 +99,9 @@ async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
     ``depends_on`` (outgoing). Same-named symbols are disambiguated via ``ambiguous`` (the
     highest-rank match is used). Returns {} if not found. Prefer this over graph_neighbors
     for 'how is X used': neighbors truncates silently with no totals."""
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        usages = await GraphQuery(index).usages(symbol, sample=sample)
+    async with tool_repo(path) as repo:
+        usages = await GraphQuery(repo.index).usages(symbol, sample=sample)
     return usages.model_dump(mode="json") if usages else {}
-
-
-def _filter_values(
-    raw: list[str] | None, enum: type[StrEnum], field: str
-) -> list[str] | None:
-    """Validate a repeatable filter against its enum, so a typo is a tool error rather than an
-    empty page the caller reads as an empty queue."""
-    if not raw:
-        return None
-    allowed = [e.value for e in enum]
-    unknown = [v for v in raw if v not in allowed]
-    if unknown:
-        raise ValueError(
-            f"unknown {field}: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
-        )
-    return list(raw)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -154,19 +132,18 @@ async def graph_flow(
     ``depth``; ``kinds`` follows extra edge kinds on top of calls/callback_arg and is validated,
     ``include_tests`` keeps test symbols, ``expand_hubs`` opens the nodes the hub rule
     collapsed."""
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        payload = await GraphQuery(index).flow(
+    async with tool_repo(path) as repo:
+        payload = await GraphQuery(repo.index).flow(
             symbol,
             FlowOptions.of(
                 direction=FlowDirection(direction),
                 depth=depth,
                 limit=limit,
-                kinds=_filter_values(kinds, EdgeKind, "kinds") or (),
+                kinds=enum_values(kinds, EdgeKind, "kinds") or (),
                 include_tests=include_tests,
                 expand_hubs=expand_hubs,
                 stop_at=stop_at or (),
-                hub_fan_in=tool_config(root).graph.flow_hub_fan_in,
+                hub_fan_in=repo.settings().graph.flow_hub_fan_in,
             ),
         )
     return payload.model_dump(mode="json") if payload else {}
@@ -181,12 +158,11 @@ async def graph_overview(path: str = ".") -> dict:
     not an error. A subkind neither hub list names is logged as a warning, so the two counts need
     not add up to the finding count.
     """
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        nodes = await index.graph.nodes()
-        edges = await index.graph.all_edges()
-        clusters = await index.graph.clusters()
-        findings = await index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
+    async with tool_repo(path) as repo:
+        nodes = await repo.index.graph.nodes()
+        edges = await repo.index.graph.all_edges()
+        clusters = await repo.index.graph.clusters()
+        findings = await repo.index.findings.by_rule_prefix("GRAPH-GOD-CONCEPT")
     by_kind: dict[str, list[str]] = defaultdict(list)
     for f in findings:
         by_kind[f.subkind or ""].append(f.evidence)
@@ -229,11 +205,10 @@ async def graph_unresolved(
     sort last and are display only; pass external=false to drop them. ``definers`` and
     ``candidates`` are capped, with the true totals in ``definers_count`` /
     ``candidates_count``. Empty until graph_build has run."""
-    root = find_root(Path(path))
-    async with await open_index(root) as index:
-        rows = await index.graph.unresolved(
-            reasons=_filter_values(reason, UnresolvedReason, "reason"),
-            call_forms=_filter_values(call_form, CallForm, "call_form"),
+    async with tool_repo(path) as repo:
+        rows = await repo.index.graph.unresolved(
+            reasons=enum_values(reason, UnresolvedReason, "reason"),
+            call_forms=enum_values(call_form, CallForm, "call_form"),
             limit=max(1, limit),
             external=external,
         )

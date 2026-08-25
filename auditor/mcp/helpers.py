@@ -1,14 +1,19 @@
-"""Shared private helpers used by more than one tool module."""
+"""Shared helpers used by more than one tool module: the behaviour annotations, the config edge,
+and the preamble every tool runs before it touches a repo."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from auditor.config import AuditorSettings, ConfigError, load_config
+from auditor.config_notice import format_config_error
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import UnmigratableColumn
+from auditor.discovery import find_root
 from auditor.paths import index_db_path
 
 # Behaviour hints surfaced to clients at no token cost: clients skip confirmation prompts for
@@ -28,29 +33,9 @@ def validate_detail(detail: str) -> None:
         )
 
 
-async def open_index(root: Path) -> IndexStore:
-    """``open_repo_index`` with an unmigratable schema surfaced as a tool error rather than a
-    traceback, which is the MCP half of what ``cli.helpers.open_index`` does."""
-    try:
-        return await open_repo_index(root)
-    except UnmigratableColumn as exc:
-        raise ToolError(
-            f"the index cannot be upgraded: {exc}. Delete it and re-scan: "
-            f"rm {index_db_path()}"
-        ) from exc
-
-
 def config_error(exc: ConfigError | ValidationError) -> ToolError:
-    """A one-line tool error for a repo config that cannot be used.
-
-    A bad profile, a cycle and unparseable TOML already read as one sentence; a validation error
-    is reduced to its first failing field.
-    """
-    if isinstance(exc, ConfigError):
-        return ToolError(f"invalid config: {exc}")
-    err = exc.errors()[0]
-    loc = ".".join(str(p) for p in err["loc"])
-    return ToolError(f"invalid config: {loc + ': ' if loc else ''}{err['msg']}")
+    """A configuration failure as a tool error, worded the way the CLI words it."""
+    return ToolError(f"invalid config: {format_config_error(exc)}")
 
 
 def tool_config(root: Path) -> AuditorSettings:
@@ -63,3 +48,56 @@ def tool_config(root: Path) -> AuditorSettings:
         return load_config(root)
     except (ConfigError, ValidationError) as exc:
         raise config_error(exc) from exc
+
+
+class ToolRepo(BaseModel):
+    """One tool call's repo: the root it resolved, and the index handle bound to that root.
+
+    The handle carries the checkout identity as well as the partition key, so a tool can read the
+    refinement rows a sibling worktree wrote.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    root: Path
+    index: IndexStore
+
+    def settings(
+        self, *, overrides: dict[str, object] | None = None
+    ) -> AuditorSettings:
+        """This repo's resolved policy, with a bad config surfaced as a tool error."""
+        if overrides is None:
+            return tool_config(self.root)
+        try:
+            return load_config(self.root, overrides=overrides)
+        except (ConfigError, ValidationError) as exc:
+            raise config_error(exc) from exc
+
+
+@asynccontextmanager
+async def tool_repo_at(root: Path) -> AsyncIterator[ToolRepo]:
+    """Hold an index handle bound to an already-resolved root for the block.
+
+    ``finding_detail`` resolves its root from the file it was asked about rather than from a
+    directory argument, and this is the entry point it uses.
+    """
+    try:
+        index = await open_repo_index(root)
+    except UnmigratableColumn as exc:
+        raise ToolError(
+            f"the index cannot be upgraded: {exc}. Delete it and re-scan: "
+            f"rm {index_db_path()}"
+        ) from exc
+    async with index:
+        yield ToolRepo(root=root, index=index)
+
+
+@asynccontextmanager
+async def tool_repo(path: str) -> AsyncIterator[ToolRepo]:
+    """Resolve ``path`` to a project root and hold an index handle bound to it for the block.
+
+    The one place a tool does either, so no tool can reach the index without the identity that
+    scopes the refinement tables.
+    """
+    async with tool_repo_at(find_root(Path(path))) as repo:
+        yield repo

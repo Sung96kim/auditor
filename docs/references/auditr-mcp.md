@@ -119,6 +119,9 @@ args = ["run", "-i", "--rm",
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
   `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them
   work on the local repo.
+- Every tool resolves its project root and opens the shared index through one seam, so a tool always
+  addresses the same checkout identity the CLI does. A repo whose configuration does not load comes
+  back as a one-line tool error naming the offending key, never a traceback.
 - `scan` takes the same scoping the CLI does, including `severity`, `rule`, `since` (audit only
   what changed against a git ref, with the whole repo still scanned so cross-file rules hold),
   `profile`, `isolated`, `malware`, `fail_on` and a `config` override dict.
