@@ -174,14 +174,35 @@ def test_the_refinements_view_is_a_different_shape(logged_repo: Path):
     assert payload["refinement_count"] == len(payload["refinements"]) == 1
 
 
-@pytest.mark.parametrize("since", ["90s", "2h", "7d", "2026-08-20"])
-def test_a_valid_since_is_accepted(logged_repo: Path, since: str):
-    payload = cli_json(
+#: computed against this run's clock, because a fixed date would drift out of every window
+_ISO_DATE = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+_ISO_DATETIME = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 7200))
+
+
+@pytest.fixture
+def windowed_repo(refine_repo: Path) -> Path:
+    """One run inside any window a reader would open, and one older than every one of them."""
+    add_observer_run(refine_repo, status=RunStatus.SUCCEEDED, age_seconds=0)
+    add_observer_run(refine_repo, status=RunStatus.FAILED, age_seconds=30 * 86400)
+    return refine_repo
+
+
+@pytest.mark.parametrize("since", ["90s", "45m", "2h", "7d", _ISO_DATE, _ISO_DATETIME])
+def test_a_since_window_keeps_the_rows_inside_it_and_drops_the_rest(
+    windowed_repo: Path, since: str
+):
+    """Every form the help text and `graph.md` advertise, asserted on the rows. This test asserted
+    `filtered`, which the default runs view set on its own with `--since` wired to nothing."""
+    inside = cli_json(
         runner.invoke(
-            app, ["graph", "log", str(logged_repo), "--since", since, "--json"]
+            app, ["graph", "log", str(windowed_repo), "--since", since, "--json"]
         )
     )
-    assert payload["filtered"] is True
+    assert [r["status"] for r in inside["runs"]] == ["succeeded"]
+    assert inside["run_count"] == 1
+    assert inside["narrowed_by"] == ["since"]
+    both = cli_json(runner.invoke(app, ["graph", "log", str(windowed_repo), "--json"]))
+    assert [r["status"] for r in both["runs"]] == ["succeeded", "failed"]
 
 
 def test_a_far_past_cutoff_keeps_the_rows_and_a_future_one_drops_them(
