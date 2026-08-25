@@ -7,7 +7,6 @@ path directly without a TTY.
 Accent colour ``#7C7CFF`` matches the rest of the auditor CLI (see self_update.py).
 """
 
-from pydantic import BaseModel
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -30,6 +29,7 @@ from auditor.cli.payloads import (
     PluginsReport,
     RulesListReport,
 )
+from auditor.config import AuditorSettings
 from auditor.graph.flow import FlowNode, FlowPayload
 from auditor.graph.payloads import (
     ClustersReport,
@@ -41,6 +41,7 @@ from auditor.graph.payloads import (
     SearchReport,
     UsagesPayload,
 )
+from auditor.user_settings import UserSettings
 
 _ACCENT = "#7C7CFF"
 _BORDER = "dim"
@@ -412,7 +413,7 @@ def render_discover(out: Console, payload: DiscoverReport) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_config_show(out: Console, payload: BaseModel) -> None:
+def render_config_show(out: Console, payload: AuditorSettings | UserSettings) -> None:
     """Either settings model, printed as the same JSON ``--json`` would emit."""
     out.print_json(data=payload.model_dump(mode="json", by_alias=True))
 

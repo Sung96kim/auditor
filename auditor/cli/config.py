@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import typer
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from auditor.cli.helpers import (
     cli_root,
@@ -16,8 +16,13 @@ from auditor.cli.helpers import (
 from auditor.cli.options import ConfigJson, RootArg, UserConfig
 from auditor.cli.payloads import ConfigCheckReport
 from auditor.cli.render import render_config_check, render_config_show
+from auditor.config import AuditorSettings
 from auditor.config_notice import NOTICE
-from auditor.user_settings import load_user_settings, user_key_report
+from auditor.user_settings import (
+    UserSettings,
+    load_user_settings,
+    user_key_report,
+)
 
 config_app = typer.Typer(no_args_is_help=True, help="Inspect resolved configuration.")
 
@@ -32,7 +37,7 @@ def config_show(
     """Print the resolved configuration (repo policy, or --user for the user settings)."""
     overrides = parse_config_json(config_json)
     root = cli_root(target, overrides=overrides)
-    settings: BaseModel
+    settings: AuditorSettings | UserSettings
     if user:
         if overrides is not None:
             fail(

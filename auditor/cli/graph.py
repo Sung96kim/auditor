@@ -9,7 +9,7 @@ import subprocess
 import time
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeVar
 
 import typer
 
@@ -132,14 +132,16 @@ def graph_build(
     present(run_staged(do_build, "building graph…"), render_graph_build, as_json=json_)
 
 
-def _query_cmd(
-    fn_name: str,
-) -> Callable[..., Coroutine[Any, Any, Any]]:
-    async def runner(root: Path, **kw: Any) -> Any:
-        async with await open_index(root) as index:
-            return await getattr(GraphQuery(index), fn_name)(**kw)
+_R = TypeVar("_R")
 
-    return runner
+
+async def _query(
+    root: Path, ask: Callable[[GraphQuery], Coroutine[Any, Any, _R]]
+) -> _R:
+    """Open ``root``'s index once and hand ``GraphQuery`` to one typed call, so the payload a
+    command renders is the one its query declares."""
+    async with await open_index(root) as index:
+        return await ask(GraphQuery(index))
 
 
 @graph_app.command("related")
@@ -152,7 +154,7 @@ def graph_related(
     """Top semantic neighbors of a symbol (name + usage), ranked."""
     root = cli_root(target)
     present(
-        run(_query_cmd("related")(root, symbol=symbol, limit=limit), "querying…"),
+        run(_query(root, lambda q: q.related(symbol, limit=limit)), "querying…"),
         render_graph_related,
         as_json=json_,
     )
@@ -168,7 +170,7 @@ def graph_neighbors(
     """Structural neighbors (calls/overrides/...) up to a depth."""
     root = cli_root(target)
     present(
-        run(_query_cmd("neighbors")(root, symbol=symbol, depth=depth), "querying…"),
+        run(_query(root, lambda q: q.neighbors(symbol, depth=depth)), "querying…"),
         render_graph_neighbors,
         as_json=json_,
     )
@@ -183,7 +185,7 @@ def graph_concept(
     """Symbols in the concept cluster matching a term."""
     root = cli_root(target)
     present(
-        run(_query_cmd("concept")(root, term=term), "querying…"),
+        run(_query(root, lambda q: q.concept(term)), "querying…"),
         render_graph_concept,
         as_json=json_,
     )
@@ -197,7 +199,7 @@ def graph_clusters(
     """List concept clusters (label + size)."""
     root = cli_root(target)
     present(
-        run(_query_cmd("clusters")(root), "querying…"),
+        run(_query(root, lambda q: q.clusters()), "querying…"),
         render_graph_clusters,
         as_json=json_,
     )
@@ -213,7 +215,7 @@ def graph_search(
     """Find symbols whose id contains the term (highest-rank first)."""
     root = cli_root(target)
     present(
-        run(_query_cmd("search")(root, term=term, limit=limit), "searching…"),
+        run(_query(root, lambda q: q.search(term, limit=limit)), "searching…"),
         render_graph_search,
         as_json=json_,
     )
@@ -230,7 +232,7 @@ def graph_usages(
     depends_on)."""
     root = cli_root(target)
     present(
-        run(_query_cmd("usages")(root, symbol=symbol, sample=sample), "querying…"),
+        run(_query(root, lambda q: q.usages(symbol, sample=sample)), "querying…"),
         render_graph_usages,
         as_json=json_,
     )
@@ -302,7 +304,7 @@ def graph_flow(
         stop_at=stop_at,
     )
     present(
-        run(_query_cmd("flow")(root, symbol=symbol, options=options), "tracing flow…"),
+        run(_query(root, lambda q: q.flow(symbol, options)), "tracing flow…"),
         render_graph_flow,
         as_json=json_,
     )

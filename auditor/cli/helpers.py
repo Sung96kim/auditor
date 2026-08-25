@@ -28,6 +28,7 @@ from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
 _T = TypeVar("_T")
+_P = TypeVar("_P", bound=BaseModel)
 
 _SPINNER = "dots12"
 _SPINNER_STYLE = ACCENT
@@ -38,16 +39,18 @@ def _echo_json(payload: object) -> None:
 
 
 def present(
-    payload: BaseModel | None,
-    render: Callable[[Console, Any], None],
+    payload: _P | None,
+    render: Callable[[Console, _P], None],
     *,
     as_json: bool = False,
 ) -> None:
     """Emit a command result: pretty for a human at a TTY, else raw JSON (so piped/
     captured/agent callers and --json still get the exact machine-readable output).
 
-    ``None`` is the "nothing found" payload: it serialises as ``{}``, which is the shape the graph
-    queries have always returned, and still reaches the renderer so it can print its own line.
+    The renderer is typed to the payload it is paired with, so a mispairing is a type error
+    rather than an ``AttributeError`` in front of a user. ``None`` is the "nothing found"
+    payload: it serialises as ``{}``, the shape the graph queries have always returned, and
+    still reaches the renderer (the three that can miss declare ``| None``).
     """
     if as_json or not console.is_terminal:
         _echo_json(
