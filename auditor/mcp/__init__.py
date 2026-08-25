@@ -9,6 +9,7 @@ from auditor.mcp import (  # noqa: F401 — imported for their @mcp.tool()/@mcp.
     graph_tools,
     ignore_tools,
     malware_tools,
+    refine_tools,
     rules_tools,
     scan_tools,
 )

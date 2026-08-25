@@ -181,7 +181,10 @@ PREAMBLE_TOOLS: dict[str, dict[str, object]] = {
     "graph_search": {"term": "user"},
     "graph_usages": {"symbol": "get_user"},
     "graph_flow": {"symbol": "get_user"},
+    "graph_log": {},
     "graph_overview": {},
+    "graph_refine_begin": {},
+    "graph_refinements": {},
     "graph_unresolved": {},
     "ignore_add": {"rule_id": "PY-STYLE-INLINE-IMPORT"},
     "ignore_list": {},
@@ -207,8 +210,8 @@ def _args(tool: str, repo: Path) -> dict[str, object]:
 async def test_a_config_that_does_not_load_is_one_line_from_every_tool(
     graph_repo: Path, tool: str, broken: str
 ):
-    """The preamble is what makes this uniform: before it loaded the policy itself, twelve of
-    these fifteen opened an index, ignored the config entirely and answered OK."""
+    """The preamble is what makes this uniform: before it loaded the policy itself, most of these
+    opened an index, ignored the config entirely and answered OK."""
     (graph_repo / "pyproject.toml").write_text(BROKEN_CONFIGS[broken])
     async with Client(mcp) as client:
         with pytest.raises(ToolError) as raised:

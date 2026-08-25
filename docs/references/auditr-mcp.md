@@ -115,10 +115,31 @@ args = ["run", "-i", "--rm",
   import and sort last; pass `external=false` to drop them. Like `graph_overview`, it caps its
   `definers` and `candidates` lists and reports the true totals as `definers_count` and
   `candidates_count`; `auditr graph unresolved --json` returns the same keys.
+- Refinements: `graph_refine_begin`, `graph_refine_propose`, `graph_refine_commit`,
+  `graph_refine_abort`, `graph_refine_status`, `graph_refinements`, `graph_log`. The flow is: read
+  `graph_unresolved`, `graph_refine_begin` to open a run, one `graph_refine_propose` per correction,
+  then `graph_refine_commit` (which rebuilds) or `graph_refine_abort`.
+- A proposal is checked against the source file's own AST facts: the destination's short name has to
+  appear in the caller's facts for that edge kind and call form, the file has to still hash to what
+  the build cached, the name must not be imported from outside the repo, and the destination must
+  define the name. A failed check comes back as `outcome: "rejected"` with a `verify` code, and the
+  rejection is recorded. So is a payload that is not a legal proposal at all: it comes back with
+  `refusal: "invalid"` and a stored row, never as a validation traceback.
+- Staged proposals live in the server process, so one run is opened, filled and committed through
+  one server. `graph_refine_status` reports `staged_here: false` in any other process.
+  `AUDITOR_REFINE_RUN` pre-binds every tool to one run, which is how a runner-spawned server works
+  without passing `run_id` on each call.
+- Until `auditr graph eval` has produced numbers for this repo, every `add_edge`, `retarget_edge`,
+  `resolve_ambiguous` and `move_node` lands `pending` and needs
+  `auditr graph refinements accept <id>` before a build applies it. `confirm_edge`,
+  `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately. There is deliberately
+  no MCP tool for `accept`, `revert`, `pin` or `prune`: activating a correction is a human step.
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
-  everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs` and
-  `malware_install`, destructive for `ignore_remove`. No tool touches an open world; all of them
-  work on the local repo.
+  everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs`,
+  `malware_install` and the four `graph_refine_*` tools that write (`begin`, `propose`, `commit`,
+  `abort`), destructive for `ignore_remove`. Destructive means a row is deleted, which is why
+  `graph_refine_abort` is only mutating: it drops staging that was never written. No tool touches an
+  open world; all of them work on the local repo.
 - Every tool resolves its project root, loads the repo policy and opens the shared index through
   one seam, so a tool always addresses the same checkout identity the CLI does. A repo whose
   configuration does not load comes back as a one-line tool error naming the offending key, never a
