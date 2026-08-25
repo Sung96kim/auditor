@@ -96,13 +96,8 @@ class IndexStore(BaseDB):
         # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
         conn.execute("PRAGMA busy_timeout=30000")
         if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA journal_mode=WAL")  # refused inside a transaction
         conn.execute("PRAGMA synchronous=NORMAL")
-        stored = conn.execute("PRAGMA user_version").fetchone()[0]
-        existing = {
-            r[0]
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
         statements = [
             stmt
             for s in BaseDB._registry
@@ -112,12 +107,22 @@ class IndexStore(BaseDB):
         cache_tables = tuple(
             n for s in BaseDB._registry for n, t in s.TABLES.items() if t.cache
         )
-        # the index is a pure cache: on any stored version that is not this one, drop and rebuild
-        # rather than migrate. A stamp of 0 on a populated database is a stamp that was lost, not
-        # a fresh database, so it rebuilds too; only an empty file skips the sweep.
-        stale = stored != SCHEMA_VERSION and bool(existing & set(cache_tables))
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # both reads under the write lock: outside it they are separate WAL snapshots, and a
+            # concurrent creator's version commit can be missed while its tables are already
+            # visible — the rebuild then drops the cache under rows that creator committed.
+            stored = conn.execute("PRAGMA user_version").fetchone()[0]
+            existing = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            # the index is a pure cache: on any stored version that is not this one, drop and
+            # rebuild rather than migrate. A stamp of 0 on a populated database is a stamp that
+            # was lost, not a fresh database, so it rebuilds too; only an empty file skips the sweep.
+            stale = stored != SCHEMA_VERSION and bool(existing & set(cache_tables))
             IndexStore._migrate_identity_tables(conn)
             if stale:
                 # only the derived cache tables; repos + ignores (user state) are preserved, and
@@ -127,10 +132,11 @@ class IndexStore(BaseDB):
             for statement in statements:
                 conn.execute(statement)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            # a failed COMMIT rolls back too, or retry_on_locked's next BEGIN finds it open
+            conn.commit()
         except BaseException:
             conn.rollback()
             raise
-        conn.commit()
 
     @staticmethod
     def _migrate_identity_tables(conn: sqlite3.Connection) -> None:
@@ -185,42 +191,53 @@ class IndexStore(BaseDB):
         and ``prefix`` so a subdirectory scan never evicts files outside it. Returns pruned paths."""
 
         def op(conn: sqlite3.Connection) -> list[str]:
-            indexed = [
-                r["path"]
-                for r in conn.execute(
-                    "SELECT path FROM files WHERE repo = ?", (self.repo,)
-                ).fetchall()
-            ]
-            stale = [p for p in indexed if p.startswith(prefix) and p not in keep_paths]
-            for p in stale:
-                for table in (
-                    "files",
-                    "file_rules",
-                    "findings",
-                    "shapes",
-                    "graph_facts",
-                ):
-                    conn.execute(
-                        f"DELETE FROM {table} WHERE repo = ? AND path = ?",
-                        (self.repo, p),
-                    )  # noqa: S608  (table name is a fixed literal)
-            if stale:
+            # IMMEDIATE before the read: in autocommit the file list is one snapshot and the
+            # deletes are another, so a scan that rewrites a file in between loses that row.
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                indexed = [
+                    r["path"]
+                    for r in conn.execute(
+                        "SELECT path FROM files WHERE repo = ?", (self.repo,)
+                    ).fetchall()
+                ]
+                stale = [
+                    p for p in indexed if p.startswith(prefix) and p not in keep_paths
+                ]
+                for p in stale:
+                    for table in (
+                        "files",
+                        "file_rules",
+                        "findings",
+                        "shapes",
+                        "graph_facts",
+                    ):
+                        conn.execute(
+                            f"DELETE FROM {table} WHERE repo = ? AND path = ?",
+                            (self.repo, p),
+                        )  # noqa: S608  (table name is a fixed literal)
                 conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
             return stale
 
         return await self._worker.run(op)
 
     async def transaction(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
         """Run ``fn`` against the live connection as one commit: everything it writes lands, or
-        nothing does. ``fn`` must not commit; any exception rolls the whole thing back."""
+        nothing does. The transaction is IMMEDIATE, so a ``fn`` that reads before it writes holds
+        the write lock from that first read. ``fn`` must not commit; any exception rolls back."""
 
         def op(conn: sqlite3.Connection) -> _T:
+            # IMMEDIATE, not the DEFERRED begin pysqlite would take at ``fn``'s first write
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 result = fn(conn)
+                conn.commit()
             except BaseException:
                 conn.rollback()
                 raise
-            conn.commit()
             return result
 
         return await self._worker.run(op)
