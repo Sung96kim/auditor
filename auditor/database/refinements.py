@@ -251,22 +251,41 @@ class RunsDB(BaseDB):
         """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
 
         ``retention_days`` is the daemon's ``ObserverConfig.skipped_retention_days``. Real runs are
-        kept forever, and so is a skipped run owning a refinement or a tuning row: the guard reads
-        both child tables, which belong to the two stores below.
+        kept forever, and so is a skipped run owning a tuning row or a refinement that is not
+        `rejected`. A run evicted from the registry owns nothing else, so its rejections go with
+        it in the same transaction and Invariant 2 never sees an orphan.
         """
         cutoff = (time.time() if now is None else now) - retention_days * _DAY_SECONDS
         identity = self.partition.identity
+        eligible = (
+            "SELECT run_id FROM graph_runs WHERE repo_identity = ? AND status = ? "
+            "AND started_at < ? "
+            "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?) "
+            "AND run_id NOT IN (SELECT run_id FROM graph_refinements "
+            "WHERE repo_identity = ? AND status != ?)"
+        )
+        binds = (
+            identity,
+            RunStatus.SKIPPED.value,
+            cutoff,
+            identity,
+            identity,
+            RefinementStatus.REJECTED.value,
+        )
 
         def op(conn: sqlite3.Connection) -> int:
-            cur = conn.execute(
-                "DELETE FROM graph_runs WHERE repo_identity = ? AND status = ? "
-                "AND started_at < ? "
-                "AND run_id NOT IN (SELECT run_id FROM graph_refinements WHERE repo_identity = ?) "
-                "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?)",
-                (identity, RunStatus.SKIPPED.value, cutoff, identity, identity),
+            doomed = [(identity, r[0]) for r in conn.execute(eligible, binds)]
+            if not doomed:
+                return 0
+            conn.executemany(
+                "DELETE FROM graph_refinements WHERE repo_identity = ? AND run_id = ?",
+                doomed,
+            )
+            conn.executemany(
+                "DELETE FROM graph_runs WHERE repo_identity = ? AND run_id = ?", doomed
             )
             conn.commit()
-            return cur.rowcount
+            return len(doomed)
 
         return await self._worker.run(op)
 

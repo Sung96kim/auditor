@@ -2,7 +2,7 @@
 the CLI and MCP tests scan. Fixture-only by design: a sibling ``conftest`` cannot be imported by
 name without colliding with the root ``tests/conftest.py``."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,7 @@ from auditor.graph.refine.models import (
     RefinementTarget,
     Run,
 )
-from auditor.graph.refine.service import RefinementService
+from auditor.graph.refine.service import RefinementService, RunRegistry
 from auditor.user_settings import UserSettings
 
 GRAPH_CONFIG = "[tool.auditor.graph]\nenabled=true\nname_similarity_threshold=0.2\n"
@@ -325,11 +325,16 @@ def _write_facts_sources(root: Path) -> Path:
 @pytest.fixture
 async def refine_service(facts_store: IndexStore, tmp_path: Path) -> RefinementService:
     """A service over `facts_store`'s three files, written to disk and built once, so a proposal
-    has both a queue row and a file the verifier can re-extract."""
+    has both a queue row and a file the verifier can re-extract.
+
+    Its own registry, not the process one: a test must not see what another test staged.
+    """
     root = _write_facts_sources(tmp_path / "src")
     settings = AuditorSettings()
     await GraphBuilder().run(facts_store, settings)
-    return RefinementService(facts_store, root, settings, UserSettings())
+    return RefinementService(
+        facts_store, root, settings, UserSettings(), registry=RunRegistry()
+    )
 
 
 @pytest.fixture
@@ -340,4 +345,16 @@ async def refine_service_other(refine_service: RefinementService) -> RefinementS
         refine_service.root,
         refine_service.settings,
         refine_service.user,
+        registry=RunRegistry(),
     )
+
+
+@pytest.fixture
+def process_runs() -> Iterator[RunRegistry]:
+    """The one registry every service in this process shares, emptied around the test."""
+    registry = RunRegistry.process()
+    registry.open_runs.clear()
+    registry.evicted.clear()
+    yield registry
+    registry.open_runs.clear()
+    registry.evicted.clear()

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from contextlib import suppress
 
 import pytest
 from pydantic import ValidationError
@@ -15,6 +16,7 @@ from auditor.graph.refine.models import (
     RefinementPayload,
     RefinementStatus,
     RefinementTarget,
+    RunOutcome,
     RunStatus,
     Tier,
 )
@@ -24,6 +26,7 @@ from auditor.graph.refine.service import (
     RefinementRefused,
     RefinementService,
     RefusalKind,
+    RunRegistry,
 )
 from auditor.graph.refine.verify import VerifyStatus
 from auditor.user_settings import UserSettings
@@ -192,8 +195,44 @@ async def test_an_evicted_run_is_finished_and_its_staging_stored(
     assert "max_open=1" in (evicted.error or "")
     stored = await refine_service.index.refinements.of_run(first.run_id)
     assert [r.status for r in stored] == [RefinementStatus.REJECTED]
-    with pytest.raises(RefinementRefused, match="not open"):
+    # "not open in this process" is also true of a run this process never opened; an agent told
+    # that looks for a bug in its own session handling instead of starting a new run
+    with pytest.raises(RefinementRefused, match="was evicted"):
         await refine_service.commit(first.run_id)
+    with pytest.raises(RefinementRefused, match="not open in this process"):
+        await refine_service.commit("a-run-nobody-opened")
+
+
+async def test_pruning_reaps_an_evicted_run_and_its_rejections(
+    refine_service: RefinementService,
+):
+    """`skipped` was chosen over `failed` because `prune_skipped_runs` can reap it, and the case
+    eviction actually creates is a skipped run that owns rows."""
+    refine_service.registry.max_open = 1
+    first = await refine_service.begin()
+    await refine_service.propose(first.run_id, CALL_EDGE)
+    await refine_service.begin()
+    assert await refine_service.index.runs.prune_skipped_runs(0) == 1
+    assert await refine_service.index.runs.run(first.run_id) is None
+    assert await refine_service.index.refinements.of_run(first.run_id) == []
+
+
+async def test_pruning_keeps_a_skipped_run_that_owns_a_live_refinement(
+    refine_service: RefinementService,
+):
+    """A rejection is a record of a refusal and goes with its run; anything still live is graph
+    state, and deleting its run would orphan it (Invariant 2)."""
+    run = await refine_service.begin()
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    committed = await refine_service.commit(run.run_id)
+    await refine_service.index.runs.finish_run(
+        run.run_id, RunOutcome(status=RunStatus.SKIPPED, error="assessment only")
+    )
+    assert await refine_service.index.runs.prune_skipped_runs(0) == 0
+    kept = await refine_service.index.refinements.refinement(
+        committed.committed[0].refinement_id
+    )
+    assert kept is not None
 
 
 async def test_commit_inserts_stages_and_rebuilds(refine_service: RefinementService):
@@ -296,6 +335,83 @@ async def test_a_proposal_outside_the_run_scope_is_refused(
     assert verdict.refusal is RefusalKind.OUT_OF_SCOPE
 
 
+#: one out-of-scope proposal per kind, so the scope guard is pinned for all eight (spec 5.4)
+_OUT_OF_SCOPE = {
+    RefinementKind.ADD_EDGE: RefinementTarget(
+        src="other.py::f", dst="other.py::g", edge_kind=EdgeKind.CALLS, name="g"
+    ),
+    RefinementKind.RETARGET_EDGE: RefinementTarget(
+        src="other.py::f",
+        from_dst="other.py::g",
+        to_dst="other.py::h",
+        edge_kind=EdgeKind.CALLS,
+        name="g",
+    ),
+    RefinementKind.CONFIRM_EDGE: RefinementTarget(
+        src="other.py::f", dst="other.py::g", edge_kind=EdgeKind.CALLS, name="g"
+    ),
+    RefinementKind.RESOLVE_AMBIGUOUS: RefinementTarget(
+        node_id="other.py::f", name="g", edge_kind=EdgeKind.CALLS
+    ),
+    RefinementKind.RELABEL_CLUSTER: RefinementTarget(members=("other.py::f",)),
+    RefinementKind.MOVE_NODE: RefinementTarget(
+        node_id="other.py::f", members=("other.py::g",)
+    ),
+    RefinementKind.ANNOTATE_NODE: RefinementTarget(node_id="other.py::f"),
+    RefinementKind.UNRESOLVABLE: RefinementTarget(node_id="other.py::f", name="g"),
+}
+_SCOPE_PAYLOAD = RefinementPayload(
+    label="a cluster", annotation="a note", candidate="other.py::h"
+)
+
+
+@pytest.mark.parametrize("kind", sorted(_OUT_OF_SCOPE, key=lambda k: k.value))
+async def test_every_kind_obeys_the_run_scope(
+    refine_service: RefinementService, kind: RefinementKind
+):
+    """`covers` read three id fields, and `relabel_cluster` fills none of them: it named no id the
+    guard looked at, so `all([])` put it in scope for every run at once."""
+    run = await refine_service.begin(scope="svc.py")
+    verdict = await refine_service.propose(
+        run.run_id,
+        Proposal(
+            kind=kind,
+            target=_OUT_OF_SCOPE[kind],
+            payload=_SCOPE_PAYLOAD,
+            reason="out of this run's scope",
+        ),
+    )
+    assert verdict.outcome is ProposalOutcome.REJECTED
+    assert verdict.refusal is RefusalKind.OUT_OF_SCOPE
+
+
+async def test_a_scope_matches_on_a_path_boundary(refine_service: RefinementService):
+    """A bare prefix match puts `svc_other.py` under the scope `svc`, which is a file the run was
+    never given."""
+    run = await refine_service.begin(scope="svc")
+    verdict = await refine_service.propose(run.run_id, CALL_EDGE)
+    assert verdict.refusal is RefusalKind.OUT_OF_SCOPE
+
+
+@pytest.mark.parametrize("scope", ["/svc.py", "../svc.py", "a/../../b"])
+async def test_a_scope_that_could_never_match_is_refused_at_begin(
+    refine_service: RefinementService, scope: str
+):
+    """Node ids are relative to the checkout, so such a scope refuses every proposal the run makes
+    and says nothing about why."""
+    with pytest.raises(RefinementRefused, match="repo-relative"):
+        await refine_service.begin(scope=scope)
+
+
+async def test_a_trailing_separator_does_not_change_a_scope(
+    refine_service: RefinementService,
+):
+    run = await refine_service.begin(scope="impl.py/")
+    assert (await refine_service.propose(run.run_id, NOTE)).outcome is (
+        ProposalOutcome.STAGED
+    )
+
+
 async def test_status_reports_what_is_staged_here(refine_service: RefinementService):
     run = await refine_service.begin()
     await refine_service.propose(run.run_id, CALL_EDGE)
@@ -303,6 +419,68 @@ async def test_status_reports_what_is_staged_here(refine_service: RefinementServ
     assert report.staged_here is True
     assert [v.kind for v in report.staged] == [RefinementKind.ADD_EDGE]
     assert report.committed == ()
+
+
+async def test_the_run_report_separates_what_committed_from_what_was_refused(
+    refine_service: RefinementService,
+):
+    """`of_run` returns rejections too, so reading it straight into `committed` reported rows a
+    run never committed, on a run that committed nothing at all."""
+    run = await refine_service.begin()
+    refused = await refine_service.propose(run.run_id, UNCALLED)
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    open_report = await refine_service.status(run.run_id)
+    assert open_report.committed == () and open_report.rejected == (
+        refused.refinement_id,
+    )
+    result = await refine_service.commit(run.run_id)
+    done = await refine_service.status(run.run_id)
+    assert done.committed == (result.committed[0].refinement_id,)
+    assert done.rejected == (refused.refinement_id,)
+
+
+async def test_two_services_in_one_process_share_the_run_that_was_staged(
+    refine_service: RefinementService, process_runs: RunRegistry
+):
+    """An MCP server builds a `RefinementService` per tool call: without one process-wide home
+    `graph_refine_propose` cannot find what `graph_refine_begin` staged."""
+    parts = (refine_service.index, refine_service.root, refine_service.settings)
+    opener = RefinementService(*parts, refine_service.user)
+    proposer = RefinementService(*parts, refine_service.user)
+    assert opener.registry is process_runs and proposer.registry is process_runs
+    run = await opener.begin()
+    verdict = await proposer.propose(run.run_id, CALL_EDGE)
+    assert verdict.outcome is ProposalOutcome.STAGED
+    assert (await proposer.status(run.run_id)).staged_here is True
+
+
+async def test_begin_reads_git_off_the_event_loop(
+    refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
+):
+    """`git_output` shells out twice with a 30 s timeout each; on the loop every other coroutine,
+    which for an MCP server is every other tool call, waits behind it."""
+
+    def slow(root, *args):
+        time.sleep(0.2)
+        return "abc"
+
+    monkeypatch.setattr("auditor.graph.refine.service.git_output", slow)
+    ticks = 0
+
+    async def tick():
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    ticker = asyncio.create_task(tick())
+    try:
+        await refine_service.begin()
+    finally:
+        ticker.cancel()
+        with suppress(asyncio.CancelledError):
+            await ticker
+    assert ticks > 5
 
 
 async def test_status_of_a_run_this_process_did_not_open_says_so(

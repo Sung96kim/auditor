@@ -15,7 +15,7 @@ import time
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -45,7 +45,13 @@ from auditor.graph.refine.models import (
     TriggerDetail,
     TriggerKind,
 )
-from auditor.graph.refine.namespace import file_of, to_partition, to_toplevel
+from auditor.graph.refine.namespace import (
+    file_of,
+    scope_path,
+    to_partition,
+    to_toplevel,
+    under_scope,
+)
 from auditor.graph.refine.tiers import TierPolicy
 from auditor.graph.refine.verify import (
     FactVerifier,
@@ -161,7 +167,11 @@ class CommitResult(BaseModel):
 
 class RunReport(BaseModel):
     """One run's state. ``staged_here`` is false in a process that did not open the run, so a
-    reader never mistakes another process's staging for an empty run."""
+    reader never mistakes another process's staging for an empty run.
+
+    ``committed`` and ``rejected`` are the run's stored rows split by fate: a rejection is stored
+    the moment it is made, so a run that committed nothing still owns rows.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -169,6 +179,7 @@ class RunReport(BaseModel):
     staged: tuple[Verdict, ...] = ()
     staged_here: bool = True
     committed: tuple[int, ...] = ()
+    rejected: tuple[int, ...] = ()
 
 
 class ProposalFacts(BaseModel):
@@ -330,12 +341,13 @@ class StagedRun(BaseModel):
     lock: asyncio.Lock = Field(default_factory=asyncio.Lock)
 
     def covers(self, proposal: Proposal) -> bool:
-        """Whether every node id the proposal names falls under this run's scope."""
-        if not self.scope:
-            return True
-        src, dst = proposal.edge_pair()
-        named = [i for i in (src, dst, proposal.target.node_id) if i]
-        return all(i.startswith(self.scope) for i in named)
+        """Whether every node id the proposal names falls under this run's scope.
+
+        `anchored_ids` is the enumeration the partition guard already uses, cluster members
+        included: a `relabel_cluster` names none of the three ids a narrower reading looks at, so
+        it would be in scope for every run at once.
+        """
+        return all(under_scope(i, self.scope) for i in proposal.anchored_ids())
 
     def holds(self, proposal: Proposal) -> bool:
         """Whether this run already staged exactly this proposal.
@@ -376,8 +388,21 @@ class RunRegistry(BaseModel):
 
     model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
 
+    #: evicted ids remembered past their run, so `require` can tell a caller what happened
+    REMEMBERED: ClassVar[int] = 64
+
     open_runs: dict[str, StagedRun] = Field(default_factory=dict)
     max_open: int = 8
+    evicted: dict[str, str] = Field(default_factory=dict)
+
+    @classmethod
+    def process(cls) -> "RunRegistry":
+        """The registry every service in this process stages into unless it is handed another.
+
+        An MCP server builds a `RefinementService` per tool call, so without one home a `propose`
+        would look for `begin`'s run in a registry that was thrown away.
+        """
+        return _PROCESS_RUNS
 
     def opened(
         self, run: Run, scope: str, partition: tuple[str, str]
@@ -387,23 +412,45 @@ class RunRegistry(BaseModel):
         Eviction drops staging that was never promised; finishing the `graph_runs` row each evicted
         run owns needs a store, so it belongs to the caller (Invariant 2).
         """
-        evicted: list[StagedRun] = []
+        gone: list[StagedRun] = []
         while len(self.open_runs) >= self.max_open:
             oldest = min(self.open_runs.values(), key=lambda s: s.opened_at)
             oldest.closed = True
-            evicted.append(self.open_runs.pop(oldest.run.run_id))
+            gone.append(self.open_runs.pop(oldest.run.run_id))
+            self._remember(oldest.run.run_id)
         staged = StagedRun(run=run, scope=scope, partition=partition)
         self.open_runs[run.run_id] = staged
-        return staged, evicted
+        return staged, gone
+
+    def reason(self) -> str:
+        """Why a run was evicted, in the words the stored row and the refusal both use."""
+        return f"evicted: registry full (max_open={self.max_open})"
 
     def require(self, run_id: str) -> StagedRun:
+        """The open run, or a refusal that says which of the two things went wrong."""
         staged = self.open_runs.get(run_id)
-        if staged is None:
-            raise RefinementRefused(f"run {run_id} is not open in this process")
-        return staged
+        if staged is not None:
+            return staged
+        why = self.evicted.get(run_id)
+        if why is not None:
+            raise RefinementRefused(
+                f"run {run_id} was {why}; its staging was stored as rejections, so start a "
+                "new run"
+            )
+        raise RefinementRefused(f"run {run_id} is not open in this process")
 
     def close(self, run_id: str) -> None:
         self.open_runs.pop(run_id, None)
+
+    def _remember(self, run_id: str) -> None:
+        """Keep the newest evictions only: this exists to explain a refusal, not to be a log."""
+        self.evicted[run_id] = self.reason()
+        while len(self.evicted) > self.REMEMBERED:
+            del self.evicted[next(iter(self.evicted))]
+
+
+#: the runs this process has open (spec 9.1's staging step); `RunRegistry.process` is the reader
+_PROCESS_RUNS = RunRegistry()
 
 
 class RefinementService:
@@ -421,7 +468,7 @@ class RefinementService:
         self.root = root
         self.settings = settings
         self.user = user
-        self.registry = registry if registry is not None else RunRegistry()
+        self.registry = registry if registry is not None else RunRegistry.process()
         self.roles = RoleClassifier(settings.role_globs)
 
     @property
@@ -437,6 +484,14 @@ class RefinementService:
         """What every stored id in a run is relative to: a commit must resolve the same pair."""
         return (self.identity, self.prefix)
 
+    def _still_open(self, staged: StagedRun) -> None:
+        """Refuse a run another caller in this process already finished, by what happened to it."""
+        if staged.closed:
+            raise RefinementRefused(
+                f"run {staged.run.run_id} is already closed in this process: it was committed, "
+                "aborted or evicted"
+            )
+
     async def begin(
         self,
         *,
@@ -449,7 +504,16 @@ class RefinementService:
         session_id: str | None = None,
         agent_name: str | None = None,
     ) -> Run:
-        """Open a run and record who asked and against which checkout state (Invariant 2)."""
+        """Open a run and record who asked and against which checkout state (Invariant 2).
+
+        ``scope`` is a repo-relative path prefix; one that could never name a node here is refused
+        rather than silently refusing every proposal the run makes.
+        """
+        try:
+            scope = scope_path(scope)
+        except ValueError as exc:
+            raise RefinementRefused(str(exc)) from exc
+        branch, commit_sha = await self._head()
         run = Run(
             repo_identity=self.identity,
             origin_partition=self.index.repo,
@@ -461,8 +525,8 @@ class RefinementService:
             trigger_detail=TriggerDetail(files=(scope,) if scope else ()),
             session_id=session_id,
             agent_name=agent_name,
-            branch=git_output(self.root, "rev-parse", "--abbrev-ref", "HEAD"),
-            commit_sha=git_output(self.root, "rev-parse", "HEAD"),
+            branch=branch,
+            commit_sha=commit_sha,
             model=model,
         )
         await self.index.runs.add_run(run)
@@ -483,8 +547,7 @@ class RefinementService:
         """
         staged = self.registry.require(run_id)
         async with staged.lock:
-            if staged.closed:
-                raise RefinementRefused(f"run {run_id} is not open in this process")
+            self._still_open(staged)
             return await self._judge(staged, proposal)
 
     async def _judge(
@@ -527,6 +590,7 @@ class RefinementService:
         if run is None:
             raise RefinementRefused(f"no run {run_id} on this checkout")
         open_run = self.registry.open_runs.get(run_id)
+        rows = await self.index.refinements.of_run(run_id)
         return RunReport(
             run=run,
             staged=tuple(item.verdict() for item in open_run.staged)
@@ -534,7 +598,12 @@ class RefinementService:
             else (),
             staged_here=open_run is not None,
             committed=tuple(
-                r.refinement_id for r in await self.index.refinements.of_run(run_id)
+                r.refinement_id
+                for r in rows
+                if r.status is not RefinementStatus.REJECTED
+            ),
+            rejected=tuple(
+                r.refinement_id for r in rows if r.status is RefinementStatus.REJECTED
             ),
         )
 
@@ -547,8 +616,7 @@ class RefinementService:
         """
         staged = self.registry.require(run_id)
         async with staged.lock:
-            if staged.closed:
-                raise RefinementRefused(f"run {run_id} is not open in this process")
+            self._still_open(staged)
             moved = self._partition_moved(staged)
             if moved is not None:
                 raise RefinementRefused(moved)
@@ -564,7 +632,7 @@ class RefinementService:
         activate and no queue row retired by a build that never happened (spec 6).
         """
         run_id = staged.run.run_id
-        refused = self._checkout_moved(staged.run)
+        refused = await self._checkout_moved(staged.run)
         if refused is not None:
             await self._finish(run_id, RunStatus.REJECTED, error=refused)
             raise RefinementRefused(refused)
@@ -645,8 +713,7 @@ class RefinementService:
         """Drop this run's staging and stamp it aborted (spec 9.1). Nothing was stored."""
         staged = self.registry.require(run_id)
         async with staged.lock:
-            if staged.closed:
-                raise RefinementRefused(f"run {run_id} is not open in this process")
+            self._still_open(staged)
             staged.closed = True
             self.registry.close(run_id)
             await self._finish(run_id, RunStatus.ABORTED, error=reason)
@@ -898,7 +965,7 @@ class RefinementService:
         Its staging was never promised, but it is stored as rejections rather than vanishing, and
         the row goes `skipped`, which is the one status `prune_skipped_runs` can ever reap.
         """
-        detail = f"evicted: registry full (max_open={self.registry.max_open})"
+        detail = self.registry.reason()
         async with (
             gone.lock
         ):  # a propose already in flight finishes before its run is retired
@@ -927,7 +994,21 @@ class RefinementService:
             raise RefinementRefused(f"no refinement {refinement_id} on this checkout")
         return moved
 
-    def _checkout_moved(self, run: Run) -> str | None:
+    async def _head(self) -> tuple[str | None, str | None]:
+        """This checkout's branch and HEAD, read off the event loop.
+
+        `git_output` shells out with a 30 s timeout, and every other coroutine on the loop, which
+        for an MCP server is every other tool call, would wait behind it.
+        """
+        branch, commit = await asyncio.gather(
+            asyncio.to_thread(
+                git_output, self.root, "rev-parse", "--abbrev-ref", "HEAD"
+            ),
+            asyncio.to_thread(git_output, self.root, "rev-parse", "HEAD"),
+        )
+        return branch, commit
+
+    async def _checkout_moved(self, run: Run) -> str | None:
         """Whether HEAD or the branch changed since `begin`, which invalidates every anchor.
 
         A run that did not start in a git checkout has nothing to compare and is never refused;
@@ -935,8 +1016,7 @@ class RefinementService:
         """
         if run.commit_sha is None:
             return None
-        branch = git_output(self.root, "rev-parse", "--abbrev-ref", "HEAD")
-        commit = git_output(self.root, "rev-parse", "HEAD")
+        branch, commit = await self._head()
         if branch == run.branch and commit == run.commit_sha:
             return None
         return (
