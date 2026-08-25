@@ -275,6 +275,32 @@ async def test_an_unknown_log_status_names_the_valid_set(queued_repo: Path):
             )
 
 
+async def test_the_log_and_the_status_agree_on_what_a_run_produced(queued_repo: Path):
+    """One field, two meanings: the log counted every row a run owned and the status counted the
+    ones it kept, so a run that stored four rejections read as seven corrections in one view and
+    three in the other, and its own summary line said "0 rejected"."""
+    async with Client(mcp) as client:
+        run_id = await _begin(client, queued_repo)
+        await client.call_tool("graph_refine_propose", _add_edge(queued_repo, run_id))
+        await client.call_tool(
+            "graph_refine_propose",
+            _add_edge(queued_repo, run_id) | {"name": "get_user"},
+        )
+        await client.call_tool(
+            "graph_refine_commit", {"path": str(queued_repo), "run_id": run_id}
+        )
+        status = _data(
+            await client.call_tool(
+                "graph_refine_status", {"path": str(queued_repo), "run_id": run_id}
+            )
+        )
+        log = _data(await client.call_tool("graph_log", {"path": str(queued_repo)}))
+    row = next(r for r in log["runs"] if r["run_id"] == run_id)
+    assert row["refinements"] == {"committed": 1, "rejected": 1}
+    assert row["refinements"] == status["run"]["refinements"]
+    assert row["summary"] == "1 committed, 1 rejected"
+
+
 async def test_the_refinements_view_reports_whether_it_was_filtered(queued_repo: Path):
     """One recorded row, so "empty" and "filtered to nothing" are two different answers rather than
     the same empty list twice."""

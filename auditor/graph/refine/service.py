@@ -715,7 +715,9 @@ class RefinementService:
         if not staged.staged:
             # spec 6 wants the queue rows retired in the same lock as the insert; with no insert
             # there is nothing to retire, so this takes no lock and runs no build
-            await self._finish(run_id, RunStatus.SUCCEEDED, summary="nothing staged")
+            await self._finish(
+                run_id, RunStatus.SUCCEEDED, summary=await self._summary(run_id)
+            )
             return CommitResult(run_id=run_id, rebuilt=False)
         landed: list[Verdict] = []
         try:
@@ -741,13 +743,20 @@ class RefinementService:
         committed = tuple(v for v in landed if v.outcome is ProposalOutcome.STAGED)
         rejected = tuple(v for v in landed if v.outcome is ProposalOutcome.REJECTED)
         await self._finish(
-            run_id,
-            RunStatus.SUCCEEDED,
-            summary=f"{len(committed)} committed, {len(rejected)} rejected",
+            run_id, RunStatus.SUCCEEDED, summary=await self._summary(run_id)
         )
         return CommitResult(
             run_id=run_id, committed=committed, rejected=rejected, build=build
         )
+
+    async def _summary(self, run_id: str) -> str:
+        """What this run produced, counted off its own rows so every surface agrees.
+
+        Counted rather than taken from the batch: a rejection stored at propose time is a row this
+        run owns too, and a summary built from the landing alone reported "0 rejected" over four.
+        """
+        counts = (await self.index.refinements.counts_by_run([run_id])).get(run_id)
+        return counts.summary if counts else "nothing staged"
 
     async def _decided(self, staged: StagedRun) -> list[Landing]:
         """What this commit will insert, worked out before anything is written."""

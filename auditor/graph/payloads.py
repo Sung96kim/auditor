@@ -19,7 +19,9 @@ from auditor.graph.model import (
     EdgeKind,
     GraphCluster,
     UnresolvedRow,
+    enum_value,
     enum_values,
+    row_limit,
 )
 from auditor.graph.refine.models import (
     Anchor,
@@ -27,7 +29,9 @@ from auditor.graph.refine.models import (
     ProducerKind,
     PruneOutcome,
     Refinement,
+    RefinementCounts,
     RefinementKind,
+    RefinementPayload,
     RefinementStatus,
     Run,
     RunnerKind,
@@ -195,7 +199,12 @@ class GraphBuildReport(WirePayload):
 
 
 class RefinementRowPayload(WirePayload):
-    """One refinement as every surface shows it: the target flattened, the anchors by node id."""
+    """One refinement as every surface shows it: the target flattened, the proposal's own values
+    beside it, the anchors by node id.
+
+    ``payload`` is carried whole rather than flattened further: a ``pending`` row is one a human
+    has to judge, and the label, annotation, candidate or reason code is what there is to judge.
+    """
 
     refinement_id: int
     run_id: str
@@ -207,6 +216,9 @@ class RefinementRowPayload(WirePayload):
     edge_kind: EdgeKind | None = None
     name: str | None = None
     node_id: str | None = None
+    from_dst: str | None = None
+    members: tuple[str, ...] = ()
+    payload: RefinementPayload = RefinementPayload()
     reason: str = ""
     confidence: float = 0.0
     drifted: bool = False
@@ -218,10 +230,19 @@ class RefinementRowPayload(WirePayload):
 
     @property
     def summary(self) -> str:
-        """What the refinement points at, in one cell: an edge as ``src -> dst``, a node as its id."""
+        """What the refinement points at, in one cell, for each shape spec 5.4 allows: an edge as
+        ``src -> dst``, a retarget as ``src: from -> to``, a moved node, a cluster's members."""
         if self.src and self.dst:
-            return f"{self.src} -> {self.dst}"
-        return self.node_id or ", ".join(self.anchors) or self.name or ""
+            moved = f"{self.from_dst} -> " if self.from_dst else ""
+            return (
+                f"{self.src}: {moved}{self.dst}"
+                if moved
+                else f"{self.src} -> {self.dst}"
+            )
+        members = ", ".join(self.members)
+        if self.node_id:
+            return f"{self.node_id} -> {members}" if members else self.node_id
+        return members or ", ".join(self.anchors) or self.name or ""
 
     @classmethod
     def of(
@@ -240,6 +261,9 @@ class RefinementRowPayload(WirePayload):
             edge_kind=target.edge_kind,
             name=target.name,
             node_id=target.node_id,
+            from_dst=target.from_dst,
+            members=target.members,
+            payload=refinement.payload,
             reason=refinement.reason,
             confidence=refinement.confidence,
             drifted=refinement.drifted,
@@ -252,15 +276,41 @@ class RefinementRowPayload(WirePayload):
 
 
 class RefinementsReport(WirePayload):
-    """``auditr graph refinements list`` and ``graph_refinements``. ``filtered`` is why an empty
-    list is empty."""
+    """``auditr graph refinements list`` and ``graph_refinements``: one page, newest first.
+
+    ``filtered`` is why an empty list is empty, and ``refinement_count`` is how many rows the same
+    filters match, so a page at the cap cannot be read as the whole list.
+    """
 
     rows: tuple[RefinementRowPayload, ...] = ()
     filtered: bool = False
+    refinement_count: int = 0
+    truncated: bool = False
+
+    @classmethod
+    def of(
+        cls,
+        rows: Sequence[RefinementRowPayload],
+        *,
+        filtered: bool,
+        total: int,
+    ) -> "RefinementsReport":
+        """One page and the total beside it, with ``truncated`` derived here rather than at each
+        call site, so the two numbers cannot disagree."""
+        return cls(
+            rows=tuple(rows),
+            filtered=filtered,
+            refinement_count=total,
+            truncated=total > len(rows),
+        )
 
 
 class RunRowPayload(WirePayload):
-    """One run as the log shows it: who made it, against which checkout, and what it cost."""
+    """One run as the log shows it: who made it, against which checkout, and what it cost.
+
+    ``cost_estimated`` travels with ``cost_usd`` because a runner that reports no price has one
+    modelled for it, and a log that showed only the number would present it as measured.
+    """
 
     run_id: str
     status: RunStatus
@@ -276,13 +326,16 @@ class RunRowPayload(WirePayload):
     branch: str | None = None
     commit_sha: str | None = None
     cost_usd: float = 0.0
+    cost_estimated: bool = False
     num_turns: int = 0
-    refinements: int = 0
+    refinements: RefinementCounts = RefinementCounts()
     started_at: float = 0.0
     finished_at: float | None = None
 
     @classmethod
-    def of(cls, run: Run, *, refinements: int = 0) -> "RunRowPayload":
+    def of(
+        cls, run: Run, *, refinements: RefinementCounts | None = None
+    ) -> "RunRowPayload":
         return cls(
             run_id=run.run_id,
             status=run.status,
@@ -298,8 +351,9 @@ class RunRowPayload(WirePayload):
             branch=run.branch,
             commit_sha=run.commit_sha,
             cost_usd=run.usage.cost_usd,
+            cost_estimated=run.usage.cost_estimated,
             num_turns=run.usage.num_turns,
-            refinements=refinements,
+            refinements=refinements or RefinementCounts(),
             started_at=run.started_at,
             finished_at=run.finished_at,
         )
@@ -356,19 +410,19 @@ class LogFilter(WirePayload):
         skipped: bool,
         limit: int,
     ) -> "LogFilter":
-        """Validate every value against the enum the chosen view owns."""
-        if view not in {v.value for v in LogView}:
-            raise ValueError(
-                f"unknown view: {view}. Valid: {', '.join(v.value for v in LogView)}"
-            )
-        chosen = LogView(view)
+        """Validate every value against the enum the chosen view owns.
+
+        ``since`` is validated whenever it is given at all: an empty string is a caller that
+        thinks it set a window, not a caller that set none.
+        """
+        chosen = LogView(enum_value(view, LogView, "view"))
         enum = RunStatus if chosen is LogView.RUNS else RefinementStatus
         return cls(
             view=chosen,
             statuses=tuple(enum_values(status, enum, "status") or ()),
-            since=parse_since(since) if since else None,
+            since=parse_since(since) if since is not None else None,
             skipped=skipped,
-            limit=max(1, limit),
+            limit=row_limit(limit),
         )
 
     @property
@@ -380,9 +434,10 @@ class LogFilter(WirePayload):
 
     @property
     def excluded_run_statuses(self) -> tuple[RunStatus, ...]:
-        """Skipped runs are assessment-only and out of the default view (spec 12.2). Expressed as
-        an exclusion rather than as an every-other-status list, so a new `RunStatus` needs no edit
-        here."""
+        """Skipped runs are out of the default view (spec 12.2): the assessment's own decisions,
+        plus any run the registry evicted or the retention sweep found stranded. Expressed as an
+        exclusion rather than as an every-other-status list, so a new `RunStatus` needs no edit
+        here, and reported as a narrowing, because it is one."""
         if self.view is not LogView.RUNS or self.skipped or self.statuses:
             return ()
         return (RunStatus.SKIPPED,)
@@ -395,17 +450,30 @@ class LogFilter(WirePayload):
 
     @property
     def filtered(self) -> bool:
-        """Whether the caller narrowed the view, which is why an empty page is empty."""
-        return bool(self.statuses) or self.since is not None
+        """Whether this page is narrower than everything recorded, which is why an empty one is
+        empty. The default run view narrows too: it hides the skipped rows."""
+        return (
+            bool(self.statuses)
+            or self.since is not None
+            or bool(self.excluded_run_statuses)
+        )
 
 
 class LogReport(WirePayload):
-    """One page of the provenance log: one view, and what produced it."""
+    """One page of the provenance log: one view, what produced it, and what it did not show.
+
+    ``hidden_statuses`` is why ``filtered`` can be true on a page nobody filtered: the default run
+    view hides the skipped rows, and an empty page there means "none you can see", not "none".
+    """
 
     view: LogView = LogView.RUNS
     runs: tuple[RunRowPayload, ...] = ()
     refinements: tuple[RefinementRowPayload, ...] = ()
     filtered: bool = False
+    hidden_statuses: tuple[RunStatus, ...] = ()
+    run_count: int = 0
+    refinement_count: int = 0
+    truncated: bool = False
 
     @classmethod
     def of(
@@ -414,17 +482,24 @@ class LogReport(WirePayload):
         *,
         runs: Sequence[RunRowPayload] = (),
         refinements: Sequence[RefinementRowPayload] = (),
+        total: int = 0,
     ) -> "LogReport":
         """One page of the provenance log, from rows a store already fetched.
 
         Pure, like every other ``of()`` in this module: `LogQuery` does the reading, because this
         module is imported by `cli/render.py` on every command and must stay free of the database.
+        ``total`` counts the chosen view under the same filters, before the limit.
         """
+        chosen = tuple(runs) if spec.view is LogView.RUNS else tuple(refinements)
         return cls(
             view=spec.view,
             runs=tuple(runs),
             refinements=tuple(refinements),
             filtered=spec.filtered,
+            hidden_statuses=spec.excluded_run_statuses,
+            run_count=total if spec.view is LogView.RUNS else 0,
+            refinement_count=0 if spec.view is LogView.RUNS else total,
+            truncated=total > len(chosen),
         )
 
 

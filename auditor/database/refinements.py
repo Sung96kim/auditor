@@ -20,6 +20,7 @@ from auditor.graph.refine.models import (
     EvalRow,
     PruneOutcome,
     Refinement,
+    RefinementCounts,
     RefinementKind,
     RefinementOutcome,
     RefinementStatus,
@@ -226,17 +227,14 @@ class RunsDB(BaseDB):
         )
         return _run_from_row(row) if row else None
 
-    async def runs(
-        self,
-        *,
-        statuses: Sequence[RunStatus] | None = None,
-        exclude: Sequence[RunStatus] | None = None,
-        since: float | None = None,
-        limit: int | None = None,
-    ) -> list[Run]:
-        """Runs newest first. Every filter and the limit run in SQL, so ``limit`` counts rows the
-        caller sees and a time window is applied before it, not after."""
-        sql = "SELECT * FROM graph_runs WHERE repo_identity = ?"
+    @staticmethod
+    def _filter(
+        statuses: Sequence[RunStatus] | None,
+        exclude: Sequence[RunStatus] | None,
+        since: float | None,
+    ) -> tuple[str, list[Any]]:
+        """The WHERE tail a page and its total share, so the two cannot narrow differently."""
+        sql = ""
         params: list[Any] = []
         if statuses:
             sql += _in_clause("status", statuses)
@@ -248,6 +246,20 @@ class RunsDB(BaseDB):
         if since is not None:
             sql += " AND started_at >= ?"
             params.append(since)
+        return sql, params
+
+    async def runs(
+        self,
+        *,
+        statuses: Sequence[RunStatus] | None = None,
+        exclude: Sequence[RunStatus] | None = None,
+        since: float | None = None,
+        limit: int | None = None,
+    ) -> list[Run]:
+        """Runs newest first. Every filter and the limit run in SQL, so ``limit`` counts rows the
+        caller sees and a time window is applied before it, not after."""
+        where, params = self._filter(statuses, exclude, since)
+        sql = f"SELECT * FROM graph_runs WHERE repo_identity = ?{where}"  # noqa: S608
         sql += " ORDER BY started_at DESC, run_id"
         if limit is not None:
             sql += " LIMIT ?"
@@ -255,6 +267,21 @@ class RunsDB(BaseDB):
         return [
             _run_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
         ]
+
+    async def count(
+        self,
+        *,
+        statuses: Sequence[RunStatus] | None = None,
+        exclude: Sequence[RunStatus] | None = None,
+        since: float | None = None,
+    ) -> int:
+        """How many runs the same filters match, so a page at the limit says how much it left."""
+        where, params = self._filter(statuses, exclude, since)
+        row = await self._fetch_one_by_identity(
+            f"SELECT COUNT(*) AS n FROM graph_runs WHERE repo_identity = ?{where}",  # noqa: S608
+            tuple(params),
+        )
+        return int(row["n"]) if row else 0
 
     async def finish_stranded_runs(
         self, *, older_than: float, now: float | None = None
@@ -446,18 +473,14 @@ class RefinementsDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def refinements(
-        self,
-        *,
-        statuses: Sequence[RefinementStatus] | None = None,
-        kinds: Sequence[RefinementKind] | None = None,
-        since: float | None = None,
-        newest_first: bool = False,
-        limit: int | None = None,
-    ) -> list[Refinement]:
-        """Refinements oldest first, or newest first for a log page. Every filter and the limit
-        run in SQL, so a time window is applied before the limit rather than after it."""
-        sql = "SELECT * FROM graph_refinements WHERE repo_identity = ?"
+    @staticmethod
+    def _filter(
+        statuses: Sequence[RefinementStatus] | None,
+        kinds: Sequence[RefinementKind] | None,
+        since: float | None,
+    ) -> tuple[str, list[Any]]:
+        """The WHERE tail a page and its total share, so the two cannot narrow differently."""
+        sql = ""
         params: list[Any] = []
         if statuses:
             sql += _in_clause("status", statuses)
@@ -468,10 +491,45 @@ class RefinementsDB(BaseDB):
         if since is not None:
             sql += " AND created_at >= ?"
             params.append(since)
+        return sql, params
+
+    async def count(
+        self,
+        *,
+        statuses: Sequence[RefinementStatus] | None = None,
+        kinds: Sequence[RefinementKind] | None = None,
+        since: float | None = None,
+    ) -> int:
+        """How many refinements the same filters match, so a page at the limit says how much it
+        left behind rather than looking like the whole list."""
+        where, params = self._filter(statuses, kinds, since)
+        row = await self._fetch_one_by_identity(
+            f"SELECT COUNT(*) AS n FROM graph_refinements WHERE repo_identity = ?{where}",  # noqa: S608
+            tuple(params),
+        )
+        return int(row["n"]) if row else 0
+
+    async def refinements(
+        self,
+        *,
+        statuses: Sequence[RefinementStatus] | None = None,
+        kinds: Sequence[RefinementKind] | None = None,
+        since: float | None = None,
+        newest_first: bool = False,
+        limit: int | None = None,
+    ) -> list[Refinement]:
+        """Refinements oldest first, or newest first for a log page. Every filter and the limit
+        run in SQL, so a time window is applied before the limit rather than after it.
+
+        Newest first orders on ``created_at`` before the id, because ``since`` filters on
+        ``created_at``: a backdated row would otherwise page ahead of rows inside the window.
+        """
+        where, params = self._filter(statuses, kinds, since)
+        sql = f"SELECT * FROM graph_refinements WHERE repo_identity = ?{where}"  # noqa: S608
         sql += (
-            " ORDER BY refinement_id DESC"
+            " ORDER BY created_at DESC, refinement_id DESC"
             if newest_first
-            else " ORDER BY refinement_id"
+            else " ORDER BY created_at, refinement_id"
         )
         if limit is not None:
             sql += " LIMIT ?"
@@ -504,17 +562,30 @@ class RefinementsDB(BaseDB):
             )
         ]
 
-    async def counts_by_run(self, run_ids: Sequence[str]) -> dict[str, int]:
-        """How many refinements each run owns, for the run log's last column."""
+    async def counts_by_run(
+        self, run_ids: Sequence[str]
+    ) -> dict[str, RefinementCounts]:
+        """What each run produced, split by fate, for the run log's last column.
+
+        Split in SQL rather than counted twice: a run's rejections are rows it owns, and a column
+        that added them to its corrections would credit a run with work it refused.
+        """
         if not run_ids:
             return {}
         placeholders = ",".join("?" for _ in run_ids)
         rows = await self._fetch_by_identity(
-            "SELECT run_id, COUNT(*) AS n FROM graph_refinements WHERE repo_identity = ? "
-            f"AND run_id IN ({placeholders}) GROUP BY run_id",  # noqa: S608  (placeholders only)
+            "SELECT run_id, status, COUNT(*) AS n FROM graph_refinements "
+            "WHERE repo_identity = ? "
+            f"AND run_id IN ({placeholders}) GROUP BY run_id, status",  # noqa: S608  (placeholders only)
             tuple(run_ids),
         )
-        return {r["run_id"]: int(r["n"]) for r in rows}
+        counts: dict[str, RefinementCounts] = {}
+        for row in rows:
+            found = counts.get(row["run_id"], RefinementCounts())
+            counts[row["run_id"]] = found.plus(
+                RefinementStatus(row["status"]), int(row["n"])
+            )
+        return counts
 
     async def anchors(
         self, refinement_ids: Sequence[int]

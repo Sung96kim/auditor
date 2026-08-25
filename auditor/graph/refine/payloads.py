@@ -5,6 +5,7 @@ build and numpy, which no fast CLI command may load. `Verdict` is emitted as its
 """
 
 from auditor.graph.payloads import GraphBuildReport, RunRowPayload
+from auditor.graph.refine.models import RefinementCounts
 from auditor.graph.refine.service import CommitResult, RunReport, Verdict
 from auditor.payload import WirePayload
 
@@ -48,7 +49,12 @@ class RunReportPayload(WirePayload):
     @classmethod
     def of(cls, report: RunReport) -> "RunReportPayload":
         return cls(
-            run=RunRowPayload.of(report.run, refinements=len(report.committed)),
+            run=RunRowPayload.of(
+                report.run,
+                refinements=RefinementCounts(
+                    committed=len(report.committed), rejected=len(report.rejected)
+                ),
+            ),
             staged=report.staged,
             staged_here=report.staged_here,
             committed=report.committed,

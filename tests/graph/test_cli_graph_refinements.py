@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 from auditor.cli import app
 from auditor.cli.render import render_graph_refinement, render_graph_refinements
 from auditor.database import open_repo_index
-from auditor.graph.model import EdgeKind
+from auditor.graph.model import MAX_LOG_ROWS, EdgeKind
 from auditor.graph.payloads import RefinementRowPayload, RefinementsReport
 from auditor.graph.refine.models import (
     ProducerKind,
@@ -87,17 +87,20 @@ def _propose(repo: Path) -> int:
     return _commit(repo, GOOD)[0]["refinement_id"]
 
 
-def _runs(repo: Path, *, skipped: bool) -> list[dict]:
-    """The run log through the `graph_log` MCP tool. `auditr graph log` is the next branch's."""
+def _log(repo: Path, **kw) -> dict:
+    """One page of the provenance log through the `graph_log` MCP tool. `auditr graph log` is the
+    next branch's."""
 
-    async def go() -> list[dict]:
+    async def go() -> dict:
         async with Client(mcp) as client:
-            page = await client.call_tool(
-                "graph_log", {"path": str(repo), "skipped": skipped}
-            )
-            return _data(page)["runs"]
+            return _data(await client.call_tool("graph_log", {"path": str(repo), **kw}))
 
     return asyncio.run(go())
+
+
+def _runs(repo: Path, *, skipped: bool) -> list[dict]:
+    """The runs half of that page."""
+    return _log(repo, skipped=skipped)["runs"]
 
 
 def _add_run(repo: Path, *, status: RunStatus, age_seconds: float) -> str:
@@ -131,7 +134,12 @@ def test_an_empty_list_says_it_is_empty_not_filtered(refined_repo: Path):
             app, ["graph", "refinements", "list", str(refined_repo), "--json"]
         )
     )
-    assert payload == {"rows": [], "filtered": False}
+    assert payload == {
+        "rows": [],
+        "filtered": False,
+        "refinement_count": 0,
+        "truncated": False,
+    }
 
 
 def test_a_status_filter_narrows_to_the_rows_that_match(refined_repo: Path):
@@ -185,7 +193,8 @@ def test_a_status_filter_narrows_to_the_rows_that_match(refined_repo: Path):
             ],
         )
     )
-    assert none_active == {"rows": [], "filtered": True}
+    assert none_active["rows"] == []
+    assert (none_active["filtered"], none_active["refinement_count"]) == (True, 0)
 
 
 def test_an_unknown_status_is_refused_with_the_valid_set(refined_repo: Path):
@@ -228,6 +237,78 @@ def test_the_limit_caps_the_rows(refined_repo: Path):
         )
     )
     assert len(payload["rows"]) == 1
+
+
+def test_the_page_is_the_newest_rows_and_the_total_says_what_it_left(
+    refined_repo: Path,
+):
+    """A page at the cap and a complete list looked the same, and the page was the *oldest* rows:
+    the `pending` row a human has to accept is the newest one, so it was the one hidden."""
+    _commit(refined_repo, BAD, GOOD)
+    payload = cli_json(
+        runner.invoke(
+            app,
+            [
+                "graph",
+                "refinements",
+                "list",
+                str(refined_repo),
+                "--limit",
+                "1",
+                "--json",
+            ],
+        )
+    )
+    assert [r["status"] for r in payload["rows"]] == ["pending"]
+    assert (payload["refinement_count"], payload["truncated"]) == (2, True)
+    whole = cli_json(
+        runner.invoke(
+            app, ["graph", "refinements", "list", str(refined_repo), "--json"]
+        )
+    )
+    assert [r["status"] for r in whole["rows"]] == ["pending", "rejected"]
+    assert whole["truncated"] is False
+
+
+def test_a_limit_over_the_ceiling_is_refused_with_the_ceiling(refined_repo: Path):
+    result = runner.invoke(
+        app, ["graph", "refinements", "list", str(refined_repo), "--limit", "10000"]
+    )
+    assert result.exit_code != 0
+    assert str(MAX_LOG_ROWS) in result.output
+
+
+def test_a_transition_answers_with_the_row_the_listing_shows(refined_repo: Path):
+    """`accept` answered `anchors: []` for a row the listing showed two anchors for, and the human
+    panel printed an empty target for every kind that has no `src`/`dst` pair."""
+    rid = _propose(refined_repo)
+    listed = cli_json(
+        runner.invoke(
+            app, ["graph", "refinements", "list", str(refined_repo), "--json"]
+        )
+    )["rows"][0]
+    accepted = cli_json(
+        runner.invoke(
+            app,
+            ["graph", "refinements", "accept", str(rid), str(refined_repo), "--json"],
+        )
+    )
+    assert accepted["anchors"] == listed["anchors"] != []
+    assert accepted["src"] == listed["src"]
+
+
+def test_the_default_run_view_says_it_hid_the_skipped_rows(refined_repo: Path):
+    """`filtered` is what tells an agent "nothing matched" from "nothing recorded". A repo whose
+    only runs were skipped answered `runs: [], filtered: false`, which reads as "never run"."""
+    _add_run(refined_repo, status=RunStatus.SKIPPED, age_seconds=0)
+    hidden = _log(refined_repo)
+    assert hidden["runs"] == []
+    assert hidden["filtered"] is True
+    assert hidden["hidden_statuses"] == ["skipped"]
+    shown = _log(refined_repo, skipped=True)
+    assert [r["status"] for r in shown["runs"]] == ["skipped"]
+    assert (shown["filtered"], shown["hidden_statuses"]) == (False, [])
+    assert shown["run_count"] == 1
 
 
 def test_accept_activates_and_the_next_build_applies_it(refined_repo: Path):

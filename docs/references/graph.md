@@ -231,7 +231,7 @@ auditr graph unresolved . --json --limit 500
 ## Refinements
 
 ```bash
-# every correction recorded for this checkout, oldest first
+# every correction recorded for this checkout, newest first
 auditr graph refinements list
 # only the ones a build is applying
 auditr graph refinements list --status active --status pinned
@@ -250,6 +250,9 @@ auditr graph refinements prune
   [auditr-mcp](auditr-mcp.md).
 - `status` is one of `pending`, `active`, `stale`, `redundant`, `reverted`, `pinned`, `superseded`,
   `rejected`. An unknown value is an error naming the set.
+- The page is the newest rows, capped by `--limit` (default 50, at most 500). `--json` carries
+  `refinement_count`, the number matching the same filters, and `truncated`; the table says
+  "showing N of T" when there is more.
 - Until `auditr graph eval` has produced numbers for this repo, every `add_edge`, `retarget_edge`,
   `resolve_ambiguous` and `move_node` lands `pending` and needs an explicit `accept`.
   `confirm_edge`, `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately.

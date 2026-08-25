@@ -300,6 +300,35 @@ class Run(BaseModel):
         )
 
 
+class RefinementCounts(BaseModel):
+    """How many refinements one run owns, split by fate (spec 9.2 stores every rejection).
+
+    One shape for every surface: the run log's column, `graph_refine_status` and the summary a
+    finished run records all read it, so a run cannot be credited with the work it rejected.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    committed: int = 0
+    rejected: int = 0
+
+    @property
+    def total(self) -> int:
+        """Every row the run owns, which is what a `COUNT(*)` over its id answers."""
+        return self.committed + self.rejected
+
+    @property
+    def summary(self) -> str:
+        """The one line a finished run records about what it produced."""
+        return f"{self.committed} committed, {self.rejected} rejected"
+
+    def plus(self, status: RefinementStatus, rows: int) -> "RefinementCounts":
+        """This count with ``rows`` more of one status folded in, so which fate a status belongs
+        to is decided here and not by each reader."""
+        field = "rejected" if status is RefinementStatus.REJECTED else "committed"
+        return self.model_copy(update={field: getattr(self, field) + rows})
+
+
 class PruneOutcome(BaseModel):
     """What one retention sweep did (spec 5.1, 5.7): rows deleted, and stranded runs finished.
 

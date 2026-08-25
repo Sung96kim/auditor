@@ -123,8 +123,17 @@ args = ["run", "-i", "--rm",
   appear in the caller's facts for that edge kind and call form, the file has to still hash to what
   the build cached, the name must not be imported from outside the repo, and the destination must
   define the name. A failed check comes back as `outcome: "rejected"` with a `verify` code, and the
-  rejection is recorded. So is a payload that is not a legal proposal at all: it comes back with
-  `refusal: "invalid"` and a stored row, never as a validation traceback.
+  rejection is recorded. So is a payload that is not a legal proposal at all, including one naming
+  an unknown `edge_kind` or `call_form`: the values that cannot be read are dropped and the row is
+  stored with `refusal: "invalid"` and the complaint, never a validation traceback. Only an unknown
+  `kind` is an error instead, because the kind chooses the shape.
+- `graph_refinements` and `graph_log` answer the newest rows first, capped by `limit` (default 50,
+  at most 500), with the total the same filters match as `refinement_count` / `run_count` and a
+  `truncated` flag, so a full page is never read as the whole list. `filtered` says why a page is
+  empty, and the default `graph_log` run view sets it because it hides assessment-only runs; the
+  statuses it hid are in `hidden_statuses`.
+- A run's `refinements` is `{committed, rejected}`, the same split `graph_refine_status` reports and
+  the same one the run's `summary` line counts.
 - Staged proposals live in the server process, so one run is opened, filled and committed through
   one server. `graph_refine_status` reports `staged_here: false` in any other process.
   `AUDITOR_REFINE_RUN` pre-binds every tool to one run, which is how a runner-spawned server works

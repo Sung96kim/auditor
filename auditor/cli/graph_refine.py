@@ -127,10 +127,13 @@ async def _move(
     """One hand transition through the ledger, so the CLI and the daemon share the rules.
 
     The ledger, not the service: a status change needs neither a checkout root nor a run registry
-    nor a git guard, and `RefinementService` has no `accept`, `revert` or `pin` at all.
+    nor a git guard, and `RefinementService` has no `accept`, `revert` or `pin` at all. The
+    anchors are read the way the listing reads them, so one row does not describe itself two ways.
     """
     async with await open_index(root) as index:
-        return RefinementRowPayload.of(await act(RefinementLedger(index=index)))
+        moved = await act(RefinementLedger(index=index))
+        anchors = await index.refinements.anchors([moved.refinement_id])
+        return RefinementRowPayload.of(moved, anchors.get(moved.refinement_id, ()))
 
 
 def _transition(
@@ -166,8 +169,8 @@ def refinements_list(
     limit: RowLimit = LOG_ROW_LIMIT,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """The graph corrections recorded for this checkout, oldest first: the order a build applies
-    them in. The `graph_log` MCP tool with view="refinements" is the newest-first half."""
+    """The graph corrections recorded for this checkout, newest first. A page at `--limit` says
+    how many rows match in all, so a full page is never mistaken for the whole list."""
     root = cli_root(target)
     present(
         run(_refinements(root, status, limit), "reading refinements…"),

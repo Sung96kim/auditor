@@ -246,6 +246,16 @@ def render_graph_unresolved(
     out.print(t)
 
 
+def _proposed_values(payload: RefinementRowPayload) -> list[tuple[str, str]]:
+    """What the proposal carries beyond its target, so a `pending` row shows what accepting it
+    would change: the label, the annotation, the candidate, the reason code, the call form."""
+    return [
+        (name, str(value))
+        for name, value in payload.payload.model_dump(mode="json").items()
+        if value
+    ]
+
+
 def render_graph_refinements(out: Console, payload: RefinementsReport) -> None:
     if not payload.rows:
         empty = (
@@ -267,8 +277,14 @@ def render_graph_refinements(out: Console, payload: RefinementsReport) -> None:
             row.summary,
         )
         drift = "[yellow]drifted[/] " if row.drifted else ""
-        t.add_row("", "", "", "", f"{drift}[dim]{row.reason}[/]")
+        detail = " ".join(f"{k}={v}" for k, v in _proposed_values(row))
+        t.add_row("", "", "", "", f"{drift}[dim]{detail} {row.reason}[/]".strip())
     out.print(t)
+    if payload.truncated:
+        out.print(
+            f"[dim]showing {len(payload.rows)} of {payload.refinement_count}, "
+            "newest first; raise --limit for more[/]"
+        )
 
 
 def render_graph_refinement(out: Console, payload: RefinementRowPayload) -> None:
@@ -281,6 +297,7 @@ def render_graph_refinement(out: Console, payload: RefinementRowPayload) -> None
         ("tier", payload.tier.value),
         ("status", payload.status.value),
         ("target", payload.summary),
+        *_proposed_values(payload),
         ("reason", payload.reason),
     ):
         t.add_row(label, value)

@@ -196,6 +196,15 @@ class CallForm(StrEnum):
     ATTR = "attr"
 
 
+def row_limit(limit: int) -> int:
+    """One log page size, bounded at both ends, so the CLI and the MCP tool cap alike.
+
+    Floored rather than refused, because a caller asking for no rows means the smallest page, and
+    the ceiling is what keeps an unbounded ``limit`` from pulling the whole table into an answer.
+    """
+    return max(1, min(limit, MAX_LOG_ROWS))
+
+
 def enum_values(
     raw: Sequence[str] | None, enum: type[StrEnum], field: str
 ) -> list[str] | None:
@@ -285,6 +294,8 @@ QUEUE_ROW_LIMIT = 50
 QUEUE_ID_CAP = 10
 #: default row cap for `graph log` and `graph refinements`, so the two surfaces cannot drift
 LOG_ROW_LIMIT = 50
+#: hard ceiling for both, so neither an agent's context nor a terminal takes the whole table
+MAX_LOG_ROWS = 500
 # Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
 DEFAULT_FLOW_LIMIT = 200
 DEFAULT_FLOW_DEPTH = 4

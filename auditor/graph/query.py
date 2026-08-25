@@ -11,7 +11,7 @@ from auditor.graph.flow import (
     FlowPayload,
     build_flow,
 )
-from auditor.graph.model import LOG_ROW_LIMIT, GraphCluster
+from auditor.graph.model import LOG_ROW_LIMIT, GraphCluster, row_limit
 from auditor.graph.payloads import (
     ClusterMember,
     ClustersReport,
@@ -286,21 +286,28 @@ class LogQuery:
         statuses: Sequence[RefinementStatus] | None = None,
         limit: int = LOG_ROW_LIMIT,
     ) -> RefinementsReport:
-        """The recorded corrections oldest first, which is the order a build applies them in."""
+        """The recorded corrections, newest first, with the total the same filters match.
+
+        Newest first because a page at the cap otherwise shows the oldest rows, which are the
+        superseded and reverted ones, and hides the `pending` row a human has to accept.
+        """
         rows = await self.index.refinements.refinements(
-            statuses=statuses, limit=max(1, limit)
+            statuses=statuses, newest_first=True, limit=row_limit(limit)
         )
+        total = await self.index.refinements.count(statuses=statuses)
         anchors = await self.index.refinements.anchors([r.refinement_id for r in rows])
-        return RefinementsReport(
-            rows=tuple(
+        return RefinementsReport.of(
+            [
                 RefinementRowPayload.of(r, anchors.get(r.refinement_id, ()))
                 for r in rows
-            ),
+            ],
             filtered=bool(statuses),
+            total=total,
         )
 
     async def page(self, spec: LogFilter) -> LogReport:
-        """One page in whichever view the filter chose, newest first in both."""
+        """One page in whichever view the filter chose, newest first in both, with the total the
+        same filters match so a capped page says what it left behind."""
         if spec.view is LogView.RUNS:
             runs = await self.index.runs.runs(
                 statuses=spec.run_statuses,
@@ -308,15 +315,20 @@ class LogQuery:
                 since=spec.since,
                 limit=spec.limit,
             )
+            total = await self.index.runs.count(
+                statuses=spec.run_statuses,
+                exclude=spec.excluded_run_statuses,
+                since=spec.since,
+            )
             counts = await self.index.refinements.counts_by_run(
                 [r.run_id for r in runs]
             )
             return LogReport.of(
                 spec,
                 runs=[
-                    RunRowPayload.of(r, refinements=counts.get(r.run_id, 0))
-                    for r in runs
+                    RunRowPayload.of(r, refinements=counts.get(r.run_id)) for r in runs
                 ],
+                total=total,
             )
         rows = await self.index.refinements.refinements(
             statuses=spec.refinement_statuses,
@@ -331,4 +343,7 @@ class LogQuery:
                 RefinementRowPayload.of(r, anchors.get(r.refinement_id, ()))
                 for r in rows
             ],
+            total=await self.index.refinements.count(
+                statuses=spec.refinement_statuses, since=spec.since
+            ),
         )

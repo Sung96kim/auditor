@@ -10,6 +10,7 @@ from auditor.graph.model import (
     LOG_ROW_LIMIT,
     MAX_FLOW_DEPTH,
     MAX_FLOW_LIMIT,
+    MAX_LOG_ROWS,
     QUEUE_ROW_LIMIT,
     CallForm,
     UnresolvedReason,
@@ -284,7 +285,10 @@ RefinementStatusFilter = Annotated[
 RowLimit = Annotated[
     int,
     typer.Option(
-        "--limit", min=1, help=f"Cap the rows shown (default {LOG_ROW_LIMIT})."
+        "--limit",
+        min=1,
+        max=MAX_LOG_ROWS,
+        help=f"Cap the rows shown (default {LOG_ROW_LIMIT}, at most {MAX_LOG_ROWS}).",
     ),
 ]
 
