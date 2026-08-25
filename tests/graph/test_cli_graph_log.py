@@ -3,6 +3,7 @@
 import asyncio
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from _support import cli_json, one_line
 from graph._support import (
     GOOD_PROPOSAL,
     add_observer_run,
+    cells,
     refine_abort,
     refine_run,
     render_text,
@@ -20,8 +22,15 @@ from typer.testing import CliRunner
 from auditor.cli import app
 from auditor.cli.render import render_graph_log
 from auditor.database import open_repo_index
-from auditor.graph.payloads import LogReport, LogView, RunRowPayload
+from auditor.graph.model import EdgeKind
+from auditor.graph.payloads import (
+    LogReport,
+    LogView,
+    RefinementRowPayload,
+    RunRowPayload,
+)
 from auditor.graph.refine.models import (
+    ProducerKind,
     Refinement,
     RefinementCounts,
     RefinementKind,
@@ -29,7 +38,10 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     RefinementTarget,
     Run,
+    RunnerKind,
     RunStatus,
+    Tier,
+    TriggerKind,
 )
 
 runner = CliRunner()
@@ -367,6 +379,97 @@ def test_skipped_is_accepted_in_the_runs_view(logged_repo: Path):
         app, ["graph", "log", str(logged_repo), "--skipped", "--json"]
     )
     assert result.exit_code == 0
+
+
+#: two epochs three days apart, so a `when` cell reading the wrong one is a different string
+_STARTED = 1755000000.0
+_FINISHED = _STARTED + 3 * 86400
+
+
+def _at(epoch: float) -> str:
+    """The stamp the `when` column carries for one epoch, in local time as the renderer reads it."""
+    return datetime.fromtimestamp(epoch).strftime("%m-%d %H:%M")
+
+
+def test_every_run_value_is_rendered_under_its_own_header():
+    """Swapping the producer and the runner, or stamping `when` from `finished_at`, left all 3494
+    tests green: every asserted substring was still somewhere in the table."""
+    report = LogReport(
+        view=LogView.RUNS,
+        runs=(
+            RunRowPayload.of(
+                Run(
+                    repo_identity="/repo/.git",
+                    producer=ProducerKind.OBSERVER,
+                    runner=RunnerKind.NONE,
+                    trigger_kind=TriggerKind.EDIT,
+                    status=RunStatus.SUCCEEDED,
+                    summary="1 committed, 2 rejected",
+                    started_at=_STARTED,
+                    finished_at=_FINISHED,
+                ),
+                refinements=RefinementCounts(committed=1, rejected=2),
+            ),
+        ),
+        run_count=1,
+    )
+    out = render_text(render_graph_log, report)
+    assert cells(out, "when") == [
+        "when",
+        "producer",
+        "runner",
+        "trigger",
+        "status",
+        "n",
+        "summary",
+    ]
+    assert cells(out, _at(_STARTED)) == [
+        _at(_STARTED),
+        "observer",
+        "none",
+        "edit",
+        "succeeded",
+        "3",
+        "1 committed, 2 rejected",
+    ]
+    assert _at(_FINISHED) not in out
+
+
+def test_every_refinement_value_is_rendered_under_its_own_header():
+    """The kind and the tier swapped invisibly here too, and this view dropped the note row its
+    sibling `graph refinements list` prints for the same row."""
+    report = LogReport(
+        view=LogView.REFINEMENTS,
+        refinements=(
+            RefinementRowPayload(
+                refinement_id=3,
+                run_id="r1",
+                kind=RefinementKind.ADD_EDGE,
+                tier=Tier.B,
+                status=RefinementStatus.PENDING,
+                src="caller.py::main",
+                dst="helper.py::read_event",
+                edge_kind=EdgeKind.CALLS,
+                name="read_event",
+                reason="main calls read_event",
+                drifted=True,
+                created_at=_STARTED,
+            ),
+        ),
+        refinement_count=1,
+    )
+    out = render_text(render_graph_log, report)
+    assert cells(out, "when") == ["when", "id", "kind", "tier", "status", "target"]
+    assert cells(out, _at(_STARTED)) == [
+        _at(_STARTED),
+        "3",
+        "add_edge",
+        "B",
+        "pending",
+        "caller.py::main -> helper.py::read_event",
+    ]
+    assert "drifted" in out
+    assert "main calls read_event" in out
 
 
 def test_the_renderer_shows_a_run_summary_and_the_rows_its_run_owns():

@@ -7,6 +7,7 @@ path directly without a TTY.
 Accent colour ``#7C7CFF`` matches the rest of the auditor CLI (see self_update.py).
 """
 
+from collections.abc import Callable
 from datetime import datetime
 
 from rich.console import Console
@@ -33,6 +34,7 @@ from auditor.cli.payloads import (
 )
 from auditor.config import AuditorSettings
 from auditor.graph.flow import FlowNode, FlowPayload
+from auditor.graph.model import MAX_LOG_ROWS
 from auditor.graph.payloads import (
     ClustersReport,
     ConceptPayload,
@@ -259,6 +261,56 @@ def _proposed_values(payload: RefinementRowPayload) -> list[tuple[str, str]]:
     ]
 
 
+#: the corrections view, shared so `graph refinements list` and `graph log --refinements` cannot
+#: show the same row two ways; the log prepends its own `when`
+_REFINEMENT_COLUMNS = ("id", "kind", "tier", "status", "target")
+_RUN_COLUMNS = ("when", "producer", "runner", "trigger", "status", "n", "summary")
+
+
+def _headed_table(columns: tuple[str, ...]) -> Table:
+    """An empty table carrying these headers, in this file's border and header style."""
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    for column in columns:
+        t.add_column(column)
+    return t
+
+
+def _note_row(columns: tuple[str, ...], note: str) -> tuple[str, ...]:
+    """A continuation row: every column blank but the last, whatever the header count is."""
+    return ("",) * (len(columns) - 1) + (note,)
+
+
+def _truncated_note(shown: int, total: int) -> str:
+    """What a capped page left behind, and whether the cap can be raised: at ``MAX_LOG_ROWS`` the
+    CLI refuses a larger ``--limit``, so telling a reader to raise it would be advice to an error."""
+    room = (
+        "raise --limit for more"
+        if shown < MAX_LOG_ROWS
+        else f"{MAX_LOG_ROWS} is the cap"
+    )
+    return f"showing {shown} of {total}, newest first; {room}"
+
+
+def _refinement_cells(row: RefinementRowPayload) -> tuple[str, ...]:
+    """One correction in `_REFINEMENT_COLUMNS` order."""
+    return (
+        str(row.refinement_id),
+        row.kind.value,
+        row.tier.value,
+        row.status.value,
+        row.summary,
+    )
+
+
+def _refinement_note(row: RefinementRowPayload) -> str:
+    """The line under a correction: whether its anchors drifted, what the proposal carries and
+    why, which is the whole of what a human accepting it has to judge."""
+    drift = "[yellow]drifted[/] " if row.drifted else ""
+    proposed = " ".join(f"{k}={v}" for k, v in _proposed_values(row))
+    note = f"{proposed} {row.reason}".strip()
+    return f"{drift}[dim]{note}[/]"
+
+
 def render_graph_refinements(out: Console, payload: RefinementsReport) -> None:
     if not payload.rows:
         empty = (
@@ -268,26 +320,14 @@ def render_graph_refinements(out: Console, payload: RefinementsReport) -> None:
         )
         out.print(f"[dim]{empty}[/]")
         return
-    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
-    for col in ("id", "kind", "tier", "status", "target"):
-        t.add_column(col)
+    t = _headed_table(_REFINEMENT_COLUMNS)
     for row in payload.rows:
-        t.add_row(
-            str(row.refinement_id),
-            row.kind.value,
-            row.tier.value,
-            row.status.value,
-            row.summary,
-        )
-        drift = "[yellow]drifted[/] " if row.drifted else ""
-        proposed = " ".join(f"{k}={v}" for k, v in _proposed_values(row))
-        note = f"{proposed} {row.reason}".strip()
-        t.add_row("", "", "", "", f"{drift}[dim]{note}[/]")
+        t.add_row(*_refinement_cells(row))
+        t.add_row(*_note_row(_REFINEMENT_COLUMNS, _refinement_note(row)))
     out.print(t)
     if payload.truncated:
         out.print(
-            f"[dim]showing {len(payload.rows)} of {payload.refinement_count}, "
-            "newest first; raise --limit for more[/]"
+            f"[dim]{_truncated_note(len(payload.rows), payload.refinement_count)}[/]"
         )
 
 
@@ -346,47 +386,46 @@ def _stamp(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).strftime("%m-%d %H:%M") if epoch else ""
 
 
+def _runs_table(payload: LogReport) -> Table:
+    """The decisions view: one row per run, with ``n`` the refinement rows that run owns."""
+    t = _headed_table(_RUN_COLUMNS)
+    for row in payload.runs:
+        t.add_row(
+            _stamp(row.started_at),
+            row.producer.value,
+            row.runner.value,
+            row.trigger_kind.value,
+            row.status.value,
+            str(row.refinements.total),
+            f"[red]{row.error}[/]" if row.error else row.summary or "",
+        )
+    return t
+
+
+def _refinements_table(payload: LogReport) -> Table:
+    """The corrections view: what `graph refinements list` shows, plus when each was recorded."""
+    columns = ("when", *_REFINEMENT_COLUMNS)
+    t = _headed_table(columns)
+    for row in payload.refinements:
+        t.add_row(_stamp(row.created_at), *_refinement_cells(row))
+        t.add_row(*_note_row(columns, _refinement_note(row)))
+    return t
+
+
+#: one table per view, so a third view registers here instead of adding a branch
+_LOG_TABLES: dict[LogView, Callable[[LogReport], Table]] = {
+    LogView.RUNS: _runs_table,
+    LogView.REFINEMENTS: _refinements_table,
+}
+
+
 def render_graph_log(out: Console, payload: LogReport) -> None:
-    runs = payload.view is LogView.RUNS
-    rows = payload.runs if runs else payload.refinements
-    if not rows:
+    if not payload.rows:
         out.print(f"[dim]{_log_empty(payload)}[/]")
         return
-    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
-    for col in (
-        ("when", "producer", "runner", "trigger", "status", "n", "summary")
-        if runs
-        else ("when", "id", "kind", "tier", "status", "target")
-    ):
-        t.add_column(col)
-    if runs:
-        for run_row in payload.runs:
-            t.add_row(
-                _stamp(run_row.started_at),
-                run_row.producer.value,
-                run_row.runner.value,
-                run_row.trigger_kind.value,
-                run_row.status.value,
-                str(run_row.refinements.total),
-                run_row.error or run_row.summary or "",
-            )
-    else:
-        for row in payload.refinements:
-            t.add_row(
-                _stamp(row.created_at),
-                str(row.refinement_id),
-                row.kind.value,
-                row.tier.value,
-                row.status.value,
-                row.summary,
-            )
-    out.print(t)
-    total = payload.run_count if runs else payload.refinement_count
+    out.print(_LOG_TABLES[payload.view](payload))
     if payload.truncated:
-        out.print(
-            f"[dim]showing {len(rows)} of {total}, newest first; "
-            "raise --limit for more[/]"
-        )
+        out.print(f"[dim]{_truncated_note(len(payload.rows), payload.total)}[/]")
     if payload.hidden_count:
         out.print(f"[dim]{_hidden_note(payload)}[/]")
 
