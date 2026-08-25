@@ -442,14 +442,20 @@ async def test_a_racing_connect_never_rebuilds_over_a_committed_writer(
     tmp_path, monkeypatch
 ):
     """A connect whose version read raced a concurrent creator must not drop the cache tables
-    under rows that creator already committed: the decision has to come from one snapshot taken
-    under the write lock. Both barriers fire only outside a transaction, so the fix ends them."""
+    under rows that creator already committed. Both barriers fire only outside a transaction, so
+    the fix ends them; `ran` asserts the statements they key on still execute, never a no-op."""
     db = tmp_path / "index.db"
     connected = threading.Event()  # the creator's connection exists
     racer_ready = threading.Event()  # the racer is at (or past) its version read
     rows_committed = threading.Event()  # the creator committed its schema and rows
     role = {"name": "creator"}
     armed = {"creator": True, "racer": True}
+    # what each role blocks on; the fix moves these under the write lock, it does not remove them
+    barrier_sql = {
+        "creator": "PRAGMA user_version",
+        "racer": "SELECT name FROM sqlite_master WHERE type='table'",
+    }
+    ran: set[str] = set()
     real_connect = sqlite3.connect
 
     def traced_connect(*args, **kwargs) -> sqlite3.Connection:
@@ -460,21 +466,16 @@ async def test_a_racing_connect_never_rebuilds_over_a_committed_writer(
             stmt = statement.strip()
             if who == "racer" and stmt == "PRAGMA synchronous=NORMAL":
                 racer_ready.set()
-            elif (
-                who == "creator"
-                and stmt == "PRAGMA user_version"
-                and armed["creator"]
-                and not conn.in_transaction
-            ):
-                armed["creator"] = False
+                return
+            if stmt != barrier_sql[who]:
+                return
+            ran.add(who)
+            if not armed[who] or conn.in_transaction:
+                return
+            armed[who] = False
+            if who == "creator":
                 racer_ready.wait(5)  # let the racer snapshot the pre-commit version
-            elif (
-                who == "racer"
-                and stmt.startswith("SELECT name FROM sqlite_master")
-                and armed["racer"]
-                and not conn.in_transaction
-            ):
-                armed["racer"] = False
+            else:
                 rows_committed.wait(5)  # let the creator commit schema and rows
 
         conn.set_trace_callback(trace)
@@ -492,7 +493,7 @@ async def test_a_racing_connect_never_rebuilds_over_a_committed_writer(
 
     async def racer() -> None:
         # gate the second connect so the role assignment above stays deterministic
-        await asyncio.to_thread(connected.wait, 5)
+        assert await asyncio.to_thread(connected.wait, 30)
         role["name"] = "racer"
         async with await IndexStore.connect(db):
             pass
@@ -500,6 +501,7 @@ async def test_a_racing_connect_never_rebuilds_over_a_committed_writer(
     await asyncio.gather(creator(), racer())
     monkeypatch.undo()
 
+    assert ran == {"creator", "racer"}  # reword a read and this test goes vacuous
     async with await IndexStore.connect(db) as store:
         assert {e.path for e in await store.files.list()} == {"pkg/a.py", "pkg/b.py"}
 
