@@ -1,5 +1,6 @@
 import inspect
 import re
+import sqlite3
 
 import pytest
 
@@ -415,7 +416,7 @@ async def test_a_database_made_before_the_name_index_gains_it_on_connect(tmp_pat
         assert "graph_nodes_name" in await store._worker.run(_index_names)
 
 
-def _index_names(conn) -> set[str]:
+def _index_names(conn: sqlite3.Connection) -> set[str]:
     return {
         r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
     }

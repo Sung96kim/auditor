@@ -164,7 +164,9 @@ def test_the_node_kinds_have_no_edge_conflicts(kind: RefinementKind):
     assert rules.check(proposal) is None
 
 
-def _retarget(from_dst="b.py::g", to_dst="c.py::g", name="g") -> Proposal:
+def _retarget(
+    from_dst: str = "b.py::g", to_dst: str = "c.py::g", name: str = "g"
+) -> Proposal:
     return Proposal(
         kind=RefinementKind.RETARGET_EDGE,
         target=RefinementTarget(

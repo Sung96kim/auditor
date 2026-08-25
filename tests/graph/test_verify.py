@@ -669,3 +669,34 @@ def test_a_cluster_kind_anchors_every_member_it_names(
     assert set(FactVerifier.paths_named(proposal, None)) == {"caller.py", "helper.py"}
     anchors = _verifier(tmp_path, files).anchors(proposal, row=None)
     assert {a.node_id for a in anchors} == {"caller.py::main", "helper.py::read_event"}
+
+
+@pytest.mark.parametrize(
+    ("to_dst", "name", "status"),
+    [
+        ("helper.py::read_event", "read_event", VerifyStatus.OK),
+        ("helper.py::unrelated", "unrelated", VerifyStatus.NO_FACT),
+    ],
+)
+def test_a_retarget_is_checked_against_the_destination_it_moves_to(
+    tmp_path: Path, to_dst: str, name: str, status: VerifyStatus
+):
+    """Spec 9.2 verifies a `retarget_edge` on `to_dst`. The edge it replaces is named in
+    `from_dst`, which is not a node the proposal is anchored to."""
+    _write(tmp_path, KINDS_REPO)
+    proposal = Proposal(
+        kind=RefinementKind.RETARGET_EDGE,
+        target=RefinementTarget(
+            src="users.py::main",
+            from_dst=f"gone.py::{name}",
+            to_dst=to_dst,
+            edge_kind=EdgeKind.CALLS,
+            name=name,
+        ),
+        reason="the import pins it to the helper",
+    )
+    assert "gone.py" not in FactVerifier.paths_named(proposal, None)
+    result = _verifier(tmp_path, KINDS_REPO).check(
+        proposal, row=None, definers=(to_dst,)
+    )
+    assert result.status is status, result.detail
