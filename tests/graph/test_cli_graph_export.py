@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from auditor.cli import app
@@ -118,13 +119,6 @@ def test_graph_export_rejects_symbol_with_cluster(graph_repo_flow: Path):
     assert result.exit_code != 0
 
 
-def test_graph_export_rejects_in_without_flow(graph_repo_flow: Path):
-    """--in only steers the flow walk; the overview and ego modes dropped it silently."""
-    _built(graph_repo_flow)
-    result = runner.invoke(app, ["graph", "export", str(graph_repo_flow), "--in"])
-    assert result.exit_code != 0
-
-
 def test_graph_export_ego_depth_default_is_unchanged(graph_repo_flow: Path):
     """--depth is shared with --flow now, so the ego default of 1 needs a guard."""
     _built(graph_repo_flow)
@@ -134,3 +128,103 @@ def test_graph_export_ego_depth_default_is_unchanged(graph_repo_flow: Path):
     assert result.exit_code == 0, result.stdout
     assert result.stdout.startswith("digraph codebase")
     assert "m.py::leaf" not in result.stdout
+
+
+def test_graph_export_flow_limit_reaches_the_dot_header(graph_repo_flow: Path):
+    """The header claims a cap; before this it always claimed 200 whatever the caller asked.
+
+    The limit counts emitted children with the root free, so 1 is what truncates this fixture's
+    two-deep chain.
+    """
+    _built(graph_repo_flow)
+    result = runner.invoke(
+        app,
+        ["graph", "export", str(graph_repo_flow), "--flow", "entry", "--limit", "1"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "at most 1 nodes" in result.stdout
+    assert "truncated" in result.stdout
+
+
+def test_graph_export_flow_stop_at_prunes_the_picture(graph_repo_flow: Path):
+    """The tree honours --stop-at; the picture used to walk straight past it."""
+    _built(graph_repo_flow)
+    full = runner.invoke(
+        app, ["graph", "export", str(graph_repo_flow), "--flow", "entry"]
+    )
+    stopped = runner.invoke(
+        app,
+        [
+            "graph",
+            "export",
+            str(graph_repo_flow),
+            "--flow",
+            "entry",
+            "--stop-at",
+            "m.py",
+        ],
+    )
+    assert full.exit_code == 0 and stopped.exit_code == 0
+    assert len(stopped.stdout) < len(full.stdout)
+
+
+def test_graph_export_flow_include_tests_widens_the_picture(graph_repo_flow_hub: Path):
+    """The hub fixture is the one with a test-role caller, so the flag can actually change the set."""
+    _built(graph_repo_flow_hub)
+    without = runner.invoke(
+        app, ["graph", "export", str(graph_repo_flow_hub), "--flow", "entry", "--in"]
+    )
+    with_tests = runner.invoke(
+        app,
+        [
+            "graph",
+            "export",
+            str(graph_repo_flow_hub),
+            "--flow",
+            "entry",
+            "--in",
+            "--include-tests",
+        ],
+    )
+    assert without.exit_code == 0 and with_tests.exit_code == 0
+    assert len(with_tests.stdout) >= len(without.stdout)
+
+
+def test_graph_export_flow_rejects_an_unknown_kind(graph_repo_flow: Path):
+    """--kinds is validated on both surfaces, so a typo is an error rather than a narrower tree."""
+    _built(graph_repo_flow)
+    result = runner.invoke(
+        app,
+        ["graph", "export", str(graph_repo_flow), "--flow", "entry", "--kinds", "nope"],
+    )
+    assert result.exit_code != 0
+    assert "unknown --kinds" in result.output
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--in"],
+        ["--limit", "5"],
+        ["--kinds", "inherits"],
+        ["--include-tests"],
+        ["--expand-hubs"],
+        ["--stop-at", "m.py"],
+    ],
+)
+def test_graph_export_rejects_a_walk_knob_without_flow(graph_repo_flow: Path, extra):
+    """They steer the flow walk only; the overview and ego modes dropped them silently."""
+    _built(graph_repo_flow)
+    result = runner.invoke(app, ["graph", "export", str(graph_repo_flow), *extra])
+    assert result.exit_code != 0
+
+
+def test_graph_export_depth_is_still_legal_without_flow(graph_repo_flow: Path):
+    """--depth is not a walk-only knob: it sets the ego export's hop count."""
+    _built(graph_repo_flow)
+    result = runner.invoke(
+        app,
+        ["graph", "export", str(graph_repo_flow), "--symbol", "entry", "--depth", "2"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert result.stdout.startswith("digraph")

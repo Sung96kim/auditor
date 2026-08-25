@@ -143,7 +143,10 @@ queries. It walks the graph breadth-first from one symbol and prints a tree.
     the repo.
 - Bare names resolve the same way `usages` does: the highest-rank match becomes `resolved` and the
   rest are listed under `ambiguous`.
-- `graph export --flow <symbol>` renders the same walk as Graphviz DOT.
+- `graph export --flow <symbol>` renders the same walk as Graphviz DOT, and takes the same knobs:
+  `--in`, `--depth`, `--limit`, `--kinds`, `--include-tests`, `--expand-hubs` and `--stop-at`. All
+  but `--depth` are errors without `--flow`, since the overview and ego modes do not walk;
+  `--depth` also sets the ego export's hop count.
 
 ```bash
 # stop at the database layer and keep the tree readable
@@ -349,6 +352,5 @@ auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json
 - The modes pick different node sets, so combining them is an error rather than a silent
   preference: `--flow` with `--symbol` or `--cluster`, `--symbol` with `--cluster`, and `--in`
   without `--flow`. A `--flow` symbol the graph does not hold is an error too, not an empty DOT.
-- Export has no `--limit`: the flow walk keeps its 200-node cap and the DOT records it in a
-  comment on the second line, with `truncated` when the cap was hit. Use `auditr graph flow
-  --limit N --json` when you need a different cap.
+- `--limit` caps the flow walk (default 200 nodes, 1 to 1000) and the DOT records the cap in a
+  comment on the second line, with `truncated` when it was hit.

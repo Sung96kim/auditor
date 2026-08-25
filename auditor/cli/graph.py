@@ -249,6 +249,31 @@ def _split_kinds(raw: str | None) -> list[str]:
     return kinds
 
 
+def _flow_options(
+    root: Path,
+    *,
+    inbound: bool,
+    depth: int,
+    limit: int,
+    kinds: str | None,
+    include_tests: bool,
+    expand_hubs: bool,
+    stop_at: list[str] | None,
+) -> FlowOptions:
+    """The walk knobs `graph flow` and `graph export --flow` share, so the tree and the picture
+    are the same walk. `--kinds` is validated here; the hub floor comes from repo policy."""
+    return FlowOptions(
+        direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+        depth=depth,
+        limit=limit,
+        kinds=tuple(_split_kinds(kinds)),
+        include_tests=include_tests,
+        expand_hubs=expand_hubs,
+        stop_at=tuple(stop_at or ()),
+        hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
+    )
+
+
 @graph_app.command("flow")
 def graph_flow(
     symbol: str,
@@ -264,15 +289,15 @@ def graph_flow(
 ) -> None:
     """Read a code path from a symbol: what it calls, or with --in what reaches it."""
     root = cli_root(target)
-    options = FlowOptions(
-        direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+    options = _flow_options(
+        root,
+        inbound=inbound,
         depth=depth,
         limit=limit,
-        kinds=tuple(_split_kinds(kinds)),
+        kinds=kinds,
         include_tests=include_tests,
         expand_hubs=expand_hubs,
-        stop_at=tuple(stop_at or ()),
-        hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
+        stop_at=stop_at,
     )
     present(
         run(_query_cmd("flow")(root, symbol=symbol, options=options), "tracing flow…"),
@@ -336,6 +361,11 @@ def graph_export(
     depth: ExportDepth = None,
     flow: FlowSymbol = None,
     inbound: FlowIn = False,
+    limit: FlowLimit = DEFAULT_FLOW_LIMIT,
+    kinds: FlowKinds = None,
+    include_tests: FlowIncludeTests = False,
+    expand_hubs: FlowExpandHubs = False,
+    stop_at: FlowStopAt = None,
 ) -> None:
     """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego/flow."""
     root = cli_root(target)
@@ -343,8 +373,17 @@ def graph_export(
         raise typer.BadParameter("--flow cannot be combined with --symbol or --cluster")
     if symbol is not None and cluster is not None:
         raise typer.BadParameter("--symbol cannot be combined with --cluster")
-    if inbound and flow is None:
-        raise typer.BadParameter("--in only applies to --flow")
+    # --depth is deliberately absent: the ego export uses it too.
+    walk_only = {
+        "--in": inbound,
+        "--limit": limit != DEFAULT_FLOW_LIMIT,
+        "--kinds": kinds is not None,
+        "--include-tests": include_tests,
+        "--expand-hubs": expand_hubs,
+        "--stop-at": bool(stop_at),
+    }
+    if flow is None and (given := [name for name, used in walk_only.items() if used]):
+        raise typer.BadParameter(f"{', '.join(given)}: only valid with --flow")
 
     async def do_export() -> str | None:
         """``None`` when --flow named a symbol the graph does not hold."""
@@ -359,10 +398,15 @@ def graph_export(
                 )
             tree = await GraphQuery(index).flow(
                 flow,
-                FlowOptions(
-                    direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+                _flow_options(
+                    root,
+                    inbound=inbound,
                     depth=4 if depth is None else depth,
-                    hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
+                    limit=limit,
+                    kinds=kinds,
+                    include_tests=include_tests,
+                    expand_hubs=expand_hubs,
+                    stop_at=stop_at,
                 ),
             )
         return to_dot(payload, flow=tree.model_dump(mode="json")) if tree else None
