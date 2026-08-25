@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.graph.refine.models import (
     ACTIVE_STATUSES,
+    STORED_ROW,
     Anchor,
     EvalMetrics,
     EvalRow,
@@ -46,7 +47,7 @@ def _refinement_from_row(row: sqlite3.Row) -> Refinement:
     data = dict(row)
     for column in ("target", "payload", "evidence"):
         data[column] = json.loads(data[column])
-    return Refinement.model_validate(data)
+    return Refinement.model_validate(data, context={STORED_ROW: True})
 
 
 def _usage_values(usage: RunUsage) -> dict[str, Any]:

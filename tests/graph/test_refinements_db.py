@@ -1,6 +1,7 @@
 """The identity-keyed stores: what survives a repo being forgotten, what a status transition
 writes, what the foreign keys refuse, and what another checkout's identity cannot reach."""
 
+import json
 import sqlite3
 
 import pytest
@@ -102,6 +103,7 @@ def _refinement(run_id: str, **kw) -> Refinement:
         run_id=run_id,
         repo_identity=kw.pop("repo_identity", IDENTITY),
         kind=kw.pop("kind", RefinementKind.ADD_EDGE),
+        reason=kw.pop("reason", "the call resolves there"),
         target=kw.pop(
             "target",
             RefinementTarget(
@@ -620,3 +622,20 @@ async def test_prune_never_orphans_a_child_row(refine_store, child):
         await refine_store.tuning.add_tuning(_tuning(run_id))
     assert await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0) == 0
     assert await refine_store.runs.run(run_id) is not None
+
+
+async def test_a_row_written_outside_the_text_rules_still_reads_back(refine_store):
+    """The read path is lenient by context, so a row hand-written before a rule existed, or by
+    another tool, does not make every build fail on it."""
+    run_id = await refine_store.runs.add_run(_run())
+    rid = await refine_store.refinements.add_refinement(_refinement(run_id), ())
+    await refine_store._worker.run(
+        lambda c: c.execute(
+            "UPDATE graph_refinements SET payload = ?, reason = '' "
+            "WHERE refinement_id = ?",
+            (json.dumps({"annotation": "x" * 400}), rid),
+        )
+    )
+    (stored,) = await refine_store.refinements.refinements()
+    assert len(stored.payload.annotation or "") == 400
+    assert stored.reason == ""

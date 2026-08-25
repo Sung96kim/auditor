@@ -528,6 +528,7 @@ async def test_a_refinement_anchored_to_a_changed_node_goes_stale(facts_store):
             run_id=run_id,
             repo_identity=facts_store.partition.identity,
             kind=RefinementKind.ADD_EDGE,
+            reason="the call resolves there",
             target=RefinementTarget(
                 src="impl.py::Impl.run",
                 dst="svc.py::load_user",
@@ -590,6 +591,7 @@ async def test_a_retarget_leaves_the_detector_edge_list_byte_identical(
             run_id=run_id,
             repo_identity=facts_store.partition.identity,
             kind=RefinementKind.RETARGET_EDGE,
+            reason="the resolver picked the wrong one",
             target=RefinementTarget(
                 src="impl.py::Impl.run",
                 edge_kind=EdgeKind.CALLS,
@@ -635,6 +637,7 @@ async def test_the_detectors_never_see_an_overlay_node_field(
             run_id=run_id,
             repo_identity=store.partition.identity,
             kind=RefinementKind.ANNOTATE_NODE,
+            reason="the retry path is worth naming",
             target=RefinementTarget(node_id="impl.py::Impl.run"),
             payload=RefinementPayload(annotation="the retry path"),
             status=RefinementStatus.ACTIVE,
@@ -697,6 +700,7 @@ async def test_the_detectors_see_a_graph_no_refinement_touched(
             run_id=run_id,
             repo_identity=facts_store.partition.identity,
             kind=RefinementKind.MOVE_NODE,
+            reason="it belongs with the other cluster",
             target=RefinementTarget(
                 node_id="impl.py::Impl.run", members=("svc.py::load_user",)
             ),

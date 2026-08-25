@@ -1,15 +1,17 @@
 """Frozen records for the refinement tables (spec 5.3, 5.4, 5.5). These cross the store boundary
 in both directions, so every JSON column has a model rather than a raw dict."""
 
+import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from auditor.graph.model import CallForm, EdgeKind
+from auditor.graph.refine.namespace import file_of
 
 
 class RunStatus(StrEnum):
@@ -95,6 +97,16 @@ REFINABLE_EDGE_KINDS = frozenset(
     }
 )
 
+#: the proposal kinds that put an edge in the graph: the only ones a verifier can check and the
+#: only ones that can collide with prior work at commit (spec 9.1, 9.2)
+EDGE_PROPOSAL_KINDS = frozenset(
+    {
+        RefinementKind.ADD_EDGE,
+        RefinementKind.RETARGET_EDGE,
+        RefinementKind.RESOLVE_AMBIGUOUS,
+    }
+)
+
 
 class Evidence(BaseModel):
     """One source excerpt behind a proposal. Provenance only: nothing verifies against it."""
@@ -172,6 +184,27 @@ class RunUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     num_turns: int = 0
+
+
+class Stratum(StrEnum):
+    """The add suite's strata (spec 10.2): how far a proposal's destination is from its source.
+
+    The tier B gate reads the one matching the proposal's own shape, because a repo's strata do
+    not measure alike; here they run 47 / 23 / 30 per cent of the add suite.
+    """
+
+    SAME_MODULE = "same-module"
+    DIRECT_IMPORT = "direct-import"
+    NEITHER = "neither"
+
+    @classmethod
+    def of(cls, src: str, dst: str, *, imports: Collection[str]) -> "Stratum":
+        """The stratum one proposed edge falls in; ``imports`` is the repo module ids the source's
+        own module imports."""
+        src_module, dst_module = file_of(src), file_of(dst)
+        if src_module == dst_module:
+            return cls.SAME_MODULE
+        return cls.DIRECT_IMPORT if dst_module in imports else cls.NEITHER
 
 
 class EvalMetrics(BaseModel):
@@ -258,48 +291,49 @@ _REQUIRED_BY_KIND: dict[RefinementKind, tuple[str, ...]] = {
 }
 
 
-class Refinement(BaseModel):
-    """One correction to the graph, owned by a run and expiring on its own (spec 5.4)."""
+#: a cluster label a proposal may not choose: it is the clusterer's own fallback (spec 9.2)
+_FALLBACK_LABEL = re.compile(r"^cluster-\d+$")
+LABEL_LENGTH = (2, 40)
+ANNOTATION_MAX = 280
+
+#: validation context flag `_refinement_from_row` passes: a row written before a text rule was
+#: tightened still reads back, and every other construction is judged by the current rules
+STORED_ROW = "stored_row"
+
+
+class ProposedEdge(BaseModel):
+    """The edge a proposal puts in the graph, with the queue name it answers.
+
+    `GraphEdge` is the stored row and carries a weight and a provenance no proposal sets, so a
+    proposal's edge is its own record.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    refinement_id: int = 0  # assigned by the insert
-    run_id: str
-    repo_identity: str
+    src: str
+    dst: str
+    kind: EdgeKind
+    name: str
+
+
+class Proposal(BaseModel):
+    """One correction a caller offers, before the service judges it (spec 9.2).
+
+    `Refinement` is the stored form of exactly this shape, so the per-kind rules live here and a
+    target no build could ever apply is refused before a run row is written.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
     kind: RefinementKind
     target: RefinementTarget = Field(default_factory=RefinementTarget)
     payload: RefinementPayload = Field(default_factory=RefinementPayload)
     reason: str = ""
     evidence: tuple[Evidence, ...] = ()
     confidence: float = 0.0
-    tier: Tier = Tier.C
-    status: RefinementStatus = RefinementStatus.PENDING
-    drifted: bool = False
-    noop_builds: int = 0
-    supersedes: int | None = None
-    attempts: int = 0
-    created_at: float = 0.0  # both stamped by the validator below when absent
-    status_at: float = 0.0
-
-    @model_validator(mode="before")
-    @classmethod
-    def _one_timestamp_until_it_moves(cls, data: Any) -> Any:
-        """Stamp `created_at` and default `status_at` to it, rather than calling the clock twice.
-
-        Two independent defaults disagreed about one construction in six, and `status_at` is what
-        the staleness sweep reads as "has this moved since it was made?".
-        """
-        if not isinstance(data, dict):
-            return data
-        created = data.get("created_at") or time.time()
-        return {
-            **data,
-            "created_at": created,
-            "status_at": data.get("status_at") or created,
-        }
 
     @model_validator(mode="after")
-    def _the_target_matches_the_kind(self) -> "Refinement":
+    def _the_target_matches_the_kind(self) -> "Proposal":
         """Refuse a target no build could apply: an `add_edge` with no destination is worse
         stored than rejected, and nothing downstream would ever report it."""
         missing = [
@@ -317,26 +351,127 @@ class Refinement(BaseModel):
             raise ValueError(f"{self.kind.value} would point {src} at itself")
         return self
 
+    @model_validator(mode="after")
+    def _the_text_a_reader_sees_is_usable(self, info: ValidationInfo) -> "Proposal":
+        """A reason, a label that names the cluster, an annotation that fits on a card (spec 9.2).
+
+        Whitespace is not text a reader can use, so the lengths are measured on the stripped value.
+        A row read back under `STORED_ROW` keeps whatever it was written with.
+        """
+        if (info.context or {}).get(STORED_ROW):
+            return self
+        if not self.reason.strip():
+            raise ValueError(f"{self.kind.value} needs a reason")
+        label = self.payload.label
+        low, high = LABEL_LENGTH
+        if label is not None and (
+            not low <= len(label.strip()) <= high
+            or _FALLBACK_LABEL.match(label.strip())
+        ):
+            raise ValueError(
+                f"label must be {low} to {high} characters and not the clusterer's own cluster-N"
+            )
+        annotation = self.payload.annotation
+        if annotation is not None and len(annotation.strip()) > ANNOTATION_MAX:
+            raise ValueError(f"annotation must be at most {ANNOTATION_MAX} characters")
+        return self
+
     def _required(self, path: str) -> object:
         """One required field, read from the target unless ``path`` names the payload half."""
         owner, _, name = path.rpartition(".")
         return getattr(self.payload if owner == "payload" else self.target, name)
 
-    def edge_pair(self) -> tuple[str | None, str | None]:
-        """The ``(src, dst)`` this refinement would put in the graph, toplevel-relative.
+    def edge(self) -> ProposedEdge | None:
+        """The edge this proposal would put in the graph, toplevel-relative.
 
-        `resolve_ambiguous` names its node in ``target.node_id`` and its chosen dst in
-        ``payload.candidate``; `retarget_edge` means its ``to_dst``. The node kinds mean nothing
-        here and answer ``(None, None)``.
+        ``None`` for the node and cluster kinds, and for a stored row read back without the fields
+        its kind needs; `resolve_ambiguous` keeps its dst in ``payload.candidate``.
         """
         target = self.target
         if self.kind is RefinementKind.RESOLVE_AMBIGUOUS:
-            return target.node_id, self.payload.candidate
-        if self.kind is RefinementKind.RETARGET_EDGE:
-            return target.src, target.to_dst
-        if self.kind in (RefinementKind.ADD_EDGE, RefinementKind.CONFIRM_EDGE):
-            return target.src, target.dst
-        return None, None
+            src, dst = target.node_id, self.payload.candidate
+        elif self.kind is RefinementKind.RETARGET_EDGE:
+            src, dst = target.src, target.to_dst
+        elif self.kind in (RefinementKind.ADD_EDGE, RefinementKind.CONFIRM_EDGE):
+            src, dst = target.src, target.dst
+        else:
+            return None
+        if src is None or dst is None or target.edge_kind is None or not target.name:
+            return None
+        return ProposedEdge(src=src, dst=dst, kind=target.edge_kind, name=target.name)
+
+    def edge_pair(self) -> tuple[str | None, str | None]:
+        """The ``(src, dst)`` of :meth:`edge`, or ``(None, None)`` when it names no edge."""
+        edge = self.edge()
+        return (edge.src, edge.dst) if edge is not None else (None, None)
+
+    def anchored_ids(self) -> tuple[str, ...]:
+        """Every node id this proposal is pinned to (spec 5.5), each one once.
+
+        Its endpoints, its target node, and the members a cluster kind moves: the cluster kinds
+        depend on every member, so an anchor per member is what "the nodes it depends on" means.
+        """
+        src, dst = self.edge_pair()
+        ids = (src, dst, self.target.node_id, *self.target.members)
+        return tuple(dict.fromkeys(i for i in ids if i))
+
+
+class Refinement(Proposal):
+    """One correction to the graph, owned by a run and expiring on its own (spec 5.4)."""
+
+    refinement_id: int = 0  # assigned by the insert
+    run_id: str
+    repo_identity: str
+    tier: Tier = Tier.C
+    status: RefinementStatus = RefinementStatus.PENDING
+    drifted: bool = False
+    noop_builds: int = 0
+    supersedes: int | None = None
+    attempts: int = 0
+    created_at: float = 0.0  # both stamped by the validator below when absent
+    status_at: float = 0.0
+
+    @classmethod
+    def of(
+        cls,
+        proposal: Proposal,
+        *,
+        run_id: str,
+        repo_identity: str,
+        tier: Tier,
+        status: RefinementStatus,
+        supersedes: int | None = None,
+    ) -> "Refinement":
+        """The stored form of one accepted proposal (spec 9.1's commit step).
+
+        Only the proposal half is copied, so a stored refinement can be re-confirmed into a fresh
+        row of its own run with ``supersedes`` set (spec 5.7).
+        """
+        return cls(
+            **proposal.model_dump(include=set(Proposal.model_fields)),
+            run_id=run_id,
+            repo_identity=repo_identity,
+            tier=tier,
+            status=status,
+            supersedes=supersedes,
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _one_timestamp_until_it_moves(cls, data: Any) -> Any:
+        """Stamp `created_at` and default `status_at` to it, rather than calling the clock twice.
+
+        Two independent defaults disagreed about one construction in six, and `status_at` is what
+        the staleness sweep reads as "has this moved since it was made?".
+        """
+        if not isinstance(data, dict):
+            return data
+        created = data.get("created_at") or time.time()
+        return {
+            **data,
+            "created_at": created,
+            "status_at": data.get("status_at") or created,
+        }
 
 
 class Anchor(BaseModel):

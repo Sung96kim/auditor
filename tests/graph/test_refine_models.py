@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
+    STORED_ROW,
+    Proposal,
     Refinement,
     RefinementKind,
     RefinementPayload,
@@ -13,6 +15,7 @@ from auditor.graph.refine.models import (
     RefinementTarget,
     Run,
     RunStatus,
+    Tier,
     ToolCall,
     TriggerDetail,
     TuningStatus,
@@ -73,7 +76,12 @@ def _refinement(kind: RefinementKind, **kw) -> Refinement:
         run_id="run-1",
         repo_identity=IDENTITY,
         kind=kind,
-        **{"target": target, "payload": payload, **kw},
+        **{
+            "target": target,
+            "payload": payload,
+            "reason": "judged by hand",
+            **kw,
+        },
     )
 
 
@@ -168,3 +176,138 @@ def test_a_run_is_frozen_all_the_way_down():
         run.trigger_detail.files.append("other.py")  # a tuple has no append
     with pytest.raises(ValidationError):
         run.tool_trace[0].tool = "Write"
+
+
+def test_a_cluster_label_must_be_a_name_a_reader_recognises():
+    with pytest.raises(ValidationError, match="label"):
+        Proposal(
+            kind=RefinementKind.RELABEL_CLUSTER,
+            target=RefinementTarget(members=("m.py::a",)),
+            payload=RefinementPayload(label="x"),
+            reason="too short",
+        )
+    with pytest.raises(ValidationError, match="label"):
+        Proposal(
+            kind=RefinementKind.RELABEL_CLUSTER,
+            target=RefinementTarget(members=("m.py::a",)),
+            payload=RefinementPayload(label="cluster-7"),
+            reason="that is the fallback label, not a name",
+        )
+
+
+def test_an_annotation_is_capped_at_280_characters():
+    with pytest.raises(ValidationError, match="annotation"):
+        Proposal(
+            kind=RefinementKind.ANNOTATE_NODE,
+            target=RefinementTarget(node_id="m.py::a"),
+            payload=RefinementPayload(annotation="x" * 281),
+            reason="too long",
+        )
+
+
+def test_a_stored_row_reads_back_even_when_it_predates_the_text_rules():
+    """`_refinement_from_row` re-validates every row on every read, and the overlay reads them on
+    every build, so a rule added after a row was written must not make that row unreadable."""
+    stored = Refinement.model_validate(
+        {
+            "run_id": "r1",
+            "repo_identity": "/repo/.git",
+            "kind": RefinementKind.ANNOTATE_NODE,
+            "target": {"node_id": "m.py::a"},
+            "payload": {"annotation": "x" * 400},
+            "reason": "",
+        },
+        context={STORED_ROW: True},
+    )
+    assert len(stored.payload.annotation or "") == 400
+    assert stored.reason == ""
+
+
+def test_a_refinement_built_by_hand_obeys_the_same_text_rules_as_a_proposal():
+    """The leniency belongs to the stored row, not to the class: without the read context an
+    out-of-bounds annotation is refused exactly as `Proposal` refuses it."""
+    with pytest.raises(ValidationError, match="annotation"):
+        Refinement(
+            run_id="r1",
+            repo_identity="/repo/.git",
+            kind=RefinementKind.ANNOTATE_NODE,
+            target=RefinementTarget(node_id="m.py::a"),
+            payload=RefinementPayload(annotation="x" * 400),
+            reason="written by hand",
+        )
+
+
+@pytest.mark.parametrize("reason", ["", "   "])
+def test_a_proposal_without_a_reason_is_refused(reason: str):
+    """Spec 9.2 requires a reason everywhere, and whitespace is not one."""
+    with pytest.raises(ValidationError, match="reason"):
+        Proposal(
+            kind=RefinementKind.ANNOTATE_NODE,
+            target=RefinementTarget(node_id="m.py::a"),
+            payload=RefinementPayload(annotation="the retry path"),
+            reason=reason,
+        )
+
+
+def test_a_whitespace_label_is_not_a_name_a_reader_recognises():
+    with pytest.raises(ValidationError, match="label"):
+        Proposal(
+            kind=RefinementKind.RELABEL_CLUSTER,
+            target=RefinementTarget(members=("m.py::a",)),
+            payload=RefinementPayload(label="   "),
+            reason="three spaces are not two characters of name",
+        )
+
+
+def test_a_stored_refinement_can_be_re_proposed_into_a_new_run():
+    """Spec 5.7's re-confirmation path hands the stored row back in, so only its proposal half
+    may be copied."""
+    stored = Refinement(
+        refinement_id=41,
+        run_id="r1",
+        repo_identity=IDENTITY,
+        kind=RefinementKind.ADD_EDGE,
+        target=RefinementTarget(
+            src="a.py::f", dst="b.py::g", edge_kind=EdgeKind.CALLS, name="g"
+        ),
+        reason="the bare call resolves in b.py",
+        tier=Tier.C,
+        status=RefinementStatus.ACTIVE,
+    )
+    again = Refinement.of(
+        stored,
+        run_id="r2",
+        repo_identity=IDENTITY,
+        tier=Tier.B,
+        status=RefinementStatus.PENDING,
+        supersedes=stored.refinement_id,
+    )
+    assert (again.run_id, again.tier, again.status) == (
+        "r2",
+        Tier.B,
+        RefinementStatus.PENDING,
+    )
+    assert (again.refinement_id, again.supersedes) == (0, 41)
+    assert again.target == stored.target
+
+
+def test_a_refinement_is_built_from_the_proposal_it_stores():
+    proposal = Proposal(
+        kind=RefinementKind.ADD_EDGE,
+        target=RefinementTarget(
+            src="a.py::f", dst="b.py::g", edge_kind=EdgeKind.CALLS, name="g"
+        ),
+        reason="the bare call resolves in b.py",
+        confidence=0.8,
+    )
+    stored = Refinement.of(
+        proposal,
+        run_id="r1",
+        repo_identity="/repo/.git",
+        tier=Tier.B,
+        status=RefinementStatus.PENDING,
+    )
+    assert isinstance(stored, Proposal)
+    assert stored.target == proposal.target
+    assert (stored.run_id, stored.tier, stored.confidence) == ("r1", Tier.B, 0.8)
+    assert stored.created_at > 0 and stored.status_at == stored.created_at

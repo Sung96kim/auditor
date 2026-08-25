@@ -2,6 +2,7 @@
 place (spec §5.6). Needs pydantic; no other third-party import."""
 
 from collections import defaultdict
+from collections.abc import Iterable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,7 @@ from auditor.graph.model import (
     UnresolvedReason,
     UnresolvedRow,
 )
+from auditor.graph.refine.namespace import short_name
 
 _EDGE_KIND_BY_FACT = {
     FactKind.CALLEE: EdgeKind.CALLS,
@@ -32,16 +34,11 @@ _SELF_RECEIVERS = ("self", "cls")
 _FORM_PREFERENCE = (CallForm.BARE, CallForm.SELF, CallForm.ATTR)
 
 
-def _short_name(node_id: str) -> str:
-    """The bare symbol name inside a node id: ``do_thing`` for ``svc/foo.py::Foo.do_thing``."""
-    return node_id.split("::")[-1].rsplit(".", 1)[-1]
-
-
 def _edged_names(edges: list[GraphEdge]) -> dict[tuple[str, str], set[str]]:
     """(src, edge kind) -> the dst short names already leaving that node."""
     out: dict[tuple[str, str], set[str]] = defaultdict(set)
     for e in edges:
-        out[(e.src, e.kind.value)].add(_short_name(e.dst))
+        out[(e.src, e.kind.value)].add(short_name(e.dst))
     return out
 
 
@@ -64,16 +61,19 @@ def form_for(
     forms: dict[tuple[str, CallForm], tuple[str | None, ...]],
     name: str,
     local_names: tuple[str, ...],
-) -> tuple[CallForm, tuple[str | None, ...]]:
-    """The form a row records for ``name``: the most tractable form it was called in that the
-    node does not itself bind, so `handle()` beside `job.handle()` reports the bare call unless
-    `handle` is a parameter, in which case the attribute call is the miss worth reporting."""
+) -> tuple[CallForm, tuple[str | None, ...]] | None:
+    """The form a row records for ``name``, or ``None`` when the node binds the name itself and
+    calls it no other way, which is no placeable fact at all.
+
+    The most tractable form wins, so `handle()` beside `job.handle()` reports the bare call unless
+    `handle` is a parameter, in which case the attribute call is the miss worth reporting.
+    """
     for form in _FORM_PREFERENCE:
         if (name, form) in forms and not (
             form is CallForm.BARE and name in local_names
         ):
             return form, forms[(name, form)]
-    return CallForm.BARE, (None,)
+    return None
 
 
 class _NotedFact(BaseModel):
@@ -90,13 +90,74 @@ class _NotedFact(BaseModel):
     call_form: CallForm
 
 
+class NameBindings(BaseModel):
+    """Which module each name in a module was imported from, and whether that source is in the repo.
+
+    The rule the queue uses to dim a row and the rule the verifier uses to reject a proposal are the
+    same rule, so they are the same object.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    bindings_by_module: Mapping[str, Mapping[str, str]] = Field(default_factory=dict)
+    aliases_by_module: Mapping[str, Mapping[str, str]] = Field(default_factory=dict)
+    dotted_to_id: Mapping[str, str] = Field(default_factory=dict)
+
+    @classmethod
+    def of(
+        cls,
+        modules: Iterable[GraphNode],
+        *,
+        module_ids: Iterable[str] | None = None,
+    ) -> "NameBindings":
+        """Build the three indexes from the module nodes; nothing else carries an import.
+
+        ``module_ids`` is every module in the graph, which is what decides whether an import source
+        is in the repo. It defaults to ``modules``' own ids, which is right for a resolver holding
+        the whole node set and wrong for a verifier holding two files.
+        """
+        mods = [m for m in modules if m.kind is NodeKind.MODULE]
+        ids = (
+            sorted(module_ids) if module_ids is not None else sorted(m.id for m in mods)
+        )
+        dotted: dict[str, str] = {}
+        for mid in ids:
+            stem = mid.removesuffix(".py").removesuffix("/__init__")
+            dotted[stem.replace("/", ".")] = mid
+        return cls(
+            bindings_by_module={m.id: dict(m.import_bindings) for m in mods},
+            aliases_by_module={m.id: dict(m.external_aliases) for m in mods},
+            dotted_to_id=dotted,
+        )
+
+    def is_repo_source(self, module_id: str, src: str) -> bool:
+        """Whether an import source names a repo module: by its full dotted path, or as a sibling
+        of the caller's own package (`from _common import x` inside ``plugin/hooks/``)."""
+        if src in self.dotted_to_id:
+            return True
+        parent = module_id.rsplit("/", 1)[0]
+        if parent == module_id:
+            return False
+        return f"{parent.replace('/', '.')}.{src}" in self.dotted_to_id
+
+    def externally_bound(self, module_id: str, *names: str | None) -> bool:
+        """Whether the caller's module binds any of ``names`` from a non-repo import (``re``,
+        ``subprocess``), directly or through a module-level alias (``_RX = re.compile(...)``)."""
+        binds = self.bindings_by_module.get(module_id, {})
+        aliases = self.aliases_by_module.get(module_id, {})
+        return any(
+            (src := binds.get(aliases.get(n, n))) is not None
+            and not self.is_repo_source(module_id, src)
+            for n in names
+            if n is not None
+        )
+
+
 class UnresolvedCollector(BaseModel):
     """Collects the facts a resolver pass could not place and applies the post-pass gates: a
     receiver a known non-repo type already settled, and a row the node already has an edge for."""
 
-    bindings_by_module: dict[str, dict[str, str]]
-    aliases_by_module: dict[str, dict[str, str]]
-    dotted_to_id: dict[str, str]
+    bindings: NameBindings
     noted: list[_NotedFact] = Field(default_factory=list)
     settled: set[tuple[str, str | None, str]] = Field(default_factory=set)
 
@@ -132,29 +193,6 @@ class UnresolvedCollector(BaseModel):
         call of ``method`` on that receiver is answered."""
         self.settled.add((node_id, receiver_root, method))
 
-    def _is_repo_source(self, module_id: str, src: str) -> bool:
-        """Whether an import source names a repo module: by its full dotted path, or as a sibling
-        of the caller's own package (`from _common import x` inside ``plugin/hooks/``)."""
-        if src in self.dotted_to_id:
-            return True
-        parent = module_id.rsplit("/", 1)[0]
-        if parent == module_id:
-            return False
-        return f"{parent.replace('/', '.')}.{src}" in self.dotted_to_id
-
-    def externally_bound(self, module_id: str, *names: str | None) -> bool:
-        """Whether the caller's module binds any of ``names`` from a non-repo import (``re``,
-        ``subprocess``), directly or through a module-level alias (``_RX = re.compile(...)``).
-        Such a row is kept for display and never briefed."""
-        binds = self.bindings_by_module.get(module_id, {})
-        aliases = self.aliases_by_module.get(module_id, {})
-        return any(
-            (src := binds.get(aliases.get(n, n))) is not None
-            and not self._is_repo_source(module_id, src)
-            for n in names
-            if n is not None
-        )
-
     def _row(self, fact: _NotedFact) -> UnresolvedRow | None:
         """The row a noted fact earns, on the first receiver root no non-repo type settled, or
         ``None`` when every root it was called on is settled."""
@@ -176,7 +214,9 @@ class UnresolvedCollector(BaseModel):
             candidates=fact.resolution.gated,
             definers=fact.resolution.definers,
             resolution_path=fact.resolution.path,
-            externally_bound=self.externally_bound(fact.node.module, fact.name, root),
+            externally_bound=self.bindings.externally_bound(
+                fact.node.module, fact.name, root
+            ),
         )
 
     def drain(self, edges: list[GraphEdge]) -> list[UnresolvedRow]:
@@ -215,20 +255,7 @@ class StructuralResolver:
         for c in self.classes.values():
             self.by_class_name[c.name].append(c.id)
         self.role_by_id = {n.id: n.role for n in nodes}
-        # module_id -> {local_name: source_dotted}: the module each name is imported FROM.
-        self.bindings_by_module: dict[str, dict[str, str]] = {
-            mid: dict(mod.import_bindings) for mid, mod in self.modules.items()
-        }
-        # module_id -> {alias: imported root} for module-level `alias = root(...)` bindings.
-        self.aliases_by_module: dict[str, dict[str, str]] = {
-            mid: dict(mod.external_aliases) for mid, mod in self.modules.items()
-        }
-        self.dotted_to_id: dict[str, str] = {}
-        for mid in sorted(self.modules):
-            stem = mid.removesuffix(".py")
-            if stem.endswith("/__init__"):
-                stem = stem[: -len("/__init__")]
-            self.dotted_to_id[stem.replace("/", ".")] = mid
+        self.bindings = NameBindings.of(self.modules.values())
         # module_id -> set of repo module_ids it imports (resolved from its import targets).
         # Used to disambiguate cross-module name resolution by real import evidence.
         self.imports_by_module: dict[str, set[str]] = {}
@@ -236,7 +263,7 @@ class StructuralResolver:
             targets = {
                 dst
                 for t in mod.imports
-                if (dst := self.dotted_to_id.get(t)) is not None
+                if (dst := self.bindings.dotted_to_id.get(t)) is not None
             }
             self.imports_by_module[mid] = targets
         # Reachability through re-export surfaces, so a symbol imported via an aggregator
@@ -262,11 +289,7 @@ class StructuralResolver:
                 imps |= new
                 frontier = new
         self.edges: list[GraphEdge] = []
-        self.collector = UnresolvedCollector(
-            bindings_by_module=self.bindings_by_module,
-            aliases_by_module=self.aliases_by_module,
-            dotted_to_id=self.dotted_to_id,
-        )
+        self.collector = UnresolvedCollector(bindings=self.bindings)
         self._seen: set[tuple[str, str, str]] = set()
 
     def _add(self, src: str, dst: str, kind: EdgeKind, weight: float = 1.0) -> None:
@@ -282,7 +305,8 @@ class StructuralResolver:
             targets = {
                 dst
                 for local, src in mod.import_bindings
-                if local == "*" and (dst := self.dotted_to_id.get(src)) is not None
+                if local == "*"
+                and (dst := self.bindings.dotted_to_id.get(src)) is not None
             }
             if targets:
                 out[mid] = targets
@@ -308,8 +332,8 @@ class StructuralResolver:
     def _binding_target(self, module_id: str, name: str) -> str | None:
         """The repo module id that ``module_id`` binds ``name`` from (``from a import Name`` → the
         id of module ``a``), or ``None`` if there's no such explicit binding or it's external."""
-        src = self.bindings_by_module.get(module_id, {}).get(name)
-        return None if src is None else self.dotted_to_id.get(src)
+        src = self.bindings.bindings_by_module.get(module_id, {}).get(name)
+        return None if src is None else self.bindings.dotted_to_id.get(src)
 
     def _namespace_defs(
         self,
@@ -405,7 +429,7 @@ class StructuralResolver:
     def _imports(self) -> None:
         for mid in sorted(self.modules):
             for target in self.modules[mid].imports:
-                dst = self.dotted_to_id.get(target)
+                dst = self.bindings.dotted_to_id.get(target)
                 if dst is not None and dst != mid:
                     self._add(mid, dst, EdgeKind.IMPORTS)
 
@@ -416,7 +440,10 @@ class StructuralResolver:
                 res = self._resolve_name(callee, n, self.by_fn_name)
                 for dst in res.ids:
                     self._add(n.id, dst, EdgeKind.CALLS)
-                form, roots = form_for(forms, callee, n.local_names)
+                site = form_for(forms, callee, n.local_names)
+                if site is None:
+                    continue
+                form, roots = site
                 self.collector.note(
                     n,
                     res,
@@ -495,12 +522,12 @@ class StructuralResolver:
         for sym in sorted(self.nodes, key=lambda s: s.id):
             if not sym.registry_roots:
                 continue
-            binds = self.bindings_by_module.get(sym.module, {})
+            binds = self.bindings.bindings_by_module.get(sym.module, {})
             for root in sym.registry_roots:
                 dotted = binds.get(root)
                 if dotted is None:
                     continue
-                dst = self.dotted_to_id.get(dotted)
+                dst = self.bindings.dotted_to_id.get(dotted)
                 if dst is not None and dst != sym.id:
                     self._add(sym.id, dst, EdgeKind.REGISTERED_IN)
 

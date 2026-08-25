@@ -16,7 +16,11 @@ from auditor.graph.model import (
     Resolution,
     UnresolvedReason,
 )
-from auditor.graph.resolve_edges import UnresolvedCollector, resolve_structural
+from auditor.graph.resolve_edges import (
+    NameBindings,
+    UnresolvedCollector,
+    resolve_structural,
+)
 
 
 def _rows(*files: tuple[str, str]):
@@ -361,9 +365,7 @@ def test_a_bound_bare_name_falls_back_to_the_attribute_form():
 
 
 def _collector() -> UnresolvedCollector:
-    return UnresolvedCollector(
-        bindings_by_module={}, aliases_by_module={}, dotted_to_id={}
-    )
+    return UnresolvedCollector(bindings=NameBindings())
 
 
 def _caller(**kw) -> GraphNode:
@@ -446,3 +448,39 @@ def test_a_sibling_import_inside_one_package_is_not_externally_bound():
     row = _row(rows, "plugin/hooks/verify_stop.py::main", "read_event")
     assert row.externally_bound is False
     assert row.definers == ("plugin/hooks/_common.py::read_event",)
+
+
+def test_name_bindings_reads_a_non_repo_import_as_external():
+    module = GraphNode(
+        id="m.py",
+        kind=NodeKind.MODULE,
+        name="m.py",
+        module="m.py",
+        qualname="m",
+        import_bindings=(("search", "re"), ("helper", "pkg.util")),
+    )
+    other = GraphNode(
+        id="pkg/util.py",
+        kind=NodeKind.MODULE,
+        name="util.py",
+        module="pkg/util.py",
+        qualname="pkg.util",
+    )
+    bindings = NameBindings.of([module, other])
+    assert bindings.externally_bound("m.py", "search") is True
+    assert bindings.externally_bound("m.py", "helper") is False
+    assert bindings.externally_bound("m.py", None) is False
+
+
+def test_name_bindings_reads_a_module_level_alias_of_an_external_root():
+    module = GraphNode(
+        id="m.py",
+        kind=NodeKind.MODULE,
+        name="m.py",
+        module="m.py",
+        qualname="m",
+        import_bindings=(("re", "re"),),
+        external_aliases=(("_RX", "re"),),
+    )
+    bindings = NameBindings.of([module])
+    assert bindings.externally_bound("m.py", "_RX") is True

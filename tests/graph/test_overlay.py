@@ -51,6 +51,7 @@ def _ref(rid: int = 1, **kw) -> Refinement:
         run_id="run-1",
         repo_identity="/x/.git",
         kind=kw.pop("kind", RefinementKind.ADD_EDGE),
+        reason=kw.pop("reason", "the call resolves there"),
         target=kw.pop(
             "target",
             RefinementTarget(

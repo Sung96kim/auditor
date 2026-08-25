@@ -12,7 +12,14 @@ from typing import Any, ClassVar
 
 from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.graph.hashes import FileHashes
-from auditor.graph.model import GraphCluster, GraphEdge, GraphNode, UnresolvedRow
+from auditor.graph.model import (
+    TEST_ROLES,
+    GraphCluster,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+    UnresolvedRow,
+)
 
 
 def _decode_unresolved(row: sqlite3.Row) -> dict[str, Any]:
@@ -57,6 +64,8 @@ class GraphDB(BaseDB):
             ),
             indexes=(
                 Index(name="graph_nodes_cluster", columns=("repo", "cluster_id")),
+                # `definers` filters on the name, once per proposal in a commit
+                Index(name="graph_nodes_name", columns=("repo", "name")),
             ),
         ),
         "graph_edges": Table(
@@ -285,6 +294,33 @@ class GraphDB(BaseDB):
             "SELECT * FROM graph_nodes WHERE repo = ? AND node_id = ?", (node_id,)
         )
         return dict(row) if row else None
+
+    async def module_ids(self) -> list[str]:
+        """Every module node id in this partition, which is what decides whether an import source
+        names a repo module (spec 9.2's externally-bound rule)."""
+        return [
+            r["node_id"]
+            for r in await self._fetch(
+                "SELECT node_id FROM graph_nodes WHERE repo = ? AND kind = ? ORDER BY node_id",
+                (NodeKind.MODULE.value,),
+            )
+        ]
+
+    async def definers(self, name: str) -> list[str]:
+        """Every non-test node in this partition whose short name is ``name`` (spec 9.2).
+
+        The role filter is the resolver's: a proposal may not point at a test stub, and a proposal
+        with no queue row behind it has nowhere else to learn what defines the name.
+        """
+        placeholders = ",".join("?" for _ in TEST_ROLES)
+        return [
+            r["node_id"]
+            for r in await self._fetch(
+                "SELECT node_id FROM graph_nodes WHERE repo = ? AND name = ? "
+                f"AND role NOT IN ({placeholders}) ORDER BY node_id",  # noqa: S608  (placeholders only)
+                (name, *TEST_ROLES),
+            )
+        ]
 
     async def nodes(self) -> list[dict[str, Any]]:
         return [
