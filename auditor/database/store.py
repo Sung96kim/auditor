@@ -132,10 +132,11 @@ class IndexStore(BaseDB):
             for statement in statements:
                 conn.execute(statement)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            # a failed COMMIT rolls back too, or retry_on_locked's next BEGIN finds it open
+            conn.commit()
         except BaseException:
             conn.rollback()
             raise
-        conn.commit()
 
     @staticmethod
     def _migrate_identity_tables(conn: sqlite3.Connection) -> None:
@@ -225,15 +226,18 @@ class IndexStore(BaseDB):
 
     async def transaction(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
         """Run ``fn`` against the live connection as one commit: everything it writes lands, or
-        nothing does. ``fn`` must not commit; any exception rolls the whole thing back."""
+        nothing does. The transaction is IMMEDIATE, so a ``fn`` that reads before it writes holds
+        the write lock from that first read. ``fn`` must not commit; any exception rolls back."""
 
         def op(conn: sqlite3.Connection) -> _T:
+            # IMMEDIATE, not the DEFERRED begin pysqlite would take at ``fn``'s first write
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 result = fn(conn)
+                conn.commit()
             except BaseException:
                 conn.rollback()
                 raise
-            conn.commit()
             return result
 
         return await self._worker.run(op)
