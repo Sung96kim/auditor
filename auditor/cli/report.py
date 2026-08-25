@@ -2,15 +2,12 @@
 
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
     check_format,
     cli_root,
+    config_errors_as_one_line,
     emit,
-    fail,
-    format_config_error,
     parse_config_json,
     require_file,
     run,
@@ -23,7 +20,6 @@ from auditor.cli.options import (
     ReportFile,
     ShowIgnored,
 )
-from auditor.config import UnknownProfile
 from auditor.engine import audit_target
 from auditor.reporters import render
 
@@ -44,7 +40,7 @@ def report(
     cli_root(
         file, profile=profile, overrides=overrides
     )  # the notice reports on this root
-    try:
+    with config_errors_as_one_line():
         results = run(
             audit_target(
                 Path(file),
@@ -54,6 +50,4 @@ def report(
             ),
             f"auditing {file.name}…",
         )
-    except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config: {format_config_error(exc)}")
     emit(render(results, fmt), output)

@@ -4,11 +4,16 @@ one-line message, never a raw traceback."""
 from pathlib import Path
 
 import pytest
-from _support import invoke
+from _support import BROKEN_CONFIGS, assert_no_escape, invoke, write_broken_config
 
 import auditor.cli
 from auditor.database.base import Column
 from auditor.database.ignores import IgnoresDB
+
+
+def one_line(text: str) -> str:
+    """``text`` with its wrapping undone: rich breaks a long line at 80 columns off a TTY."""
+    return " ".join(text.split())
 
 
 def test_bare_invocation_shows_help_and_exits_zero():
@@ -17,7 +22,7 @@ def test_bare_invocation_shows_help_and_exits_zero():
     result = invoke()
     assert result.exit_code == 0
     assert "Usage" in result.output and "scan" in result.output
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
 
 
 @pytest.mark.parametrize("cmd", ["scan", "report", "manifest", "discover"])
@@ -25,7 +30,7 @@ def test_missing_target_fails_cleanly(cmd):
     result = invoke(cmd, "does/not/exist.py")
     assert result.exit_code == 1
     assert "no such file" in result.output
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
 
 
 @pytest.mark.parametrize("cmd", [("scan", "src"), ("report", "src/web.py")])
@@ -34,7 +39,7 @@ def test_invalid_format_errors_cleanly(sample_repo, cmd):
     result = invoke(name, str(sample_repo / target), "-f", "xml")
     assert result.exit_code == 1
     assert "unknown format" in result.output
-    assert "Traceback" not in result.output  # clean error, not a raw stack trace
+    assert_no_escape(result)  # a clean error, not a raw stack trace
 
 
 @pytest.mark.parametrize(
@@ -63,7 +68,7 @@ def test_init_fails_cleanly_on_an_unusable_home(tmp_path, monkeypatch, layout):
     result = invoke(*args)
     assert result.exit_code == 1
     assert "cannot write the auditor home" in " ".join(result.output.split())
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
 
 
 def test_an_unmigratable_index_prints_the_repair(monkeypatch):
@@ -84,7 +89,7 @@ def test_an_unmigratable_index_prints_the_repair(monkeypatch):
     assert result.exit_code == 1
     assert "cannot be upgraded" in result.output
     assert "ignores.added" in result.output and "rm " in result.output
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
 
 
 def _under_a_file(tmp_path: Path) -> Path:
@@ -113,7 +118,7 @@ def test_unwritable_output_path_fails_cleanly(
 
     assert result.exit_code == 1
     assert "cannot write" in result.output
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
 
 
 @pytest.mark.parametrize(
@@ -128,7 +133,7 @@ def test_a_bad_profile_fails_on_one_line(tmp_path, argv):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
     result = invoke(*argv, str(tmp_path))
     assert result.exit_code == 1
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
     assert "nope" in result.output
 
 
@@ -137,7 +142,8 @@ def test_a_bad_profile_flag_fails_on_one_line(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\n")
     result = invoke("scan", str(tmp_path), "--profile", "nope", "--no-index")
     assert result.exit_code == 1
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
+    assert "unknown profile 'nope'" in one_line(result.stderr)
 
 
 @pytest.mark.parametrize("argv", [["crossfile"], ["graph", "build"]])
@@ -149,7 +155,42 @@ def test_a_bad_extends_in_the_repo_toml_fails_on_one_line(tmp_path, argv):
     )
     result = invoke(*argv, str(tmp_path))
     assert result.exit_code == 1
-    assert "Traceback" not in result.output
+    assert_no_escape(result)
+    assert "unknown profile 'nope'" in one_line(result.stderr)
+
+
+# Every command surface that reaches the config loader, by the route it reaches it: directly,
+# through an audit, through a staged build, or through a server it never gets to start.
+CONFIG_SURFACES = [
+    ("config", "show", "-r"),
+    ("config", "check", "-r"),
+    ("crossfile",),
+    ("discover",),
+    ("graph", "build"),
+    ("graph", "serve"),
+    ("report",),
+    ("scan", "--no-index"),
+]
+
+
+@pytest.mark.parametrize("kind", sorted(BROKEN_CONFIGS))
+@pytest.mark.parametrize(
+    "surface", CONFIG_SURFACES, ids=lambda s: "_".join(s).strip("-")
+)
+def test_a_config_that_cannot_be_used_is_one_line_on_every_surface(
+    tmp_path, kind, surface
+):
+    """One error hierarchy, one guard per surface: an unknown profile, a cycle and unparseable
+    TOML all exit 1 with a named line, and none of them escapes as an exception."""
+    phrase = write_broken_config(tmp_path, kind)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    target = str(tmp_path / "a.py") if surface[0] == "report" else str(tmp_path)
+
+    result = invoke(*surface, target)
+
+    assert_no_escape(result)
+    assert result.exit_code == 1
+    assert phrase in one_line(result.stderr)
 
 
 def test_only_the_cli_edge_calls_load_config_directly():

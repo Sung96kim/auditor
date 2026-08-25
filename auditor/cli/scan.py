@@ -5,7 +5,6 @@ CI-gate / serve options, and a concise human summary by default (machine formats
 from pathlib import Path
 
 import typer
-from pydantic import ValidationError
 
 from auditor.baseline import Baseline
 from auditor.cli.apps import app
@@ -13,9 +12,9 @@ from auditor.cli.console import err_console
 from auditor.cli.helpers import (
     check_format,
     cli_root,
+    config_errors_as_one_line,
     emit,
     fail,
-    format_config_error,
     load_settings,
     parse_config_json,
     require_exists,
@@ -52,7 +51,7 @@ from auditor.cli.options import (
     WriteBaseline,
 )
 from auditor.cli.summary import print_summary
-from auditor.config import UnknownProfile, is_configured
+from auditor.config import is_configured
 from auditor.discovery import default_base_ref, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity as _check_severity
@@ -207,7 +206,7 @@ def scan(
         incremental = True  # whole-repo scan stays fast via the cache
     # "." renders as ".…" against the ellipsis — show the directory's name instead.
     target_label = target.resolve().name if str(target) == "." else target
-    try:
+    with config_errors_as_one_line():
         results = run_live(
             lambda report: audit_target(
                 target,
@@ -229,8 +228,6 @@ def scan(
             f"auditing {target_label}",
             spinner=not verbose,
         )
-    except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config: {format_config_error(exc)}")
 
     if write_baseline is not None:
         recorded = Baseline.from_results(results).write(write_baseline)

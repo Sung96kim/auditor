@@ -10,7 +10,10 @@ import auditor.config as config_module
 from auditor.config import (
     AuditorSettings,
     CategoryConfig,
+    CircularProfile,
+    ConfigError,
     GraphConfig,
+    MalformedConfig,
     OverrideConfig,
     ResolvedConfig,
     RolePolicy,
@@ -254,7 +257,7 @@ def test_circular_profile_rejected(tmp_path):
     loop.write_text(f'extends = "{loop}"\n')  # absolute self-reference
     (tmp_path / ".auditor").mkdir()
     (tmp_path / ".auditor" / "config.toml").write_text(f'extends = "{loop}"\n')
-    with pytest.raises(ValueError, match="circular"):
+    with pytest.raises(CircularProfile, match="circular"):
         load_config(tmp_path)
 
 
@@ -565,6 +568,42 @@ def test_unknown_profile_raises_a_named_error(tmp_path):
         load_config(tmp_path, profile="no-such-profile")
     assert "no-such-profile" in str(caught.value)
     assert "strict" in str(caught.value)  # the message lists the built-ins
+
+
+@pytest.mark.parametrize(
+    "error",
+    [UnknownProfile, CircularProfile, MalformedConfig],
+    ids=lambda e: e.__name__,
+)
+def test_every_config_error_is_one_catchable_family(error):
+    """The CLI and MCP edges each catch `ConfigError` once. A member that leaves the family (or a
+    base that stops being a ValueError) escapes both guards as a traceback."""
+    assert issubclass(error, ConfigError)
+    assert issubclass(ConfigError, ValueError)
+
+
+def test_a_malformed_repo_toml_is_a_config_error(tmp_path):
+    """A repo TOML that will not parse names the file it is in, instead of raising tomllib's
+    decode error from under the loader."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("nope = = 1\n")
+    with pytest.raises(MalformedConfig, match="is not valid TOML"):
+        load_config(tmp_path)
+
+
+def test_a_malformed_profile_file_is_a_config_error(tmp_path):
+    profile = tmp_path / "p.toml"
+    profile.write_text("not = valid = toml\n")
+    with pytest.raises(MalformedConfig, match="is not valid TOML"):
+        load_config(tmp_path, profile=str(profile))
+
+
+def test_the_loaders_own_output_field_is_not_a_config_key():
+    """`unknown_keys` is filled in by the loader, so a config that spells it is reporting a typo,
+    not setting a key."""
+    assert unknown_config_keys({"unknown_keys": ["x"]}, AuditorSettings) == [
+        "unknown_keys"
+    ]
 
 
 def test_env_cannot_choose_a_profile(tmp_path, monkeypatch):

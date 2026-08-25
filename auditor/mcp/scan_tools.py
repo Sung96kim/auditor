@@ -11,14 +11,14 @@ from mcp.types import ResourceLink
 from pydantic import ValidationError
 
 from auditor.aggregate import AuditAggregator
-from auditor.config import load_config
+from auditor.config import ConfigError
 from auditor.database import IndexStore
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity, gate_tripped
 from auditor.malware.tools import resolve_tool
 from auditor.mcp.artifacts import publish
-from auditor.mcp.helpers import READ_ONLY, config_error, validate_detail
+from auditor.mcp.helpers import READ_ONLY, config_error, tool_config, validate_detail
 from auditor.mcp.server import mcp
 from auditor.models import ManifestEntry, ScanResult
 from auditor.paths import index_db_path, repo_key
@@ -126,7 +126,7 @@ async def scan(
             show_ignored=show_ignored,
             cross_file=not isolated,
         )
-    except ValidationError as exc:
+    except (ConfigError, ValidationError) as exc:
         raise config_error(exc) from exc
     gate = None
     if fail_on is not None:
@@ -229,7 +229,7 @@ def discover(
     (e.g. 'source'|'test'); ``limit`` caps ``files`` — the list can be enormous on a big repo, so
     it is unbounded only when you ask for it (limit=null)."""
     root = find_root(Path(path))
-    settings = load_config(root)
+    settings = tool_config(root)
     classifier = RoleClassifier(settings.role_globs)
     discovery = FileDiscovery(
         root,

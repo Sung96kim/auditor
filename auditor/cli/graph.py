@@ -12,14 +12,13 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from pydantic import ValidationError
 
 from auditor.cli.console import ACCENT, err_console
 from auditor.cli.graph_refine import register as register_refine
 from auditor.cli.helpers import (
     cli_root,
+    config_errors_as_one_line,
     fail,
-    format_config_error,
     load_settings,
     open_index,
     present,
@@ -49,7 +48,7 @@ from auditor.cli.render import (
     render_graph_search,
     render_graph_usages,
 )
-from auditor.config import AuditorSettings, UnknownProfile
+from auditor.config import AuditorSettings
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
@@ -129,10 +128,7 @@ def graph_build(
             report("building graph…")
             return await _build(root, settings, report, lock_held=True)
 
-    try:
-        summary = run_staged(do_build, "building graph…")
-    except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config: {format_config_error(exc)}")
+    summary = run_staged(do_build, "building graph…")
     present(summary, render_graph_build, as_json=json_)
 
 
@@ -316,13 +312,13 @@ def graph_serve(
     """Serve the interactive graph UI. Serves the already-built graph when present (fast); only
     scans + builds when it's missing. Pass --rebuild to force a fresh build."""
     root = cli_root(target)
-    try:
+    # `graph serve` reaches the loader only inside `_serve_html`, so this is the one guard
+    # between a bad repo config and a traceback (`graph build` fails earlier, in `load_settings`).
+    with config_errors_as_one_line():
         html = run_staged(
             lambda report: _serve_html(root, rebuild=rebuild, report=report),
             "preparing graph UI…",
         )
-    except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config: {format_config_error(exc)}")
     server = ReportServer(html)
     err_console.print(
         f"[{ACCENT}]◆[/] serving graph UI at [bold]{server.url}[/bold]  [dim](Ctrl-C to stop)[/dim]"

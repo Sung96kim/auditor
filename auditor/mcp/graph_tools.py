@@ -9,7 +9,6 @@ from pathlib import Path
 
 from loguru import logger
 
-from auditor.config import load_config
 from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
@@ -26,7 +25,7 @@ from auditor.graph.model import (
     capped_row,
 )
 from auditor.graph.query import GraphQuery
-from auditor.mcp.helpers import MUTATING, READ_ONLY, open_index
+from auditor.mcp.helpers import MUTATING, READ_ONLY, open_index, tool_config
 from auditor.mcp.server import mcp
 
 
@@ -39,7 +38,7 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     root = find_root(Path(path))
     if scan:
         await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
-    settings = load_config(root)
+    settings = tool_config(root)
     async with await open_index(root) as index:
         await index.repos.register(time.time())
         return await GraphBuilder().rebuild(index, settings)
@@ -171,7 +170,7 @@ async def graph_flow(
                 include_tests=include_tests,
                 expand_hubs=expand_hubs,
                 stop_at=tuple(stop_at or ()),
-                hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+                hub_fan_in=tool_config(root).graph.flow_hub_fan_in,
             ),
         )
 

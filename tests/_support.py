@@ -4,6 +4,7 @@
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -28,6 +29,48 @@ SAMPLE_REPO = DATA_DIR / "sample_repo"
 DEAD_SYMBOL_REGISTRY = DATA_DIR / "dead_symbol_registry"
 PLUGIN_FILE = DATA_DIR / "plugins" / "house_rules.py"
 TS_DATA = DATA_DIR / "ts"
+
+
+def _unknown_profile(root: Path) -> None:
+    _pyproject(root, 'extends = "nope"')
+
+
+def _circular_extends(root: Path) -> None:
+    (root / "p1.toml").write_text(f'extends = "{root / "p2.toml"}"\n')
+    (root / "p2.toml").write_text(f'extends = "{root / "p1.toml"}"\n')
+    _pyproject(root, f'extends = "{root / "p1.toml"}"')
+
+
+def _malformed_profile(root: Path) -> None:
+    (root / "p.toml").write_text("not = valid = toml\n")
+    _pyproject(root, f'extends = "{root / "p.toml"}"')
+
+
+def _malformed_repo_toml(root: Path) -> None:
+    _pyproject(root, None)
+    (root / ".auditor").mkdir()
+    (root / ".auditor" / "config.toml").write_text("nope = = 1\n")
+
+
+def _pyproject(root: Path, auditor_table: str | None) -> None:
+    table = f"[tool.auditor]\n{auditor_table}\n" if auditor_table else ""
+    (root / "pyproject.toml").write_text(f'[project]\nname="x"\nversion="0"\n{table}')
+
+
+# Each config the loader can find but cannot use, with the phrase its one line has to carry.
+BROKEN_CONFIGS: dict[str, tuple[Callable[[Path], None], str]] = {
+    "unknown_profile": (_unknown_profile, "unknown profile 'nope'"),
+    "circular_extends": (_circular_extends, "circular profile extends"),
+    "malformed_profile": (_malformed_profile, "is not valid TOML"),
+    "malformed_repo_toml": (_malformed_repo_toml, "is not valid TOML"),
+}
+
+
+def write_broken_config(root: Path, kind: str) -> str:
+    """Give ``root`` one of the :data:`BROKEN_CONFIGS`; returns the phrase its error must name."""
+    write, phrase = BROKEN_CONFIGS[kind]
+    write(root)
+    return phrase
 
 
 def write_plugin_repo(
@@ -181,6 +224,18 @@ _RUNNER = CliRunner()
 def invoke(*args: str):
     """Run the auditor CLI with string args; returns the typer ``Result``."""
     return _RUNNER.invoke(app, list(args))
+
+
+def assert_no_escape(result) -> None:
+    """Fail when an exception escaped the command instead of a clean ``typer.Exit``.
+
+    ``CliRunner`` catches an escaped exception, stores it here and leaves ``result.output``
+    empty, so asserting ``"Traceback" not in result.output`` can never fail on that case.
+    """
+    escaped = result.exception
+    assert escaped is None or isinstance(escaped, SystemExit), (
+        f"{type(escaped).__name__}: {escaped}"
+    )
 
 
 def cli_json(result):

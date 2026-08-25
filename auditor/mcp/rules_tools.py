@@ -3,11 +3,8 @@
 
 from pathlib import Path
 
-from pydantic import ValidationError
-
-from auditor.config import load_config
 from auditor.discovery import find_root
-from auditor.mcp.helpers import READ_ONLY, config_error
+from auditor.mcp.helpers import READ_ONLY, tool_config
 from auditor.mcp.server import mcp
 from auditor.registry import REGISTRY
 
@@ -22,9 +19,6 @@ def rules_list(
     """Enumerate detector rules, optionally filtered by category, standard (bandit/owasp), or
     framework (e.g. pytest). Includes the rules ``root``'s trusted plugins contribute; each row
     records the module or file it was registered from."""
-    try:
-        load_config(find_root(Path(root)))
-    except ValidationError as exc:
-        raise config_error(exc) from exc
+    tool_config(find_root(Path(root)))
     rows = REGISTRY.rule_rows(category=category, standard=standard, framework=framework)
     return [row.model_dump() for row in rows]

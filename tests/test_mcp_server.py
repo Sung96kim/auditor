@@ -4,7 +4,7 @@ import json
 import subprocess
 
 import pytest
-from _support import write_plugin_repo
+from _support import BROKEN_CONFIGS, write_broken_config, write_plugin_repo
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddleware
@@ -100,6 +100,21 @@ async def test_rules_list_tool_rejects_an_invalid_config(tmp_path):
     )
     with pytest.raises(ToolError, match="invalid config"):
         await mcp.call_tool("rules_list", {"root": str(tmp_path)})
+
+
+@pytest.mark.parametrize("kind", sorted(BROKEN_CONFIGS))
+@pytest.mark.parametrize(
+    "tool, argument", [("discover", "path"), ("rules_list", "root")]
+)
+async def test_a_config_that_cannot_be_used_is_a_tool_error(
+    tmp_path, kind, tool, argument
+):
+    """The MCP edge catches the same family the CLI does: a bad profile, a cycle and unparseable
+    TOML reach the client as one line instead of a traceback on the server's stderr."""
+    phrase = write_broken_config(tmp_path, kind)
+    with pytest.raises(ToolError, match="invalid config") as caught:
+        await mcp.call_tool(tool, {argument: str(tmp_path)})
+    assert phrase in str(caught.value)
 
 
 async def test_report_tool(sample_repo):

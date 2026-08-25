@@ -7,7 +7,8 @@ import asyncio
 import difflib
 import json
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
@@ -17,7 +18,7 @@ from rich.console import Console
 from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
-from auditor.config import AuditorSettings, UnknownProfile, load_config
+from auditor.config import AuditorSettings, ConfigError, load_config
 from auditor.config_notice import NOTICE, ConfigNotice
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
@@ -109,18 +110,31 @@ def flush_config_notice() -> None:
 _NON_FIELD_LOC = ("", "[key]")
 
 
-def format_config_error(exc: UnknownProfile | ValidationError) -> str:
+def format_config_error(exc: ConfigError | ValidationError) -> str:
     """One line naming what is wrong with the configuration, for a failure with no traceback.
 
-    A bad profile speaks for itself; a validation error becomes ``'<dotted loc>: <msg>'`` with the
-    parts that name no field dropped, so a bad role or category key reads ``roles.tets`` rather
-    than ``roles.tets.``.
+    A bad profile, a cycle and unparseable TOML speak for themselves; a validation error becomes
+    ``'<dotted loc>: <msg>'`` with the parts that name no field dropped, so a bad role or category
+    key reads ``roles.tets`` rather than ``roles.tets.``.
     """
-    if isinstance(exc, UnknownProfile):
+    if isinstance(exc, ConfigError):
         return str(exc)
     err = exc.errors()[0]
     loc = ".".join(str(p) for p in err["loc"] if str(p) not in _NON_FIELD_LOC)
     return f"{loc}: {err['msg']}" if loc else err["msg"]
+
+
+@contextmanager
+def config_errors_as_one_line() -> Iterator[None]:
+    """Turn any configuration failure raised under this block into one clean line and exit 1.
+
+    Every command surface guards with this rather than its own ``except``, so a new kind of
+    config failure reaches a user as a message from all of them at once.
+    """
+    try:
+        yield
+    except (ConfigError, ValidationError) as exc:
+        fail(f"invalid config: {format_config_error(exc)}")
 
 
 def load_settings(
@@ -131,12 +145,12 @@ def load_settings(
     loader: PluginLoader | None = None,
     overrides: dict[str, object] | None = None,
 ) -> AuditorSettings:
-    """:func:`auditor.config.load_config` with both config failures turned into one clean line.
+    """:func:`auditor.config.load_config` with every config failure turned into one clean line.
 
     The same split as :func:`_connect`: the library raises so a caller can handle it, and the CLI
     edge is where a traceback becomes a message.
     """
-    try:
+    with config_errors_as_one_line():
         return load_config(
             root,
             profile=profile,
@@ -144,8 +158,6 @@ def load_settings(
             loader=loader,
             overrides=overrides,
         )
-    except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config: {format_config_error(exc)}")
 
 
 def require_exists(path: Path) -> None:

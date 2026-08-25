@@ -6,12 +6,11 @@ from pathlib import Path
 
 from fastmcp.exceptions import ToolError
 
-from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
-from auditor.mcp.helpers import DESTRUCTIVE, MUTATING, READ_ONLY
+from auditor.mcp.helpers import DESTRUCTIVE, MUTATING, READ_ONLY, tool_config
 from auditor.mcp.server import mcp
 from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
@@ -32,7 +31,7 @@ async def ignore_add(
     ``rule_id`` (must be a known rule unless ``force`` — e.g. an untrusted local plugin rule).
     Idempotent per scope."""
     root = find_root(Path(path))
-    load_config(
+    tool_config(
         root
     )  # register the repo's entry-point/config plugins so their rules validate
     if not force and rule_id not in REGISTRY.rule_ids():

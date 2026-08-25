@@ -499,7 +499,9 @@ def _walk_unknown(
     for key, value in raw.items():
         path = f"{prefix}{key}"
         field = model.model_fields.get(key)
-        if field is None:
+        # A field the loader fills in (``exclude=True``) is an output, not a key a config may set,
+        # so spelling it in TOML is as unknown as a typo.
+        if field is None or field.exclude:
             yield path
         else:
             yield from _walk_unknown_value(field.annotation, value, path)
@@ -541,8 +543,24 @@ def unknown_config_keys(raw: dict[str, object], model: type[BaseModel]) -> list[
     return sorted(_walk_unknown(model, raw, ""))
 
 
-class UnknownProfile(ValueError):
+class ConfigError(ValueError):
+    """A configuration that was found but cannot be used.
+
+    One base so every CLI and MCP edge can turn any config failure into a single line: a caller
+    catching this catches an unknown profile, a cycle in ``extends`` and unparseable TOML alike.
+    """
+
+
+class UnknownProfile(ConfigError):
     """``extends`` or ``--profile`` named a profile that is neither built in nor a readable file."""
+
+
+class CircularProfile(ConfigError):
+    """A profile's ``extends`` chain leads back to a profile already being loaded."""
+
+
+class MalformedConfig(ConfigError):
+    """A config or profile file exists but does not parse as TOML."""
 
 
 def _builtin_profiles() -> list[str]:
@@ -557,7 +575,7 @@ def _builtin_profiles() -> list[str]:
 def _load_profile(name_or_path: str, _seen: frozenset[str] = frozenset()) -> dict:
     """Load a built-in profile by name or a TOML file by path, resolving ``extends``."""
     if name_or_path in _seen:
-        raise ValueError(f"circular profile extends: {name_or_path}")
+        raise CircularProfile(f"circular profile extends: {name_or_path}")
     raw = _read_profile_toml(name_or_path)
     parent = raw.pop("extends", None)
     if parent:
@@ -566,13 +584,21 @@ def _load_profile(name_or_path: str, _seen: frozenset[str] = frozenset()) -> dic
     return raw
 
 
+def _parse_toml(text: str, source: str) -> dict:
+    """Parse one raw TOML layer, naming the file when it will not parse."""
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise MalformedConfig(f"{source} is not valid TOML: {exc}") from exc
+
+
 def _read_profile_toml(name_or_path: str) -> dict:
     path = Path(name_or_path)
     if path.suffix == ".toml" and path.exists():
-        return tomllib.loads(path.read_text())
+        return _parse_toml(path.read_text(), str(path))
     res = resources.files("auditor.profiles").joinpath(f"{name_or_path}.toml")
     if res.is_file():
-        return tomllib.loads(res.read_text())
+        return _parse_toml(res.read_text(), f"profile {name_or_path}")
     raise UnknownProfile(
         f"unknown profile {name_or_path!r}; choose a built-in ({', '.join(_builtin_profiles())}) "
         "or a path to a .toml file"
@@ -584,11 +610,13 @@ def _read_repo_tomls(root: Path) -> tuple[dict, dict]:
     pyproject: dict = {}
     pp = root / "pyproject.toml"
     if pp.exists():
-        pyproject = tomllib.loads(pp.read_text()).get("tool", {}).get("auditor", {})
+        pyproject = (
+            _parse_toml(pp.read_text(), str(pp)).get("tool", {}).get("auditor", {})
+        )
     standalone: dict = {}
     sa = root / ".auditor" / "config.toml"
     if sa.exists():
-        standalone = tomllib.loads(sa.read_text())
+        standalone = _parse_toml(sa.read_text(), str(sa))
     return pyproject, standalone
 
 
