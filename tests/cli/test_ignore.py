@@ -191,7 +191,7 @@ def test_ignored_finding_does_not_trip_the_gate(repo):
         ("ignore", "clear"),
     ],
 )
-def test_ignore_commands_warn_about_unknown_config_keys(repo, _restore_registry, args):
+def test_ignore_commands_warn_about_unknown_config_keys(repo, restore_registry, args):
     """Every other config-loading command warns once; these three were silent, so a typo in the
     repo's policy surfaced nowhere for anyone driving ignores."""
     (repo / ".auditor").mkdir(exist_ok=True)
