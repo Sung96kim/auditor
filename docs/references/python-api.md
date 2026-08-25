@@ -97,6 +97,23 @@ async with await IndexStore.connect(db_path, repo) as index:
   composes. They take the open connection and never commit.
 - Where the database lives and how it is partitioned is in [index.md](index.md).
 
+## Graph refinement
+
+- `auditor.graph.refine.service.RefinementService(index, root, settings, user, registry=None)`:
+  `begin`, `propose`, `status`, `commit`, `abort`, `prune`, `rebuild`. The only supported way to
+  record a graph correction; it is what the `graph_refine_*` MCP tools call. `registry` defaults to
+  the registry this process shares for that repo identity, and passing a fresh one splits the
+  staging.
+- `auditor.graph.refine.service.RefinementLedger(index=...)`: `accept`, `revert`, `pin`, `prune`,
+  `refinement`. The by-hand half of the lifecycle, over an index handle alone. It needs no checkout
+  root and no run, which is what `auditr graph refinements accept <id>` has to work without.
+- `auditor.graph.refine.verify.FactVerifier`: the AST-fact check one proposal has to pass. Pure, so
+  a caller reads the files and hands the facts in.
+- `auditor.graph.query.LogQuery(index)`: `page(spec)` for `graph log`'s two views and
+  `refinements(statuses, limit)` for the corrections page. The one reader the CLI and the MCP tools
+  both call, so the two surfaces cannot drift on ordering or on what a time window means. Both
+  answer newest first.
+
 ## Models
 
 - Exported records: `Finding` and `ManifestEntry` are frozen pydantic models; `ScanResult` and

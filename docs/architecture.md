@@ -67,7 +67,7 @@ Paths are relative to the repo root.
   `repo_identity()` / `repo_dir_key()` / `repo_dir()` / `ensure_repo_dir()`. The repo dir is keyed
   by sha1 of the resolved git common dir, so worktrees of one checkout share it and a symlinked or
   moved path does not mint a second one.
-- `skips.py`, `ignores.py`, `baseline.py`: the three suppression seams; `gate.py` is the gate they
+- `skips.py`, `ignores.py`, `baseline.py`: the suppression seams; `gate.py` is the gate they
   feed (see Cross-cutting behavior).
 - `reporters/base.py`: the `Reporter` ABC and `render(results, fmt)`. `serve.py` (`ReportServer`)
   serves a rendered page on an ephemeral `127.0.0.1` port and never binds a public interface.
@@ -80,7 +80,7 @@ Paths are relative to the repo root.
   command payload and `cli/render.py` one `render_*` function per payload, taking that model and
   never a dict; `cli/options.py` holds the shared Typer annotations. `present` is generic over the
   payload, so it dumps the model and a renderer paired with the wrong one is a type error.
-- `payload.py`: the two shells both payload modules build on, `WirePayload` (a frozen object) and
+- `payload.py`: the shells both payload modules build on, `WirePayload` (a frozen object) and
   `WireRows` (a frozen array of one row model), so each payload declares only its own fields. The
   graph query payloads live in `graph/payloads.py` instead, beside the query, so the CLI and the
   MCP tools read the same shape without importing each other.
@@ -182,7 +182,7 @@ flowchart TB
   reports how many findings survive skip directives and persistent ignores. `ScanEngine` holds the
   same object, so both report the same count. See [crossfile.md](references/crossfile.md).
 - `crossfile.run` clears the repo-level rules' rows, groups the `shapes` table for duplicate models
-  and functions within a role, then merges four pure passes: `settings_cohesion.find_scattered`,
+  and functions within a role, then merges the pure passes: `settings_cohesion.find_scattered`,
   `fixture_usage.find_unused`, `dead_code.find_dead`, and `private_usage.find_leaked_private`. It
   re-parses nothing.
 
@@ -232,8 +232,8 @@ flowchart TB
 
 - `cli/plugins.py` (`list`) constructs a `PluginLoader`, runs a config load through it, and prints
   `REGISTRY.snapshot()` plus the loader's warnings. See [plugins.md](references/plugins.md).
-- `plugins.PluginLoader` has three discovery paths: the `auditor.*` entry-point groups, modules
-  named in the config's `plugins` list, and `.auditor/plugins/*.py`. Local plugins execute repo
+- `plugins.PluginLoader` discovers plugins from the `auditor.*` entry-point groups, from modules
+  named in the config's `plugins` list, and from `.auditor/plugins/*.py`. Local plugins execute repo
   code, so they load only under `trust_local_plugins` or `--allow-local-plugins`.
 - The plugin contract is the ABCs themselves: subclass `Detector`, `LanguageAuditor` or `Reporter`
   and `__init_subclass__` registers it.
@@ -246,7 +246,7 @@ flowchart TB
 - `malware/tools.py` resolves each binary from `$AUDITOR_HOME/bin` first, then `PATH`, and reports
   versions. Those versions fold into the cache fingerprint, so a database refresh invalidates
   exactly the malware rows.
-- `malware/passes.py` runs two passes at scan time: `clamav.py` over the files `malware/walk.py`
+- `malware/passes.py` runs its passes at scan time: `clamav.py` over the files `malware/walk.py`
   enumerates (no gitignore filter, vendored dirs included by default), and `osv.py` over the repo's
   lockfiles. `malware/rules.py` registers the rule ids so `rules list`, config and SARIF
   descriptors know them.
@@ -280,7 +280,7 @@ flowchart TB
 - `graph/refine/` is the refinement layer. Stdlib, pydantic and `config.py`, no database:
   - `models.py` holds the frozen records: `Proposal` and the per-kind target rules, the stored
     `Refinement`, the anchors, and the eval rows a tier gate reads.
-  - `namespace.py` owns the node id: partition-relative against toplevel-relative, plus the two
+  - `namespace.py` owns the node id: partition-relative against toplevel-relative, plus the
     readers that take an id apart (`short_name`, `file_of`).
   - `overlay.py` is the pure merge one build applies, and `lock.py` the cross-process rebuild lock.
   - `verify.py` is the AST-fact check over the files a proposal names.
@@ -296,8 +296,8 @@ flowchart TB
   dims and shapes a row with.
 - `refine/tiers.py` reads spec 9.2's tier column and spec 10.3's gate. The tier comes from the
   proposal's shape; whether it activates comes from the eval rows measured on this repo for this
-  runner and model, per suite and stratum. With no rows, everything but the four kinds that cannot
-  add an edge starts `pending`.
+  runner and model, per suite and stratum. With no rows, everything but the kinds that cannot add
+  an edge starts `pending`.
 - `refine/conflicts.py` answers a proposal against the resolver's own edges first (an edge the
   resolver now produces is `redundant` and terminal) and then against the active refinements (the
   same edge is a confirmation, another destination for the same name contradicts).
@@ -309,11 +309,26 @@ flowchart TB
   anything is written and inserted as one `IndexStore.transaction`, and a rebuild that fails after
   it rejects every row the commit inserted, so a run that dies leaves nothing a later `accept`
   could activate and a retry cannot land the same change twice.
+- `graph/refine/payloads.py` holds the one wire model that narrows a service result,
+  `RunReportPayload`, because a `RunReport` carries a whole `Run`. It is separate from
+  `graph/payloads.py` because it imports the service, and therefore the graph build and numpy,
+  which no fast CLI command may load. `Verdict` and `refine/service.py`'s `CommitResult` are
+  emitted as themselves rather than copied into a second model.
+- `graph/query.py`'s `LogQuery` is the provenance reader: `page(spec)` for `graph log`'s two views
+  and `refinements(statuses, limit)` for the corrections page. It exists so a frozen wire model
+  never does database I/O and so the CLI and the MCP tools read one page one way. Every filter and
+  every time window is a SQL clause, applied before the `LIMIT`, and both surfaces page newest
+  first.
+- `mcp/refine_tools.py` is spec 9.5's in-session producer: `graph_refine_begin | propose | commit |
+  abort | status`, plus `graph_refinements` and `graph_log`. It builds a `RefinementService` per
+  call over the process registry for that repo identity and never constructs one of its own. There
+  is deliberately no tool for `accept`, `revert`, `pin` or `prune`: under spec 10.3 activating a
+  correction is a human step, and `auditr graph refinements` is where it happens.
 - `RefinementLedger` is the by-hand half over the index handle alone: `accept`, `revert` and `pin`
   are status transitions, because the build is the one merge point, and `prune` finishes the runs a
   dead process left open and then sweeps the retention window. It needs no run registry, no checkout root and no git guard, which is what a
   `graph refinements accept <id>` surface has to work without. `RefinementService` composes it.
-- `FactReader` does the three reads a proposal is judged against (its queue row, the role-filtered
+- `FactReader` does the reads a proposal is judged against (its queue row, the role-filtered
   definers of the name, a verifier over the files it names). `verify.FactVerifier` is pure by
   contract, so the reading has an object of its own.
 - A proposal is refused before any file is read when it is not a legal `Proposal` (the model's own
@@ -355,7 +370,7 @@ flowchart TB
   kinds into the resolver's output, `nodes` applies the node and cluster kinds to the ranked and
   clustered result, and `queue_rows` retires the rows a refinement answered. Each pass records its
   verdicts on the object, so `Overlay.outcomes` is whole however many passes the build ran.
-- `build.SimilarityPass` and `build.ClusterPass` are the build's own two seams: the name and usage
+- `build.SimilarityPass` and `build.ClusterPass` are the build's own seams: the name and usage
   edges plus the text-sparse set, and one ranking and clustering with the cluster rows and queue
   rows derived from it. Nothing in `run` is rebound to mean something else.
 - The detectors get their own pass: a second `build._clustered` over the edge list captured before
@@ -397,7 +412,7 @@ flowchart TB
   `ambiguous_name` and `unimportable_name` rows; the build pass adds `text_sparse`, `generic_label`
   and `singleton_cluster` rows after clustering. It is node-keyed, so `IndexStore.prune` never
   touches it. See [graph.md](references/graph.md).
-- `database/refinements.py` holds the four identity stores, one concern each:
+- `database/refinements.py` holds the identity stores, one concern each:
   - `RunsDB` (`index.runs`) owns `graph_runs`, one row per decision, model call or not.
   - `RefinementsDB` (`index.refinements`) owns `graph_refinements` and
     `graph_refinement_anchors`: one row per correction, plus the nodes it is pinned to with the
@@ -418,7 +433,7 @@ flowchart TB
   the `rejected` refinements it owns. Real runs are never swept, and neither is a skipped run that
   owns a `graph_tuning` row or a refinement that is not `rejected`: both reference
   `graph_runs.run_id` with no `ON DELETE`.
-- `graph/hashes.py` derives two hashes per node from the extracted facts: `truth_sha` over the fact
+- `graph/hashes.py` derives the per-node hashes from the extracted facts: `truth_sha` over the fact
   tuples structural edges read, and `facts_sha` over those plus `doc_tokens`.
   - `truth_sha` decides run gating and anchor drift; `facts_sha` decides whether similarity edges
     rebuild.
@@ -476,8 +491,8 @@ flowchart TB
   the `FastMCP` instance and caps any single tool response at `MAX_TOOL_RESPONSE_BYTES` so no call
   floods an agent's context. See [auditr-mcp.md](references/auditr-mcp.md).
 - The tool modules mirror the CLI: `scan_tools.py` (`scan`, `report`, `finding_detail`, `manifest`,
-  `discover`, `aggregate`), `rules_tools.py`, `ignore_tools.py`, `malware_tools.py`, and
-  `graph_tools.py`. Every module registers unconditionally.
+  `discover`, `aggregate`), `rules_tools.py`, `ignore_tools.py`, `malware_tools.py`,
+  `refine_tools.py`, and `graph_tools.py`. Every module registers unconditionally.
 - Every tool carries an annotation from `mcp/helpers.py`: `READ_ONLY`, `MUTATING` or `DESTRUCTIVE`,
   so a client can skip confirmation on reads and cache idempotent calls. None declare an open
   world; the tools touch the local repo only.
@@ -493,7 +508,7 @@ flowchart TB
   config reads the same from every tool it covers. No tool module calls `IndexStore.connect` or
   `open_repo_index`, and none holds its handle across an `audit_target` scan, which opens its own
   connection to the same database; `tests/graph/test_mcp_preamble.py` parses each one to keep it
-  that way and drives all fifteen against three broken configs.
+  that way and drives every one of them against three broken configs.
 - Two things sit outside that seam on purpose. `rules_list` is synchronous, so it cannot hold an
   async context manager and calls `tool_config(find_root(path))` directly. `server.py`'s
   `ConfigNoticeMiddleware` resolves its own root for the config notice, so a tool call resolves one
@@ -507,7 +522,7 @@ flowchart TB
 - `plugin/.claude-plugin/plugin.json` points at `plugin/skills/` (one directory per skill),
   `plugin/agents/auditor-reviewer.md` (the review subagent), and `plugin/.mcp.json` (a
   `uvx`-launched `auditr-mcp`). `plugin/settings.json` wires the status line.
-- `plugin/hooks/hooks.json` registers three stdlib hooks: `session_start.py` on `SessionStart`,
+- `plugin/hooks/hooks.json` registers the stdlib hooks: `session_start.py` on `SessionStart`,
   `audit_edit.py` on `PostToolUse` matching `Edit|Write`, and `verify_stop.py` on `Stop`.
 - `plugin/statusline/auditor_status.py` replicates `discovery.find_root` and `paths.repo_dir_key`
   in stdlib only, then reads the `scan` block of `$AUDITOR_HOME/repos/<key>/status.json`, which
@@ -524,7 +539,7 @@ flowchart TB
   rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`.
 - Two table classes, declared by `Table.cache`:
   - `cache=True` (partition tables): dropped and rebuilt by the next scan on a version change.
-  - `cache=False` (identity tables): never dropped. `repos`, `ignores` and the five `graph_*`
+  - `cache=False` (identity tables): never dropped. `repos`, `ignores` and the `graph_*`
     refinement tables. On every connect `IndexStore._migrate_identity_tables` reconciles their
     declared columns against `PRAGMA table_info` and adds what is missing with `ALTER TABLE`.
 - A column added to an identity table after it ships must be nullable or carry a default, must

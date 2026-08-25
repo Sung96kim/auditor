@@ -233,13 +233,14 @@ async def graph_refine_status(path: str = ".", run_id: str | None = None) -> dic
 async def graph_refinements(
     path: str = ".", status: list[str] | None = None, limit: int = LOG_ROW_LIMIT
 ) -> dict:
-    """The corrections recorded for this checkout, oldest first, which is the order a build applies
-    them in. Use graph_log with view="refinements" for the newest first. Filter with ``status``
+    """The corrections recorded for this checkout, newest first, so a page at the cap shows the
+    rows a human still has to judge rather than the superseded ones. Filter with ``status``
     (pending | active | stale | redundant | reverted | pinned | superseded | rejected), a
-    repeatable list; an unknown value is an error. Returns {rows, filtered}; ``filtered`` says
-    whether an empty list means "nothing matched" rather than "nothing recorded". A ``pending`` row
-    is waiting on a human running `auditr graph refinements accept <id>`; no tool here can activate
-    one."""
+    repeatable list; an unknown value is an error. Returns {rows, filtered, refinement_count,
+    truncated}; ``filtered`` says whether an empty list means "nothing matched" rather than
+    "nothing recorded", and ``refinement_count`` is how many rows the same filters match in all. A
+    ``pending`` row is waiting on a human running `auditr graph refinements accept <id>`; no tool
+    here can activate one."""
     async with tool_repo(path) as repo:
         try:
             statuses = enum_values(status, RefinementStatus, "status")
@@ -264,7 +265,10 @@ async def graph_log(
     (``view="refinements"``), newest first. ``status`` is validated against whichever view you
     chose, so a run status is an error in the refinements view and the message names the valid set.
     ``since`` takes a duration (90s, 45m, 2h, 7d) or an ISO date, never a git ref. Assessment-only
-    runs are hidden unless ``skipped`` is true. Returns {view, runs, refinements, filtered}."""
+    runs are hidden unless ``skipped`` is true. Returns {view, runs, refinements, filtered,
+    hidden_statuses, run_count, refinement_count, truncated}. The default run view sets
+    ``filtered`` because it hides assessment-only runs, and ``hidden_statuses`` names what it hid,
+    so an empty page there means "none you can see"."""
     async with tool_repo(path) as repo:
         try:
             spec = LogFilter.of(
