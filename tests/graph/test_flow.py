@@ -22,7 +22,6 @@ from auditor.graph.flow import (
     FlowDirection,
     FlowNode,
     FlowOptions,
-    FlowPayload,
     FlowResult,
     HubMark,
     _NodeMarks,
@@ -774,12 +773,19 @@ async def test_query_flow_returns_the_payload_shape(flow_store):
 
 
 async def test_the_payload_carries_every_walk_result_field(flow_store):
-    """The seam hand-copied five fields, so a new FlowResult field would never reach the wire."""
+    """The seam hand-copied five fields, so a new FlowResult field would never reach the wire.
+
+    Read off the dump, not the class: a declared field excluded from serialisation is exactly the
+    bug this exists to catch, and it leaves the two field sets equal.
+    """
     payload = await GraphQuery(flow_store).flow(
         "app/cli.py::main", FlowOptions(depth=1)
     )
     assert payload is not None
-    assert set(FlowResult.model_fields) <= set(FlowPayload.model_fields)
+    dumped = payload.model_dump(mode="json")
+    assert set(FlowResult.model_fields) <= set(dumped)
+    # a copied value, not a default the widening filled in
+    assert dumped["modules"] and dumped["limit"] == DEFAULT_FLOW_LIMIT
 
 
 async def test_query_flow_resolves_a_bare_name_and_reports_ambiguity(flow_store):
@@ -793,7 +799,7 @@ async def test_query_flow_resolves_a_bare_name_and_reports_ambiguity(flow_store)
     )
 
 
-async def test_query_flow_unknown_symbol_is_empty(flow_store):
+async def test_query_flow_unknown_symbol_returns_none(flow_store):
     assert await GraphQuery(flow_store).flow("does_not_exist") is None
 
 

@@ -188,7 +188,8 @@ def test_graph_export_flow_include_tests_widens_the_picture(graph_repo_flow_hub:
         ],
     )
     assert without.exit_code == 0 and with_tests.exit_code == 0
-    assert len(with_tests.stdout) >= len(without.stdout)
+    caller = "tests/test_entry.py::test_entry"
+    assert caller in with_tests.stdout and caller not in without.stdout
 
 
 def test_graph_export_flow_rejects_an_unknown_kind(graph_repo_flow: Path):

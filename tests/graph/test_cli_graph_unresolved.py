@@ -172,6 +172,27 @@ def test_a_queue_column_no_model_declares_fails_loudly(graph_repo: Path):
         QueueRowPayload.of({**rows[0], "run_id": 7})
 
 
+def test_a_stored_priority_survives_the_payload_round_trip():
+    """`UnresolvedRow._derive_priority` refills a missing priority from the reason and the call
+    form, so a value it would never derive is the only one that tells preserved from recomputed:
+    S3's `flow_leaf` bump reserves 0, and this row would otherwise derive 2."""
+    row = {
+        "node_id": "m.py::use",
+        "name": "handle",
+        "reason": "unimportable_name",
+        "fact_kind": "attr_callee",
+        "receiver_root": None,
+        "call_form": "bare",
+        "candidates": [],
+        "definers": [],
+        "resolution_path": [],
+        "priority": 0,
+        "externally_bound": False,
+    }
+    assert QueueRowPayload.of(row).priority == 0
+    assert QueueRowPayload.of({**row, "priority": None}).priority == 2
+
+
 def test_an_empty_queue_and_an_empty_filter_read_differently():
     """Four causes used to render one message; only the never-built one may name the build."""
     empty = _render(QueueReport(()))

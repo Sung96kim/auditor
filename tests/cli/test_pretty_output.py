@@ -6,6 +6,7 @@ Pretty path: call render functions directly with a StringIO Console (force_termi
 
 import io
 import json
+import re
 
 import pytest
 from rich.console import Console
@@ -175,7 +176,9 @@ def test_render_graph_build_shows_counts():
 
 
 def test_render_graph_unresolved_shows_the_row():
-    con, buf = _console()
+    """The counts are the only digits in the row, so the two columns are pinned in order: a
+    transposed pair renders a plausible table that reports the wrong side."""
+    con, buf = _plain_console()
     render_graph_unresolved(
         con,
         QueueReport(
@@ -188,8 +191,8 @@ def test_render_graph_unresolved_shows_the_row():
                     reason=UnresolvedReason.UNIMPORTABLE_NAME,
                     definers=("helper.py::handle",),
                     candidates=(),
-                    definers_count=1,
-                    candidates_count=0,
+                    definers_count=3,
+                    candidates_count=7,
                     externally_bound=True,
                 ),
             )
@@ -199,6 +202,8 @@ def test_render_graph_unresolved_shows_the_row():
     assert "m.py::use" in out
     assert "unimportable_name" in out
     assert "attr" in out
+    row = next(line for line in out.splitlines() if "m.py::use" in line)
+    assert re.findall(r"\d+", row) == ["3", "7"]
 
 
 def test_render_graph_unresolved_empty_queue():

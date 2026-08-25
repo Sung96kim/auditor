@@ -494,6 +494,11 @@ def test_graph_unresolved_row_keys_are_unchanged(graph_repo: Path):
     payload = cli_json(invoke("graph", "unresolved", str(graph_repo), "--json"))
     assert payload, "the fixture repo produced no unresolved rows"
     assert sorted(payload[0]) == QUEUE_ROW_KEYS
-    # `priority` is a stored column that `QueueRowPayload.of` now re-validates through
-    # `UnresolvedRow._derive_priority`; it must survive that round trip, not be recomputed away.
-    assert isinstance(payload[0]["priority"], int)
+    # `priority` is a stored column that `QueueRowPayload.of` re-validates through
+    # `UnresolvedRow._derive_priority`; the worst row is bare + unimportable_name, whose drain
+    # order is 2, so a recomputation that lands elsewhere fails here.
+    assert (payload[0]["reason"], payload[0]["call_form"]) == (
+        "unimportable_name",
+        "bare",
+    )
+    assert payload[0]["priority"] == 2

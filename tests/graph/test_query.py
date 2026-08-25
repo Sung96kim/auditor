@@ -31,7 +31,7 @@ async def test_concept_matches_by_label(query_store):
     }
 
 
-async def test_concept_no_match_returns_empty(query_store):
+async def test_concept_no_match_returns_none(query_store):
     """A term matching no label and no member name must return None, not the largest cluster."""
     assert await GraphQuery(query_store).concept("zzznotaconcept") is None
 
@@ -85,7 +85,7 @@ async def test_usages_groups_in_and_out_with_counts(query_store):
     assert out.used_by == {} and "name_similar" not in out.depends_on
 
 
-async def test_usages_unknown_returns_empty(query_store):
+async def test_usages_unknown_returns_none(query_store):
     assert await GraphQuery(query_store).usages("does_not_exist") is None
 
 
