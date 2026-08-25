@@ -145,7 +145,7 @@ def load_settings(
             overrides=overrides,
         )
     except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+        fail(f"invalid config: {format_config_error(exc)}")
 
 
 def require_exists(path: Path) -> None:

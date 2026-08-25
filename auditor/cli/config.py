@@ -40,7 +40,7 @@ def config_show(
         try:
             settings = load_user_settings(root)
         except ValidationError as exc:
-            fail(f"invalid user config — {format_config_error(exc)}")
+            fail(f"invalid user config: {format_config_error(exc)}")
     else:
         settings = load_settings(root, overrides=overrides)
     present(settings.model_dump(mode="json"), render_config_show, as_json=json_)
@@ -60,7 +60,7 @@ def config_check(
     try:
         load_user_settings(root)
     except ValidationError as exc:
-        fail(f"invalid user config — {format_config_error(exc)}")
+        fail(f"invalid user config: {format_config_error(exc)}")
     present(
         {
             "root": str(root),

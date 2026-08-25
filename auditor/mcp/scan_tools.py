@@ -49,7 +49,7 @@ def _report_or_link(
             body,
             mime_type="application/json",
             name=f"{kind}-full.json",
-            description=f"Full {kind} report — {findings} findings across {len(results)} "
+            description=f"Full {kind} report: {findings} findings across {len(results)} "
             f"files ({len(body)} bytes). Read this resource for the complete record.",
         )
     return json_payload(results, detail=detail, limit=limit)
@@ -107,7 +107,7 @@ async def scan(
             or resolve_tool("osv-scanner")
         ):
             raise ToolError(
-                "malware scan requested but neither ClamAV nor osv-scanner is installed — "
+                "malware scan requested but neither ClamAV nor osv-scanner is installed; "
                 "run malware_install (or `auditor malware install`)"
             )
         merged = dict(config or {})

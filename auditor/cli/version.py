@@ -35,7 +35,7 @@ def _update_status(ver: str) -> str:
         data = fetch_pypi(timeout=3)
         latest = pick_latest(data["releases"], data["info_version"], include_pre=False)
     except (RuntimeError, KeyError):
-        return "[dim]offline — couldn't reach PyPI[/dim]"
+        return "[dim]offline, could not reach PyPI[/dim]"
     if is_newer(ver, latest):
         return f"[yellow]↑ {latest} available[/yellow] [dim](auditr self update)[/dim]"
     return f"[green]✓ up to date[/green] [dim]({ver})[/dim]"

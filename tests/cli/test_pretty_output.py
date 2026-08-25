@@ -317,7 +317,7 @@ def test_render_ignore_add_shows_note():
             "file": "a.py",
             "line": 99,
             "reason": None,
-            "note": "no current finding at that line — stored with literal-line fallback",
+            "note": "no current finding at that line; stored with literal-line fallback",
         },
     )
     out = buf.getvalue()

@@ -226,7 +226,7 @@ def self_update(
     if dropped:
         err_console.print(
             f"[yellow]note:[/yellow] {latest} no longer offers extra(s) "
-            f"{', '.join(dropped)} — dropping from the upgrade"
+            f"{', '.join(dropped)}; dropping from the upgrade"
         )
     try:
         cmd = upgrade_command(
@@ -247,7 +247,7 @@ def self_update(
 
     if proc.returncode == 0:
         err_console.print(
-            f"[green]✓[/green] upgraded to {latest} — restart any running auditr processes"
+            f"[green]✓[/green] upgraded to {latest}; restart any running auditr processes"
         )
     else:
         err_console.print(

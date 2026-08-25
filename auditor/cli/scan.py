@@ -196,7 +196,7 @@ def scan(
         ):
             fail(
                 "malware scan requested but neither ClamAV nor osv-scanner is "
-                "installed — run `auditor malware install`"
+                "installed; run `auditor malware install`"
             )
         merged = dict(overrides or {})
         merged["malware_scan"] = {**merged.get("malware_scan", {}), "enabled": malware}
@@ -230,12 +230,12 @@ def scan(
             spinner=not verbose,
         )
     except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+        fail(f"invalid config: {format_config_error(exc)}")
 
     if write_baseline is not None:
         recorded = Baseline.from_results(results).write(write_baseline)
         err_console.print(
-            f"[bold]Wrote baseline[/bold] {write_baseline} — {recorded} finding(s) recorded"
+            f"[bold]Wrote baseline[/bold] {write_baseline}: {recorded} finding(s) recorded"
         )
         return
 

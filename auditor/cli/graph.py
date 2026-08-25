@@ -132,7 +132,7 @@ def graph_build(
     try:
         summary = run_staged(do_build, "building graph…")
     except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+        fail(f"invalid config: {format_config_error(exc)}")
     present(summary, render_graph_build, as_json=json_)
 
 
@@ -322,7 +322,7 @@ def graph_serve(
             "preparing graph UI…",
         )
     except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+        fail(f"invalid config: {format_config_error(exc)}")
     server = ReportServer(html)
     err_console.print(
         f"[{ACCENT}]◆[/] serving graph UI at [bold]{server.url}[/bold]  [dim](Ctrl-C to stop)[/dim]"

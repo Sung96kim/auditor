@@ -55,5 +55,5 @@ def report(
             f"auditing {file.name}…",
         )
     except (UnknownProfile, ValidationError) as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+        fail(f"invalid config: {format_config_error(exc)}")
     emit(render(results, fmt), output)

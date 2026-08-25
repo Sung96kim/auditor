@@ -55,7 +55,7 @@ Isolated = Annotated[
     bool,
     typer.Option(
         "--isolated",
-        help="Single file only — skip the index + cross-file pass (faster standalone check).",
+        help="Single file only: skip the index + cross-file pass (faster standalone check).",
     ),
 ]
 StrictTests = Annotated[

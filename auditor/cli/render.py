@@ -83,7 +83,7 @@ def render_graph_concept(out: Console, payload: dict[str, Any]) -> None:
     member_count = payload.get("member_count", 0)
     shown = payload.get("shown", 0)
     out.print(
-        f"[bold {_ACCENT}]{label}[/] — [dim]{member_count} members[/]"
+        f"[bold {_ACCENT}]{label}[/] [dim]({member_count} members)[/]"
         + (f", showing {shown}" if shown and shown < member_count else "")
     )
     members = payload.get("members", [])
@@ -130,7 +130,7 @@ def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
     )
     ambiguous = payload.get("ambiguous", [])
     if ambiguous:
-        out.print("[yellow]ambiguous[/] — also matched: " + ", ".join(ambiguous))
+        out.print("[yellow]ambiguous[/], also matched: " + ", ".join(ambiguous))
     for title, key in (("USED BY", "used_by"), ("DEPENDS ON", "depends_on")):
         groups = payload.get(key, {})
         if not groups:
@@ -199,7 +199,7 @@ def render_graph_flow(out: Console, payload: dict[str, Any]) -> None:
         out.print(f"[bold {_ACCENT}]modules[/]  " + " · ".join(modules))
     ambiguous = payload.get("ambiguous", [])
     if ambiguous:
-        out.print("[yellow]ambiguous[/] — also matched: " + ", ".join(ambiguous))
+        out.print("[yellow]ambiguous[/], also matched: " + ", ".join(ambiguous))
     root = payload["root"]
     tree = Tree(_flow_label(root, root=True))
     _flow_branch(tree, root)

@@ -81,7 +81,7 @@ async def _ignore_add(
     if line is not None and file is not None:
         evidence = await finding_evidence_at(root, file, rule_id, line)
         if evidence is None:
-            note = "no current finding at that line — stored with literal-line fallback"
+            note = "no current finding at that line; stored with literal-line fallback"
         else:
             ev_hash = evidence_hash(evidence)
     async with await open_index(root) as index:
