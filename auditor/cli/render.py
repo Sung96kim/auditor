@@ -277,8 +277,9 @@ def render_graph_refinements(out: Console, payload: RefinementsReport) -> None:
             row.summary,
         )
         drift = "[yellow]drifted[/] " if row.drifted else ""
-        detail = " ".join(f"{k}={v}" for k, v in _proposed_values(row))
-        t.add_row("", "", "", "", f"{drift}[dim]{detail} {row.reason}[/]".strip())
+        proposed = " ".join(f"{k}={v}" for k, v in _proposed_values(row))
+        note = f"{proposed} {row.reason}".strip()
+        t.add_row("", "", "", "", f"{drift}[dim]{note}[/]")
     out.print(t)
     if payload.truncated:
         out.print(

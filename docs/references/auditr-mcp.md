@@ -147,8 +147,10 @@ args = ["run", "-i", "--rm",
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs`,
   `malware_install` and the four `graph_refine_*` tools that write (`begin`, `propose`, `commit`,
   `abort`), destructive for `ignore_remove`. Destructive means a row is deleted, which is why
-  `graph_refine_abort` is only mutating: it drops staging that was never written. No tool touches an
-  open world; all of them work on the local repo.
+  `graph_refine_abort` is only mutating: it drops staging that was never written.
+  `graph_refine_begin` and `graph_refine_propose` are additionally marked non-idempotent, because
+  each call opens a run or stages another proposal: a client must not silently retry them. No tool
+  touches an open world; all of them work on the local repo.
 - Every tool resolves its project root, loads the repo policy and opens the shared index through
   one seam, so a tool always addresses the same checkout identity the CLI does. A repo whose
   configuration does not load comes back as a one-line tool error naming the offending key, never a

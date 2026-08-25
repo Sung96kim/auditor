@@ -20,7 +20,14 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.payloads import CommitPayload, RunReportPayload
 from auditor.graph.refine.service import RefinementRefused, RefinementService
-from auditor.mcp.helpers import MUTATING, READ_ONLY, ToolRepo, tool_repo, tool_user
+from auditor.mcp.helpers import (
+    MUTATING,
+    MUTATING_ONCE,
+    READ_ONLY,
+    ToolRepo,
+    tool_repo,
+    tool_user,
+)
 from auditor.mcp.server import mcp
 
 #: the env var `GlobalPaths.refine_run` binds, named in the error that tells a caller about it
@@ -57,7 +64,7 @@ def _client(raw: str) -> ClientKind:
     return ClientKind(enum_value(raw, ClientKind, "client"))
 
 
-@mcp.tool(annotations=MUTATING)
+@mcp.tool(annotations=MUTATING_ONCE)
 async def graph_refine_begin(
     path: str = ".",
     scope: str = "",
@@ -87,7 +94,7 @@ async def graph_refine_begin(
     return RunRowPayload.of(run).model_dump(mode="json")
 
 
-@mcp.tool(annotations=MUTATING)
+@mcp.tool(annotations=MUTATING_ONCE)
 async def graph_refine_propose(
     path: str = ".",
     run_id: str | None = None,

@@ -766,6 +766,20 @@ async def test_every_graph_tool_registers_unconditionally():
 # --- output-volume hardening ------------------------------------------------------------
 
 
+#: the refinement tools and what each one advertises: (readOnlyHint, idempotentHint). `abort` is
+#: mutating and not destructive on purpose (it drops staging that was never written), and the two
+#: that open or stage work of their own are not idempotent, so a retried timeout is visible.
+_REFINE_ANNOTATIONS = {
+    "graph_refine_begin": (False, False),
+    "graph_refine_propose": (False, False),
+    "graph_refine_commit": (False, True),
+    "graph_refine_abort": (False, True),
+    "graph_refine_status": (True, True),
+    "graph_refinements": (True, True),
+    "graph_log": (True, True),
+}
+
+
 async def test_tool_annotations_read_only_vs_mutating():
     """Read tools advertise readOnlyHint; index-writers don't; ignore_remove is destructive."""
     tools = {t.name: t for t in await mcp.list_tools()}
@@ -776,6 +790,19 @@ async def test_tool_annotations_read_only_vs_mutating():
     assert tools["malware_update_dbs"].annotations.readOnlyHint is False
     assert tools["malware_install"].annotations.readOnlyHint is False
     assert tools["graph_build"].annotations.readOnlyHint is False
+
+
+@pytest.mark.parametrize("name", sorted(_REFINE_ANNOTATIONS))
+async def test_the_refinement_tools_advertise_what_they_do(name: str):
+    """A client decides whether to prompt from these, and `graph_refine_abort` being destructive
+    would contradict the reference page: destructive means a row is deleted, and abort drops
+    staging that was never written. Nothing pinned any of the seven."""
+    read_only, idempotent = _REFINE_ANNOTATIONS[name]
+    annotations = {t.name: t.annotations for t in await mcp.list_tools()}[name]
+    assert annotations.readOnlyHint is read_only
+    assert annotations.idempotentHint is idempotent
+    assert annotations.destructiveHint is not True
+    assert annotations.openWorldHint is False
 
 
 def test_response_limiting_middleware_registered():

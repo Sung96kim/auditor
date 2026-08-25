@@ -23,6 +23,11 @@ from auditor.user_settings import UserSettings, load_user_settings
 # so none touch an open world.
 READ_ONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True, openWorldHint=False)
 MUTATING = ToolAnnotations(readOnlyHint=False, idempotentHint=True, openWorldHint=False)
+#: a write a retry would repeat rather than re-apply: each call opens or stages work of its own,
+#: so a client retrying a timeout must not do it silently
+MUTATING_ONCE = ToolAnnotations(
+    readOnlyHint=False, idempotentHint=False, openWorldHint=False
+)
 DESTRUCTIVE = ToolAnnotations(
     readOnlyHint=False, idempotentHint=True, destructiveHint=True, openWorldHint=False
 )

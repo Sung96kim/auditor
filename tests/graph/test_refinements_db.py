@@ -110,8 +110,8 @@ def _refinement(run_id: str, **kw) -> Refinement:
                 src="m.py::f", dst="s.py::g", edge_kind=EdgeKind.CALLS, name="g"
             ),
         ),
-        created_at=100.0,
-        status_at=100.0,
+        created_at=kw.pop("created_at", 100.0),
+        status_at=kw.pop("status_at", 100.0),
         **kw,
     )
 
@@ -592,6 +592,81 @@ async def test_tuning_and_evals_survive_a_forgotten_repo(refine_store):
     await refine_store.repos.forget()
     assert len(await refine_store.tuning.tuning()) == 1
     assert len(await refine_store.evals.evals()) == 1
+
+
+async def test_runs_can_exclude_a_status_from_the_default_view(refine_store):
+    """The default `graph log` view excludes `skipped`. With no row of that status in any test,
+    deleting the clause left the suite green and three assessment runs leaked into the view."""
+    kept = await refine_store.runs.add_run(_run(status=RunStatus.SUCCEEDED))
+    await refine_store.runs.add_run(_run(status=RunStatus.SKIPPED))
+    everything = await refine_store.runs.runs()
+    assert len(everything) == 2
+    visible = await refine_store.runs.runs(exclude=[RunStatus.SKIPPED])
+    assert [r.run_id for r in visible] == [kept]
+    assert await refine_store.runs.count(exclude=[RunStatus.SKIPPED]) == 1
+
+
+async def test_runs_apply_their_time_window_and_count_the_same_rows(refine_store):
+    await refine_store.runs.add_run(_run(started_at=100.0))
+    recent = await refine_store.runs.add_run(_run(started_at=900.0))
+    assert [r.run_id for r in await refine_store.runs.runs(since=500.0)] == [recent]
+    assert await refine_store.runs.count(since=500.0) == 1
+    assert await refine_store.runs.count() == 2
+
+
+async def test_the_newest_first_order_is_the_one_the_window_filters_on(refine_store):
+    """`since` filters `created_at`, so the page has to order on it too: ordered by id alone, a
+    backdated row pages ahead of rows inside the window."""
+    run_id = await refine_store.runs.add_run(_run())
+    old_but_last = await refine_store.refinements.add_refinement(
+        _refinement(run_id, created_at=10.0)
+    )
+    newest = await refine_store.refinements.add_refinement(
+        _refinement(run_id, created_at=900.0)
+    )
+    page = await refine_store.refinements.refinements(newest_first=True)
+    assert [r.refinement_id for r in page] == [newest, old_but_last]
+    oldest_first = await refine_store.refinements.refinements()
+    assert [r.refinement_id for r in oldest_first] == [old_but_last, newest]
+
+
+async def test_the_time_window_runs_before_the_limit_not_after_it(refine_store):
+    """The window is in SQL on purpose. Moved into Python after the `LIMIT`, an oldest-first page
+    of a busy repo fetches fifty ancient rows and drops every one of them: 5 becomes 0."""
+    run_id = await refine_store.runs.add_run(_run())
+    for _ in range(55):
+        await refine_store.refinements.add_refinement(
+            _refinement(run_id, created_at=100.0)
+        )
+    for _ in range(5):
+        await refine_store.refinements.add_refinement(
+            _refinement(run_id, created_at=900.0)
+        )
+    inside = await refine_store.refinements.refinements(
+        since=500.0, newest_first=False, limit=50
+    )
+    assert len(inside) == 5
+    assert await refine_store.refinements.count(since=500.0) == 5
+    assert await refine_store.refinements.count() == 60
+
+
+async def test_counts_by_run_splits_what_a_run_kept_from_what_it_refused(refine_store):
+    """The run log's last column. Returning `{}` was invisible: nothing asserted a count."""
+    mine = await refine_store.runs.add_run(_run())
+    other = await refine_store.runs.add_run(_run())
+    await refine_store.refinements.add_refinement(_refinement(mine))
+    await refine_store.refinements.add_refinement(
+        _refinement(mine, status=RefinementStatus.REJECTED)
+    )
+    await refine_store.refinements.add_refinement(
+        _refinement(mine, status=RefinementStatus.REJECTED)
+    )
+    counts = await refine_store.refinements.counts_by_run([mine, other])
+    assert (counts[mine].committed, counts[mine].rejected) == (1, 2)
+    assert counts[mine].total == 3
+    assert counts[mine].summary == "1 committed, 2 rejected"
+    assert other not in counts
+    assert await refine_store.refinements.counts_by_run([]) == {}
 
 
 async def test_prune_skipped_runs_spares_real_runs_and_recent_ones(refine_store):

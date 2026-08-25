@@ -91,9 +91,38 @@ def _command_paths() -> set[tuple[str, ...]]:
     return walk(root, click.Context(root))
 
 
+#: how each silent command is invoked here, or why it is not: the bucket is a property of the
+#: command, so it is proved by running it rather than declared by which set it sits in
+SILENT_ARGV: dict[tuple[str, ...], tuple[str, ...] | str] = {
+    ("init",): ("init", "--check", "-r", "{repo}"),
+    ("manifest",): ("manifest", "{repo}/a.py"),
+    ("version",): ("version",),
+    ("config", "check"): ("config", "check", "-r", "{repo}"),
+    ("index", "repos"): ("index", "repos"),
+    ("malware", "install"): "installs a system package",
+    ("malware", "status"): ("malware", "status"),
+    ("malware", "update-dbs"): "downloads virus databases",
+    ("self", "update"): "reaches PyPI and rewrites the installation",
+}
+
+
 def test_the_command_registry_is_fully_classified():
-    """A new command has to be put in one bucket or the other, so it cannot ship undecided."""
+    """A new command has to be put in one bucket or the other, so it cannot ship undecided, and a
+    silent one has to say how it is invoked or why it cannot be, so its bucket is proved below
+    rather than taken on trust."""
     assert _command_paths() == WARNING_COMMANDS | SILENT_COMMANDS
+    assert set(SILENT_ARGV) == SILENT_COMMANDS
+
+
+@pytest.mark.parametrize("path", sorted(SILENT_COMMANDS))
+def test_a_silent_command_prints_no_notice(bad_config, path):
+    """Moving a command into this bucket used to cost nothing: the registry test only checked the
+    union, so a command that does warn could sit here and the suite stayed green."""
+    argv = SILENT_ARGV[path]
+    if isinstance(argv, str):
+        pytest.skip(f"not invoked here: {argv}")
+    result = invoke(*(part.format(repo=bad_config) for part in argv))
+    assert "unknown config key" not in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -111,11 +140,12 @@ def test_the_command_registry_is_fully_classified():
         ("rules", "list", "-r", "{repo}"),
         ("graph", "clusters", "{repo}"),
         ("graph", "unresolved", "{repo}"),
+        ("graph", "refinements", "list", "{repo}"),
     ],
 )
 def test_a_config_loading_command_warns_exactly_once(bad_config, argv):
-    """Twelve of the twenty-six warning commands, one per command module plus both graph
-    modules, so the property is not proved on `discover` alone."""
+    """One per command module plus both graph modules and the nested refinements sub-app, so the
+    property is not proved on `discover` alone."""
     result = invoke(*(part.format(repo=bad_config) for part in argv))
     assert result.exit_code == 0, result.output
     assert "unknown config key: bogus" in result.stderr

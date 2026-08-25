@@ -365,6 +365,17 @@ async def test_the_log_and_the_status_agree_on_what_a_run_produced(queued_repo: 
     assert row["summary"] == "1 committed, 1 rejected"
 
 
+async def test_an_unknown_refinements_status_names_the_valid_set(queued_repo: Path):
+    """`graph_log`'s status was pinned and this one was not. Dropping the check answered every
+    row with `filtered: false`, which is exactly the empty page read as an empty result that
+    validating against the enum exists to prevent."""
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="unknown status"):
+            await client.call_tool(
+                "graph_refinements", {"path": str(queued_repo), "status": ["nope"]}
+            )
+
+
 async def test_the_refinements_view_reports_whether_it_was_filtered(queued_repo: Path):
     """One recorded row, so "empty" and "filtered to nothing" are two different answers rather than
     the same empty list twice."""

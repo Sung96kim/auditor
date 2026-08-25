@@ -2,6 +2,8 @@
 
 import asyncio
 import io
+import re
+import shutil
 import time
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from auditor.graph.payloads import RefinementRowPayload, RefinementsReport
 from auditor.graph.refine.models import (
     ProducerKind,
     RefinementKind,
+    RefinementPayload,
     RefinementStatus,
     Run,
     RunnerKind,
@@ -28,7 +31,7 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.service import RunRegistry
 from auditor.mcp import mcp
-from auditor.paths import user_config_path
+from auditor.paths import auditor_home, user_config_path
 
 runner = CliRunner()
 
@@ -312,8 +315,30 @@ def test_the_default_run_view_says_it_hid_the_skipped_rows(refined_repo: Path):
     assert shown["run_count"] == 1
 
 
+def _refined_edges(repo: Path) -> int:
+    """Edges the overlay put in the graph, which is what a rebuild would have added."""
+
+    async def go() -> int:
+        index = await open_repo_index(repo)
+        try:
+            edges = await index.graph.all_edges()
+            return sum(1 for e in edges if e["provenance"] == "refined")
+        finally:
+            await index.aclose()
+
+    return asyncio.run(go())
+
+
 def test_accept_activates_and_the_next_build_applies_it(refined_repo: Path):
+    """`accept` is a status change and nothing else: the build is the one merge point (spec 6).
+
+    The locks directory is emptied first because the commit that produced this row already took
+    the rebuild lock; a stopwatch is not the gate, since a rebuild of a three-file repo is fast
+    enough to be flaky, but the lock file and the unapplied edge are not.
+    """
     rid = _propose(refined_repo)
+    locks = auditor_home() / "observer" / "locks"
+    shutil.rmtree(locks, ignore_errors=True)
     accepted = cli_json(
         runner.invoke(
             app,
@@ -321,10 +346,13 @@ def test_accept_activates_and_the_next_build_applies_it(refined_repo: Path):
         )
     )
     assert accepted["status"] == "active"
+    assert not list(locks.glob("*.lock"))
+    assert _refined_edges(refined_repo) == 0
     built = cli_json(
         runner.invoke(app, ["graph", "build", str(refined_repo), "--no-scan", "--json"])
     )
     assert built["refined"] == 1
+    assert _refined_edges(refined_repo) == 1
 
 
 @pytest.mark.parametrize(
@@ -410,6 +438,23 @@ def test_a_broken_user_config_is_one_line_from_prune(refined_repo: Path):
     assert "Traceback" not in result.output
 
 
+def _row() -> RefinementRowPayload:
+    """One `add_edge` row with a real node id: 70-odd characters, which is what the five-column
+    layout has to keep on one line at width 120."""
+    return RefinementRowPayload(
+        refinement_id=3,
+        run_id="r1",
+        kind=RefinementKind.ADD_EDGE,
+        tier=Tier.B,
+        status=RefinementStatus.PENDING,
+        src="plugin/hooks/audit_edit.py::main",
+        dst="plugin/hooks/_common.py::read_event",
+        edge_kind=EdgeKind.CALLS,
+        name="read_event",
+        reason="main calls read_event, imported from the sibling _common",
+    )
+
+
 def _render(payload) -> str:
     buf = io.StringIO()
     console = Console(file=buf, width=120)
@@ -425,22 +470,62 @@ def test_the_empty_renderer_distinguishes_no_rows_from_no_matches():
     assert "matched" in _render(RefinementsReport(filtered=True))
 
 
+def _cells(rendered: str, first: str) -> list[str]:
+    """The cells of the row whose first column is ``first``, so a value under the wrong header is
+    visible where a substring search over the whole table is not."""
+    for line in rendered.splitlines():
+        parts = re.split(r"[│┃]", line)
+        cells = [c.strip() for c in parts[1:-1]]
+        if len(parts) > 2 and cells and cells[0] == first:
+            return cells
+    raise AssertionError(f"no row starting {first!r} in\n{rendered}")
+
+
+def test_every_value_is_rendered_under_its_own_header():
+    """Swapping the tier and the status left the suite green: every asserted substring was still
+    somewhere in the table, just in the wrong column."""
+    out = _render(RefinementsReport.of([_row()], filtered=False, total=1))
+    assert _cells(out, "id") == ["id", "kind", "tier", "status", "target"]
+    assert _cells(out, "3") == [
+        "3",
+        "add_edge",
+        "B",
+        "pending",
+        "plugin/hooks/audit_edit.py::main -> plugin/hooks/_common.py::read_event",
+    ]
+
+
+def test_a_capped_page_says_how_many_rows_there_are():
+    assert "showing 1 of 9" in _render(
+        RefinementsReport.of([_row()], filtered=False, total=9)
+    )
+    assert "showing" not in _render(
+        RefinementsReport.of([_row()], filtered=False, total=1)
+    )
+
+
+def test_the_panel_shows_the_label_a_cluster_row_proposes():
+    """A `relabel_cluster` row printed an empty target and no label, which is the whole of what a
+    human accepting it has to judge."""
+    row = RefinementRowPayload(
+        refinement_id=4,
+        run_id="r1",
+        kind=RefinementKind.RELABEL_CLUSTER,
+        tier=Tier.A,
+        status=RefinementStatus.PENDING,
+        members=("m.py::f", "m.py::g"),
+        payload=RefinementPayload(label="user lookup"),
+        reason="both fetch a user",
+    )
+    out = _render(row)
+    assert "m.py::f, m.py::g" in out
+    assert "user lookup" in out
+
+
 def test_the_row_renderer_shows_the_edge_the_tier_and_the_reason():
     """A real node id is 70-odd characters. Five columns keep it on one line at width 120; the
     reason rides the continuation row rather than stealing half the table."""
-    row = RefinementRowPayload(
-        refinement_id=3,
-        run_id="r1",
-        kind=RefinementKind.ADD_EDGE,
-        tier=Tier.B,
-        status=RefinementStatus.PENDING,
-        src="plugin/hooks/audit_edit.py::main",
-        dst="plugin/hooks/_common.py::read_event",
-        edge_kind=EdgeKind.CALLS,
-        name="read_event",
-        reason="main calls read_event, imported from the sibling _common",
-    )
-    out = _render(RefinementsReport(rows=(row,)))
+    out = _render(RefinementsReport.of([_row()], filtered=False, total=1))
     assert (
         "plugin/hooks/audit_edit.py::main -> plugin/hooks/_common.py::read_event" in out
     )
