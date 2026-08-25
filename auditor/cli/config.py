@@ -14,7 +14,7 @@ from auditor.cli.helpers import (
 )
 from auditor.cli.options import ConfigJson, RootArg, UserConfig
 from auditor.cli.render import render_config_check, render_config_show
-from auditor.config import load_config_report
+from auditor.config import load_config
 from auditor.discovery import find_root
 from auditor.user_settings import load_user_settings, unknown_user_keys
 
@@ -43,11 +43,10 @@ def config_show(
         warn_unknown_config(unknown_user_keys(root))
     else:
         try:
-            loaded = load_config_report(root, overrides=parse_config_json(config_json))
+            settings = load_config(root, overrides=parse_config_json(config_json))
         except ValidationError as exc:
             fail(f"invalid config — {format_config_error(exc)}")
-        warn_unknown_config(loaded.unknown_keys)
-        settings = loaded.settings
+        warn_unknown_config(settings.unknown_keys)
     present(settings.model_dump(mode="json"), render_config_show, as_json=json_)
 
 
@@ -61,7 +60,7 @@ def config_check(
     root = find_root(target)
     overrides = parse_config_json(config_json)
     try:
-        loaded = load_config_report(root, overrides=overrides)
+        settings = load_config(root, overrides=overrides)
     except ValidationError as exc:
         fail(f"invalid config — {format_config_error(exc)}")
     try:
@@ -72,7 +71,7 @@ def config_check(
     present(
         {
             "root": str(root),
-            "policy_unknown": list(loaded.unknown_keys),
+            "policy_unknown": list(settings.unknown_keys),
             "user_unknown": unknown_user_keys(root),
         },
         render_config_check,

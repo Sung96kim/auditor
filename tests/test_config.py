@@ -6,6 +6,7 @@ import warnings
 import pytest
 from pydantic import BaseModel, ValidationError
 
+import auditor.config as config_module
 from auditor.config import (
     AuditorSettings,
     CategoryConfig,
@@ -18,7 +19,6 @@ from auditor.config import (
     _NonPolicyEnvSource,
     is_configured,
     load_config,
-    load_config_report,
     unknown_config_keys,
     unknown_repo_keys,
 )
@@ -192,9 +192,9 @@ def test_unknown_config_keys_are_reported_not_raised(
     path = tmp_path / config_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
-    report = load_config_report(tmp_path)
-    assert report.unknown_keys == tuple(expected)
-    assert report.settings.extends == "base"  # the load still succeeds
+    settings = load_config(tmp_path)
+    assert settings.unknown_keys == tuple(expected)
+    assert settings.extends == "base"  # the load still succeeds
     assert unknown_repo_keys(tmp_path) == expected  # same list without a plugin load
 
 
@@ -220,11 +220,11 @@ def test_valid_config_reports_nothing(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="base"\n'
     )
-    assert load_config_report(tmp_path).unknown_keys == ()
+    assert load_config(tmp_path).unknown_keys == ()
 
 
 def test_load_config_never_warns(tmp_path):
-    """Regression: unknown keys are a value on the report, never a `warnings.warn` from the
+    """Regression: unknown keys are a value on the settings, never a `warnings.warn` from the
     loader. A warning here would land on stdout-adjacent output and corrupt `-f json`."""
     (tmp_path / ".auditor").mkdir()
     (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
@@ -291,7 +291,7 @@ def test_overrides_merge_as_highest_layer(tmp_path):
 
 def test_overrides_unknown_key_is_reported(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    assert load_config_report(tmp_path, overrides={"nope": 1}).unknown_keys == ("nope",)
+    assert load_config(tmp_path, overrides={"nope": 1}).unknown_keys == ("nope",)
 
 
 # ---------------------------------------------------------------------------
@@ -535,3 +535,21 @@ def test_a_graph_knob_is_repo_configurable(tmp_path, key, literal, expected):
         f'[project]\nname="x"\nversion="0"\n[tool.auditor.graph]\n{key}={literal}\n'
     )
     assert getattr(load_config(tmp_path).graph, key) == expected
+
+
+def test_unknown_keys_never_reach_the_dumped_config(tmp_path):
+    """Regression: `config show --json` is a pinned contract, so the field the loader fills must
+    not appear in any dump of the settings."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    settings = load_config(tmp_path)
+    assert settings.unknown_keys == ("malware_scan.bogus",)
+    assert "unknown_keys" not in settings.model_dump(mode="json")
+    assert "unknown_keys" not in settings.model_dump()
+    assert "unknown_keys" not in settings.model_dump_json()
+
+
+def test_load_config_report_is_gone():
+    """The two-entry-point era is over; a straggling import must fail loudly, not resolve."""
+    assert not hasattr(config_module, "load_config_report")
+    assert not hasattr(config_module, "ConfigReport")

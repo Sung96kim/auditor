@@ -109,12 +109,11 @@ scan auditor/cli/scan.py  ? render
 ├── → _diff_report_only auditor/cli/scan.py
 │   ├── → fail auditor/cli/helpers.py  ↺ seen
 │   ├── → load_config auditor/config.py
-│   │   └── → load_config_report auditor/config.py
-│   │       ├── → merged_config_dict auditor/config.py  ↺ seen
-│   │       ├── → unknown_config_keys auditor/config.py  ↺ seen
-│   │       ├── → PluginLoader.load_config_modules auditor/plugins.py
-│   │       ├── → PluginLoader.load_entry_points auditor/plugins.py
-│   │       └── → PluginLoader.load_local auditor/plugins.py
+│   │   ├── → merged_config_dict auditor/config.py  ↺ seen
+│   │   ├── → unknown_config_keys auditor/config.py  ↺ seen
+│   │   ├── → PluginLoader.load_config_modules auditor/plugins.py
+│   │   ├── → PluginLoader.load_entry_points auditor/plugins.py
+│   │   └── → PluginLoader.load_local auditor/plugins.py
 │   ├── → default_base_ref auditor/discovery.py
 │   │   └── → _git auditor/discovery.py  ? run
 │   ├── → find_root auditor/discovery.py  ↺ seen ⊕ 48 hub

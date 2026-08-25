@@ -194,7 +194,7 @@ flowchart TB
 
 ## config
 
-- `cli/config.py` (`show`, `check`) runs `config.load_config_report` for the resolved root and
+- `cli/config.py` (`show`, `check`) runs `config.load_config` for the resolved root and
   dumps the merged `AuditorSettings`. It is how you see which layer won. `--user` dumps the
   resolved `UserSettings` instead, and `check` reports the keys no model declares in either. See
   [config.md](references/config.md).

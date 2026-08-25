@@ -33,7 +33,7 @@ from auditor.cli.render import (
     render_ignore_list,
     render_ignore_rm,
 )
-from auditor.config import load_config_report, unknown_repo_keys
+from auditor.config import load_config, unknown_repo_keys
 from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
@@ -59,8 +59,8 @@ def ignore_add(
     if line is not None and file is None:
         fail("--line requires --file")
     root = find_root(target)
-    loaded = load_config_report(root, allow_local_plugins=allow_local_plugins)
-    warn_unknown_config(loaded.unknown_keys)
+    settings = load_config(root, allow_local_plugins=allow_local_plugins)
+    warn_unknown_config(settings.unknown_keys)
     if not force and rule_id not in REGISTRY.rule_ids():
         fail(
             f"unknown rule_id {rule_id!r}; run `auditor rules list` to see rules "

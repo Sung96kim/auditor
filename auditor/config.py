@@ -363,12 +363,19 @@ class _NonPolicyEnvSource(EnvSettingsSource):
 
 
 class AuditorSettings(BaseSettings):
-    """The merged repo configuration."""
+    """The merged repo configuration, plus the keys no model declares.
+
+    ``unknown_keys`` is a value on the settings, never a warning from the loader: only the CLI and
+    MCP edges decide whether a human sees them, and both print to stderr so machine output on
+    stdout stays parseable. It is excluded from every dump, because ``config show --json`` is a
+    pinned contract.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="AUDITOR_", extra="ignore", validate_default=False
     )
 
+    unknown_keys: tuple[str, ...] = Field(default=(), exclude=True)
     extends: str = "base"
     exclude: list[str] = Field(default_factory=list)
     resolve_packages: list[str] = Field(
@@ -421,6 +428,13 @@ class AuditorSettings(BaseSettings):
             _NonPolicyEnvSource(settings_cls),
             dotenv_settings,
             file_secret_settings,
+        )
+
+    @classmethod
+    def merged(cls, raw: dict[str, object]) -> "AuditorSettings":
+        """Validate one raw merged config dict and carry the keys no model declares."""
+        return cls.model_validate(raw).model_copy(
+            update={"unknown_keys": tuple(unknown_config_keys(raw, cls))}
         )
 
     @field_validator("rules", mode="after")
@@ -528,19 +542,6 @@ def unknown_config_keys(raw: dict[str, object], model: type[BaseModel]) -> list[
     return sorted(_walk_unknown(model, raw, ""))
 
 
-class ConfigReport(BaseModel):
-    """A loaded config plus the keys no model declares.
-
-    The unknown keys are a value, never a ``warnings.warn``: only the CLI edge decides whether a
-    human sees them, and it prints to stderr so machine output on stdout stays parseable.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    settings: AuditorSettings
-    unknown_keys: tuple[str, ...] = ()
-
-
 def _load_profile(name_or_path: str, _seen: frozenset[str] = frozenset()) -> dict:
     """Load a built-in profile by name or a TOML file by path, resolving ``extends``."""
     if name_or_path in _seen:
@@ -625,34 +626,6 @@ def unknown_repo_keys(
     )
 
 
-def load_config_report(
-    root: Path,
-    *,
-    profile: str | None = None,
-    allow_local_plugins: bool = False,
-    loader: "PluginLoader | None" = None,
-    overrides: dict | None = None,
-) -> ConfigReport:
-    """Two-phase load: read raw config, load the plugins it names (so a config can
-    reference plugin-contributed rules), then validate against the populated registry.
-
-    ``profile`` overrides the repo's ``extends`` for this run. Entry-point and config-named
-    plugins load unconditionally; local ``.auditor/plugins`` load only when trusted.
-    ``overrides`` deep-merges onto the loaded config as the highest layer. Unknown keys are
-    returned on the report, never warned about here.
-    """
-    raw = merged_config_dict(root, profile=profile, overrides=overrides)
-    loader = loader if loader is not None else PluginLoader()
-    loader.load_entry_points()
-    loader.load_config_modules(list(raw.get("plugins", [])))
-    trusted = allow_local_plugins or bool(raw.get("trust_local_plugins", False))
-    loader.load_local(root, trusted=trusted)
-    return ConfigReport(
-        settings=AuditorSettings.model_validate(raw),
-        unknown_keys=tuple(unknown_config_keys(raw, AuditorSettings)),
-    )
-
-
 def load_config(
     root: Path,
     *,
@@ -661,15 +634,21 @@ def load_config(
     loader: "PluginLoader | None" = None,
     overrides: dict | None = None,
 ) -> AuditorSettings:
-    """The merged, validated repo configuration. Use :func:`load_config_report` when the caller
-    also has to surface the keys no model declares."""
-    return load_config_report(
-        root,
-        profile=profile,
-        allow_local_plugins=allow_local_plugins,
-        loader=loader,
-        overrides=overrides,
-    ).settings
+    """Two-phase load: read raw config, load the plugins it names (so a config can reference
+    plugin-contributed rules), then validate against the populated registry.
+
+    ``profile`` overrides the repo's ``extends`` for this run. Entry-point and config-named plugins
+    load unconditionally; local ``.auditor/plugins`` load only when trusted. ``overrides``
+    deep-merges on as the highest layer. Unknown keys land on ``settings.unknown_keys``, never a
+    warning from here.
+    """
+    raw = merged_config_dict(root, profile=profile, overrides=overrides)
+    loader = loader if loader is not None else PluginLoader()
+    loader.load_entry_points()
+    loader.load_config_modules(list(raw.get("plugins", [])))
+    trusted = allow_local_plugins or bool(raw.get("trust_local_plugins", False))
+    loader.load_local(root, trusted=trusted)
+    return AuditorSettings.merged(raw)
 
 
 # --------------------------------------------------------------- per-file resolution

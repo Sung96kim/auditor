@@ -56,9 +56,17 @@ asyncio.run(main())
 ## `load_config`
 
 - `load_config(root: Path, *, profile=None, allow_local_plugins=False, loader=None,
-  overrides=None) -> AuditorSettings` returns the merged repo configuration.
+  overrides=None) -> AuditorSettings` returns the merged repo configuration. It is the only
+  loader; there is no separate report call.
 - It loads plugins between the raw read and validation, so a config may name plugin-contributed
   rules. `profile` replaces the repo's `extends` for this load.
+- `settings.unknown_keys` is the tuple of dotted paths no model declares, filled at load time.
+  Unknown keys never fail the load and the loader never warns; the CLI and the MCP server print
+  them once on stderr.
+- `unknown_keys` is excluded from every dump, so `model_dump()` and `auditr config show --json`
+  carry the configuration only.
+- `AuditorSettings.merged(raw)` is the classmethod that pairs a validated model with the unknown
+  keys from the same raw dict, for a caller that merged the layers itself.
 - `ResolvedConfig(settings, role=..., rel_path=...)` narrows those settings to one file;
   `.effective(rule_id)` returns the enablement, severity, verdict kind and thresholds that apply to
   one rule there.
