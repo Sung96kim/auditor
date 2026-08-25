@@ -6,7 +6,6 @@ call form. Pure: the caller does the reading and hands the facts in.
 """
 
 from collections.abc import Sequence
-from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +26,7 @@ from auditor.graph.refine.models import (
     Proposal,
     ProposedEdge,
     RefinementKind,
+    VerifyStatus,
 )
 from auditor.graph.refine.namespace import file_of, short_name
 from auditor.graph.resolve_edges import NameBindings, call_forms, form_for
@@ -48,23 +48,6 @@ ENDPOINT_KINDS: dict[EdgeKind, tuple[frozenset[NodeKind], frozenset[NodeKind]]] 
         frozenset({NodeKind.METHOD}),
     ),
 }
-
-
-class VerifyStatus(StrEnum):
-    """Why a proposal passed or failed the fact check."""
-
-    OK = "ok"  # the facts support an edge of this shape, not that this dst is the only one
-    UNVERIFIED = (
-        "unverified"  # a kind spec 9.2 gives no verifier; accepted, tiered on shape
-    )
-    STALE_FILE = "stale_file"
-    NO_SUCH_PATH = "no_such_path"
-    NOT_LOADED = "not_loaded"
-    NO_SRC_NODE = "no_src_node"
-    NO_FACT = "no_fact"
-    EXTERNALLY_BOUND = "externally_bound"
-    NOT_A_DEFINER = "not_a_definer"
-    BAD_NODE_KIND = "bad_node_kind"
 
 
 #: the two statuses a proposal may still be stored under
@@ -205,7 +188,7 @@ class FactVerifier(BaseModel):
         endpoint = self._endpoint_kinds(src, dst, kind)
         if endpoint is not None:
             return VerifyResult(status=VerifyStatus.BAD_NODE_KIND, detail=endpoint)
-        if short not in self._facts(owner, forms, kind, call_form):
+        if short not in self.facts_named(owner, kind, call_form):
             named = f" as a {call_form.value} call" if kind is EdgeKind.CALLS else ""
             return VerifyResult(
                 status=VerifyStatus.NO_FACT,
@@ -336,16 +319,19 @@ class FactVerifier(BaseModel):
                 return f"{node_id} is a {node.kind.value}, not one of {kinds}"
         return None
 
-    def _facts(
-        self,
-        owner: GraphNode,
-        forms: dict[tuple[str, CallForm], tuple[str | None, ...]],
-        kind: EdgeKind,
-        call_form: CallForm,
+    @staticmethod
+    def facts_named(
+        owner: GraphNode, kind: EdgeKind, call_form: CallForm
     ) -> frozenset[str]:
-        """The fact tuple spec 9.2 pairs with this edge kind and call form."""
+        """The fact tuple spec 9.2 pairs with this edge kind and call form.
+
+        Public because a brief shows a caller the same tuple its proposal will be checked against,
+        and a second copy of the table would drift from this one.
+        """
         if kind is EdgeKind.CALLS:
-            return frozenset(name for name, form in forms if form is call_form)
+            return frozenset(
+                name for name, form in call_forms(owner) if form is call_form
+            )
         if kind is EdgeKind.REFERENCES_TYPE:
             return frozenset(owner.param_types) | frozenset(owner.class_refs)
         if kind is EdgeKind.CALLBACK_ARG:

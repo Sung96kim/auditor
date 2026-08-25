@@ -2,7 +2,12 @@
 
 import pytest
 
-from auditor.graph.refine.namespace import in_scope, to_partition
+from auditor.graph.refine.namespace import (
+    in_scope,
+    scope_path,
+    to_partition,
+    under_scope,
+)
 
 
 @pytest.mark.parametrize(
@@ -27,3 +32,10 @@ def test_an_id_outside_the_prefix_is_out_of_scope():
 def test_a_root_scan_sees_every_id():
     assert to_partition("apps/backend/m.py::f", "") == "apps/backend/m.py::f"
     assert in_scope("anything", "") is True
+
+
+def test_a_dot_scope_means_the_whole_repo():
+    """No node id starts with `./`, so a literal `.` would brief nothing and refuse everything."""
+    assert scope_path(".") == ""
+    assert scope_path("./") == ""
+    assert under_scope("helper.py::f", scope_path(".")) is True

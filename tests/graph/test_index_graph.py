@@ -19,6 +19,7 @@ from auditor.graph.model import (
     UnresolvedReason,
     UnresolvedRow,
 )
+from auditor.graph.refine.namespace import under_scope
 from auditor.models import FileRole, IndexEntry
 
 
@@ -210,6 +211,84 @@ async def test_unresolved_applies_the_limit_after_both_filters(graph_store):
     ]
     rows = await graph_store.graph.unresolved(call_forms=["bare"], limit=2)
     assert [r["name"] for r in rows] == ["two", "three"]
+
+
+_SCOPED_QUEUE = (
+    ("auditor/cli/graph.py::run", "one"),
+    ("auditor/cli.py::run", "two"),
+    ("auditor/client.py::run", "three"),
+    ("auditor/cli", "four"),
+    ("helper.py::f", "five"),
+)
+
+
+@pytest.fixture
+async def scoped_queue(graph_store):
+    """A queue whose ids sit either side of every boundary `under_scope` draws."""
+    await graph_store.graph.replace_unresolved(
+        [_row(node_id, name) for node_id, name in _SCOPED_QUEUE]
+    )
+    return graph_store
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        ("auditor/cli", {"one", "four"}),
+        ("auditor/cli.py", {"two"}),
+        ("auditor", {"one", "two", "three", "four"}),
+        ("helper.py", {"five"}),
+        ("", {"one", "two", "three", "four", "five"}),
+        (None, {"one", "two", "three", "four", "five"}),
+        ("nothing", set()),
+    ],
+)
+async def test_a_prefix_matches_on_path_and_symbol_boundaries(
+    scoped_queue, prefix, expected
+):
+    """`auditor/cli` must not take `auditor/client.py`, and must take `auditor/cli` itself."""
+    rows = await scoped_queue.graph.unresolved(prefix=prefix)
+    assert {r["name"] for r in rows} == expected
+
+
+@pytest.mark.parametrize("prefix", ["auditor/cli", "auditor", "helper.py"])
+async def test_the_prefix_filter_agrees_with_under_scope(scoped_queue, prefix):
+    """The SQL and the service's own scope check answer the same question, so a run cannot brief
+    a row it would then refuse."""
+    every = await scoped_queue.graph.unresolved()
+    assert await scoped_queue.graph.unresolved(prefix=prefix) == [
+        r for r in every if under_scope(r["node_id"], prefix)
+    ]
+
+
+async def test_the_limit_applies_after_the_prefix(scoped_queue):
+    rows = await scoped_queue.graph.unresolved(prefix="auditor", limit=2)
+    assert len(rows) == 2
+    assert {r["name"] for r in rows} <= {"one", "two", "three", "four"}
+
+
+async def test_a_prefix_holding_like_wildcards_matches_literally(graph_store):
+    """`_` and `%` are LIKE wildcards, so an unescaped prefix would take a sibling directory."""
+    await graph_store.graph.replace_unresolved(
+        [_row("a_b/m.py::f", "real"), _row("axb/m.py::f", "decoy")]
+    )
+    rows = await graph_store.graph.unresolved(prefix="a_b")
+    assert [r["name"] for r in rows] == ["real"]
+
+
+@pytest.mark.parametrize("prefix", ["auditor/cli", "auditor", "helper.py", "", None])
+async def test_count_unresolved_counts_what_unresolved_returns(scoped_queue, prefix):
+    assert await scoped_queue.graph.count_unresolved(prefix) == len(
+        await scoped_queue.graph.unresolved(prefix=prefix, limit=None)
+    )
+
+
+async def test_count_unresolved_ignores_the_external_rows_when_asked(graph_store):
+    await graph_store.graph.replace_unresolved(
+        [_row("a.py::f", "real"), _row("a.py::g", "dimmed", externally_bound=True)]
+    )
+    assert await graph_store.graph.count_unresolved() == 2
+    assert await graph_store.graph.count_unresolved(external=False) == 1
 
 
 async def test_replace_unresolved_swaps_the_whole_queue(graph_store):

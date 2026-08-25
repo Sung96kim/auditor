@@ -413,6 +413,21 @@ class GraphDB(BaseDB):
 
         await self._worker.run(op)
 
+    @staticmethod
+    def _scope_clause(prefix: str | None) -> tuple[str, list[Any]]:
+        """The WHERE tail that keeps only rows under ``prefix``, on a path or a symbol boundary.
+
+        The same rule `graph.refine.namespace.under_scope` applies in Python, so the reader and the
+        service's scope check cannot drift. An empty prefix filters nothing.
+        """
+        if not prefix:
+            return "", []
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return (
+            " AND (node_id = ? OR node_id LIKE ? ESCAPE '\\' OR node_id LIKE ? ESCAPE '\\')",
+            [prefix, f"{escaped}/%", f"{escaped}::%"],
+        )
+
     async def unresolved(
         self,
         node_ids: list[str] | None = None,
@@ -420,6 +435,7 @@ class GraphDB(BaseDB):
         call_forms: list[str] | None = None,
         limit: int | None = None,
         external: bool = True,
+        prefix: str | None = None,
     ) -> list[dict[str, Any]]:
         """Queue rows in drain order: priority, then the externally bound rows, then node id and
         name. Every filter and the limit run in SQL, so the limit counts rows the caller sees."""
@@ -435,8 +451,29 @@ class GraphDB(BaseDB):
                 params += values
         if not external:
             sql += " AND externally_bound = 0"
+        scope_sql, scope_params = self._scope_clause(prefix)
+        sql += scope_sql
+        params += scope_params
         sql += " ORDER BY priority, externally_bound, node_id, name"
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
         return [_decode_unresolved(r) for r in await self._fetch(sql, tuple(params))]
+
+    async def count_unresolved(
+        self, prefix: str | None = None, *, external: bool = True
+    ) -> int:
+        """How many queue rows a scope holds, so a capped brief can say what it left behind.
+
+        A reader of its own rather than a flag on `unresolved`: that one decodes every row it
+        returns, which on a real repo is the whole queue for one number.
+        """
+        sql = "SELECT COUNT(*) AS n FROM graph_unresolved WHERE repo = ?"
+        params: list[Any] = []
+        if not external:
+            sql += " AND externally_bound = 0"
+        scope_sql, scope_params = self._scope_clause(prefix)
+        sql += scope_sql
+        params += scope_params
+        row = await self._fetch_one(sql, tuple(params))
+        return int(row["n"]) if row else 0

@@ -22,7 +22,9 @@ from auditor.graph.model import (
 )
 from auditor.graph.refine.namespace import short_name
 
-_EDGE_KIND_BY_FACT = {
+#: the edge kind a queue row's fact kind implies. Public: a brief reads it to show the caller which
+#: fact tuple its proposal will be checked against.
+EDGE_KIND_BY_FACT = {
     FactKind.CALLEE: EdgeKind.CALLS,
     FactKind.ATTR_CALLEE: EdgeKind.CALLS,
     FactKind.TYPED_CALL: EdgeKind.CALLS,
@@ -240,7 +242,7 @@ class UnresolvedCollector(BaseModel):
             row = self._row(fact)
             if row is None:
                 continue
-            kind = _EDGE_KIND_BY_FACT[row.fact_kind]
+            kind = EDGE_KIND_BY_FACT[row.fact_kind]
             if row.name in edged.get((row.node_id, kind.value), frozenset()):
                 continue
             key = (row.node_id, row.name, row.reason)

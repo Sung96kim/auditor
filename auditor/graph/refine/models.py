@@ -90,6 +90,41 @@ class Tier(StrEnum):
     C = "C"
 
 
+class VerifyStatus(StrEnum):
+    """Why a proposal passed or failed the fact check."""
+
+    OK = "ok"  # the facts support an edge of this shape, not that this dst is the only one
+    UNVERIFIED = (
+        "unverified"  # a kind spec 9.2 gives no verifier; accepted, tiered on shape
+    )
+    STALE_FILE = "stale_file"
+    NO_SUCH_PATH = "no_such_path"
+    NOT_LOADED = "not_loaded"
+    NO_SRC_NODE = "no_src_node"
+    NO_FACT = "no_fact"
+    EXTERNALLY_BOUND = "externally_bound"
+    NOT_A_DEFINER = "not_a_definer"
+    BAD_NODE_KIND = "bad_node_kind"
+
+
+class ProposalOutcome(StrEnum):
+    """What `propose` did with one proposal."""
+
+    STAGED = "staged"
+    REJECTED = "rejected"
+
+
+class RefusalKind(StrEnum):
+    """Why a proposal was never judged against the facts at all (spec 9.2's validation rules)."""
+
+    INVALID = "invalid"  # `Proposal`'s own validators refused it; the message is theirs
+    OVER_CAP = "over_cap"
+    OUT_OF_SCOPE = "out_of_scope"
+    ALREADY_STAGED = "already_staged"
+    INTRA_BATCH = "intra_batch"
+    OUT_OF_PARTITION = "out_of_partition"
+
+
 #: statuses a build applies. `pinned` is never auto-staled, only marked `drifted` (spec 5.7).
 ACTIVE_STATUSES = frozenset({RefinementStatus.ACTIVE, RefinementStatus.PINNED})
 
@@ -299,6 +334,43 @@ class Run(BaseModel):
             session_id=session_id,
             agent_name=agent_name,
         )
+
+
+class Verdict(BaseModel):
+    """The service's answer about one proposal (spec 9.1).
+
+    ``refinement_id`` is filled the moment a row exists: at `propose` for a rejection, at `commit`
+    for an acceptance.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    outcome: ProposalOutcome
+    kind: RefinementKind
+    tier: Tier = Tier.C
+    status: RefinementStatus = RefinementStatus.PENDING
+    verify: VerifyStatus = VerifyStatus.UNVERIFIED
+    #: set when the proposal never reached the verifier, so "unverified" is not read as a check
+    refusal: RefusalKind | None = None
+    detail: str = ""
+    refinement_id: int = 0
+
+
+class RunReport(BaseModel):
+    """One run's state. ``staged_here`` is false in a process that did not open the run, so a
+    reader never mistakes another process's staging for an empty run.
+
+    ``committed`` and ``rejected`` are the run's stored rows split by fate: a rejection is stored
+    the moment it is made, so a run that committed nothing still owns rows.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run: Run
+    staged: tuple[Verdict, ...] = ()
+    staged_here: bool = True
+    committed: tuple[int, ...] = ()
+    rejected: tuple[int, ...] = ()
 
 
 class RefinementCounts(BaseModel):

@@ -36,6 +36,14 @@ from auditor.graph.refine.models import (
 _DAY_SECONDS = 86_400
 
 
+class NoSuchRun(RuntimeError):
+    """An update named a run this checkout's identity does not own.
+
+    The identity tables are shared, so an UPDATE that matched nothing means the row belongs to
+    another checkout (or never existed); silently updating nothing would lose that.
+    """
+
+
 def _run_from_row(row: sqlite3.Row) -> Run:
     """One row as a `Run`, rebuilding the sub-models the insert spread into flat columns."""
     data = dict(row)
@@ -220,6 +228,31 @@ class RunsDB(BaseDB):
             conn.commit()
 
         await self._worker.run(op)
+
+    async def record_prompt(
+        self, run_id: str, *, prompt: str, system_prompt_sha: str
+    ) -> None:
+        """Record the brief a run was given, and the hash of the rules it was given with it.
+
+        Written mid-run: `add_run` happens before the brief exists, and a run that dies after it
+        must still show what it was asked (Invariant 2).
+
+        Raises:
+            NoSuchRun: no run with this id belongs to this checkout's identity.
+        """
+        sql = (
+            "UPDATE graph_runs SET prompt = ?, system_prompt_sha = ? "
+            "WHERE run_id = ? AND repo_identity = ?"
+        )
+        binds = (prompt, system_prompt_sha, run_id, self.partition.identity)
+
+        def op(conn: sqlite3.Connection) -> int:
+            changed = conn.execute(sql, binds).rowcount
+            conn.commit()
+            return changed
+
+        if await self._worker.run(op) == 0:
+            raise NoSuchRun(f"no run {run_id} on this checkout")
 
     async def run(self, run_id: str) -> Run | None:
         row = await self._fetch_one_by_identity(

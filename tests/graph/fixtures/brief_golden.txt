@@ -1,0 +1,55 @@
+Refinement brief
+
+scope: (the whole repo)
+commit: (not a git checkout)
+targets: 8 of 8 queue rows under this scope
+limits: 12 targets per run, 25 corrections per run
+
+Targets
+
+1. impl.py::Impl.run
+   at impl.py:3, unimportable_name: the callee 'load_user', called bare
+   definers: svc.py::load_user
+   facts on run: _local, load_user
+   actions: add_edge, annotate_node, unresolvable
+
+2. base.py::Base
+   at base.py:1, text_sparse: the node 'Base'
+   actions: annotate_node, unresolvable
+
+3. base.py::Base
+   at base.py:1, singleton_cluster: the node 'base'
+   actions: annotate_node, unresolvable
+
+4. base.py::Base.run
+   at base.py:2, text_sparse: the node 'Base.run'
+   actions: annotate_node, unresolvable
+
+5. impl.py::Impl
+   at impl.py:2, text_sparse: the node 'Impl'
+   actions: annotate_node, unresolvable
+
+6. impl.py::Impl
+   at impl.py:2, singleton_cluster: the node 'impl'
+   actions: annotate_node, unresolvable
+
+7. impl.py::_local
+   at impl.py:6, text_sparse: the node '_local'
+   actions: annotate_node, unresolvable
+
+8. svc.py::load_user
+   at svc.py:1, singleton_cluster: the node 'get'
+   actions: annotate_node, unresolvable
+
+Stale corrections
+
+   none.
+
+What to do
+
+   actions available here: add_edge, annotate_node, unresolvable
+   Read the source before every proposal, then call mcp__graph__propose once per target at most.
+      Call mcp__graph__brief to re-read this with your verdicts.
+
+   Answer with: summary (one line), proposed (how many you made), stopped_because (done | unsure |
+      budget | nothing_to_do).

@@ -29,11 +29,14 @@ def in_scope(node_id: str, prefix: str) -> bool:
 def scope_path(scope: str) -> str:
     """One run's scope as a repo-relative path prefix, with any trailing separator dropped.
 
+    ``.`` and ``''`` both mean the whole repo: no node id starts with ``./``, so a literal ``.``
+    would match nothing and refuse every proposal the run made.
+
     Raises ``ValueError`` for a scope that could never name a node here: node ids are relative to
     the checkout, so an absolute path or one climbing out of it refuses every proposal instead.
     """
     cleaned = scope.strip().rstrip("/")
-    if not cleaned:
+    if not cleaned or cleaned == ".":
         return ""
     if cleaned.startswith("/") or ".." in cleaned.split("/"):
         raise ValueError(f"scope {scope!r} is not a repo-relative path")

@@ -13,7 +13,6 @@ import asyncio
 import sqlite3
 import time
 from collections.abc import Mapping, Sequence
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -21,28 +20,36 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_fie
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
+from auditor.database.refinements import NoSuchRun
 from auditor.discovery import git_output
 from auditor.graph.build import GraphBuilder
-from auditor.graph.model import EdgeKind, GraphEdge, NodeKind, UnresolvedRow
+from auditor.graph.model import EdgeKind, GraphEdge, UnresolvedRow
 from auditor.graph.payloads import GraphBuildReport
+from auditor.graph.refine.brief import Brief, BriefBuilder
 from auditor.graph.refine.conflicts import ConflictRules
+from auditor.graph.refine.facts import FactReader
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
 from auditor.graph.refine.models import (
     Anchor,
     ClientKind,
     ProducerKind,
     Proposal,
+    ProposalOutcome,
     PruneOutcome,
     Refinement,
     RefinementKind,
     RefinementStatus,
+    RefusalKind,
     Run,
     RunnerKind,
     RunOutcome,
+    RunReport,
     RunStatus,
     Stratum,
     Tier,
     TriggerKind,
+    Verdict,
+    VerifyStatus,
 )
 from auditor.graph.refine.namespace import (
     file_of,
@@ -51,14 +58,9 @@ from auditor.graph.refine.namespace import (
     to_toplevel,
     under_scope,
 )
+from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA
 from auditor.graph.refine.tiers import TierPolicy
-from auditor.graph.refine.verify import (
-    FactVerifier,
-    FileFacts,
-    VerifyResult,
-    VerifyStatus,
-)
-from auditor.graph.resolve_edges import NameBindings
+from auditor.graph.refine.verify import FactVerifier, VerifyResult
 from auditor.payload import WirePayload
 from auditor.roles import RoleClassifier
 from auditor.user_settings import LimitsConfig, UserSettings
@@ -82,6 +84,11 @@ class RefinementRefused(RuntimeError):
         return cls(f"{detail}: {exc.advice}")
 
     @classmethod
+    def no_such_run(cls, run_id: str) -> "RefinementRefused":
+        """A run id no row on this checkout's identity answers to."""
+        return cls(f"no run {run_id} on this checkout")
+
+    @classmethod
     def not_a_proposal(cls, exc: ValidationError) -> "RefinementRefused":
         """A payload no lenient read can rescue, refused in the service's own error type.
 
@@ -97,44 +104,6 @@ class RefinementRefused(RuntimeError):
             f"run {run_id} failed to commit: {exc}. Nothing it inserted is live, so a retry "
             "cannot land the same change twice."
         )
-
-
-class ProposalOutcome(StrEnum):
-    """What `propose` did with one proposal."""
-
-    STAGED = "staged"
-    REJECTED = "rejected"
-
-
-class RefusalKind(StrEnum):
-    """Why a proposal was never judged against the facts at all (spec 9.2's validation rules)."""
-
-    INVALID = "invalid"  # `Proposal`'s own validators refused it; the message is theirs
-    OVER_CAP = "over_cap"
-    OUT_OF_SCOPE = "out_of_scope"
-    ALREADY_STAGED = "already_staged"
-    INTRA_BATCH = "intra_batch"
-    OUT_OF_PARTITION = "out_of_partition"
-
-
-class Verdict(BaseModel):
-    """The service's answer about one proposal (spec 9.1).
-
-    ``refinement_id`` is filled the moment a row exists: at `propose` for a rejection, at `commit`
-    for an acceptance.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    outcome: ProposalOutcome
-    kind: RefinementKind
-    tier: Tier = Tier.C
-    status: RefinementStatus = RefinementStatus.PENDING
-    verify: VerifyStatus = VerifyStatus.UNVERIFIED
-    #: set when the proposal never reached the verifier, so "unverified" is not read as a check
-    refusal: RefusalKind | None = None
-    detail: str = ""
-    refinement_id: int = 0
 
 
 class CommitResult(WirePayload):
@@ -156,86 +125,6 @@ class CommitResult(WirePayload):
     def landed(self) -> int:
         """How many refinement rows this commit inserted."""
         return len(self.committed)
-
-
-class RunReport(BaseModel):
-    """One run's state. ``staged_here`` is false in a process that did not open the run, so a
-    reader never mistakes another process's staging for an empty run.
-
-    ``committed`` and ``rejected`` are the run's stored rows split by fate: a rejection is stored
-    the moment it is made, so a run that committed nothing still owns rows.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    run: Run
-    staged: tuple[Verdict, ...] = ()
-    staged_here: bool = True
-    committed: tuple[int, ...] = ()
-    rejected: tuple[int, ...] = ()
-
-
-class FactReader(BaseModel):
-    """The three reads one proposal is judged against, over the collaborators they need.
-
-    `verify.FactVerifier` is pure by contract, so the reading belongs to an object of its own
-    rather than to the service, where it was four private methods and a four-collaborator call.
-    """
-
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
-
-    index: IndexStore
-    root: Path
-    roles: RoleClassifier
-
-    async def queue_row(self, proposal: Proposal) -> UnresolvedRow | None:
-        """The `graph_unresolved` row this proposal answers, if there is one."""
-        node_id = proposal.target.node_id or proposal.target.src
-        name = proposal.target.name
-        if not node_id or not name:
-            return None
-        rows = await self.index.graph.unresolved(node_ids=[node_id])
-        return next(
-            (UnresolvedRow.model_validate(r) for r in rows if r["name"] == name), None
-        )
-
-    async def definers(
-        self, proposal: Proposal, row: UnresolvedRow | None
-    ) -> Sequence[str]:
-        """The role-filtered definitions of the called name: the queue row's when there is one,
-        otherwise the graph's own answer (spec 9.2's `retarget_edge` row needs it)."""
-        if row is not None:
-            return row.definers
-        name = proposal.target.name
-        return await self.index.graph.definers(name) if name else []
-
-    async def verifier(
-        self, proposal: Proposal, row: UnresolvedRow | None
-    ) -> FactVerifier:
-        """A verifier holding the files this proposal names, re-read from disk."""
-        files: dict[str, FileFacts] = {}
-        missing: set[str] = set()
-        for path in FactVerifier.paths_named(proposal, row):
-            if not (self.root / path).is_file():
-                missing.add(path)  # a path that never existed, not a file that moved
-                continue
-            cached = await self.index.graph.hashes(path)
-            if cached is None:
-                continue  # left out, so the verifier answers not_loaded rather than guessing
-            files[path] = FileFacts.of(self.root, path, cached.truth, self.roles)
-        modules = [
-            node
-            for facts in files.values()
-            for node in facts.nodes
-            if node.kind is NodeKind.MODULE
-        ]
-        return FactVerifier(
-            files=files,
-            bindings=NameBindings.of(
-                modules, module_ids=await self.index.graph.module_ids()
-            ),
-            missing=frozenset(missing),
-        )
 
 
 class ProposalFacts(BaseModel):
@@ -664,7 +553,7 @@ class RefinementService:
         """One run as a reader sees it: the stored row, plus this process's staging."""
         run = await self.index.runs.run(run_id)
         if run is None:
-            raise RefinementRefused(f"no run {run_id} on this checkout")
+            raise RefinementRefused.no_such_run(run_id)
         open_run = self.registry.open_runs.get(run_id)
         rows = await self.index.refinements.of_run(run_id)
         return RunReport(
@@ -681,6 +570,29 @@ class RefinementService:
             rejected=tuple(
                 r.refinement_id for r in rows if r.status is RefinementStatus.REJECTED
             ),
+        )
+
+    async def brief(self, run_id: str) -> Brief:
+        """The brief this run works from, recorded on its row as it is handed over.
+
+        The prompt and the sha of the rules it was written under are stored here rather than at
+        `begin`, which runs before there is a brief to store (Invariant 2). A re-read returns the
+        same brief with the verdicts earned so far.
+        """
+        staged = self.registry.require(run_id)
+        brief = await BriefBuilder(
+            facts=self.facts, limits=self.user.observer.limits
+        ).build(staged.scope, commit_sha=staged.run.commit_sha)
+        try:
+            await self.index.runs.record_prompt(
+                run_id,
+                prompt=brief.render(),
+                system_prompt_sha=SYSTEM_PROMPT_SHA,
+            )
+        except NoSuchRun as exc:
+            raise RefinementRefused.no_such_run(run_id) from exc
+        return brief.model_copy(
+            update={"staged": tuple(item.verdict() for item in staged.staged)}
         )
 
     async def commit(self, run_id: str) -> CommitResult:
@@ -804,7 +716,7 @@ class RefinementService:
             await self._finish(run_id, RunStatus.ABORTED, error=reason)
         run = await self.index.runs.run(run_id)
         if run is None:  # the row was written by `begin`, so this cannot happen
-            raise RefinementRefused(f"no run {run_id} on this checkout")
+            raise RefinementRefused.no_such_run(run_id)
         return run
 
     async def prune(self) -> PruneOutcome:

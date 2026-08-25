@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from auditor.database import IndexStore
+from auditor.database.refinements import NoSuchRun
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     Anchor,
@@ -368,6 +369,48 @@ async def test_finish_run_records_the_terminal_state(refine_store):
     )
     assert stored.usage.cost_usd == pytest.approx(0.004)
     assert stored.finished_at == 150.0
+
+
+async def test_record_prompt_stores_the_brief_and_the_rules_hash(refine_store):
+    run_id = await refine_store.runs.add_run(_run())
+    await refine_store.runs.record_prompt(
+        run_id, prompt="brief text", system_prompt_sha="ab" * 32
+    )
+    stored = await refine_store.runs.run(run_id)
+    assert (stored.prompt, stored.system_prompt_sha) == ("brief text", "ab" * 32)
+
+
+async def test_record_prompt_overwrites_an_earlier_brief(refine_store):
+    """A run that re-briefs itself keeps the prompt it was last given, not the first one."""
+    run_id = await refine_store.runs.add_run(_run())
+    await refine_store.runs.record_prompt(
+        run_id, prompt="first", system_prompt_sha="a" * 64
+    )
+    await refine_store.runs.record_prompt(
+        run_id, prompt="second", system_prompt_sha="b" * 64
+    )
+    stored = await refine_store.runs.run(run_id)
+    assert (stored.prompt, stored.system_prompt_sha) == ("second", "b" * 64)
+
+
+async def test_record_prompt_refuses_an_unknown_run(refine_store):
+    """`finish_run` no-ops on an unknown id; a lost prompt would be invisible, so this raises."""
+    with pytest.raises(NoSuchRun, match="no run nope on this checkout"):
+        await refine_store.runs.record_prompt(
+            "nope", prompt="brief", system_prompt_sha="c" * 64
+        )
+
+
+async def test_record_prompt_cannot_stamp_another_checkouts_run(
+    refine_store, other_store
+):
+    """The identity tables are shared, so an unpartitioned UPDATE would cross checkouts."""
+    run_id = await refine_store.runs.add_run(_run(prompt="mine"))
+    with pytest.raises(NoSuchRun):
+        await other_store.runs.record_prompt(
+            run_id, prompt="theirs", system_prompt_sha="d" * 64
+        )
+    assert (await refine_store.runs.run(run_id)).prompt == "mine"
 
 
 async def test_finish_run_stamps_a_time_when_the_outcome_does_not(refine_store):
