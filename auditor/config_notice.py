@@ -29,7 +29,6 @@ class ConfigNotice(BaseModel):
     root: Path | None = None
     profile: str | None = None
     overrides: dict[str, object] | None = None
-    directory: Path | None = None
     policy: tuple[str, ...] | None = None
     owned_by_command: bool = False
     reported: set[Path] = Field(default_factory=set)
@@ -39,7 +38,6 @@ class ConfigNotice(BaseModel):
         self.root = None
         self.profile = None
         self.overrides = None
-        self.directory = None
         self.policy = None
         self.owned_by_command = False
         self.reported = set()
@@ -50,17 +48,11 @@ class ConfigNotice(BaseModel):
         *,
         profile: str | None = None,
         overrides: dict[str, object] | None = None,
-        directory: Path | None = None,
     ) -> Path:
-        """Remember the root a run resolved and its extra layers, and hand the root straight back.
-
-        ``directory`` is this repo's state dir when the caller already resolved it: deriving it
-        costs a ``git rev-parse``.
-        """
+        """Remember the root a run resolved and its extra layers, and hand the root straight back."""
         self.root = root
         self.profile = profile
         self.overrides = overrides
-        self.directory = directory
         self.policy = None
         return root
 
@@ -72,11 +64,12 @@ class ConfigNotice(BaseModel):
         """Mark this run as one whose own output already lists the unknown keys."""
         self.owned_by_command = True
 
-    def keys(self) -> list[str]:
+    def keys(self, *, directory: Path | None = None) -> list[str]:
         """Every dotted path neither settings model declares, repo policy first.
 
         Each source is read under its own guard, so a repo policy that cannot be read still lets
-        the user's own file report its keys, and the other way round.
+        the user's own file report its keys, and the other way round. Pass ``directory`` when the
+        caller already resolved this repo's state dir: deriving it costs a ``git rev-parse``.
         """
         if self.root is None:
             return []
@@ -90,7 +83,7 @@ class ConfigNotice(BaseModel):
                 )
             )
         with suppress(*_UNREADABLE):
-            found += unknown_user_keys(self.root, directory=self.directory)
+            found += unknown_user_keys(self.root, directory=directory)
         return found
 
     def report(self) -> list[str]:

@@ -203,9 +203,22 @@ def test_config_check_owns_its_own_report(bad_config):
 
 
 def test_init_owns_its_own_report(bad_config):
-    result = invoke("init", "--check", "-r", str(bad_config))
-    assert result.exit_code == 0, result.output
+    """Its payload is the unknown keys, so a stderr block would repeat them. Asserting the
+    silence alone passed just as well while init was dropping the repo-policy keys entirely."""
+    result = invoke("init", "--check", "-r", str(bad_config), "--json")
+    assert cli_json(result)["unknown_keys"] == ["bogus"]
     assert "unknown config key" not in result.stderr
+
+
+def test_init_reports_both_key_families(bad_config):
+    """`init` is the command a user runs to be told their configuration is sound, and it opts the
+    whole notice out; reporting one family would leave the other reported by nothing."""
+    user_config_path().parent.mkdir(parents=True, exist_ok=True)
+    user_config_path().write_text('{"observer": {"runer": "claude"}}')
+
+    result = invoke("init", "--check", "-r", str(bad_config), "--json")
+
+    assert cli_json(result)["unknown_keys"] == ["bogus", "observer.runer"]
 
 
 def test_version_never_reads_a_repo_config(monkeypatch):

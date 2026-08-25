@@ -52,6 +52,9 @@ auditr init --json
 - `--check` writes nothing. It lists unknown keys with their dotted path, reports a moved
   checkout, and reports a leftover `.auditor/.status.json`. Its report says `not written
   (--check)`, never `up to date`.
+- Both modes list unknown keys from both families, repo policy first and then the user settings,
+  in `unknown_keys`. `init` opts out of the stderr notice every other command prints, so the two
+  lists have to be the same one.
 - `--migrate` and `--clean-status` both write, so combining either with `--check` exits non-zero
   rather than doing nothing.
 - A moved checkout is one whose breadcrumb names a root that no longer exists. Two live worktrees

@@ -26,7 +26,7 @@ from auditor.paths import (
     user_schema_path,
     write_json_dict,
 )
-from auditor.user_settings import UserSettings, unknown_user_keys
+from auditor.user_settings import UserSettings
 
 CONFIG_VERSION: int = UserSettings.model_fields["config_version"].default
 
@@ -79,7 +79,7 @@ def init(
         if flag and check:
             fail(f"{name} writes; it cannot be combined with --check")
     root = cli_root(target)
-    NOTICE.owned()  # render_init lists the unknown user keys and --json carries them
+    NOTICE.owned()  # render_init lists the unknown keys and --json carries them
     home = auditor_home()
     identity = repo_identity(root)
     directory = repo_dir_for_identity(identity)
@@ -131,7 +131,9 @@ def init(
             "repo_dir": str(directory) if repo else None,
             "written": written,
             "checked": check,
-            "unknown_keys": unknown_user_keys(root, directory=directory),
+            # Both families, from the notice this command opted out of: reporting only the user
+            # half made init the one command that would not mention a [tool.auditor] typo.
+            "unknown_keys": NOTICE.keys(directory=directory),
             "moved_from": moved,
             "migrated": migrated,
             "legacy_status": str(legacy) if had_legacy else None,
