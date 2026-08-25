@@ -1,13 +1,18 @@
+import asyncio
 from pathlib import Path
 
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from typer.testing import CliRunner
 
+from auditor.cli import app
 from auditor.database import open_repo_index
 from auditor.engine import audit_target
 from auditor.graph.detectors import GodConceptKind
-from auditor.graph.model import MAX_FLOW_LIMIT, QUEUE_ID_CAP
+from auditor.graph.flow import DEFAULT_OPTIONS, FlowOptions
+from auditor.graph.model import MAX_FLOW_DEPTH, MAX_FLOW_LIMIT, QUEUE_ID_CAP
+from auditor.graph.query import GraphQuery
 from auditor.languages.python.detectors.graph_rules import GOD_CONCEPT_RULE
 from auditor.mcp_server import mcp
 from auditor.models import Category, Finding, Severity, VerdictKind
@@ -314,6 +319,83 @@ async def test_graph_flow_clamps_the_limit_at_both_ends(
             )
         )
     assert payload["limit"] == expect
+
+
+def _record_flow_options(monkeypatch: pytest.MonkeyPatch) -> list[FlowOptions]:
+    """Stand in for the walk and keep the options each surface handed it, in call order."""
+    seen: list[FlowOptions] = []
+
+    async def spy(self, symbol: str, options: FlowOptions = DEFAULT_OPTIONS) -> None:
+        seen.append(options)
+        return None
+
+    monkeypatch.setattr(GraphQuery, "flow", spy)
+    return seen
+
+
+@pytest.mark.parametrize("sent, expect", [(99_999, MAX_FLOW_DEPTH), (-5, 0)])
+async def test_graph_flow_clamps_the_depth_at_both_ends(
+    graph_repo_flow: Path, monkeypatch: pytest.MonkeyPatch, sent: int, expect: int
+):
+    """No argument parser stands between a client and the walk, and four recursions over the
+    tree ride on the depth the CLI has always bounded."""
+    seen = _record_flow_options(monkeypatch)
+    async with Client(mcp) as c:
+        await c.call_tool(
+            "graph_flow",
+            {"symbol": "entry", "path": str(graph_repo_flow), "depth": sent},
+        )
+    assert [o.depth for o in seen] == [expect]
+
+
+def test_the_tool_and_the_cli_build_the_same_flow_options(
+    graph_repo_flow_hub: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """One `FlowOptions.of` for three surfaces: the tool used to be a third, separately
+    validated build of the same eight fields. Sync, because the CLI runs its own event loop."""
+    path = str(graph_repo_flow_hub)
+    seen = _record_flow_options(monkeypatch)
+
+    async def call_the_tool() -> None:
+        async with Client(mcp) as c:
+            await c.call_tool(
+                "graph_flow",
+                {
+                    "symbol": "entry",
+                    "path": path,
+                    "direction": "in",
+                    "depth": 3,
+                    "limit": 7,
+                    "kinds": ["inherits"],
+                    "include_tests": True,
+                    "expand_hubs": True,
+                    "stop_at": ["svc.py"],
+                },
+            )
+
+    asyncio.run(call_the_tool())
+    cli = CliRunner().invoke(
+        app,
+        [
+            "graph",
+            "flow",
+            "entry",
+            path,
+            "--in",
+            "--depth",
+            "3",
+            "--limit",
+            "7",
+            "--kinds",
+            "inherits",
+            "--include-tests",
+            "--expand-hubs",
+            "--stop-at",
+            "svc.py",
+        ],
+    )
+    assert cli.exit_code == 0, cli.output
+    assert len(seen) == 2 and seen[0] == seen[1]
 
 
 async def test_graph_flow_takes_the_walk_pruning_knobs(graph_repo_flow_hub: Path):

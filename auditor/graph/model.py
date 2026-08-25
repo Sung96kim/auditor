@@ -252,6 +252,7 @@ QUEUE_ID_CAP = 10
 
 # Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
 DEFAULT_FLOW_LIMIT = 200
+DEFAULT_FLOW_DEPTH = 4
 MAX_FLOW_LIMIT = 1000
 MAX_FLOW_DEPTH = 64
 

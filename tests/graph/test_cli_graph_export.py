@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from auditor.cli import app
+from auditor.graph.model import MAX_FLOW_DEPTH
 
 runner = CliRunner()
 
@@ -217,6 +218,37 @@ def test_graph_export_rejects_a_walk_knob_without_flow(graph_repo_flow: Path, ex
     _built(graph_repo_flow)
     result = runner.invoke(app, ["graph", "export", str(graph_repo_flow), *extra])
     assert result.exit_code != 0
+
+
+@pytest.mark.parametrize("value", [str(MAX_FLOW_DEPTH + 1), "-1"])
+def test_graph_export_bounds_its_depth(graph_repo_flow: Path, value: str):
+    """The same walk `graph flow` bounds: export ran it unbounded above the cap and tracebacked
+    below zero, while the docs promised both surfaces took 0 to 64."""
+    _built(graph_repo_flow)
+    result = runner.invoke(
+        app,
+        ["graph", "export", str(graph_repo_flow), "--flow", "entry", "--depth", value],
+    )
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+
+
+def _unreachable(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("the payload build ran before the walk knobs were validated")
+
+
+def test_graph_export_validates_the_walk_knobs_before_it_builds_the_payload(
+    graph_repo_flow: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`graph flow` rejects a typo before it queries; export paid a whole payload build first."""
+    _built(graph_repo_flow)
+    monkeypatch.setattr("auditor.cli.graph.build_payload", _unreachable)
+    result = runner.invoke(
+        app,
+        ["graph", "export", str(graph_repo_flow), "--flow", "entry", "--kinds", "nope"],
+    )
+    assert result.exit_code != 0
+    assert "unknown --kinds" in result.output
 
 
 def test_graph_export_depth_is_still_legal_without_flow(graph_repo_flow: Path):

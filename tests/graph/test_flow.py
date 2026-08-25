@@ -30,6 +30,8 @@ from auditor.graph.flow import (
     build_flow,
 )
 from auditor.graph.model import (
+    MAX_FLOW_DEPTH,
+    MAX_FLOW_LIMIT,
     CallForm,
     EdgeKind,
     FactKind,
@@ -575,12 +577,36 @@ def test_a_stopped_hub_is_not_collapsed(cache):
     assert hub.stopped is True and hub.hub.collapsed is False
 
 
-@pytest.mark.parametrize("field, bad", [("depth", -1), ("limit", 0), ("hub_fan_in", 0)])
+@pytest.mark.parametrize(
+    "field, bad",
+    [
+        ("depth", -1),
+        ("depth", MAX_FLOW_DEPTH + 1),
+        ("limit", 0),
+        ("limit", MAX_FLOW_LIMIT + 1),
+        ("hub_fan_in", 0),
+    ],
+)
 def test_flow_options_reject_out_of_range_values(field: str, bad: int):
     """FlowOptions is the only validation between a flag and the walk; GraphConfig already has
     ge=1 on its twin."""
     with pytest.raises(ValidationError):
         FlowOptions(**{field: bad})
+
+
+@pytest.mark.parametrize(
+    "knob, sent, expect",
+    [
+        ("depth", 10_000, MAX_FLOW_DEPTH),
+        ("depth", -1, 0),
+        ("limit", 10_000, MAX_FLOW_LIMIT),
+        ("limit", 0, 1),
+    ],
+)
+def test_flow_options_of_clamps_the_walk_bounds(knob: str, sent: int, expect: int):
+    """`of` is the build a surface with no argument parser goes through, so the model clamps
+    rather than each caller: an unbounded depth rides four recursions over the tree."""
+    assert getattr(FlowOptions.of(hub_fan_in=4, **{knob: sent}), knob) == expect
 
 
 def test_a_hub_mark_survives_the_smallest_possible_floor(cache):

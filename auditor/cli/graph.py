@@ -54,7 +54,7 @@ from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.flow import FlowDirection, FlowOptions
-from auditor.graph.model import DEFAULT_FLOW_LIMIT, EdgeKind
+from auditor.graph.model import DEFAULT_FLOW_DEPTH, DEFAULT_FLOW_LIMIT, EdgeKind
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.viz import build_payload, render_app, to_dot
@@ -260,16 +260,19 @@ def _flow_options(
     expand_hubs: bool,
     stop_at: list[str] | None,
 ) -> FlowOptions:
-    """The walk knobs `graph flow` and `graph export --flow` share, so the tree and the picture
-    are the same walk. `--kinds` is validated here; the hub floor comes from repo policy."""
-    return FlowOptions(
+    """The CLI half of one flow build, so the tree and the picture are the same walk.
+
+    A comma string is parsed into kinds and rejected here if it names none; the hub floor comes
+    from repo policy. ``FlowOptions.of`` owns the bounds every surface shares.
+    """
+    return FlowOptions.of(
         direction=FlowDirection.IN if inbound else FlowDirection.OUT,
         depth=depth,
         limit=limit,
-        kinds=tuple(_split_kinds(kinds)),
+        kinds=_split_kinds(kinds),
         include_tests=include_tests,
         expand_hubs=expand_hubs,
-        stop_at=tuple(stop_at or ()),
+        stop_at=stop_at or (),
         hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
     )
 
@@ -279,7 +282,7 @@ def graph_flow(
     symbol: str,
     target: GraphTarget = Path("."),
     inbound: FlowIn = False,
-    depth: FlowDepth = 4,
+    depth: FlowDepth = DEFAULT_FLOW_DEPTH,
     limit: FlowLimit = DEFAULT_FLOW_LIMIT,
     kinds: FlowKinds = None,
     include_tests: FlowIncludeTests = False,
@@ -384,31 +387,37 @@ def graph_export(
     }
     if flow is None and (given := [name for name, used in walk_only.items() if used]):
         raise typer.BadParameter(f"{', '.join(given)}: only valid with --flow")
+    # resolved before the payload build, so a --kinds typo or a bad config costs nothing
+    walk: tuple[str, FlowOptions] | None = (
+        None
+        if flow is None
+        else (
+            flow,
+            _flow_options(
+                root,
+                inbound=inbound,
+                depth=DEFAULT_FLOW_DEPTH if depth is None else depth,
+                limit=limit,
+                kinds=kinds,
+                include_tests=include_tests,
+                expand_hubs=expand_hubs,
+                stop_at=stop_at,
+            ),
+        )
+    )
 
     async def do_export() -> str | None:
         """``None`` when --flow named a symbol the graph does not hold."""
         async with await open_index(root) as index:
             payload = await build_payload(index)
-            if flow is None:
+            if walk is None:
                 return to_dot(
                     payload,
                     cluster=cluster,
                     symbol=symbol,
                     depth=1 if depth is None else depth,
                 )
-            tree = await GraphQuery(index).flow(
-                flow,
-                _flow_options(
-                    root,
-                    inbound=inbound,
-                    depth=4 if depth is None else depth,
-                    limit=limit,
-                    kinds=kinds,
-                    include_tests=include_tests,
-                    expand_hubs=expand_hubs,
-                    stop_at=stop_at,
-                ),
-            )
+            tree = await GraphQuery(index).flow(*walk)
         return to_dot(payload, flow=tree.model_dump(mode="json")) if tree else None
 
     dot = run(do_export(), "exporting…")

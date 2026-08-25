@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from auditor.graph.model import (
+    DEFAULT_FLOW_DEPTH,
     MAX_FLOW_DEPTH,
     MAX_FLOW_LIMIT,
     QUEUE_ROW_LIMIT,
@@ -323,6 +324,9 @@ FlowSymbol = Annotated[
 ExportDepth = Annotated[
     int | None,
     typer.Option(
-        "--depth", help="Hops for --symbol (default 1) or --flow (default 4)."
+        "--depth",
+        min=0,
+        max=MAX_FLOW_DEPTH,
+        help=f"Hops for --symbol (default 1) or --flow (default {DEFAULT_FLOW_DEPTH}).",
     ),
 ]

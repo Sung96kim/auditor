@@ -16,8 +16,8 @@ from auditor.graph.build import GraphBuilder
 from auditor.graph.detectors import GodConceptKind
 from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
+    DEFAULT_FLOW_DEPTH,
     DEFAULT_FLOW_LIMIT,
-    MAX_FLOW_LIMIT,
     QUEUE_ROW_LIMIT,
     CallForm,
     EdgeKind,
@@ -131,7 +131,7 @@ async def graph_flow(
     symbol: str,
     path: str = ".",
     direction: str = "out",
-    depth: int = 4,
+    depth: int = DEFAULT_FLOW_DEPTH,
     limit: int = DEFAULT_FLOW_LIMIT,
     kinds: list[str] | None = None,
     include_tests: bool = False,
@@ -148,23 +148,24 @@ async def graph_flow(
     where the hub rule refused to expand it (never at the start symbol, under expand_hubs, or on
     the last level the depth budget reached), ``seen_ref``/``cycle`` when the walk already covered
     them, ``stopped`` when a stop glob cut the branch, and ``unresolved`` for calls the resolver
-    could not place. ``limit`` counts emitted nodes and is clamped to 1..1000; the
-    default of 200 is roughly 50 KB of compact JSON. Prune a wide tree with ``stop_at`` (module globs,
-    the branch is shown and not entered) rather than by lowering ``depth``; ``kinds`` follows
-    extra edge kinds on top of calls/callback_arg and is validated, ``include_tests`` keeps test
-    symbols, ``expand_hubs`` opens the nodes the hub rule collapsed."""
+    could not place. ``limit`` counts emitted nodes and is clamped to 1..1000 (the default of
+    200 is roughly 50 KB of compact JSON) and ``depth`` is clamped to 0..64. Prune a wide tree
+    with ``stop_at`` (module globs, the branch is shown and not entered) rather than by lowering
+    ``depth``; ``kinds`` follows extra edge kinds on top of calls/callback_arg and is validated,
+    ``include_tests`` keeps test symbols, ``expand_hubs`` opens the nodes the hub rule
+    collapsed."""
     root = find_root(Path(path))
     async with await open_index(root) as index:
         payload = await GraphQuery(index).flow(
             symbol,
-            FlowOptions(
+            FlowOptions.of(
                 direction=FlowDirection(direction),
                 depth=depth,
-                limit=min(max(1, limit), MAX_FLOW_LIMIT),
-                kinds=tuple(_filter_values(kinds, EdgeKind, "kinds") or ()),
+                limit=limit,
+                kinds=_filter_values(kinds, EdgeKind, "kinds") or (),
                 include_tests=include_tests,
                 expand_hubs=expand_hubs,
-                stop_at=tuple(stop_at or ()),
+                stop_at=stop_at or (),
                 hub_fan_in=tool_config(root).graph.flow_hub_fan_in,
             ),
         )

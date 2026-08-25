@@ -8,7 +8,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from auditor.graph.cache import EdgeRow, GraphCache, QueueRow
-from auditor.graph.model import DEFAULT_FLOW_LIMIT, TEST_ROLES, EdgeKind
+from auditor.graph.model import (
+    DEFAULT_FLOW_DEPTH,
+    DEFAULT_FLOW_LIMIT,
+    MAX_FLOW_DEPTH,
+    MAX_FLOW_LIMIT,
+    TEST_ROLES,
+    EdgeKind,
+)
 
 DEFAULT_HUB_FAN_IN = 40  # keep in step with GraphConfig.flow_hub_fan_in
 
@@ -38,13 +45,43 @@ class FlowOptions(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     direction: FlowDirection = FlowDirection.OUT
-    depth: int = Field(default=4, ge=0)
-    limit: int = Field(default=DEFAULT_FLOW_LIMIT, ge=1)
+    depth: int = Field(default=DEFAULT_FLOW_DEPTH, ge=0, le=MAX_FLOW_DEPTH)
+    limit: int = Field(default=DEFAULT_FLOW_LIMIT, ge=1, le=MAX_FLOW_LIMIT)
     kinds: tuple[str, ...] = ()
     include_tests: bool = False
     expand_hubs: bool = False
     stop_at: tuple[str, ...] = ()
     hub_fan_in: int = Field(default=DEFAULT_HUB_FAN_IN, ge=1)
+
+    @classmethod
+    def of(
+        cls,
+        *,
+        hub_fan_in: int,
+        direction: FlowDirection = FlowDirection.OUT,
+        depth: int = DEFAULT_FLOW_DEPTH,
+        limit: int = DEFAULT_FLOW_LIMIT,
+        kinds: Sequence[str] = (),
+        include_tests: bool = False,
+        expand_hubs: bool = False,
+        stop_at: Sequence[str] = (),
+    ) -> "FlowOptions":
+        """Build the knobs for one walk, clamping ``depth`` and ``limit`` into range.
+
+        The build every surface goes through, so a caller with no argument parser to reject an
+        out-of-range value still walks a bounded tree. ``hub_fan_in`` is the caller's own
+        settings source, never read here.
+        """
+        return cls(
+            direction=direction,
+            depth=min(max(0, depth), MAX_FLOW_DEPTH),
+            limit=min(max(1, limit), MAX_FLOW_LIMIT),
+            kinds=tuple(kinds),
+            include_tests=include_tests,
+            expand_hubs=expand_hubs,
+            stop_at=tuple(stop_at),
+            hub_fan_in=hub_fan_in,
+        )
 
 
 DEFAULT_OPTIONS = FlowOptions()  # frozen, so one shared instance is a safe default
