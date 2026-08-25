@@ -1,16 +1,19 @@
 """`auditr graph refinements` — the five subcommands spec 12.2 names."""
 
 import asyncio
-import io
-import re
 import shutil
-import time
 from pathlib import Path
 
 import pytest
-from _support import GOOD_PROPOSAL, cli_json, one_line, refine_run, tool_data
+from _support import cli_json, one_line, tool_data
 from fastmcp import Client
-from rich.console import Console
+from graph._support import (
+    GOOD_PROPOSAL,
+    add_observer_run,
+    cells,
+    refine_run,
+    render_text,
+)
 from typer.testing import CliRunner
 
 from auditor.cli import app
@@ -19,15 +22,11 @@ from auditor.database import open_repo_index
 from auditor.graph.model import MAX_LOG_ROWS, EdgeKind
 from auditor.graph.payloads import RefinementRowPayload, RefinementsReport
 from auditor.graph.refine.models import (
-    ProducerKind,
     RefinementKind,
     RefinementPayload,
     RefinementStatus,
-    Run,
-    RunnerKind,
     RunStatus,
     Tier,
-    TriggerKind,
 )
 from auditor.mcp import mcp
 from auditor.paths import auditor_home, user_config_path
@@ -43,8 +42,8 @@ def _propose(repo: Path) -> int:
 
 
 def _log(repo: Path, **kw) -> dict:
-    """One page of the provenance log through the `graph_log` MCP tool. `auditr graph log` is the
-    next branch's."""
+    """One page of the provenance log through the `graph_log` MCP tool, which is the surface these
+    tests read; `tests/graph/test_cli_graph_log.py` drives the CLI half."""
 
     async def go() -> dict:
         async with Client(mcp) as client:
@@ -58,31 +57,6 @@ def _log(repo: Path, **kw) -> dict:
 def _runs(repo: Path, *, skipped: bool) -> list[dict]:
     """The runs half of that page."""
     return _log(repo, skipped=skipped)["runs"]
-
-
-def _add_run(repo: Path, *, status: RunStatus, age_seconds: float) -> str:
-    """One run row written directly and aged by hand, which is the only way a test can have a run
-    older than a retention window. The assessment writes `skipped` rows in S8; eviction already
-    does today."""
-
-    async def go() -> str:
-        index = await open_repo_index(repo)
-        try:
-            return await index.runs.add_run(
-                Run(
-                    repo_identity=index.partition.identity,
-                    producer=ProducerKind.OBSERVER,
-                    runner=RunnerKind.NONE,
-                    trigger_kind=TriggerKind.EDIT,
-                    status=status,
-                    summary="no structural change",
-                    started_at=time.time() - age_seconds,
-                )
-            )
-        finally:
-            await index.aclose()
-
-    return asyncio.run(go())
 
 
 def test_an_empty_list_says_it_is_empty_not_filtered(refine_repo: Path):
@@ -252,7 +226,7 @@ def test_a_transition_answers_with_the_row_the_listing_shows(refine_repo: Path):
 def test_the_default_run_view_says_it_hid_the_skipped_rows(refine_repo: Path):
     """`filtered` is what tells an agent "nothing matched" from "nothing recorded". A repo whose
     only runs were skipped answered `runs: [], filtered: false`, which reads as "never run"."""
-    _add_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=0)
+    add_observer_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=0)
     hidden = _log(refine_repo)
     assert hidden["runs"] == []
     assert hidden["filtered"] is True
@@ -341,8 +315,8 @@ def test_an_unknown_id_is_named(refine_repo: Path):
 
 
 def test_prune_drops_only_the_assessment_runs_past_the_window(refine_repo: Path):
-    _add_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=30 * 86400)
-    _add_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=0)
+    add_observer_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=30 * 86400)
+    add_observer_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=0)
     _propose(refine_repo)  # a real run, which prune must never touch
     payload = cli_json(
         runner.invoke(
@@ -363,7 +337,7 @@ def test_prune_drops_only_the_assessment_runs_past_the_window(refine_repo: Path)
 def test_prune_finishes_a_run_a_dead_process_left_queued(refine_repo: Path):
     """Nothing else can close it: `abort` is refused from any other process and the registry died
     with the one that opened it, so before this the row sat `queued` and out of every view."""
-    stranded = _add_run(refine_repo, status=RunStatus.QUEUED, age_seconds=7200)
+    stranded = add_observer_run(refine_repo, status=RunStatus.QUEUED, age_seconds=7200)
     payload = cli_json(
         runner.invoke(
             app, ["graph", "refinements", "prune", str(refine_repo), "--json"]
@@ -403,39 +377,22 @@ def _row() -> RefinementRowPayload:
     )
 
 
-def _render(payload: RefinementsReport | RefinementRowPayload) -> str:
-    """One payload through its own renderer, at the width the five-column layout is designed for."""
-    buf = io.StringIO()
-    console = Console(file=buf, width=120)
-    if isinstance(payload, RefinementsReport):
-        render_graph_refinements(console, payload)
-    else:
-        render_graph_refinement(console, payload)
-    return buf.getvalue()
-
-
 def test_the_empty_renderer_distinguishes_no_rows_from_no_matches():
-    assert "none recorded" in _render(RefinementsReport())
-    assert "matched" in _render(RefinementsReport(filtered=True))
-
-
-def _cells(rendered: str, first: str) -> list[str]:
-    """The cells of the row whose first column is ``first``, so a value under the wrong header is
-    visible where a substring search over the whole table is not."""
-    for line in rendered.splitlines():
-        parts = re.split(r"[│┃]", line)
-        cells = [c.strip() for c in parts[1:-1]]
-        if len(parts) > 2 and cells and cells[0] == first:
-            return cells
-    raise AssertionError(f"no row starting {first!r} in\n{rendered}")
+    assert "none recorded" in render_text(render_graph_refinements, RefinementsReport())
+    assert "matched" in render_text(
+        render_graph_refinements, RefinementsReport(filtered=True)
+    )
 
 
 def test_every_value_is_rendered_under_its_own_header():
     """Swapping the tier and the status left the suite green: every asserted substring was still
     somewhere in the table, just in the wrong column."""
-    out = _render(RefinementsReport.of([_row()], filtered=False, total=1))
-    assert _cells(out, "id") == ["id", "kind", "tier", "status", "target"]
-    assert _cells(out, "3") == [
+    out = render_text(
+        render_graph_refinements,
+        RefinementsReport.of([_row()], filtered=False, total=1),
+    )
+    assert cells(out, "id") == ["id", "kind", "tier", "status", "target"]
+    assert cells(out, "3") == [
         "3",
         "add_edge",
         "B",
@@ -445,11 +402,13 @@ def test_every_value_is_rendered_under_its_own_header():
 
 
 def test_a_capped_page_says_how_many_rows_there_are():
-    assert "showing 1 of 9" in _render(
-        RefinementsReport.of([_row()], filtered=False, total=9)
+    assert "showing 1 of 9" in render_text(
+        render_graph_refinements,
+        RefinementsReport.of([_row()], filtered=False, total=9),
     )
-    assert "showing" not in _render(
-        RefinementsReport.of([_row()], filtered=False, total=1)
+    assert "showing" not in render_text(
+        render_graph_refinements,
+        RefinementsReport.of([_row()], filtered=False, total=1),
     )
 
 
@@ -466,7 +425,7 @@ def test_the_panel_shows_the_label_a_cluster_row_proposes():
         payload=RefinementPayload(label="user lookup"),
         reason="both fetch a user",
     )
-    out = _render(row)
+    out = render_text(render_graph_refinement, row)
     assert "m.py::f, m.py::g" in out
     assert "user lookup" in out
 
@@ -474,7 +433,10 @@ def test_the_panel_shows_the_label_a_cluster_row_proposes():
 def test_the_row_renderer_shows_the_edge_the_tier_and_the_reason():
     """A real node id is 70-odd characters. Five columns keep it on one line at width 120; the
     reason rides the continuation row rather than stealing half the table."""
-    out = _render(RefinementsReport.of([_row()], filtered=False, total=1))
+    out = render_text(
+        render_graph_refinements,
+        RefinementsReport.of([_row()], filtered=False, total=1),
+    )
     assert (
         "plugin/hooks/audit_edit.py::main -> plugin/hooks/_common.py::read_event" in out
     )

@@ -1,13 +1,18 @@
 """`auditr graph log` — the provenance log, in two views."""
 
 import asyncio
-import io
 import time
 from pathlib import Path
 
 import pytest
-from _support import GOOD_PROPOSAL, cli_json, one_line, refine_run
-from rich.console import Console
+from _support import cli_json, one_line
+from graph._support import (
+    GOOD_PROPOSAL,
+    add_observer_run,
+    refine_abort,
+    refine_run,
+    render_text,
+)
 from typer.testing import CliRunner
 
 from auditor.cli import app
@@ -15,7 +20,6 @@ from auditor.cli.render import render_graph_log
 from auditor.database import open_repo_index
 from auditor.graph.payloads import LogReport, LogView, RunRowPayload
 from auditor.graph.refine.models import (
-    ProducerKind,
     Refinement,
     RefinementCounts,
     RefinementKind,
@@ -23,21 +27,10 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     RefinementTarget,
     Run,
-    RunnerKind,
     RunStatus,
-    TriggerKind,
 )
 
 runner = CliRunner()
-
-
-async def _add_run(repo: Path, **kw) -> str:
-    index = await open_repo_index(repo)
-    try:
-        run = Run(repo_identity=index.partition.identity, **kw)
-        return await index.runs.add_run(run)
-    finally:
-        await index.aclose()
 
 
 async def _add_refinement(repo: Path, *, name: str, age_days: float) -> int:
@@ -72,17 +65,7 @@ def logged_repo(refine_repo: Path) -> Path:
     `refine_repo` already took `process_runs`, so the registries are emptied around the test.
     """
     refine_run(refine_repo, GOOD_PROPOSAL)
-    asyncio.run(
-        _add_run(
-            refine_repo,
-            producer=ProducerKind.OBSERVER,
-            runner=RunnerKind.NONE,
-            trigger_kind=TriggerKind.EDIT,
-            status=RunStatus.SKIPPED,
-            summary="no structural change",
-            started_at=time.time(),
-        )
-    )
+    add_observer_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=0)
     return refine_repo
 
 
@@ -119,7 +102,7 @@ def test_a_run_row_carries_the_split_of_what_its_run_produced(logged_repo: Path)
 def test_a_status_filter_narrows_and_says_so(logged_repo: Path):
     """Two real runs of different statuses, so the filter has something to narrow to as well as
     something to narrow away."""
-    refine_run(logged_repo, GOOD_PROPOSAL, abort="changed my mind")
+    refine_abort(logged_repo, GOOD_PROPOSAL, reason="changed my mind")
     aborted = cli_json(
         runner.invoke(
             app, ["graph", "log", str(logged_repo), "--status", "aborted", "--json"]
@@ -261,18 +244,14 @@ def test_the_limit_caps_the_rows_and_the_page_says_what_it_left(logged_repo: Pat
     assert payload["truncated"] is True
 
 
-def _render(payload: LogReport) -> str:
-    buf = io.StringIO()
-    render_graph_log(Console(file=buf, width=120), payload)
-    return buf.getvalue()
-
-
 def test_the_renderer_tells_an_empty_repo_from_a_narrowed_page_from_a_hidden_one():
     """Three causes, three sentences. Keying the "nothing matched" line off `filtered` alone would
     print it on a repo with nothing recorded, because the default run view sets `filtered`."""
-    assert "none recorded" in _render(LogReport())
-    assert "nothing matched" in _render(LogReport(filtered=True))
-    hidden = _render(LogReport(filtered=True, hidden_statuses=(RunStatus.SKIPPED,)))
+    assert "none recorded" in render_text(render_graph_log, LogReport())
+    assert "nothing matched" in render_text(render_graph_log, LogReport(filtered=True))
+    hidden = render_text(
+        render_graph_log, LogReport(filtered=True, hidden_statuses=(RunStatus.SKIPPED,))
+    )
     assert "nothing matched" not in hidden
     assert "--skipped" in hidden
 
@@ -295,7 +274,7 @@ def test_the_renderer_shows_a_run_summary_and_the_rows_its_run_owns():
         ),
         run_count=1,
     )
-    out = _render(report)
+    out = render_text(render_graph_log, report)
     assert "succeeded" in out
     assert "1 committed" in out
     assert " 3 " in out  # the `n` column is the run's row total, not just what it kept
@@ -308,6 +287,6 @@ def test_the_renderer_says_how_much_a_capped_page_left_behind():
         run_count=9,
         truncated=True,
     )
-    out = _render(report)
+    out = render_text(render_graph_log, report)
     assert "1 of 9" in out
     assert "--limit" in out

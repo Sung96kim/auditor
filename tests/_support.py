@@ -1,15 +1,13 @@
 """Shared test helpers + fixture paths, importable from any test in the mirrored tree
 (``tests/`` is on the path via ``pythonpath``)."""
 
-import asyncio
 import json
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fastmcp import Client
 from typer.testing import CliRunner
 
 from auditor.cli import app
@@ -18,7 +16,6 @@ from auditor.languages.bash.auditor import BashAuditor
 from auditor.languages.manifest.auditor import ManifestAuditor
 from auditor.languages.python.auditor import PythonAuditor
 from auditor.languages.typescript.auditor import TypeScriptAuditor
-from auditor.mcp import mcp
 from auditor.models import (
     Category,
     FileRole,
@@ -263,47 +260,6 @@ def cli_json(result):
     """
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
-
-
-# --- refinement-run helpers (shared by tests/graph/*) --------------------------------------
-#: the one true correction on the `refine_repo` pair: `caller.main` calls a name `helper` defines
-GOOD_PROPOSAL: dict[str, str] = {
-    "kind": "add_edge",
-    "src": "caller.py::main",
-    "dst": "helper.py::read_event",
-    "edge_kind": "calls",
-    "name": "read_event",
-    "reason": "main calls read_event, which helper.py defines",
-}
-
-
-def refine_run(
-    repo: Path, *proposals: Mapping[str, Any], abort: str | None = None
-) -> dict[str, Any]:
-    """Drive one refinement run through the MCP tools and answer whatever ended it.
-
-    The tools are the public producer, so the rows a test reads were written the way an agent
-    writes them. ``abort`` is the reason a run ends without committing.
-    """
-
-    async def go() -> dict[str, Any]:
-        async with Client(mcp) as client:
-            begun = await client.call_tool("graph_refine_begin", {"path": str(repo)})
-            run_id = tool_data(begun)["run_id"]
-            for proposal in proposals:
-                await client.call_tool(
-                    "graph_refine_propose",
-                    {"path": str(repo), "run_id": run_id, **proposal},
-                )
-            args: dict[str, Any] = {"path": str(repo), "run_id": run_id}
-            if abort is None:
-                return tool_data(await client.call_tool("graph_refine_commit", args))
-            ended = await client.call_tool(
-                "graph_refine_abort", args | {"reason": abort}
-            )
-            return tool_data(ended)
-
-    return asyncio.run(go())
 
 
 def git(repo: Path, *args: str) -> None:
