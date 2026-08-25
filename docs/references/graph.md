@@ -225,7 +225,8 @@ auditr graph unresolved . --json --limit 500
 
 - The graph the query commands read is the deterministic build plus an overlay of active
   refinements. There is no CLI for refinements yet; this section describes what a build does with
-  the rows once something puts them there.
+  the rows once something puts them there, and what the three judgement layers decide before a row
+  is written at all.
 - A refinement is recorded against a repo *identity* (the git common dir), not a scan partition, so
   every worktree of one checkout shares them.
 - Every edge carries a provenance: `deterministic` when the resolver produced it, `refined` when an
@@ -261,6 +262,40 @@ auditr graph unresolved . --json --limit 500
   briefable until something replaces it. The build-pass rows (`generic_label`,
   `singleton_cluster`, `text_sparse`) are rebuilt from the overlaid clustering instead, so a
   `relabel_cluster` or a `move_node` stops producing them without any retirement step.
+
+## Refinement verdicts
+
+- A proposal names one of five edge kinds (`calls`, `references_type`, `callback_arg`, `inherits`,
+  `overrides`) and carries a reason. The fact check answers one of:
+  - `ok`: the src node's own facts back an edge of this shape. With more than one definer that is
+    not a claim that this destination is the right one.
+  - `unverified`: a kind with no verifier (`confirm_edge`, `relabel_cluster`, `annotate_node`,
+    `unresolvable`, `move_node`). Accepted, tiered on shape.
+  - `no_such_path`, `not_loaded`, `stale_file`: the path is not a file here, the caller never
+    handed the file in, or the file no longer hashes to what the build cached. Only the last one is
+    fixed by rebuilding the graph.
+  - `no_src_node`, `no_fact`: the src node is not in its file, or the fact tuple for that edge kind
+    and call form does not name the destination. A bare name the src binds itself is no fact, which
+    is the rule the unresolved queue applies to the same call.
+  - `externally_bound`, `not_a_definer`, `bad_node_kind`: the caller's module imports the name from
+    outside the repo, the destination does not define it (or is outside the gated candidates for
+    `resolve_ambiguous`), or the endpoints are node kinds the resolver never pairs.
+- The tier is the proposal's shape (spec 9.2). Tier A is the kinds that cannot add an edge plus a
+  verified `resolve_ambiguous`; tier B is a verified `add_edge` on a bare or `self` call with one
+  definer and no external binding; everything else is tier C.
+- Whether a tier activates is measured, not assumed. Tier A's `resolve_ambiguous` waits for the
+  decoy suite, tier B waits for the add suite's stratum matching the proposal (same module, direct
+  import, or neither) plus a collision control with no false adds. A suite stratum that ran no
+  trials proves nothing. With no eval rows every tier but the four safe kinds starts `pending`.
+- At commit a proposal is checked against prior work:
+  - `redundant`: the resolver now produces this edge. Terminal, never re-briefed.
+  - `already_resolved`: the source already has a deterministic edge of the same kind for the same
+    short name, pointing elsewhere. Only `add_edge` trips this, because `retarget_edge` names that
+    edge on purpose.
+  - `duplicate`: an active refinement already adds this edge, so the proposal is stored as a
+    `confirm_edge`.
+  - `contradicts`: an active refinement already points the same source at another destination for
+    this name.
 
 ## Graph findings
 

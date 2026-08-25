@@ -263,15 +263,30 @@ flowchart TB
 - `build.GraphWrite` is that whole result as one frozen record: `nodes`, `edges`, `clusters`,
   `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
   counts, so the empty-graph build takes the same path and reports the same shape as any other.
-- `graph/refine/` is the refinement layer: `models.py` (the frozen records), `namespace.py`
-  (partition-relative vs toplevel-relative node ids), `overlay.py` (the pure merge) and `lock.py`
-  (the cross-process rebuild lock). Stdlib, pydantic and `config.py`, no database.
-- `refine/verify.py` is spec 9.2's fact check. It re-reads every file a proposal names, re-extracts
-  it, and refuses when the file no longer hashes to what the build cached; then it checks the
-  destination's short name against the src node's own fact tuple for that edge kind and call form,
-  rejects a name the caller's module imported from outside the repo, and rejects a destination that
-  does not define the name. The externally-bound rule is `resolve_edges.NameBindings`, the same
-  object the unresolved queue dims a row with.
+- `graph/refine/` is the refinement layer. Stdlib, pydantic and `config.py`, no database:
+  - `models.py` holds the frozen records: `Proposal` and the per-kind target rules, the stored
+    `Refinement`, the anchors, and the eval rows a tier gate reads.
+  - `namespace.py` owns the node id: partition-relative against toplevel-relative, plus the two
+    readers that take an id apart (`short_name`, `file_of`).
+  - `overlay.py` is the pure merge one build applies, and `lock.py` the cross-process rebuild lock.
+  - `verify.py` is the AST-fact check over the files a proposal names.
+  - `tiers.py` turns a verified proposal into a tier and the status that tier starts in.
+  - `conflicts.py` is the commit-time collision check against prior work.
+- `refine/verify.py` re-reads every file a proposal names, re-extracts it, and refuses when the file
+  no longer hashes to what the build cached. It then checks the destination's short name against the
+  src node's own fact tuple for that edge kind and call form, refuses a destination outside the
+  role-filtered definers (outside the gated candidates for `resolve_ambiguous`), refuses a name the
+  caller's module imported from outside the repo, and refuses endpoints whose node kinds the
+  resolver never pairs. The externally-bound rule and the call-form split are
+  `resolve_edges.NameBindings` and `resolve_edges.form_for`, the same objects the unresolved queue
+  dims and shapes a row with.
+- `refine/tiers.py` reads spec 9.2's tier column and spec 10.3's gate. The tier comes from the
+  proposal's shape; whether it activates comes from the eval rows measured on this repo for this
+  runner and model, per suite and stratum. With no rows, everything but the four kinds that cannot
+  add an edge starts `pending`.
+- `refine/conflicts.py` answers a proposal against the resolver's own edges first (an edge the
+  resolver now produces is `redundant` and terminal) and then against the active refinements (the
+  same edge is a confirmation, another destination for the same name contradicts).
 - `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
   the active rows against their anchors and the passes are its methods: `edges` merges the edge
   kinds into the resolver's output, `nodes` applies the node and cluster kinds to the ranked and
