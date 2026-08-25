@@ -9,7 +9,7 @@ import os
 
 from fastmcp.exceptions import ToolError
 
-from auditor.graph.model import LOG_ROW_LIMIT, enum_values
+from auditor.graph.model import LOG_ROW_LIMIT, enum_value, enum_values
 from auditor.graph.payloads import LogFilter, RunRowPayload
 from auditor.graph.query import LogQuery
 from auditor.graph.refine.models import (
@@ -55,8 +55,7 @@ def _run_id(given: str | None) -> str:
 
 def _client(raw: str) -> ClientKind:
     """The client a run is attributed to, refused by name rather than logged as another one."""
-    chosen = enum_values([raw], ClientKind, "client")
-    return ClientKind(chosen[0]) if chosen else ClientKind.CLI
+    return ClientKind(enum_value(raw, ClientKind, "client"))
 
 
 @mcp.tool(annotations=MUTATING)
@@ -121,21 +120,26 @@ async def graph_refine_propose(
     name, reason_code). ``edge_kind`` is one of calls, references_type, callback_arg, inherits,
     overrides. ``reason`` is required on every kind.
 
+    ``confidence`` is a 0 to 1 scale, recorded with the row as provenance; no gate reads it.
+
     Returns {outcome, kind, tier, status, verify, refusal, detail, refinement_id}. ``outcome`` is
     "staged" or "rejected"; ``verify`` says which check failed, and ``refusal`` is set instead when
     the proposal never reached the check at all (invalid, over_cap, out_of_scope, already_staged,
-    intra_batch, out_of_partition). A proposal this tool cannot even shape into a correction comes
-    back as "rejected" with refusal "invalid", and that rejection is recorded like any other.
+    intra_batch, out_of_partition). ``refinement_id`` is 0 while a proposal is staged: its row is
+    written at commit. A payload this tool cannot even shape into a correction comes back as
+    "rejected" with refusal "invalid" and is recorded like any other rejection, the unreadable
+    values dropped and the complaint in ``detail``; only an unknown ``kind`` is an error instead,
+    because the kind chooses the shape and there is no row to store without it.
     ``verify: "ok"`` means the source's own facts support an edge of this shape to a node that
     defines the name; where several nodes define it, it does not mean this one is the right one,
     which is why such a proposal is tier C. Until this repo has eval numbers, every ``add_edge``,
     ``retarget_edge``, ``resolve_ambiguous`` and ``move_node`` lands "pending" and needs a human to
     run `auditr graph refinements accept <id>` before a build applies it: activating your own
     correction is not something this tool set can do, by design."""
-    if kind not in {k.value for k in RefinementKind}:
-        raise ToolError(
-            f"unknown kind: {kind}. Valid: {', '.join(k.value for k in RefinementKind)}"
-        )
+    try:
+        enum_value(kind, RefinementKind, "kind")
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
     # the raw arguments, not a built `Proposal`: `Proposal` owns spec 9.2's shape and text rules,
     # and `propose` stores the rejection an illegal one earns (spec 9.2)
     proposal = {

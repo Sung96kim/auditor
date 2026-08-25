@@ -147,6 +147,48 @@ async def test_a_proposal_with_no_reason_is_stored_as_an_invalid_rejection(
         assert [r["status"] for r in rows["rows"]] == ["rejected"]
 
 
+#: the payload shapes the service cannot turn into a correction at all (spec 9.2)
+UNSHAPEABLE: dict[str, dict] = {
+    "no target": {"src": None, "dst": None, "edge_kind": None, "name": None},
+    "unknown edge kind": {"edge_kind": "callz"},
+    "unknown call form": {"call_form": "nope"},
+    "malformed evidence": {"evidence": [{"path": "caller.py", "line": "x"}]},
+    "confidence off the scale": {"confidence": 99.0},
+}
+
+
+@pytest.mark.parametrize("broken", sorted(UNSHAPEABLE))
+async def test_a_payload_that_cannot_be_shaped_is_stored_as_a_rejection(
+    queued_repo: Path, broken: str
+):
+    """Spec 9.2 stores every rejection, and these are the shapes an agent gets wrong: an unknown
+    enum used to raise from the model layer instead, so the one rejection worth reading back was
+    the one nothing recorded."""
+    async with Client(mcp) as client:
+        run_id = await _begin(client, queued_repo)
+        payload = _add_edge(queued_repo, run_id) | UNSHAPEABLE[broken]
+        verdict = _data(await client.call_tool("graph_refine_propose", payload))
+        assert (verdict["outcome"], verdict["refusal"]) == ("rejected", "invalid")
+        assert verdict["verify"] == "unverified"
+        assert verdict["refinement_id"] > 0
+        assert verdict["detail"]
+        rows = _data(
+            await client.call_tool(
+                "graph_refinements", {"path": str(queued_repo), "status": ["rejected"]}
+            )
+        )
+        stored = rows["rows"]
+        assert [r["refinement_id"] for r in stored] == [verdict["refinement_id"]]
+        # Invariant 2: the row a reader can reach belongs to the run that earned it
+        assert stored[0]["run_id"] == run_id
+        log = _data(
+            await client.call_tool(
+                "graph_log", {"path": str(queued_repo), "view": "runs"}
+            )
+        )
+        assert [r["run_id"] for r in log["runs"]] == [run_id]
+
+
 async def test_abort_ends_the_run_and_drops_the_staging(queued_repo: Path):
     async with Client(mcp) as client:
         run_id = await _begin(client, queued_repo)

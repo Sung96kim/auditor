@@ -127,16 +127,38 @@ async def test_a_payload_with_no_reason_is_stored_as_a_rejection(
     assert stored is not None and stored.status is RefinementStatus.REJECTED
 
 
-async def test_a_payload_no_lenient_read_can_rescue_is_refused_not_raised(
+async def test_a_target_no_kind_could_fill_is_stored_not_raised(
     refine_service: RefinementService,
 ):
-    """A missing `dst` is not a text rule `STORED_ROW` relaxes, so there is no proposal to
-    attribute a rejection to. The refusal is still the service's own error type: a caller that has
-    to tell a pydantic traceback from a verdict has two contracts instead of one."""
+    """Spec 9.2 stores every rejection, and a row that carries a complaint needs no target a build
+    could apply: the read drops what it cannot use and the rest of the payload still reaches the
+    reader."""
+    run = await refine_service.begin()
+    verdict = await refine_service.propose(
+        run.run_id,
+        {
+            "kind": "add_edge",
+            "target": {"src": "impl.py::Impl.run"},
+            "reason": "a destination I forgot to name",
+        },
+    )
+    assert verdict.refusal is RefusalKind.INVALID
+    assert "target is missing" in verdict.detail
+    stored = await refine_service.index.refinements.refinement(verdict.refinement_id)
+    assert stored is not None and stored.status is RefinementStatus.REJECTED
+    assert (stored.target.src, stored.target.dst) == ("impl.py::Impl.run", None)
+
+
+async def test_a_payload_with_no_readable_kind_is_refused_not_raised(
+    refine_service: RefinementService,
+):
+    """The kind chooses the shape, so a payload without a readable one has no row to be stored as.
+    The refusal is still the service's own error type: a caller that has to tell a pydantic
+    traceback from a verdict has two contracts instead of one."""
     run = await refine_service.begin()
     with pytest.raises(RefinementRefused, match="not a proposal"):
         await refine_service.propose(
-            run.run_id, {"kind": "add_edge", "target": {"src": "impl.py::Impl.run"}}
+            run.run_id, {"kind": "delete_edge", "target": {"src": "impl.py::Impl.run"}}
         )
 
 

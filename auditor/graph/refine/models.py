@@ -345,6 +345,42 @@ ANNOTATION_MAX = 280
 #: validation context flag `_refinement_from_row` passes: a row written before a text rule was
 #: tightened still reads back, and every other construction is judged by the current rules
 STORED_ROW = "stored_row"
+#: validation context flag for a read that is a rejection being recorded: spec 9.2 stores every
+#: rejection, and a row that exists to carry a complaint needs no target a build could apply
+REJECTED_ROW = "rejected_row"
+
+
+def _recording_a_rejection(model: BaseModel, info: ValidationInfo) -> bool:
+    """Whether this read is a stored rejection, either being recorded or read back again."""
+    context = info.context or {}
+    if not context.get(STORED_ROW):
+        return False
+    return bool(context.get(REJECTED_ROW)) or (
+        getattr(model, "status", None) is RefinementStatus.REJECTED
+    )
+
+
+def _without(raw: Mapping[str, Any], exc: ValidationError) -> dict[str, Any]:
+    """``raw`` with every value the validator could not read dropped, so the rest still reaches
+    the stored rejection: an unreadable ``edge_kind`` costs its own field, not the whole target."""
+    data = dict(raw)
+    for error in exc.errors():
+        data = _dropped(data, tuple(error["loc"]))
+    return data
+
+
+def _dropped(data: Any, loc: tuple[Any, ...]) -> Any:
+    """``data`` without the value at ``loc``; a location inside a sequence drops the sequence,
+    which is how one unreadable evidence item costs the evidence and nothing else."""
+    if not loc or not isinstance(data, Mapping):
+        return data
+    key, *rest = loc
+    if key not in data:
+        return data
+    inner = data[key]
+    if rest and isinstance(inner, Mapping):
+        return {**data, key: _dropped(inner, tuple(rest))}
+    return {k: v for k, v in data.items() if k != key}
 
 
 class ProposedEdge(BaseModel):
@@ -379,9 +415,15 @@ class Proposal(BaseModel):
     confidence: float = 0.0
 
     @model_validator(mode="after")
-    def _the_target_matches_the_kind(self) -> "Proposal":
+    def _the_target_matches_the_kind(self, info: ValidationInfo) -> "Proposal":
         """Refuse a target no build could apply: an `add_edge` with no destination is worse
-        stored than rejected, and nothing downstream would ever report it."""
+        stored than rejected, and nothing downstream would ever report it.
+
+        A rejection is the exception spec 9.2 asks for: its row exists to carry the complaint, so
+        it is stored and read back whatever its target says.
+        """
+        if _recording_a_rejection(self, info):
+            return self
         missing = [
             field for field in _REQUIRED_BY_KIND[self.kind] if not self._required(field)
         ]
@@ -398,8 +440,9 @@ class Proposal(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _the_text_a_reader_sees_is_usable(self, info: ValidationInfo) -> "Proposal":
-        """A reason, a label that names the cluster, an annotation that fits on a card (spec 9.2).
+    def _the_values_a_reader_sees_are_usable(self, info: ValidationInfo) -> "Proposal":
+        """A reason, a label that names the cluster, an annotation that fits on a card, a
+        confidence on the scale it is read on (spec 9.2).
 
         Whitespace is not text a reader can use, so the lengths are measured on the stripped value.
         A row read back under `STORED_ROW` keeps whatever it was written with.
@@ -408,6 +451,8 @@ class Proposal(BaseModel):
             return self
         if not self.reason.strip():
             raise ValueError(f"{self.kind.value} needs a reason")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence is a 0 to 1 scale")
         label = self.payload.label
         low, high = LABEL_LENGTH
         if label is not None and (
@@ -455,16 +500,19 @@ class Proposal(BaseModel):
     def read(cls, raw: "Proposal | Mapping[str, Any]") -> tuple["Proposal", str]:
         """One proposal, and the validator's complaint about it when it is not a legal one.
 
-        An illegal payload is re-read under `STORED_ROW` so the rejection spec 9.2 requires can be
-        stored. A target no kind could ever fill is not a text rule that context relaxes: it raises
-        `ValidationError`, because there is no proposal to attribute a rejection to.
+        Spec 9.2 stores every rejection, so an illegal payload is re-read with the values the
+        validator could not read dropped: a target no kind could fill, an unreadable enum and a
+        malformed evidence item all become one stored row carrying the complaint. ``kind`` is the
+        exception, because it chooses the shape and there is no row to store without it.
         """
         if isinstance(raw, Proposal):
             return raw, ""
         try:
             return cls.model_validate(raw), ""
         except ValidationError as exc:
-            lenient = cls.model_validate(raw, context={STORED_ROW: True})
+            lenient = cls.model_validate(
+                _without(raw, exc), context={STORED_ROW: True, REJECTED_ROW: True}
+            )
             return lenient, str(exc.errors()[0]["msg"])
 
     def rebased(self, prefix: str) -> "Proposal":

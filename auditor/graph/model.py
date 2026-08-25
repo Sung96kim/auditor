@@ -200,16 +200,33 @@ def enum_values(
     raw: Sequence[str] | None, enum: type[StrEnum], field: str
 ) -> list[str] | None:
     """Validate a repeatable filter against its enum, so a typo is an error rather than an empty
-    page the caller reads as an empty result."""
+    page the caller reads as an empty result. Every typo is named, not just the first."""
     if not raw:
         return None
-    allowed = [e.value for e in enum]
+    allowed = _allowed(enum)
     unknown = [v for v in raw if v not in allowed]
     if unknown:
         raise ValueError(
             f"unknown {field}: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
         )
     return list(raw)
+
+
+def enum_value(raw: str, enum: type[StrEnum], field: str) -> str:
+    """Validate one value against its enum, worded exactly as :func:`enum_values` words it.
+
+    The singular half: a repeatable filter reads an empty input as "every value", and a parameter
+    that takes exactly one has no such reading, so ``""`` is a typo here rather than a default.
+    """
+    allowed = _allowed(enum)
+    if raw not in allowed:
+        raise ValueError(f"unknown {field}: {raw}. Valid: {', '.join(allowed)}")
+    return raw
+
+
+def _allowed(enum: type[StrEnum]) -> list[str]:
+    """The values one enum offers, in declaration order, for a message that names the set."""
+    return [e.value for e in enum]
 
 
 def unresolved_priority(reason: UnresolvedReason, call_form: CallForm) -> int:
