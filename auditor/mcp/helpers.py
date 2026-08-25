@@ -1,6 +1,7 @@
 """Shared helpers used by more than one tool module: the behaviour annotations, the config edge,
 and the preamble every tool runs before it touches a repo."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,7 +15,8 @@ from auditor.config_notice import format_config_error
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import UnmigratableColumn
 from auditor.discovery import find_root
-from auditor.paths import index_db_path
+from auditor.paths import index_db_path, repo_dir_for_identity
+from auditor.user_settings import UserSettings, load_user_settings
 
 # Behaviour hints surfaced to clients at no token cost: clients skip confirmation prompts for
 # read-only tools and can cache idempotent ones. All auditor tools work on the local repo only,
@@ -63,6 +65,23 @@ class ToolRepo(BaseModel):
     root: Path
     index: IndexStore
     settings: AuditorSettings
+
+
+async def tool_user(repo: ToolRepo) -> UserSettings:
+    """The user's own settings for one tool call, read off the loop and refused as one line.
+
+    `load_user_settings` reads two files and, without the state dir, shells out to git for it: on
+    the loop every other tool call on this server waits behind that. The identity the handle
+    already resolved is what names the dir, so the git call is skipped rather than threaded.
+    """
+    try:
+        return await asyncio.to_thread(
+            load_user_settings,
+            repo.root,
+            directory=repo_dir_for_identity(repo.index.partition.identity),
+        )
+    except ValidationError as exc:
+        raise config_error(exc) from exc
 
 
 @asynccontextmanager

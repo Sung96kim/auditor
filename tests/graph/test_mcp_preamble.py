@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import inspect
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from auditor.database import IndexStore, open_repo_index
-from auditor.mcp import mcp
+from auditor.mcp import mcp, refine_tools
 from auditor.mcp.helpers import ToolRepo, tool_repo
 
 MCP_DIR = Path(__file__).resolve().parents[2] / "auditor" / "mcp"
@@ -183,7 +184,11 @@ PREAMBLE_TOOLS: dict[str, dict[str, object]] = {
     "graph_flow": {"symbol": "get_user"},
     "graph_log": {},
     "graph_overview": {},
+    "graph_refine_abort": {"run_id": "no-such-run"},
     "graph_refine_begin": {},
+    "graph_refine_commit": {"run_id": "no-such-run"},
+    "graph_refine_propose": {"run_id": "no-such-run", "kind": "confirm_edge"},
+    "graph_refine_status": {"run_id": "no-such-run"},
     "graph_refinements": {},
     "graph_unresolved": {},
     "ignore_add": {"rule_id": "PY-STYLE-INLINE-IMPORT"},
@@ -203,6 +208,27 @@ def _args(tool: str, repo: Path) -> dict[str, object]:
             "line": 1,
         }
     return {**PREAMBLE_TOOLS[tool], "path": str(repo)}
+
+
+async def test_every_refinement_tool_is_in_the_matrix():
+    """The dict says "every tool that reaches a repo through the preamble" and nothing checked it:
+    the seven tools this slice added put three in and left four out, and the four left out are the
+    ones that also read the user's settings.
+
+    The module's own public coroutines are its tools, which the registry check on the next line
+    pins.
+    """
+    tools = {
+        name
+        for name, obj in vars(refine_tools).items()
+        if inspect.iscoroutinefunction(obj)
+        and obj.__module__ == refine_tools.__name__
+        and not name.startswith("_")
+    }
+    async with Client(mcp) as client:
+        registered = {tool.name for tool in await client.list_tools()}
+    assert len(tools) == 7 and tools <= registered
+    assert tools <= set(PREAMBLE_TOOLS)
 
 
 @pytest.mark.parametrize("tool", sorted(PREAMBLE_TOOLS))

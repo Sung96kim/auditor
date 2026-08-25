@@ -328,7 +328,8 @@ class MalwareScanConfig(BaseModel):
 class GlobalPaths(BaseSettings):
     """Global auditor settings from the environment (``AUDITOR_`` prefix). ``home`` ←
     ``$AUDITOR_HOME`` (default ``~/.auditor``); ``code_mode`` ← ``$AUDITOR_CODE_MODE`` gates the
-    experimental Code Mode MCP transform. Lives here so the project's BaseSettings stay together
+    experimental Code Mode MCP transform; ``refine_run`` ← ``$AUDITOR_REFINE_RUN`` pre-binds the
+    refinement tools to one run (spec 9.5). Lives here so the project's BaseSettings stay together
     (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the ``home`` helper.
 
     ``env_ignore_empty`` makes ``AUDITOR_HOME=`` mean unset rather than ``Path(".")``, which would
@@ -338,6 +339,7 @@ class GlobalPaths(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUDITOR_", env_ignore_empty=True)
     home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
     code_mode: bool = False
+    refine_run: str = ""
 
 
 class _NonPolicyEnvSource(EnvSettingsSource):

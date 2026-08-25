@@ -269,11 +269,17 @@ def user_json_layers(root: Path, *, directory: Path | None = None) -> dict[str, 
     return deep_merge(_read_layer(user_config_path()), _read_layer(overlay))
 
 
-def load_user_settings(root: Path) -> UserSettings:
+def load_user_settings(root: Path, *, directory: Path | None = None) -> UserSettings:
     """Resolve the user's settings for one repo: defaults, then the global file, then the
     per-repo file, then ``AUDITOR_USER_*`` (later wins). The layering is hand-built because the
-    settings-source pipeline puts env below init values, and env has to win here."""
-    merged = deep_merge(user_json_layers(root), EnvSettingsSource(UserSettings)())
+    settings-source pipeline puts env below init values, and env has to win here.
+
+    Pass ``directory`` when the caller already resolved the repo's state dir, as
+    :func:`user_json_layers` describes: deriving it costs a ``git rev-parse``.
+    """
+    merged = deep_merge(
+        user_json_layers(root, directory=directory), EnvSettingsSource(UserSettings)()
+    )
     return UserSettings.model_validate(merged)
 
 

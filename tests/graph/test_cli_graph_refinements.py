@@ -28,6 +28,7 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.service import RunRegistry
 from auditor.mcp import mcp
+from auditor.paths import user_config_path
 
 runner = CliRunner()
 
@@ -396,6 +397,17 @@ def test_prune_finishes_a_run_a_dead_process_left_queued(refined_repo: Path):
     rows = {r["run_id"]: r for r in _runs(refined_repo, skipped=True)}
     assert rows[stranded]["status"] == "skipped"
     assert "stranded" in rows[stranded]["error"]
+
+
+def test_a_broken_user_config_is_one_line_from_prune(refined_repo: Path):
+    """`prune` is the one command here that reads the user's settings, and it read them outside
+    the guard every other command surface uses: a bad file printed a pydantic traceback."""
+    user_config_path().parent.mkdir(parents=True, exist_ok=True)
+    user_config_path().write_text('{"observer": {"skipped_retention_days": "soon"}}')
+    result = runner.invoke(app, ["graph", "refinements", "prune", str(refined_repo)])
+    assert result.exit_code == 1
+    assert "invalid user config" in result.output
+    assert "Traceback" not in result.output
 
 
 def _render(payload) -> str:

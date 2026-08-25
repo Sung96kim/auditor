@@ -5,10 +5,9 @@ An agent reads `graph_unresolved`, opens a run, proposes against what it saw, an
 staged proposals live in this process, so a run is opened, filled and committed through one server.
 """
 
-import os
-
 from fastmcp.exceptions import ToolError
 
+from auditor.config import GlobalPaths
 from auditor.graph.model import LOG_ROW_LIMIT, enum_value, enum_values
 from auditor.graph.payloads import LogFilter, RunRowPayload
 from auditor.graph.query import LogQuery
@@ -21,30 +20,30 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.payloads import CommitPayload, RunReportPayload
 from auditor.graph.refine.service import RefinementRefused, RefinementService
-from auditor.mcp.helpers import MUTATING, READ_ONLY, ToolRepo, tool_repo
+from auditor.mcp.helpers import MUTATING, READ_ONLY, ToolRepo, tool_repo, tool_user
 from auditor.mcp.server import mcp
-from auditor.user_settings import load_user_settings
 
-#: pre-binds every tool to one run, for a server a runner spawned (spec 9.5)
+#: the env var `GlobalPaths.refine_run` binds, named in the error that tells a caller about it
 RUN_ENV = "AUDITOR_REFINE_RUN"
 
 
-def _service(repo: ToolRepo) -> RefinementService:
+async def _service(repo: ToolRepo) -> RefinementService:
     """One service per tool call, over the run registry this process already shares.
 
     The registry is deliberately not passed: `RefinementService` defaults to
     `RunRegistry.process(identity)`, and a second one would split the staging
-    `graph_refine_status` reports on.
+    `graph_refine_status` reports on. The user's settings come through `tool_user`, so the read
+    stays off the event loop and a broken settings file is one line rather than a traceback.
     """
     return RefinementService(
-        repo.index, repo.root, repo.settings, load_user_settings(repo.root)
+        repo.index, repo.root, repo.settings, await tool_user(repo)
     )
 
 
 def _run_id(given: str | None) -> str:
     """The run these tools act on: the argument, else the env binding, else an error saying how
     to open one."""
-    run_id = given or os.environ.get(RUN_ENV, "")
+    run_id = given or GlobalPaths().refine_run
     if not run_id:
         raise ToolError(
             "no run to work on: call graph_refine_begin first, or set "
@@ -73,8 +72,9 @@ async def graph_refine_begin(
     is an error. ``client`` is one of claude-code, codex, cli. Read ``graph_unresolved`` first: a
     proposal that answers a queue row is the only shape that can reach tier B."""
     async with tool_repo(path) as repo:
+        service = await _service(repo)
         try:
-            run = await _service(repo).begin(
+            run = await service.begin(
                 scope=scope,
                 producer=ProducerKind.AGENT,
                 client=_client(client),
@@ -166,8 +166,9 @@ async def graph_refine_propose(
         "confidence": confidence,
     }
     async with tool_repo(path) as repo:
+        service = await _service(repo)
         try:
-            verdict = await _service(repo).propose(_run_id(run_id), proposal)
+            verdict = await service.propose(_run_id(run_id), proposal)
         except RefinementRefused as exc:
             raise ToolError(str(exc)) from exc
     return verdict.model_dump(mode="json")
@@ -183,8 +184,9 @@ async def graph_refine_commit(path: str = ".", run_id: str | None = None) -> dic
     rejected, landed, rebuilt, build}; ``build`` is the same shape graph_build returns, and is null
     when ``rebuilt`` is false."""
     async with tool_repo(path) as repo:
+        service = await _service(repo)
         try:
-            result = await _service(repo).commit(_run_id(run_id))
+            result = await service.commit(_run_id(run_id))
         except RefinementRefused as exc:
             raise ToolError(str(exc)) from exc
     return CommitPayload.of(result).model_dump(mode="json")
@@ -197,8 +199,9 @@ async def graph_refine_abort(
     """Drop everything staged on a run and close it. Nothing staged was ever written, so nothing is
     removed from the graph; rejections already recorded stay. Returns the run row."""
     async with tool_repo(path) as repo:
+        service = await _service(repo)
         try:
-            run = await _service(repo).abort(_run_id(run_id), reason)
+            run = await service.abort(_run_id(run_id), reason)
         except RefinementRefused as exc:
             raise ToolError(str(exc)) from exc
     return RunRowPayload.of(run).model_dump(mode="json")
@@ -210,8 +213,9 @@ async def graph_refine_status(path: str = ".", run_id: str | None = None) -> dic
     ``committed`` and ``rejected``. ``staged_here`` is false when the run was opened by another
     process, in which case ``staged`` is empty because staging never reaches the database."""
     async with tool_repo(path) as repo:
+        service = await _service(repo)
         try:
-            report = await _service(repo).status(_run_id(run_id))
+            report = await service.status(_run_id(run_id))
         except RefinementRefused as exc:
             raise ToolError(str(exc)) from exc
     return RunReportPayload.of(report).model_dump(mode="json")

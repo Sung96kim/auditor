@@ -57,6 +57,7 @@ from auditor.graph.refine.service import (
     RefinementRefused,
     RefinementService,
 )
+from auditor.user_settings import UserSettings
 
 
 async def _unresolved_rows(
@@ -150,15 +151,17 @@ def _transition(
     present(payload, render_graph_refinement, as_json=json_)
 
 
-async def _prune(root: Path, settings: AuditorSettings) -> PruneReport:
+async def _prune(
+    root: Path, settings: AuditorSettings, user: UserSettings
+) -> PruneReport:
     """The retention sweep at this user's configured windows.
 
     The one command here that does build a `RefinementService`: `prune()` reads
-    `user.observer.skipped_retention_days` and `limits.stranded_run_seconds`, and those reads
-    belong in one place.
+    `user.observer.skipped_retention_days` and `limits.stranded_run_seconds`. Both settings are
+    read at the command edge, where a broken file is one line, and handed in.
     """
     async with await open_index(root) as index:
-        service = RefinementService(index, root, settings, load_user(root))
+        service = RefinementService(index, root, settings, user)
         return PruneReport.of(await service.prune())
 
 
@@ -218,7 +221,7 @@ def refinements_prune(
     retention window together with the rejected refinements they own. Nothing live is deleted."""
     root = cli_root(target)
     present(
-        run(_prune(root, load_settings(root)), "pruning…"),
+        run(_prune(root, load_settings(root), load_user(root)), "pruning…"),
         render_graph_prune,
         as_json=json_,
     )

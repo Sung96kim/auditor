@@ -1,5 +1,8 @@
 """The refinement MCP tools (spec 9.5's in-session producer)."""
 
+import asyncio
+import time
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -8,6 +11,8 @@ from fastmcp.exceptions import ToolError
 
 from auditor.graph.refine.service import RunRegistry
 from auditor.mcp import mcp
+from auditor.paths import user_config_path
+from auditor.user_settings import load_user_settings
 
 HELPER = "def read_event():\n    return {}\n"
 CALLER = "def main():\n    return read_event()\n"
@@ -237,6 +242,65 @@ async def test_an_impossible_scope_is_refused_by_name(queued_repo: Path):
             await client.call_tool(
                 "graph_refine_begin", {"path": str(queued_repo), "scope": "/etc"}
             )
+
+
+async def test_the_settings_read_is_off_the_event_loop(
+    queued_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`load_user_settings` reads two files and, unless it is handed the state dir, shells out to
+    git with a 30 s timeout. On the loop every other tool call on the server waits behind it."""
+    real = load_user_settings
+
+    def slow(root, *, directory=None):
+        time.sleep(0.2)
+        return real(root, directory=directory)
+
+    monkeypatch.setattr("auditor.mcp.helpers.load_user_settings", slow)
+    ticks = 0
+
+    async def tick() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    ticker = asyncio.create_task(tick())
+    try:
+        async with Client(mcp) as client:
+            await _begin(client, queued_repo)
+    finally:
+        ticker.cancel()
+        with suppress(asyncio.CancelledError):
+            await ticker
+    assert ticks > 5
+
+
+#: the tools that build a `RefinementService`, and therefore read the user's own settings
+SERVICE_TOOLS: dict[str, dict] = {
+    "graph_refine_begin": {},
+    "graph_refine_propose": {"run_id": "no-such-run", "kind": "confirm_edge"},
+    "graph_refine_commit": {"run_id": "no-such-run"},
+    "graph_refine_abort": {"run_id": "no-such-run"},
+    "graph_refine_status": {"run_id": "no-such-run"},
+}
+
+
+@pytest.mark.parametrize("tool", sorted(SERVICE_TOOLS))
+async def test_a_broken_user_config_is_one_line_from_every_tool(
+    queued_repo: Path, tool: str
+):
+    """The preamble covers repo policy; these five read the user's own settings as well, outside
+    it, so a bad `~/.auditor/config.json` reached a client as an unhandled pydantic traceback."""
+    user_config_path().parent.mkdir(parents=True, exist_ok=True)
+    user_config_path().write_text('{"observer": {"limits": {"max_open_runs": "many"}}}')
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError) as raised:
+            await client.call_tool(
+                tool, {"path": str(queued_repo), **SERVICE_TOOLS[tool]}
+            )
+    message = str(raised.value)
+    assert message.startswith("invalid config: "), message
+    assert "\n" not in message and "Traceback" not in message
 
 
 async def test_the_run_env_binding_replaces_the_run_id_argument(
