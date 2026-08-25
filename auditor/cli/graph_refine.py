@@ -22,6 +22,10 @@ from auditor.cli.helpers import (
 )
 from auditor.cli.options import (
     GraphTarget,
+    LogRefinements,
+    LogSince,
+    LogSkipped,
+    LogStatus,
     QueueCallForm,
     QueueExternal,
     QueueLimit,
@@ -31,6 +35,7 @@ from auditor.cli.options import (
     RowLimit,
 )
 from auditor.cli.render import (
+    render_graph_log,
     render_graph_prune,
     render_graph_refinement,
     render_graph_refinements,
@@ -44,6 +49,9 @@ from auditor.graph.model import (
     UnresolvedReason,
 )
 from auditor.graph.payloads import (
+    LogFilter,
+    LogReport,
+    LogView,
     QueueReport,
     QueueRowPayload,
     RefinementRowPayload,
@@ -225,7 +233,38 @@ def refinements_prune(
     )
 
 
+async def _log(root: Path, spec: LogFilter) -> LogReport:
+    async with await open_index(root) as index:
+        return await LogQuery(index).page(spec)
+
+
+def graph_log(
+    target: GraphTarget = Path("."),
+    refinements: LogRefinements = False,
+    status: LogStatus = None,
+    since: LogSince = None,
+    skipped: LogSkipped = False,
+    limit: RowLimit = LOG_ROW_LIMIT,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Who changed the graph, and what they changed. Newest first in both views. Assessment-only
+    runs are hidden until `--skipped`, and the page says so in `hidden_statuses`."""
+    root = cli_root(target)
+    try:
+        spec = LogFilter.of(
+            view=LogView.REFINEMENTS.value if refinements else LogView.RUNS.value,
+            status=status,
+            since=since,
+            skipped=skipped,
+            limit=limit,
+        )
+    except ValueError as exc:
+        fail(str(exc))
+    present(run(_log(root, spec), "reading log…"), render_graph_log, as_json=json_)
+
+
 def register(app: typer.Typer) -> None:
     """Mount this module's commands onto the ``graph`` sub-app."""
     app.command("unresolved")(graph_unresolved)
+    app.command("log")(graph_log)
     app.add_typer(refinements_app, name="refinements")

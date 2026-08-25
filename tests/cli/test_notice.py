@@ -29,6 +29,7 @@ WARNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("graph", "concept"),
         ("graph", "export"),
         ("graph", "flow"),
+        ("graph", "log"),
         ("graph", "neighbors"),
         ("graph", "related"),
         ("graph", "refinements", "accept"),
@@ -140,6 +141,7 @@ def test_a_silent_command_prints_no_notice(bad_config, path):
         ("rules", "list", "-r", "{repo}"),
         ("graph", "clusters", "{repo}"),
         ("graph", "unresolved", "{repo}"),
+        ("graph", "log", "{repo}"),
         ("graph", "refinements", "list", "{repo}"),
     ],
 )

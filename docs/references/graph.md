@@ -43,6 +43,9 @@ auditr graph clusters .
 # what the deterministic resolver could not place, worst first
 auditr graph unresolved .
 
+# who changed the graph and what they changed
+auditr graph log .
+
 # interactive UI on a local port
 auditr graph serve .
 
@@ -265,6 +268,35 @@ auditr graph refinements prune
   reach them. It then deletes assessment-only runs (`skipped`) past `observer.skipped_retention_days`
   together with the `rejected` refinements they own, and never a run that owns a live refinement or
   a tuning row. Nothing live is ever deleted.
+
+## Provenance log
+
+```bash
+# who changed the graph, newest first
+auditr graph log
+# the corrections instead of the decisions that made them
+auditr graph log --refinements
+# only the runs that failed, in the last two hours
+auditr graph log --status failed --since 2h
+# include the assessment-only rows the observer writes
+auditr graph log --skipped
+```
+
+- `graph log` has two views. `--runs` (the default) shows one row per decision, with `n`, the number
+  of refinement rows that run owns; `--refinements` shows the corrections themselves. Both are
+  newest first, which is the opposite of the order a build applies them in.
+- The `summary` column splits that count for a finished run ("1 committed, 0 rejected"), because a
+  run is not credited with the proposals it refused. An aborted run shows its reason there instead.
+- `--status` is validated against whichever view is showing, so a run status in the refinements view
+  is an error naming the valid set, not an empty page.
+- `--since` takes a duration (`90s`, `45m`, `2h`, `7d`) or an ISO date (`2026-08-20`,
+  `2026-08-20T14:00:00`). It is not a git ref: `scan --since` scopes files, and a log is scoped by
+  time.
+- Assessment-only runs, the ones the observer records when it decides an edit is not worth a
+  refinement, are hidden until `--skipped`. Hiding them is a narrowing, so the default page reports
+  `filtered: true` with `hidden_statuses: ["skipped"]`, and the table says so beneath it.
+- The page is capped by `--limit` (default 50, at most 500). `--json` carries `run_count` or
+  `refinement_count`, the number matching the same filters, and `truncated`.
 
 ## Refinement overlay
 

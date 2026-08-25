@@ -292,6 +292,32 @@ RowLimit = Annotated[
     ),
 ]
 
+LogRefinements = Annotated[
+    bool,
+    typer.Option(
+        "--refinements/--runs",
+        help="Show the corrections instead of the decisions that made them.",
+    ),
+]
+LogStatus = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--status",
+        help="Only these statuses, validated against the view shown (repeatable).",
+    ),
+]
+LogSince = Annotated[
+    str | None,
+    typer.Option(
+        "--since",
+        help="Only rows after a duration (90s, 45m, 2h, 7d) or an ISO date.",
+    ),
+]
+LogSkipped = Annotated[
+    bool,
+    typer.Option("--skipped", help="Include assessment-only runs, hidden by default."),
+]
+
 # --- `graph flow` options ---
 FlowIn = Annotated[
     bool,

@@ -7,6 +7,8 @@ path directly without a TTY.
 Accent colour ``#7C7CFF`` matches the rest of the auditor CLI (see self_update.py).
 """
 
+from datetime import datetime
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -35,6 +37,8 @@ from auditor.graph.payloads import (
     ClustersReport,
     ConceptPayload,
     GraphBuildReport,
+    LogReport,
+    LogView,
     NeighborsReport,
     QueueReport,
     RefinementRowPayload,
@@ -314,6 +318,67 @@ def render_graph_prune(out: Console, payload: PruneOutcome) -> None:
     out.print(
         f"[{_ACCENT}]{payload.stranded_runs}[/] runs left open by a dead process finished"
     )
+
+
+def _log_empty(payload: LogReport) -> str:
+    """Why this page has no rows: nothing recorded, nothing matched, or nothing visible."""
+    if not payload.filtered:
+        return "(none recorded; the observer and the graph_refine_* tools write here)"
+    if payload.hidden_statuses:
+        hidden = ", ".join(s.value for s in payload.hidden_statuses)
+        return f"(no runs to show; {hidden} runs are hidden, --skipped includes them)"
+    return "(nothing matched the filter)"
+
+
+def _stamp(epoch: float) -> str:
+    """A log timestamp as local `MM-DD HH:MM`, which is what a reader scanning a log needs."""
+    return datetime.fromtimestamp(epoch).strftime("%m-%d %H:%M") if epoch else ""
+
+
+def render_graph_log(out: Console, payload: LogReport) -> None:
+    runs = payload.view is LogView.RUNS
+    rows = payload.runs if runs else payload.refinements
+    if not rows:
+        out.print(f"[dim]{_log_empty(payload)}[/]")
+        return
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    for col in (
+        ("when", "producer", "runner", "trigger", "status", "n", "summary")
+        if runs
+        else ("when", "id", "kind", "tier", "status", "target")
+    ):
+        t.add_column(col)
+    if runs:
+        for run_row in payload.runs:
+            t.add_row(
+                _stamp(run_row.started_at),
+                run_row.producer.value,
+                run_row.runner.value,
+                run_row.trigger_kind.value,
+                run_row.status.value,
+                str(run_row.refinements.total),
+                run_row.error or run_row.summary or "",
+            )
+    else:
+        for row in payload.refinements:
+            t.add_row(
+                _stamp(row.created_at),
+                str(row.refinement_id),
+                row.kind.value,
+                row.tier.value,
+                row.status.value,
+                row.summary,
+            )
+    out.print(t)
+    total = payload.run_count if runs else payload.refinement_count
+    if payload.truncated:
+        out.print(
+            f"[dim]showing {len(rows)} of {total}, newest first; "
+            "raise --limit for more[/]"
+        )
+    if runs and payload.hidden_statuses:
+        hidden = ", ".join(s.value for s in payload.hidden_statuses)
+        out.print(f"[dim]{hidden} runs are hidden; --skipped includes them[/]")
 
 
 # ---------------------------------------------------------------------------

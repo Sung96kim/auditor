@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
-from _support import cli_json, one_line, tool_data
+from _support import GOOD_PROPOSAL, cli_json, one_line, refine_run, tool_data
 from fastmcp import Client
 from rich.console import Console
 from typer.testing import CliRunner
@@ -34,44 +34,12 @@ from auditor.paths import auditor_home, user_config_path
 
 runner = CliRunner()
 
-GOOD = {
-    "kind": "add_edge",
-    "src": "caller.py::main",
-    "dst": "helper.py::read_event",
-    "edge_kind": "calls",
-    "name": "read_event",
-    "reason": "main calls read_event, which helper.py defines",
-}
-BAD = GOOD | {"name": "get_user", "reason": "a name main does not call"}
-
-
-def _commit(repo: Path, *proposals: dict) -> list[dict]:
-    """Drive one run through the MCP tools and answer the commit's committed verdicts.
-
-    The tools are the public producer, so the rows these tests read were written the way a real
-    agent writes them.
-    """
-
-    async def go() -> list[dict]:
-        async with Client(mcp) as client:
-            begun = await client.call_tool("graph_refine_begin", {"path": str(repo)})
-            run_id = tool_data(begun)["run_id"]
-            for proposal in proposals:
-                await client.call_tool(
-                    "graph_refine_propose",
-                    {"path": str(repo), "run_id": run_id, **proposal},
-                )
-            done = await client.call_tool(
-                "graph_refine_commit", {"path": str(repo), "run_id": run_id}
-            )
-            return tool_data(done)["committed"]
-
-    return asyncio.run(go())
+BAD = GOOD_PROPOSAL | {"name": "get_user", "reason": "a name main does not call"}
 
 
 def _propose(repo: Path) -> int:
     """One committed `add_edge` for the queue row, and its id."""
-    return _commit(repo, GOOD)[0]["refinement_id"]
+    return refine_run(repo, GOOD_PROPOSAL)["committed"][0]["refinement_id"]
 
 
 def _log(repo: Path, **kw) -> dict:
@@ -132,7 +100,7 @@ def test_an_empty_list_says_it_is_empty_not_filtered(refine_repo: Path):
 def test_a_status_filter_narrows_to_the_rows_that_match(refine_repo: Path):
     """Two rows, one of each status, so `filtered` distinguishes "nothing matched" from "nothing
     recorded" against a list that is not empty either way."""
-    committed = _commit(refine_repo, GOOD, BAD)
+    committed = refine_run(refine_repo, GOOD_PROPOSAL, BAD)["committed"]
     pending = cli_json(
         runner.invoke(
             app,
@@ -209,7 +177,7 @@ def test_list_shows_the_committed_correction(refine_repo: Path):
 
 
 def test_the_limit_caps_the_rows(refine_repo: Path):
-    _commit(refine_repo, GOOD, BAD)
+    refine_run(refine_repo, GOOD_PROPOSAL, BAD)
     payload = cli_json(
         runner.invoke(
             app,
@@ -232,7 +200,7 @@ def test_the_page_is_the_newest_rows_and_the_total_says_what_it_left(
 ):
     """A page at the cap and a complete list looked the same, and the page was the *oldest* rows:
     the `pending` row a human has to accept is the newest one, so it was the one hidden."""
-    _commit(refine_repo, BAD, GOOD)
+    refine_run(refine_repo, BAD, GOOD_PROPOSAL)
     payload = cli_json(
         runner.invoke(
             app,
