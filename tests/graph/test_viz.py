@@ -1,6 +1,6 @@
 import pytest
 
-from auditor.graph.flow import FlowPayload
+from auditor.graph.flow import FlowNode, FlowPayload
 from auditor.graph.model import (
     EdgeKind,
     GraphEdge,
@@ -8,7 +8,7 @@ from auditor.graph.model import (
     NodeKind,
     Provenance,
 )
-from auditor.graph.viz import build_payload, to_dot
+from auditor.graph.viz import _FLOW_DOT_STYLE, build_payload, to_dot
 
 
 async def test_payload_shape_and_mapping(viz_store):
@@ -162,6 +162,12 @@ def _flow_tree(*, truncated: bool = False) -> dict:
             ],
         },
     }
+
+
+def test_the_dot_marks_name_real_flow_node_fields():
+    """`_flow_declare` reads each mark off the model by name, so a renamed field has to fail
+    here rather than at render time."""
+    assert set(_FLOW_DOT_STYLE) <= set(FlowNode.model_fields)
 
 
 def _flow(tree: dict) -> FlowPayload:

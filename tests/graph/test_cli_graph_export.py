@@ -234,16 +234,16 @@ def test_graph_export_bounds_its_depth(graph_repo_flow: Path, value: str):
     assert "Traceback" not in result.output
 
 
-def _unreachable(*_args: object, **_kwargs: object) -> None:
-    raise AssertionError("the payload build ran before the walk knobs were validated")
-
-
 def test_graph_export_validates_the_walk_knobs_before_it_builds_the_payload(
     graph_repo_flow: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """`graph flow` rejects a typo before it queries; export paid a whole payload build first."""
+
+    def unreachable(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the payload build ran before the knobs were validated")
+
     _built(graph_repo_flow)
-    monkeypatch.setattr("auditor.cli.graph.build_payload", _unreachable)
+    monkeypatch.setattr("auditor.cli.graph.build_payload", unreachable)
     result = runner.invoke(
         app,
         ["graph", "export", str(graph_repo_flow), "--flow", "entry", "--kinds", "nope"],

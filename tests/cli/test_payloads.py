@@ -281,17 +281,13 @@ def test_each_graph_query_payload_matches_its_renderer(method):
     )
 
 
-def _model_names() -> frozenset[str]:
-    """Every payload model a command can name at a `present` call site."""
-    return frozenset(
-        name
-        for module in (cli_payloads, graph_payloads, flow)
-        for name, obj in vars(module).items()
-        if isinstance(obj, type) and issubclass(obj, BaseModel)
-    )
-
-
-MODEL_NAMES = _model_names()
+# every payload model a command can name at a `present` call site
+MODEL_NAMES = frozenset(
+    name
+    for module in (cli_payloads, graph_payloads, flow)
+    for name, obj in vars(module).items()
+    if isinstance(obj, type) and issubclass(obj, BaseModel)
+)
 
 
 def _constructed(node: ast.expr) -> str | None:

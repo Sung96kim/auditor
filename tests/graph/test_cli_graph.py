@@ -13,8 +13,9 @@ from auditor.cli import app
 from auditor.cli.graph import _split_kinds, graph_flow
 from auditor.cli.render import render_graph_flow
 from auditor.graph.flow import FlowNode, FlowPayload
-from auditor.graph.model import DEFAULT_FLOW_LIMIT, Provenance
+from auditor.graph.model import DEFAULT_FLOW_DEPTH, DEFAULT_FLOW_LIMIT, Provenance
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
+from auditor.mcp.graph_tools import graph_flow as graph_flow_tool
 from auditor.paths import partition_for
 
 runner = CliRunner()
@@ -117,11 +118,13 @@ def test_the_render_fixture_covers_every_flow_node_field():
     assert set(_flow_dict()["root"]) == set(FlowNode.model_fields)
 
 
-def test_the_flow_node_cap_has_one_home():
-    """The constant, the CLI signature and the MCP ceiling were three copies of one policy."""
-    assert (
-        inspect.signature(graph_flow).parameters["limit"].default == DEFAULT_FLOW_LIMIT
-    )
+@pytest.mark.parametrize(
+    "knob, constant", [("limit", DEFAULT_FLOW_LIMIT), ("depth", DEFAULT_FLOW_DEPTH)]
+)
+def test_the_flow_walk_defaults_have_one_home(knob: str, constant: int):
+    """The constant, the CLI signature and the MCP default were three copies of one policy."""
+    assert inspect.signature(graph_flow).parameters[knob].default == constant
+    assert inspect.signature(graph_flow_tool).parameters[knob].default == constant
 
 
 @pytest.mark.parametrize(

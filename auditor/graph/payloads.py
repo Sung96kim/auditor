@@ -1,7 +1,7 @@
-"""The wire models ``GraphQuery`` returns, shared by the CLI renderers and the MCP tools.
+"""The wire models the graph surfaces emit: what a build landed, and what ``GraphQuery`` returns.
 
-They live beside the query rather than under ``auditor/cli`` so both surfaces read the same shape
-and neither imports the other.
+They live beside the graph rather than under ``auditor/cli`` so the CLI renderers and the MCP
+tools read the same shape and neither imports the other.
 """
 
 from collections.abc import Mapping
@@ -11,18 +11,6 @@ from pydantic import ConfigDict, Field
 
 from auditor.graph.model import QUEUE_ID_CAP, GraphCluster, UnresolvedRow
 from auditor.payload import WirePayload, WireRows
-
-
-class GraphBuildReport(WirePayload):
-    """What one build landed, as ``graph build`` and the MCP tool report it."""
-
-    nodes: int
-    edges: int
-    clusters: int
-    unresolved: int
-    findings: int
-    refined: int
-    expired: int
 
 
 class RelatedRow(WirePayload):
@@ -167,3 +155,15 @@ class QueueRowPayload(UnresolvedRow):
 
 class QueueReport(WireRows[QueueRowPayload]):
     """``graph unresolved``."""
+
+
+class GraphBuildReport(WirePayload):
+    """What one build landed, as ``graph build`` and the MCP tool report it."""
+
+    nodes: int
+    edges: int
+    clusters: int
+    unresolved: int
+    findings: int
+    refined: int
+    expired: int
