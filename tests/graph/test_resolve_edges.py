@@ -1,8 +1,8 @@
 import pytest
 
 from auditor.graph.extract import extract_file_facts
-from auditor.graph.model import GraphEdge
-from auditor.graph.resolve_edges import resolve_structural
+from auditor.graph.model import GraphEdge, UnresolvedReason
+from auditor.graph.resolve_edges import StructuralResolver, resolve_structural
 
 SRC_A = """
 class Base:
@@ -21,7 +21,7 @@ def _edges(*sources: str) -> list[GraphEdge]:
     nodes = []
     for i, s in enumerate(sources):
         nodes += extract_file_facts(f"m{i}.py", s, "production").nodes
-    return resolve_structural(nodes)
+    return resolve_structural(nodes).edges
 
 
 def _pairs(edges: list[GraphEdge], kind: str) -> set[tuple[str, str]]:
@@ -78,7 +78,7 @@ def test_reexport_resolves_through_package_init():
         ),  # __init__ re-exports the leaf
         ("pkg/leaf.py", "def handle():\n    return 1\n"),
     )
-    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "calls")
     assert ("caller.py::use", "pkg/leaf.py::handle") in calls
 
 
@@ -94,7 +94,7 @@ def test_star_reexport_reference_edge():
             "from pkg.schemas import Widget\ndef q() -> int:\n    Widget()\n    return 0\n",
         ),
     )
-    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "references_type")
     assert ("pkg/consumer.py::q", "pkg/real.py::Widget") in refs
 
 
@@ -110,7 +110,7 @@ def test_transitive_star_reexport_reference_edge():
             "from pkg import Widget\ndef q() -> int:\n    Widget()\n    return 0\n",
         ),
     )
-    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "references_type")
     assert ("pkg/consumer.py::q", "pkg/real.py::Widget") in refs
 
 
@@ -126,7 +126,7 @@ def test_star_reexport_call_edge():
             "from pkg.api import handle\ndef use():\n    return handle()\n",
         ),
     )
-    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "calls")
     assert ("pkg/consumer.py::use", "pkg/impl.py::handle") in calls
 
 
@@ -142,7 +142,7 @@ def test_plain_module_explicit_import_not_followed_as_reexport():
             "from pkg.svc import Secret\ndef q() -> int:\n    Secret()\n    return 0\n",
         ),
     )
-    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "references_type")
     assert ("pkg/consumer.py::q", "pkg/internal.py::Secret") not in refs
 
 
@@ -167,7 +167,7 @@ def test_typed_receiver_disambiguates_method_call():
             "    return svc.do_thing(payload)\n",
         ),
     )
-    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "calls")
     assert ("routes.py::handler", "svc/foo.py::FooService.do_thing") in calls
     assert ("routes.py::handler", "svc/bar.py::BarService.do_thing") not in calls
 
@@ -185,7 +185,7 @@ def test_typed_receiver_resolves_inherited_method():
             "    return svc.do_thing(1)\n",
         ),
     )
-    calls = _pairs(resolve_structural(_reexport_nodes(*files)), "calls")
+    calls = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "calls")
     assert ("routes.py::handler", "base.py::BaseSvc.do_thing") in calls
 
 
@@ -243,7 +243,7 @@ def test_same_named_method_edges_survive_build_dedup():
         "        return select(Model.id)\n"
     )
     nodes = _dedupe_first_wins(extract_file_facts("m0.py", src, "production").nodes)
-    refs = _pairs(resolve_structural(nodes), "references_type")
+    refs = _pairs(resolve_structural(nodes).edges, "references_type")
     assert ("m0.py::Thing.label", "m0.py::Model") in refs
 
 
@@ -274,7 +274,7 @@ def test_binding_disambiguates_name_defined_in_several_reachable_modules():
             "    return select(Model.id) or 0\n",
         ),
     )
-    edges = resolve_structural(_reexport_nodes(*files))
+    edges = resolve_structural(_reexport_nodes(*files)).edges
     refs = _pairs(edges, "references_type")
     calls = _pairs(edges, "calls")
     assert ("caller.py::q", "a.py::Model") in refs  # binding pins Model to a
@@ -305,7 +305,7 @@ def test_reexport_binding_resolves_through_star_not_named_sibling():
             "from pkg import Model\ndef q() -> int:\n    return select(Model.id) or 0\n",
         ),
     )
-    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "references_type")
     assert ("consumer.py::q", "pkg/orm.py::Model") in refs  # the star-exported class
     assert (
         "consumer.py::q",
@@ -331,7 +331,7 @@ def test_binding_resolves_through_named_init_reexport():
             "from pkg import Model\ndef q() -> int:\n    return select(Model.id) or 0\n",
         ),
     )
-    refs = _pairs(resolve_structural(_reexport_nodes(*files)), "references_type")
+    refs = _pairs(resolve_structural(_reexport_nodes(*files)).edges, "references_type")
     assert ("consumer.py::q", "pkg/models/base.py::Model") in refs
 
 
@@ -345,7 +345,7 @@ def test_body_class_ref_cross_module_gated_by_import():
     )
     models = extract_file_facts("models.py", "class Widget:\n    pass\n", "production")
     other = extract_file_facts("other.py", "class Widget:\n    pass\n", "production")
-    edges = resolve_structural([*caller.nodes, *models.nodes, *other.nodes])
+    edges = resolve_structural([*caller.nodes, *models.nodes, *other.nodes]).edges
     refs = {(e.src, e.dst) for e in edges if e.kind == "references_type"}
     assert ("caller.py::uses", "models.py::Widget") in refs  # imported → edge
     assert ("caller.py::uses", "other.py::Widget") not in refs  # not imported → no edge
@@ -382,7 +382,7 @@ def test_imports_edges_resolve_within_repo():
     b = extract_file_facts("pkg/b.py", "x = 1\n", "production")
     c = extract_file_facts("pkg/c.py", "y = 2\n", "production")
     nodes = [*a.nodes, *b.nodes, *c.nodes]
-    edges = resolve_structural(nodes)
+    edges = resolve_structural(nodes).edges
     imports = {(e.src, e.dst) for e in edges if e.kind == "imports"}
     assert ("pkg/a.py", "pkg/b.py") in imports
     assert ("pkg/a.py", "pkg/c.py") in imports
@@ -392,7 +392,7 @@ def test_imports_edges_skip_unresolved_external():
     a = extract_file_facts(
         "pkg/a.py", "import numpy\nfrom requests import get\n", "production"
     )
-    edges = resolve_structural(a.nodes)
+    edges = resolve_structural(a.nodes).edges
     assert not [e for e in edges if e.kind == "imports"]  # external -> no edge
 
 
@@ -404,7 +404,7 @@ def test_registered_in_resolves_via_import_binding():
         "production",
     )
     nodes = [*app_mod.nodes, *routes.nodes]
-    edges = resolve_structural(nodes)
+    edges = resolve_structural(nodes).edges
     reg = {(e.src, e.dst) for e in edges if e.kind == "registered_in"}
     assert ("pkg/routes.py::handler", "pkg/app.py") in reg
 
@@ -415,7 +415,7 @@ def test_registered_in_skips_external_registry():
         "from flask import app\n\n@app.route('/x')\ndef handler():\n    pass\n",
         "production",
     )
-    edges = resolve_structural(routes.nodes)
+    edges = resolve_structural(routes.nodes).edges
     assert not [e for e in edges if e.kind == "registered_in"]  # flask not in repo
 
 
@@ -432,7 +432,7 @@ def test_production_caller_does_not_resolve_to_test_def():
         "test",
     )
     nodes = [*prod.nodes, *tst.nodes]
-    edges = resolve_structural(nodes)
+    edges = resolve_structural(nodes).edges
     calls = {(e.src, e.dst) for e in edges if e.kind == "calls"}
     # production use() -> production get() only (svc.py is same module, so this already holds);
     # the key assertion: NO production -> test edge for the shared name
@@ -453,7 +453,7 @@ def test_production_caller_cross_module_skips_test_targets():
     )
     tst = extract_file_facts("test_x.py", "def handle():\n    return 2\n", "test")
     nodes = [*prod.nodes, *helper.nodes, *tst.nodes]
-    edges = resolve_structural(nodes)
+    edges = resolve_structural(nodes).edges
     calls = {(e.src, e.dst) for e in edges if e.kind == "calls"}
     assert ("svc.py::use", "helper.py::handle") in calls  # imported production target
     assert ("svc.py::use", "test_x.py::handle") not in calls  # never the test def
@@ -465,7 +465,7 @@ def test_module_contains_top_level_symbols():
         "def foo():\n    pass\n\nclass Bar:\n    def baz(self):\n        pass\n",
         "production",
     )
-    edges = resolve_structural(facts.nodes)
+    edges = resolve_structural(facts.nodes).edges
     contains = {(e.src, e.dst) for e in edges if e.kind == "contains"}
     assert ("m.py", "m.py::foo") in contains  # module -> top-level function
     assert ("m.py", "m.py::Bar") in contains  # module -> top-level class
@@ -477,3 +477,89 @@ def test_module_contains_top_level_symbols():
         "m.py",
         "m.py::Bar.baz",
     ) not in contains  # module does NOT directly contain methods
+
+
+def _resolve(
+    name: str,
+    files: tuple[tuple[str, str], ...],
+    *,
+    caller_id: str,
+    classes: bool = False,
+):
+    """Run one `_resolve_name` against a built resolver, so the Resolution fields can be asserted
+    directly rather than inferred from the edge set."""
+    nodes = _reexport_nodes(*files)
+    resolver = StructuralResolver(nodes)
+    caller = next(n for n in nodes if n.id == caller_id)
+    index = resolver.by_class_name if classes else resolver.by_fn_name
+    return resolver._resolve_name(name, caller, index)
+
+
+def test_resolution_of_a_same_module_name_carries_no_reason():
+    files = (
+        ("m.py", "def helper():\n    return 1\n\ndef use():\n    return helper()\n"),
+    )
+    res = _resolve("helper", files, caller_id="m.py::use")
+    assert res.ids == ("m.py::helper",)
+    assert res.definers == ("m.py::helper",)
+    assert res.reason is None
+
+
+def test_resolution_reports_ambiguous_when_two_definers_are_reachable():
+    files = (
+        ("a.py", "def save():\n    return 1\n"),
+        ("b.py", "def save():\n    return 2\n"),
+        (
+            "caller.py",
+            "import a\nimport b\ndef use():\n    return save()\n",
+        ),
+    )
+    res = _resolve("save", files, caller_id="caller.py::use")
+    assert res.ids == ()
+    assert set(res.gated) == {"a.py::save", "b.py::save"}
+    assert res.reason is UnresolvedReason.AMBIGUOUS_NAME
+
+
+def test_resolution_reports_unimportable_when_the_definer_is_not_reachable():
+    files = (
+        ("a.py", "def save():\n    return 1\n"),
+        ("caller.py", "def use():\n    return save()\n"),
+    )
+    res = _resolve("save", files, caller_id="caller.py::use")
+    assert res.ids == ()
+    assert res.gated == ()
+    assert res.definers == ("a.py::save",)
+    assert res.reason is UnresolvedReason.UNIMPORTABLE_NAME
+
+
+def test_resolution_role_filter_hides_a_test_only_definer_from_a_production_caller():
+    files = (("caller.py", "def use():\n    return handle()\n"),)
+    nodes = _reexport_nodes(*files)
+    nodes += extract_file_facts(
+        "test_x.py", "def handle():\n    return 1\n", "test"
+    ).nodes
+    resolver = StructuralResolver(nodes)
+    caller = next(n for n in nodes if n.id == "caller.py::use")
+    res = resolver._resolve_name("handle", caller, resolver.by_fn_name)
+    assert res.definers == ()  # a production caller never sees the test definition
+
+
+def test_resolution_path_records_every_module_the_binding_walked():
+    """`consumer` imports from `pkg`, which star-re-exports `pkg.models`, whose `__init__` names
+    the definer. All three hops belong in the path, not just the two endpoints."""
+    files = (
+        ("pkg/models/base.py", "class Model:\n    id = 1\n"),
+        ("pkg/models/__init__.py", "from .base import Model\n"),
+        ("pkg/__init__.py", "from pkg.models import *\n"),
+        (
+            "consumer.py",
+            "from pkg import Model\ndef q() -> int:\n    return select(Model.id) or 0\n",
+        ),
+    )
+    res = _resolve("Model", files, caller_id="consumer.py::q", classes=True)
+    assert res.ids == ("pkg/models/base.py::Model",)
+    assert res.path == (
+        "pkg/__init__.py",
+        "pkg/models/__init__.py",
+        "pkg/models/base.py",
+    )

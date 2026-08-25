@@ -143,6 +143,59 @@ counting members whose name contains the term), and returns the whole membership
 matching node. Use it when you're asking "what part of the codebase handles X" rather than
 "where exactly is symbol X."
 
+## What the graph could not resolve
+
+```
+auditr graph unresolved --json                       # whole queue, worst first
+auditr graph unresolved --reason ambiguous_name      # names with a real candidate set
+auditr graph unresolved --call-form self --call-form bare
+auditr graph unresolved --no-external                # drop the non-repo-import rows
+```
+
+Each row is a fact the deterministic resolver refused to turn into an edge, plus the evidence.
+The first row of `auditr graph unresolved . --json --limit 3` on this repo (lists trimmed):
+
+```json
+{
+  "node_id": "auditor/cli/report.py::report",
+  "name": "render",
+  "reason": "ambiguous_name",
+  "fact_kind": "callee",
+  "receiver_root": null,
+  "call_form": "bare",
+  "priority": 1,
+  "externally_bound": false,
+  "candidates": [
+    "auditor/reporters/base.py::Reporter.render",
+    "auditor/reporters/base.py::render",
+    "auditor/reporters/html_reporter.py::HtmlReporter.render"
+  ],
+  "definers": [
+    "auditor/database/base.py::Column.render",
+    "auditor/database/base.py::Index.render",
+    "auditor/reporters/base.py::Reporter.render"
+  ],
+  "resolution_path": [
+    "auditor/reporters/__init__.py",
+    "auditor/reporters/base.py"
+  ],
+  "definers_count": 9,
+  "candidates_count": 6
+}
+```
+
+- Use it as the counterweight to a dead-code call. An empty `used_by` plus a queue row naming that
+  symbol means the graph lost the edge, not that the symbol is unused.
+- `externally_bound: true` means the calling module imports that name or receiver from outside the
+  repo (`re.search`, `subprocess.run`). Those rows sort last; skip them, or pass `--no-external`.
+- `call_form` is the tractability signal: `bare` and `self` rows are answerable by reading one file,
+  `attr` rows usually are not.
+- `definers` and `candidates` are capped id lists; `definers_count` and `candidates_count` carry the
+  true totals.
+- `--reason` and `--call-form` are validated: an unknown value is an error, not an empty page. An
+  empty result says whether a filter matched nothing or the queue was never built.
+- The queue is rebuilt by every `graph build` and is empty before the first one.
+
 ## Reading the output: `used_by` vs `depends_on`, edge kinds, staleness
 
 - **`used_by`** (incoming structural edges) = who depends on this symbol — what breaks if you

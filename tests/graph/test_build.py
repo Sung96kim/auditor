@@ -1,44 +1,23 @@
-import pytest
-
 from auditor.config import AuditorSettings, GraphConfig
-from auditor.database import IndexStore
-from auditor.graph.build import GraphBuilder, compute_abstractness
+from auditor.graph.build import GraphBuilder, _quality_rows, compute_abstractness
 from auditor.graph.extract import extract_file_facts
-from auditor.graph.model import GraphNode, NodeKind
+from auditor.graph.model import FactKind, GraphNode, NodeKind, UnresolvedReason
 
-BASE = "class Base:\n    def run(self): ...\n"
-IMPL = "from base import Base\nclass Impl(Base):\n    def run(self):\n        return load_user()\n\ndef load_user():\n    return get_user_record()\n"
-
-
-@pytest.fixture
-async def store(tmp_path):
-    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
-    await s.graph.set_facts(
-        "base.py",
-        extract_file_facts("base.py", BASE, "production").model_dump_json(),
-        "h1",
-    )
-    await s.graph.set_facts(
-        "impl.py",
-        extract_file_facts("impl.py", IMPL, "production").model_dump_json(),
-        "h2",
-    )
-    yield s
-    await s.aclose()
+STUB_CLASS = "class Base:\n    def run(self): ...\n"
 
 
 def test_compute_abstractness_stub_method():
-    facts = extract_file_facts("base.py", BASE, "production")
+    facts = extract_file_facts("base.py", STUB_CLASS, "production")
     run = next(n for n in facts.nodes if n.id == "base.py::Base.run")
     assert compute_abstractness(run, proto_method_ids=set()) >= 0.4  # stub body
 
 
-async def test_build_reports_stage_progress(store):
+async def test_build_reports_stage_progress(facts_store):
     settings = AuditorSettings(
         graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
     )
     seen: list[str] = []
-    await GraphBuilder().run(store, settings, progress=seen.append)
+    await GraphBuilder().run(facts_store, settings, progress=seen.append)
     for label in (
         "resolving structural edges",
         "computing naming similarity",
@@ -51,23 +30,22 @@ async def test_build_reports_stage_progress(store):
     assert seen.index("clustering concepts") < seen.index("persisting graph")
 
 
-async def test_build_writes_nodes_edges_clusters(store):
+async def test_build_writes_nodes_edges_clusters(facts_store):
     settings = AuditorSettings(
         graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
     )
-    summary = await GraphBuilder().run(store, settings)
+    summary = await GraphBuilder().run(facts_store, settings)
     assert summary["nodes"] >= 4
     # override edge survived the repo pass
-    over = await store.graph.edges_of("impl.py::Impl.run", ["overrides"])
+    over = await facts_store.graph.edges_of("impl.py::Impl.run", ["overrides"])
     assert any(e["dst"] == "base.py::Base.run" for e in over)
-    # cross-module call resolved by name
-    calls = await store.graph.edges_of("impl.py::load_user", ["calls"])
+    # same-module call resolved by name
+    calls = await facts_store.graph.edges_of("impl.py::_local", ["calls"])
     assert any(
-        e["dst"] == "impl.py::load_user" or e["src"] == "impl.py::load_user"
-        for e in calls
+        e["dst"] == "impl.py::_local" or e["src"] == "impl.py::_local" for e in calls
     )
     # every node got a cluster id + a rank
-    nodes = await store.graph.nodes()
+    nodes = await facts_store.graph.nodes()
     assert all(n["cluster_id"] is not None for n in nodes if n["kind"] != "module")
 
 
@@ -124,84 +102,172 @@ def test_test_and_module_nodes_excluded_from_clusters():
     }  # only prod symbols are clustered
 
 
-async def test_build_personalizes_rank_against_tests(tmp_path):
+async def test_build_personalizes_rank_against_tests(graph_store):
     prod_src = "def helper():\n    return shared()\n\ndef shared():\n    return 1\n"
     test_src = "from prod import shared\n\ndef test_thing():\n    return shared()\n"
-    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
-    try:
-        await s.graph.set_facts(
-            "prod.py",
-            extract_file_facts("prod.py", prod_src, "production").model_dump_json(),
-            "h1",
-        )
-        await s.graph.set_facts(
-            "test_x.py",
-            extract_file_facts("test_x.py", test_src, "test").model_dump_json(),
-            "h2",
-        )
-        settings = AuditorSettings(
-            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
-        )
-        await GraphBuilder().run(s, settings)
-        nodes = {n["node_id"]: n for n in await s.graph.nodes()}
-        assert nodes["prod.py::helper"]["rank"] > nodes["test_x.py::test_thing"]["rank"]
-    finally:
-        await s.aclose()
+    await graph_store.graph.set_facts(
+        "prod.py",
+        extract_file_facts("prod.py", prod_src, "production").model_dump_json(),
+        "h1",
+    )
+    await graph_store.graph.set_facts(
+        "test_x.py",
+        extract_file_facts("test_x.py", test_src, "test").model_dump_json(),
+        "h2",
+    )
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    await GraphBuilder().run(graph_store, settings)
+    nodes = {n["node_id"]: n for n in await graph_store.graph.nodes()}
+    assert nodes["prod.py::helper"]["rank"] > nodes["test_x.py::test_thing"]["rank"]
 
 
-async def test_build_runs_detectors_and_persists(tmp_path):
+async def test_build_runs_detectors_and_persists(graph_store):
     src_hub = "def hub():\n    return 1\n"
     callers = "from hub import hub\n" + "".join(
         f"def c{i}():\n    return hub()\n" for i in range(12)
     )
-    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
-    try:
-        await s.graph.set_facts(
-            "hub.py",
-            extract_file_facts("hub.py", src_hub, "production").model_dump_json(),
-            "h1",
-        )
-        await s.graph.set_facts(
-            "callers.py",
-            extract_file_facts("callers.py", callers, "production").model_dump_json(),
-            "h2",
-        )
-        settings = AuditorSettings(
-            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=True)
-        )
-        summary = await GraphBuilder().run(s, settings)
-        assert "findings" in summary
-        assert summary["findings"] >= 0
-        # detect=False clears graph findings and adds none
-        settings_off = AuditorSettings(
-            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=False)
-        )
-        summary_off = await GraphBuilder().run(s, settings_off)
-        assert summary_off["findings"] == 0
-    finally:
-        await s.aclose()
+    await graph_store.graph.set_facts(
+        "hub.py",
+        extract_file_facts("hub.py", src_hub, "production").model_dump_json(),
+        "h1",
+    )
+    await graph_store.graph.set_facts(
+        "callers.py",
+        extract_file_facts("callers.py", callers, "production").model_dump_json(),
+        "h2",
+    )
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=True)
+    )
+    summary = await GraphBuilder().run(graph_store, settings)
+    assert "findings" in summary
+    assert summary["findings"] >= 0
+    # detect=False clears graph findings and adds none
+    settings_off = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=False)
+    )
+    summary_off = await GraphBuilder().run(graph_store, settings_off)
+    assert summary_off["findings"] == 0
 
 
-async def test_dedup_property_getter_setter(tmp_path):
+async def test_dedup_property_getter_setter(graph_store):
     facts = extract_file_facts("prop.py", PROP, "production")
     # getter + setter share an id — the extractor now merges them into ONE node (Finding A),
     # unioning their facts, rather than emitting two and lossily dropping one at build dedup.
     dup_nodes = [n for n in facts.nodes if n.id == "prop.py::Box.config"]
     assert len(dup_nodes) == 1, "extractor merges getter+setter into one node"
 
-    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
-    try:
-        await s.graph.set_facts(
-            "prop.py",
-            facts.model_dump_json(),
-            "h1",
+    await graph_store.graph.set_facts("prop.py", facts.model_dump_json(), "h1")
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    await GraphBuilder().run(graph_store, settings)
+    nodes = await graph_store.graph.nodes()
+    matching = [n for n in nodes if n["node_id"] == "prop.py::Box.config"]
+    assert len(matching) == 1
+
+
+async def test_build_reports_and_persists_the_unresolved_count(facts_store):
+    """`svc.py::load_user` calls `get_user_record()`, which nothing in the fixture defines, so it
+    earns no row; `impl.py::Impl.run` calls `load_user()`, which `svc.py` defines and `impl.py`
+    never imports, so it does."""
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    summary = await GraphBuilder().run(facts_store, settings)
+    rows = await facts_store.graph.unresolved()
+    assert summary["unresolved"] == len(rows)
+    assert ("impl.py::Impl.run", "load_user") in {
+        (r["node_id"], r["name"]) for r in rows
+    }
+    assert "get_user_record" not in {r["name"] for r in rows}
+
+
+async def test_build_records_text_sparse_symbols(facts_store):
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    await GraphBuilder().run(facts_store, settings)
+    sparse = await facts_store.graph.unresolved(reasons=["text_sparse"])
+    assert sparse, (
+        "the tiny base/impl fixture has no symbol with 4 distinct concept tokens"
+    )
+    assert all(r["fact_kind"] == "node" and r["priority"] == 4 for r in sparse)
+
+
+async def test_a_text_sparse_test_symbol_does_not_reach_the_queue(graph_store):
+    """The resolver gates test callers out; the build pass must gate the same set out, or the
+    priority-4 band fills with `tests/`."""
+    for path, src, role in (
+        ("svc.py", "def load_user():\n    return 1\n", "production"),
+        ("tests/test_x.py", "def test_zz():\n    return 1\n", "test"),
+    ):
+        await graph_store.graph.set_facts(
+            path, extract_file_facts(path, src, role).model_dump_json(), path
         )
-        settings = AuditorSettings(
-            graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    await GraphBuilder().run(graph_store, settings)
+    rows = await graph_store.graph.unresolved()
+    assert rows, "the production symbol must still earn its text_sparse row"
+    assert not [r for r in rows if r["node_id"].startswith("tests/")]
+
+
+async def test_build_replaces_the_queue_rather_than_appending(facts_store):
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2)
+    )
+    first = await GraphBuilder().run(facts_store, settings)
+    second = await GraphBuilder().run(facts_store, settings)
+    assert first["unresolved"] == second["unresolved"]
+    assert len(await facts_store.graph.unresolved()) == second["unresolved"]
+
+
+async def test_build_with_no_facts_reports_an_empty_queue(graph_store):
+    settings = AuditorSettings(graph=GraphConfig(enabled=True))
+    assert await GraphBuilder().run(graph_store, settings) == {
+        "nodes": 0,
+        "edges": 0,
+        "clusters": 0,
+        "unresolved": 0,
+        "findings": 0,
+    }
+    assert await graph_store.graph.unresolved() == []
+
+
+def test_quality_rows_flag_fallback_labels_and_singletons():
+    """Unit test for the two cluster branches: this repo currently produces no `generic_label`
+    row at all, so a build-level test would assert nothing."""
+    nodes = [
+        GraphNode(
+            id=f"m.py::{name}",
+            kind=NodeKind.FUNCTION,
+            name=name,
+            module="m.py",
+            qualname=name,
+            rank=rank,
         )
-        await GraphBuilder().run(s, settings)
-        nodes = await s.graph.nodes()
-        matching = [n for n in nodes if n["node_id"] == "prop.py::Box.config"]
-        assert len(matching) == 1
-    finally:
-        await s.aclose()
+        for name, rank in (("a", 0.9), ("b", 0.1), ("c", 0.5))
+    ]
+    rows = _quality_rows(
+        nodes,
+        {"m.py::b"},
+        {"m.py::a": 1, "m.py::b": 1, "m.py::c": 2},
+        {1: "user"},  # cluster 2 contributed no token, so its label falls back
+        {1: 2, 2: 1},
+    )
+    seen = {(r.node_id, r.reason) for r in rows}
+    assert ("m.py::b", UnresolvedReason.TEXT_SPARSE) in seen
+    assert ("m.py::c", UnresolvedReason.GENERIC_LABEL) in seen
+    assert ("m.py::c", UnresolvedReason.SINGLETON_CLUSTER) in seen
+    assert (
+        "m.py::a",
+        UnresolvedReason.GENERIC_LABEL,
+    ) not in seen  # cluster 1 has a real label
+    assert [r.name for r in rows if r.reason is UnresolvedReason.GENERIC_LABEL] == [
+        "cluster-2"
+    ]
+    assert all(r.fact_kind is FactKind.NODE and r.priority == 4 for r in rows)

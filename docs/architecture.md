@@ -248,10 +248,21 @@ flowchart TB
   of presenting an empty group as a working one.
 - `graph build` auto-scans first with graph extraction forced on (skip with `--no-scan`), then runs
   `graph.build.GraphBuilder.run` over the cached per-file facts: dedupe nodes,
-  `resolve_edges.resolve_structural`, `naming.name_similar_edges` (tf-idf plus LSI),
+  `resolve_edges.resolve_structural` (returning a `StructuralResult` of deterministic edges plus the
+  facts it could not place), `naming.name_similar_edges` (tf-idf plus LSI),
   `usage.usage_similar_edges` (callee and operand-type Jaccard), `rank.pagerank`,
-  `cluster.cluster_concepts`, persist through `IndexStore.graph.replace`, then
-  `detectors.run_graph_detectors` writes the `GRAPH-*` findings into the findings table.
+  `cluster.cluster_concepts`, persist through `IndexStore.graph.replace` and
+  `IndexStore.graph.replace_unresolved`, then `detectors.run_graph_detectors` writes the `GRAPH-*`
+  findings into the findings table.
+- `resolve_edges._resolve_name` returns a frozen `Resolution` (`ids`, `gated`, `definers`, `path`,
+  `reason`), which is both how an edge is chosen and the evidence a queue row carries.
+- `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to the
+  `UnresolvedCollector` it owns, which applies the post-pass gates (a settled non-repo receiver, a
+  name the node already has an edge to) and materializes the rows in `drain`.
+- `graph_unresolved` is a partition table rebuilt by every build. The resolver contributes
+  `ambiguous_name` and `unimportable_name` rows; the build pass adds `text_sparse`, `generic_label`
+  and `singleton_cluster` rows after clustering. It is node-keyed, so `IndexStore.prune` never
+  touches it. See [graph.md](references/graph.md).
 - The query commands (`related`, `neighbors`, `concept`, `clusters`, `search`, `usages`) all read
   the persisted tables through `graph.query.GraphQuery`; nothing is recomputed.
 - `graph serve` renders `graph.viz.build_payload` into the bundled UI and serves it on

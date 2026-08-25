@@ -26,7 +26,7 @@ def render_graph_build(out: Console, payload: dict[str, Any]) -> None:
     t = Table.grid(padding=(0, 3))
     t.add_column(style="bold")
     t.add_column(justify="right", style=_ACCENT)
-    for key in ("nodes", "edges", "clusters", "findings"):
+    for key in ("nodes", "edges", "clusters", "unresolved", "findings"):
         if key in payload:
             t.add_row(key, str(payload[key]))
     out.print(Panel(t, title="graph built", border_style=_BORDER))
@@ -140,6 +140,44 @@ def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
             sample = ", ".join(s.split("::")[-1] for s in info.get("sample", []))
             t.add_row(edge, str(info["count"]), sample)
         out.print(t)
+
+
+def _queue_name(row: dict[str, Any]) -> str:
+    """The called name as written: ``job.handle`` for an attribute call, so two rows on the same
+    method under different receivers are told apart."""
+    name = str(row.get("name", ""))
+    root = row.get("receiver_root")
+    return f"{root}.{name}" if root else name
+
+
+def render_graph_unresolved(
+    out: Console, payload: list[dict[str, Any]], *, filtered: bool = False
+) -> None:
+    if not payload:
+        empty = (
+            "(no rows matched the filter)"
+            if filtered
+            else "(queue is empty; run `auditr graph build` first)"
+        )
+        out.print(f"[dim]{empty}[/]")
+        return
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    for col in ("node", "form", "name", "reason"):
+        t.add_column(col)
+    t.add_column("definers", justify="right")
+    t.add_column("candidates", justify="right")
+    t.add_column("ext-bound", justify="center")
+    for row in payload:
+        t.add_row(
+            str(row.get("node_id", "")),
+            str(row.get("call_form", "")),
+            _queue_name(row),
+            str(row.get("reason", "")),
+            str(row.get("definers_count", len(row.get("definers", [])))),
+            str(row.get("candidates_count", len(row.get("candidates", [])))),
+            "yes" if row.get("externally_bound") else "",
+        )
+    out.print(t)
 
 
 # ---------------------------------------------------------------------------

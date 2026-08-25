@@ -5,6 +5,7 @@ from typing import Annotated
 
 import typer
 
+from auditor.graph.model import QUEUE_ROW_LIMIT, CallForm, UnresolvedReason
 from auditor.models import RuleId
 
 ScanTarget = Annotated[Path, typer.Argument(help="File or directory to audit.")]
@@ -222,5 +223,30 @@ CleanStatus = Annotated[
     bool,
     typer.Option(
         "--clean-status", help="Delete a leftover <repo>/.auditor/.status.json."
+    ),
+]
+
+
+# --- `graph` sub-app options ---
+GraphTarget = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
+QueueReason = Annotated[
+    list[UnresolvedReason] | None,
+    typer.Option("--reason", help="Only these queue reasons (repeatable)."),
+]
+QueueCallForm = Annotated[
+    list[CallForm] | None,
+    typer.Option("--call-form", help="Only these call forms (repeatable)."),
+]
+QueueLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit", min=1, help=f"Cap the rows shown (default {QUEUE_ROW_LIMIT})."
+    ),
+]
+QueueExternal = Annotated[
+    bool,
+    typer.Option(
+        "--external/--no-external",
+        help="Show rows bound to a non-repo import (dimmed, sorted last).",
     ),
 ]

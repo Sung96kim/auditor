@@ -1,8 +1,9 @@
 """Pure data model for the semantic graph — stdlib only (no numpy/sklearn)."""
 
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class NodeKind(StrEnum):
@@ -58,8 +59,19 @@ class GraphNode(BaseModel):
         str, ...
     ] = ()  # body-loaded names (class-as-value uses: Model(), Model.col, f(Model))
     typed_calls: tuple[
+        tuple[str, str, str], ...
+    ] = ()  # (receiver var, receiver type, method) per call on an annotated receiver / self
+    attr_callees: tuple[
+        tuple[str | None, str, bool], ...
+    ] = ()  # (receiver root or None, method, receiver is the root itself) per attribute call
+    bare_callees: tuple[str, ...] = ()  # names called as a bare `name()` call
+    local_names: tuple[
+        str, ...
+    ] = ()  # every name the function binds: all parameter forms, nested def/class/lambda
+    # names and their parameters, `except ... as` targets, local imports, body assignments
+    external_aliases: tuple[
         tuple[str, str], ...
-    ] = ()  # (receiver_type, method) for calls on an annotated receiver / self
+    ] = ()  # module nodes: (alias, imported root) per module-level `alias = root(...)`
     imports: tuple[str, ...] = ()  # module nodes: candidate dotted import targets
     import_bindings: tuple[
         tuple[str, str], ...
@@ -101,3 +113,123 @@ class FileGraphFacts(BaseModel):
     path: str
     role: str
     nodes: list[GraphNode] = []
+
+
+class UnresolvedReason(StrEnum):
+    """Why a fact sits in the queue. The first two come from the resolver, the rest from the
+    build pass over the clustered graph."""
+
+    AMBIGUOUS_NAME = "ambiguous_name"
+    UNIMPORTABLE_NAME = "unimportable_name"
+    TEXT_SPARSE = "text_sparse"
+    GENERIC_LABEL = "generic_label"
+    SINGLETON_CLUSTER = "singleton_cluster"
+
+
+class Resolution(BaseModel):
+    """One name-resolution attempt: what it picked (``ids``), what it weighed (``gated``), every
+    role-filtered repo definition of the name (``definers``), and the modules it went through."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ids: tuple[str, ...] = ()
+    gated: tuple[str, ...] = ()
+    definers: tuple[str, ...] = ()
+    path: tuple[str, ...] = ()
+    reason: UnresolvedReason | None = None
+
+
+class FactKind(StrEnum):
+    """Which extracted fact a queue row is about. ``NODE`` covers the build-pass rows, whose
+    subject is a symbol or a cluster rather than a name the resolver tried to place."""
+
+    CALLEE = "callee"
+    ATTR_CALLEE = "attr_callee"
+    CLASS_REF = "class_ref"
+    TYPED_CALL = "typed_call"
+    NODE = "node"
+
+
+class CallForm(StrEnum):
+    """How a name was called at the site the resolver could not place: a bare ``name()``, a
+    direct ``self``/``cls`` receiver, or any other attribute receiver."""
+
+    BARE = "bare"
+    SELF = "self"
+    ATTR = "attr"
+
+
+def unresolved_priority(reason: UnresolvedReason, call_form: CallForm) -> int:
+    """Drain order for the queue (spec §8.3 item 3), lowest first. 0 is reserved for the
+    ``flow_leaf`` bump a flow request applies in S3."""
+    if reason is UnresolvedReason.AMBIGUOUS_NAME:
+        return 1
+    if reason is UnresolvedReason.UNIMPORTABLE_NAME:
+        return 2 if call_form in (CallForm.SELF, CallForm.BARE) else 3
+    return 4
+
+
+class UnresolvedRow(BaseModel):
+    """One queue row: a fact the deterministic pass could not place, carrying everything a
+    refiner needs to judge it without re-deriving the resolution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    fact_kind: FactKind
+    name: str
+    reason: UnresolvedReason
+    receiver_root: str | None = None
+    call_form: CallForm = CallForm.BARE
+    candidates: tuple[str, ...] = ()
+    definers: tuple[str, ...] = ()
+    resolution_path: tuple[str, ...] = ()
+    priority: int
+    externally_bound: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_priority(cls, data: Any) -> Any:
+        """Fill ``priority`` from the reason and call form unless the caller passed one, so drain
+        order can never disagree with the row it orders. S3's ``flow_leaf`` bump passes one."""
+        if not isinstance(data, dict) or data.get("priority") is not None:
+            return data
+        try:
+            reason = UnresolvedReason(data["reason"])
+            call_form = CallForm(data.get("call_form") or CallForm.BARE)
+        except (KeyError, ValueError):
+            return data
+        return {**data, "priority": unresolved_priority(reason, call_form)}
+
+    @classmethod
+    def for_node(
+        cls, node_id: str, name: str, reason: UnresolvedReason
+    ) -> "UnresolvedRow":
+        """A build-pass row, whose subject is a symbol or a cluster rather than a name the
+        resolver tried to place."""
+        return cls(node_id=node_id, fact_kind=FactKind.NODE, name=name, reason=reason)
+
+
+# Queue display policy, shared by every surface so the CLI and the MCP tool cannot drift apart.
+QUEUE_ROW_LIMIT = 50
+QUEUE_ID_CAP = 10
+
+
+def capped_row(row: dict[str, Any], cap: int = QUEUE_ID_CAP) -> dict[str, Any]:
+    """One queue payload row with its two id lists capped and their true totals alongside, the
+    way graph_overview caps its hub lists: a node can have dozens of definers."""
+    out = dict(row)
+    for col in ("definers", "candidates"):
+        ids = out[col]
+        out[col] = ids[:cap]
+        out[f"{col}_count"] = len(ids)
+    return out
+
+
+class StructuralResult(BaseModel):
+    """One resolver pass: the deterministic edges it produced and the facts it could not place."""
+
+    model_config = ConfigDict(frozen=True)
+
+    edges: list[GraphEdge] = Field(default_factory=list)
+    unresolved: list[UnresolvedRow] = Field(default_factory=list)
