@@ -17,24 +17,12 @@ When dispatched directly (e.g. `@auditor-reviewer`), you run in the background b
 2. Scan the requested scope:
    - Whole repo: `scan(path=".")` or `auditr scan . -f json`.
    - A diff: `scan(path=".", since="<base>")` or `auditr scan . --since <base> -f json`.
-3. Read the risk categories first, then the promoted maintainability categories, then
-   everything else worst-severity-first. For each `candidate` finding, open `file:line`. MCP `scan`
+3. Read findings worst-severity-first. For each `candidate` finding, open `file:line`. MCP `scan`
    defaults to compact (no `evidence`) — call `finding_detail(file, rule_id, line)` first (or
-   `detail="full"`); CLI JSON already has `evidence`. Land on one verdict with a one-line reason:
-   `fix-recommended` (what to change, where, why), `suppress-recommended` (the exact
-   `# auditor: skip: <RULE-ID>` directive and the line it belongs on), or `dismiss` (the reason).
-   `auto` findings are already decided — report them, don't re-litigate.
-4. Return a structured report, in this order:
-   - Totals by severity, and the worst findings per file.
-   - Risk findings: `security`, `malware`, `secrets`, `supply-chain`, `correctness`, `async`,
-     `a11y`.
-   - **Maintainability recommendations**, its own section, for the promoted categories
-     (`oop-composition`, `dead-code`, `typing`, `testing`, `config`, `style`, `design-system`,
-     `react`). These are reported in full: every candidate gets its own recommendation and is
-     never rolled up into a "+N lower" count.
-   - Your candidate verdicts with a count of each.
-
-   Do not edit code unless explicitly asked — the recommendations are the deliverable.
+   `detail="full"`); CLI JSON already has `evidence`. Decide real vs. false-positive with a
+   one-line reason. `auto` findings are already decided — report them, don't re-litigate.
+4. Return a structured report: totals by severity; the worst findings per file; and your candidate
+   verdicts (real / false-positive + reason). Do not edit code unless explicitly asked.
 
 Severity: `blocking > high > medium > low > suggestion`. `blocking` = the most severe (auditor has no
 "critical" tier). The CI gate counts `auto` findings only.

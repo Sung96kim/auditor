@@ -44,18 +44,10 @@ issues."
 1. **`auto` findings first** — these are already decided deterministically (typing, secrets,
    most of `malware`'s unambiguous patterns) and are exactly what the gate is watching. Report
    them as-is; they're not up for debate.
-2. **Risk-category candidates next** — `security`, `malware`, `secrets`, `supply-chain`,
-   `correctness`, `async`, `a11y` at `blocking`/`high`. See `judge-findings`'s
-   `references/judging.md` for the per-category real-issue-vs-false-positive heuristics; this
-   skill doesn't re-derive them.
-3. **Then the promoted maintainability categories** — `oop-composition`, `dead-code`, `typing`,
-   `testing`, `config`, `style`, `design-system`, `react`. These are reported in full: every
-   candidate gets its own recommendation, never rolled up into a "+N lower" count, and never
-   dismissed on tier alone. Severity is a risk ordering, not a value ordering; the dismissal bar
-   is in `judge-findings`'s `references/judging.md`.
-4. **Everything else next**, worst-severity-first — still judgment calls before you can call the
-   changeset clean.
-5. Within the same severity, prioritize by **file role and blast radius** over raw count — one
+2. **`candidate` findings next, worst-severity-first** — these need judgment before you can call
+   the changeset clean. See `judge-findings`'s `references/judging.md` for the per-category
+   real-issue-vs-false-positive heuristics; this skill doesn't re-derive them.
+3. Within the same severity, prioritize by **file role and blast radius** over raw count — one
    `high` in `auditor/gate.py` (production, load-bearing) outranks five `low`s in a test fixture.
    Use `graph usages <symbol>` (see `explore-graph`) when you need to know whether a changed
    symbol is widely depended-on before deciding how much scrutiny it earns.

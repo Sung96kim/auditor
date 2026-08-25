@@ -4,10 +4,9 @@ description: Explore the semantic code graph — dead code, call/dependency impa
 paths: "**/*.py, **/*.ts, **/*.tsx"
 ---
 
-Answer structural questions with auditor's semantic graph. Requires the `[graph]` extra
-(`uv tool install "auditr[graph]"`); check first and guide install if missing — CLI without it
-prints "requires the optional [graph] dependencies" and exits 1, MCP without it simply won't
-register the `graph_*` tools.
+Answer structural questions with auditor's semantic graph. Nothing to install and nothing to
+check first: the graph libraries are core dependencies of `auditr`, so the CLI subcommands and the
+`graph_*` MCP tools are always available.
 
 ## Steps
 

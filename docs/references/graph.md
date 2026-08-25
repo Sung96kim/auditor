@@ -2,9 +2,13 @@
 
 `auditr graph` builds and queries a semantic graph of a repo: nodes are modules, classes and
 functions, edges are structural relations (calls, overrides, imports) and semantic ones (name and
-usage similarity). `auditr graph <subcommand> --help` lists every flag. It needs the `[graph]` extra
-(`uv tool install "auditr[graph]"`); without it every subcommand prints a message naming the missing
-dependencies (numpy, scikit-learn, networkx) and exits 1.
+usage similarity). `auditr graph <subcommand> --help` lists every flag.
+
+- Nothing extra to install: `numpy`, `scikit-learn`, `snowballstemmer` and `networkx` are core
+  dependencies.
+- The sub-app is imported on the first `graph` subcommand, so the rest of the CLI never pays its
+  ~0.65 s import. The first graph command in a process is that much slower; the ones after it
+  are not.
 
 ## Common invocations
 

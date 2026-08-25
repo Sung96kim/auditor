@@ -163,7 +163,8 @@ that is otherwise dormant.
 
 ### Semantic graph (`[tool.auditor.graph]`, `GraphConfig`)
 
-Opt-in and needs the `graph` extra ([graph.md](graph.md)).
+Opt-in per repo, but no extra to install: the graph libraries ship in the core distribution
+([graph.md](graph.md)).
 
 - `enabled` (default `false`): make a plain `scan -i` populate graph facts. `auditr graph build`
   extracts them regardless.

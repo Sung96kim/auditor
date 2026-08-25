@@ -16,8 +16,11 @@ Paths are relative to the repo root.
   suffixes), manifest (`package.json`).
 - `auditor/database/` is the SQLite layer: `base.py` (worker, table DSL, `BaseDB`), one module per
   table, `store.py` (the `IndexStore` facade).
-- `auditor/graph/` is the semantic graph behind the optional `[graph]` extra; `auditor/graph/ui/`
-  is the Vite frontend `graph serve` embeds.
+- `auditor/graph/` is the semantic graph, part of the core install since its libraries moved out
+  of the `[graph]` extra; `auditor/graph/ui/` is the Vite frontend `graph serve` embeds.
+- `auditor/cli/lazy.py` holds `LazyGroup`, the deferred sub-app mount, and `auditor/observer/` the
+  observer package. `auditr_observer.py` is the observer's client and lives at the repo root,
+  outside the package, so it never imports `auditor`.
 - `auditor/malware/` wraps the opt-in ClamAV and osv-scanner shell-outs. `auditor/reporters/` holds
   one module per output format. `auditor/profiles/*.toml` holds the built-in config profiles
   (`base`, `strict`, `pydantic`, `all-strict`).
@@ -213,9 +216,12 @@ flowchart TB
 
 ## graph
 
-- `cli/__init__.py` mounts `cli/graph.py` when the `[graph]` extra imports, else
-  `cli/graph_stub.py`, whose commands print the install hint and exit non-zero. See
-  [graph.md](references/graph.md).
+- `cli/__init__.py` mounts `graph` through `cli/lazy.py`'s `LazyGraphGroup`, which imports
+  `cli/graph.py` on the first graph subcommand, so numpy, scikit-learn and networkx never load
+  for the other commands. See [graph.md](references/graph.md).
+- A broken graph dependency surfaces as a one-line click error naming `auditr graph`, not a
+  traceback, and the failed import is cached, so a second dispatch repeats that error instead
+  of presenting an empty group as a working one.
 - `graph build` auto-scans first with graph extraction forced on (skip with `--no-scan`), then runs
   `graph.build.GraphBuilder.run` over the cached per-file facts: dedupe nodes,
   `resolve_edges.resolve_structural`, `naming.name_similar_edges` (tf-idf plus LSI),
@@ -251,7 +257,7 @@ flowchart TB
   floods an agent's context. See [auditr-mcp.md](references/auditr-mcp.md).
 - The tool modules mirror the CLI: `scan_tools.py` (`scan`, `report`, `finding_detail`, `manifest`,
   `discover`, `aggregate`), `rules_tools.py`, `ignore_tools.py`, `malware_tools.py`, and
-  `graph_tools.py`, which registers only when the `[graph]` extra imports.
+  `graph_tools.py`. Every module registers unconditionally.
 - Every tool carries an annotation from `mcp/helpers.py`: `READ_ONLY`, `MUTATING` or `DESTRUCTIVE`,
   so a client can skip confirmation on reads and cache idempotent calls. None declare an open
   world; the tools touch the local repo only.

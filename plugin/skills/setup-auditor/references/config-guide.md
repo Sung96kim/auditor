@@ -44,7 +44,7 @@ Top-level keys on the resolved `AuditorSettings`, grouped by what they control:
 | `cli_frameworks` | `["typer", "click"]` | CLI frameworks whose free-function-command idiom is exempted from the OOP-orchestrator / cross-file duplicate-function heuristics. |
 | `design_system` | empty | `[tool.auditor.design_system]` — a project's declared DS primitives. The `design-system` TS rules stay silent until a repo opts in (see the TS/React section of the top-level README). |
 | `sqlalchemy` | both `false` | `expire_on_commit` / `async_session` — facts about the project's session factory the auditor can't see from a model file alone. Setting either activates a dormant rule (`SA-GREENLET-ATTR-AFTER-COMMIT` / `SA-IMPLICIT-LAZY-ASYNC`). |
-| `graph` | `enabled: false` | `[tool.auditor.graph]` — the semantic graph pass (needs the `graph` extra). `enabled = true` makes a plain `scan -i` also populate graph facts; otherwise use `auditr graph build` explicitly. |
+| `graph` | `enabled: false` | `[tool.auditor.graph]` — the semantic graph pass. `enabled = true` makes a plain `scan -i` also populate graph facts; otherwise use `auditr graph build` explicitly. |
 | `malware_scan` | `enabled: false` | `[tool.auditor.malware_scan]` — the opt-in ClamAV + osv-scanner shell-outs. `enabled = true`, or per-run `scan --malware`. |
 
 Verified example — a minimal standalone config that just picks a profile:
@@ -134,12 +134,15 @@ actually needs — don't install extras a repo won't use:
 |---|---|---|
 | `mcp` | `fastmcp`, puts `auditr-mcp` on PATH | Always, if the repo will be audited from an agent/MCP client rather than pure CLI/CI. The Claude Code plugin bundles its own `uvx --from auditr[mcp] auditr-mcp` — installing this extra system-wide is for using the MCP server outside the plugin (Codex, a bare `claude mcp add`, etc). |
 | `ts` | `tree-sitter`, `tree-sitter-typescript` | The repo has `.ts`/`.tsx` files auditor should parse — without it, TypeScript/React detectors don't run. |
-| `graph` | `numpy`, `scikit-learn`, `snowballstemmer`, `networkx` | The repo is large/complex enough that "god concept" / "scattered concept" / naming-consistency queries (`auditr graph ...`) add value, or the team wants `explore-graph`-skill-level usage-tracing (find-refs, blast radius) beyond what per-file findings give. |
+
+The semantic graph needs no extra: `numpy`, `scikit-learn`, `snowballstemmer` and `networkx` are
+core dependencies. `auditr[graph]` still resolves as an empty alias, so older install commands
+keep working.
 
 ```bash
-uv tool install "auditr[mcp,ts,graph]"    # pick the subset that applies
-uv tool install "auditr[mcp]"             # Python-only repo, agent-driven — the common case
-uv tool install auditr                    # CLI/CI-only, no MCP, pure Python repo
+uv tool install "auditr[mcp,ts]"    # pick the subset that applies
+uv tool install "auditr[mcp]"       # Python-only repo, agent-driven — the common case
+uv tool install auditr              # CLI/CI-only, no MCP, pure Python repo
 ```
 
 `pip install`/`pipx install` accept the same extras syntax (`pip install "auditr[mcp,ts]"`).

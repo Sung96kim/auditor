@@ -50,8 +50,8 @@ hand; the reporter is the source of truth for the shape and will drift if you ha
 
 ## PR review body — assembled, not a built-in reporter
 
-There's no `-f pr` flag; a PR review comment needs a verdict column (`fix-recommended` /
-`suppress-recommended` / `dismiss`, one line) that no reporter emits, since that requires reading `evidence` and deciding — the reporters
+There's no `-f pr` flag; a PR review comment needs a judgment column (real / false-positive, one
+line) that no reporter emits, since that requires reading `evidence` and deciding — the reporters
 only render what the scan already knows. Build it from the JSON payload (MCP `scan(since=<base>,
 fail_on=<floor>, detail="full")`, or CLI `-f json`) after you've triaged per
 `references/triage.md`. Template — gate result first, then findings worst-severity-first, grouped
@@ -67,8 +67,8 @@ by file:
 
 - 🔎 **high** `PY-ASYNC-SYNC-IO` L555 — sync `subprocess.run(...)` blocks the event loop inside
   async `test_scan_since_head`.
-  **Verdict:** fix-recommended — this test function is `async def` and calls `subprocess.run`
-  directly instead of `asyncio.to_thread`; not a false positive, and a low-risk change to make.
+  **Judgment:** real — this test function is `async def` and calls `subprocess.run` directly
+  instead of `asyncio.to_thread`; not a false positive, low-risk fix.
 
 ### plugin/hooks/audit_edit.py
 
@@ -88,10 +88,10 @@ Rules for filling it in:
 - **Worst severity first**, both across files and within a file (mirrors the reporter's own
   sort — don't invent a different order).
 - **Group by file** — a reviewer scanning a PR thinks per-file, not per-rule.
-- Every line needs `rule_id` + `line` + **the one-line verdict** for candidates
-  (`fix-recommended` / `suppress-recommended` / `dismiss`, with the reason) — a bare finding list
-  without a verdict isn't a review, it's a re-post of the scan. `auto` findings don't need a
-  verdict line (they're already decided); a short "(auto)" tag is enough context.
+- Every line needs `rule_id` + `line` + **the one-line judgment** for candidates (real /
+  false-positive-dismissed / false-positive-suppressed, with the reason) — a bare finding list
+  without judgment isn't a review, it's a re-post of the scan. `auto` findings don't need a
+  judgment line (they're already decided); a short "(auto)" tag is enough context.
 - Keep the evidence/reasoning as short as what you'd actually want to read in a PR thread — this
   isn't `references/examples.md`-length worked reasoning, it's the verdict plus the one line that
   justifies it.

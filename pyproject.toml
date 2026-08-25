@@ -8,9 +8,14 @@ license = { file = "LICENSE" }
 dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
-    "typer>=0.26",
+    # Ceiling: the lazy graph mount rides typer.main.get_group and TyperGroup internals.
+    "typer>=0.26,<0.27",
     "rich>=13",
     "loguru>=0.7",
+    "numpy>=2.1",
+    "scikit-learn>=1.6",
+    "snowballstemmer>=2.2",
+    "networkx>=3",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +24,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "pyyaml",
     "ruff",
     "commitizen",
     "fastmcp",
@@ -29,12 +35,16 @@ ts = [
     "tree-sitter>=0.23",
     "tree-sitter-typescript>=0.23",
 ]
-graph = [
-    "numpy>=2.1",
-    "scikit-learn>=1.6",
-    "snowballstemmer>=2.2",
-    "networkx>=3",
-]
+# The graph libraries are core dependencies now; the extra stays as an empty alias so
+# `pip install "auditr[graph]"` and existing uv-tool receipts keep resolving.
+graph = []
+# Each agent SDK bundles a ~300MB x86_64-only CLI binary, so they stay opt-in and CI never
+# installs them. Nothing imports these until the observer slices land.
+observer-claude = ["claude-agent-sdk>=0.2,<0.3"]
+observer-codex = ["openai-codex==0.147.*"]
+observer = ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*"]
+# Opt-in vector layer; `model2vec` needs one online model fetch, so it stays out of CI too.
+vectors = ["sqlite-vec>=0.1.9,<0.2", "model2vec>=0.9,<0.10"]
 # Experimental: lets a client LLM orchestrate the tools in a sandbox so large intermediate
 # payloads never reach the model. Opt-in — also gated by the AUDITOR_CODE_MODE env flag.
 code-mode = ["fastmcp[code-mode]"]
@@ -42,6 +52,7 @@ code-mode = ["fastmcp[code-mode]"]
 [project.scripts]
 auditr = "auditor.cli:app"
 auditr-mcp = "auditor.mcp_server:main"
+auditr-observer = "auditr_observer:main"  # top-level module, never imports the auditor package
 auditor = "auditor.cli:app"  # alias — matches the import package name
 auditor-mcp = "auditor.mcp_server:main"  # alias
 
@@ -49,7 +60,7 @@ auditor-mcp = "auditor.mcp_server:main"  # alias
 artifacts = ["auditor/graph/ui/dist/index.html"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["auditor"]
+packages = ["auditor", "auditr_observer.py"]
 exclude = [
     "auditor/graph/ui/node_modules",
     "auditor/graph/ui/src",

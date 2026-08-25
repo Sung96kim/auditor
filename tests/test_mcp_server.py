@@ -19,7 +19,7 @@ from auditor.malware.dbs import DbUpdateReport
 from auditor.mcp import code_mode
 from auditor.mcp.artifacts import publish
 from auditor.mcp.server import MAX_TOOL_RESPONSE_BYTES
-from auditor.mcp_server import _GRAPH_OK, mcp
+from auditor.mcp_server import mcp
 from auditor.models import (
     Category,
     FileRole,
@@ -28,6 +28,17 @@ from auditor.models import (
     Severity,
     VerdictKind,
 )
+
+_GRAPH_TOOLS = {
+    "graph_build",
+    "graph_related",
+    "graph_neighbors",
+    "graph_concept",
+    "graph_clusters",
+    "graph_search",
+    "graph_usages",
+    "graph_overview",
+}
 
 
 @pytest.mark.parametrize(
@@ -669,7 +680,6 @@ async def test_malware_install_backend_absent_never_shells_out(monkeypatch):
     assert data["clamav_command"] == fake_command
 
 
-@pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
 async def test_graph_search_and_usages_tools(sample_repo):
     """graph_search locates symbols and graph_usages returns grouped connectivity with full
     counts — exercised through the real MCP call path."""
@@ -706,6 +716,12 @@ def test_mcp_server_shim_reexports_package_objects():
     assert auditor.mcp_server.main is auditor.mcp.main
 
 
+async def test_every_graph_tool_registers_unconditionally():
+    """The graph libraries are core dependencies, so no import guard may hide these tools."""
+    names = {t.name for t in await mcp.list_tools()}
+    assert names >= _GRAPH_TOOLS, sorted(_GRAPH_TOOLS - names)
+
+
 # --- output-volume hardening ------------------------------------------------------------
 
 
@@ -718,8 +734,7 @@ async def test_tool_annotations_read_only_vs_mutating():
     assert tools["ignore_remove"].annotations.destructiveHint is True
     assert tools["malware_update_dbs"].annotations.readOnlyHint is False
     assert tools["malware_install"].annotations.readOnlyHint is False
-    if "graph_build" in tools:  # only when the graph extra is installed
-        assert tools["graph_build"].annotations.readOnlyHint is False
+    assert tools["graph_build"].annotations.readOnlyHint is False
 
 
 def test_response_limiting_middleware_registered():

@@ -17,8 +17,7 @@ Roll the whole-repo index into `AUDIT.md` — a whole-repo posture snapshot, not
    never-scanned repo).
 3. Read the rollup: totals by severity, a files-with-findings table, and a "Candidates to judge"
    section (every `candidate`-verdict finding across the whole scope, worst-first) that feeds
-   `judge-findings`, which returns `fix-recommended` / `suppress-recommended` / `dismiss` verdicts
-   and edits nothing. See `references/reading-audit-md.md` for the exact format — including one
+   `judge-findings`. See `references/reading-audit-md.md` for the exact format — including one
    gotcha (the files table sorts by raw finding count, not severity, despite its header).
 4. The rollup is per-repo partitioned in the one shared `~/.auditor/index.db` — two repos never
    mix rows. For a diff-scoped, gated review instead of a whole-repo snapshot, use

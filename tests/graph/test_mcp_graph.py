@@ -1,38 +1,57 @@
+from pathlib import Path
+
 import pytest
 from fastmcp import Client
 
 from auditor.engine import audit_target
 from auditor.mcp_server import mcp
 
+_GRAPH_CONFIG = "[tool.auditor.graph]\nenabled=true\nname_similarity_threshold=0.2\n"
+_SIMILAR_NAMES = (
+    "def get_user(uid):\n    return db.fetch(uid)\n\n"
+    "def fetch_user(uid):\n    return db.fetch(uid)\n"
+)
+_RESOLVABLE_CALLS = (
+    "def get_user(uid):\n    return uid\n\n"
+    "def fetch_user(uid):\n    return uid\n\n"
+    "def load_user(uid):\n    return get_user(uid) or fetch_user(uid)\n"
+)
 
-@pytest.fixture
-def repo(tmp_path, monkeypatch):
+
+def _write_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    module_source: str,
+    graph_config: str = "",
+) -> Path:
+    """A one-module repo with its own AUDITOR_HOME, so no index is shared between tests."""
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path / "home"))
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname="x"\nversion="0"\n'
-        "[tool.auditor.graph]\nenabled=true\nname_similarity_threshold=0.2\n"
+        '[project]\nname="x"\nversion="0"\n' + graph_config
     )
-    (tmp_path / "m.py").write_text(
-        "def get_user(uid):\n    return db.fetch(uid)\n\n"
-        "def fetch_user(uid):\n    return db.fetch(uid)\n"
-    )
+    (tmp_path / "m.py").write_text(module_source)
     return tmp_path
+
+
+@pytest.fixture
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    return _write_repo(tmp_path, monkeypatch, _SIMILAR_NAMES, _GRAPH_CONFIG)
+
+
+@pytest.fixture
+def repo_no_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A repo with NO [tool.auditor.graph] config — graph_build must still auto-scan."""
+    return _write_repo(tmp_path, monkeypatch, _SIMILAR_NAMES)
+
+
+@pytest.fixture
+def repo_with_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A repo whose calls resolve within the module, so structural neighbors exist to cap."""
+    return _write_repo(tmp_path, monkeypatch, _RESOLVABLE_CALLS, _GRAPH_CONFIG)
 
 
 def _data(result):
     return result.data if hasattr(result, "data") else result
-
-
-@pytest.fixture
-def repo_no_graph(tmp_path, monkeypatch):
-    """A repo with NO [tool.auditor.graph] config — graph_build must still auto-scan."""
-    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path / "home"))
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    (tmp_path / "m.py").write_text(
-        "def get_user(uid):\n    return db.fetch(uid)\n\n"
-        "def fetch_user(uid):\n    return db.fetch(uid)\n"
-    )
-    return tmp_path
 
 
 async def test_graph_build_then_related(repo):
@@ -85,6 +104,24 @@ async def test_graph_concept_is_capped(repo):
         assert concept["member_count"] == biggest["member_count"]
 
 
+async def test_graph_neighbors_is_capped(repo_with_calls):
+    """``limit`` is the tool's only logic, so give it a symbol with more hops than the cap."""
+    path = str(repo_with_calls)
+    await audit_target(repo_with_calls, incremental=True)
+    async with Client(mcp) as c:
+        await c.call_tool("graph_build", {"path": path})
+        every = _data(
+            await c.call_tool("graph_neighbors", {"symbol": "load_user", "path": path})
+        )
+        assert len(every) > 1, every
+        capped = _data(
+            await c.call_tool(
+                "graph_neighbors", {"symbol": "load_user", "path": path, "limit": 1}
+            )
+        )
+        assert len(capped) == 1
+
+
 async def test_graph_overview_shape(repo):
     await audit_target(repo, incremental=True)
     async with Client(mcp) as c:
@@ -97,3 +134,5 @@ async def test_graph_overview_shape(repo):
         assert all({"label", "size"} <= set(c) for c in ov["top_clusters"])
         assert isinstance(ov["god_concepts"], list) and len(ov["god_concepts"]) <= 5
         assert isinstance(ov["bottlenecks"], list) and len(ov["bottlenecks"]) <= 5
+        assert ov["god_concept_count"] >= len(ov["god_concepts"])
+        assert ov["bottleneck_count"] >= len(ov["bottlenecks"])

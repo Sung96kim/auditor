@@ -1,6 +1,7 @@
 """``auditor graph`` — semantic-graph commands: build|related|neighbors|concept|clusters|export.
 
-Imported only via a guarded mount in cli/__init__, so the core CLI works without the [graph] extra.
+Imported on the first ``graph`` subcommand by ``cli/lazy.py``, so the rest of the CLI never pays
+this module's numpy/scikit-learn/networkx import.
 """
 
 import shutil
@@ -14,6 +15,7 @@ import typer
 
 from auditor.cli.console import ACCENT, err_console
 from auditor.cli.helpers import present, run, run_staged
+from auditor.cli.lazy import GRAPH_HELP
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
@@ -27,20 +29,16 @@ from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import audit_target
+from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.query import GraphQuery
 from auditor.graph.viz import build_payload, render_app, to_dot
 from auditor.paths import index_db_path, repo_key
 from auditor.serve import ReportServer
 
-graph_app = typer.Typer(
-    no_args_is_help=True, help="Build + query the semantic code graph."
-)
+graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
 
 _Target = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
-
-
-GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
 
 
 async def _autoscan(root: Path) -> None:

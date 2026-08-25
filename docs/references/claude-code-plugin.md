@@ -41,10 +41,8 @@ claude --plugin-dir ./plugin
 Invoked as `/auditor:<name>`, and auto-invoked when the task matches the skill's description. Each
 `SKILL.md` is a thin workflow and carries deeper `references/` files the agent loads on demand.
 
-- `judge-findings`: run auditor and judge its candidate findings, returning `fix-recommended`,
-  `suppress-recommended` or `dismiss` for each, and promoting the maintainability categories so
-  every candidate in them gets its own recommendation. It reports and recommends; it never edits
-  the audited code.
+- `judge-findings`: run auditor and judge its candidate findings, deciding fix, skip directive, or
+  dismiss for each.
 - `audit-changes`: audit only what changed against a base ref and gate it, for PR and CI review.
 - `setup-auditor`: onboard a repo, covering install, config scaffold, profile choice, baseline and
   MCP registration.
@@ -58,9 +56,7 @@ Invoked as `/auditor:<name>`, and auto-invoked when the task matches the skill's
 ## Subagent
 
 - `auditor-reviewer` runs a full or changeset scan in its own context and returns a triaged report:
-  severity rollup, worst findings per file, judged `candidate` verdicts (`fix-recommended`,
-  `suppress-recommended`, `dismiss`), and the promoted maintainability categories in a section of
-  their own.
+  severity rollup, worst findings per file, and judged `candidate` verdicts.
 - Use it for deep audits that would otherwise flood the main conversation. Dispatched directly with
   `@auditor-reviewer`, it runs in the background by default.
 - It prefers the MCP tools when connected and falls back to the `auditr` CLI over Bash. Its tool
