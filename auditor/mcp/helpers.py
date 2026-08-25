@@ -51,7 +51,8 @@ def tool_config(root: Path) -> AuditorSettings:
 
 
 class ToolRepo(BaseModel):
-    """One tool call's repo: the root it resolved, and the index handle bound to that root.
+    """One tool call's repo: the root it resolved, the policy that root loads, and the index
+    handle bound to it.
 
     The handle carries the checkout identity as well as the partition key, so a tool can read the
     refinement rows a sibling worktree wrote.
@@ -61,26 +62,18 @@ class ToolRepo(BaseModel):
 
     root: Path
     index: IndexStore
-
-    def settings(
-        self, *, overrides: dict[str, object] | None = None
-    ) -> AuditorSettings:
-        """This repo's resolved policy, with a bad config surfaced as a tool error."""
-        if overrides is None:
-            return tool_config(self.root)
-        try:
-            return load_config(self.root, overrides=overrides)
-        except (ConfigError, ValidationError) as exc:
-            raise config_error(exc) from exc
+    settings: AuditorSettings
 
 
 @asynccontextmanager
 async def tool_repo_at(root: Path) -> AsyncIterator[ToolRepo]:
     """Hold an index handle bound to an already-resolved root for the block.
 
-    ``finding_detail`` resolves its root from the file it was asked about rather than from a
-    directory argument, and this is the entry point it uses.
+    The policy is loaded first and once: a repo whose configuration does not load is one tool
+    error from every tool, before any handle is opened. ``finding_detail`` resolves its root from
+    the file it was asked about rather than from a directory argument, and this is what it uses.
     """
+    settings = tool_config(root)
     try:
         index = await open_repo_index(root)
     except UnmigratableColumn as exc:
@@ -89,7 +82,7 @@ async def tool_repo_at(root: Path) -> AsyncIterator[ToolRepo]:
             f"rm {index_db_path()}"
         ) from exc
     async with index:
-        yield ToolRepo(root=root, index=index)
+        yield ToolRepo(root=root, index=index, settings=settings)
 
 
 @asynccontextmanager

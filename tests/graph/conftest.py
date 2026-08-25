@@ -2,6 +2,7 @@
 the CLI and MCP tests scan. Fixture-only by design: a sibling ``conftest`` cannot be imported by
 name without colliding with the root ``tests/conftest.py``."""
 
+import subprocess
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -97,6 +98,32 @@ def _write_graph_repo(
 def graph_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The default one-module repo: two similarly named functions, graph config on."""
     return _write_graph_repo(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def graph_repo_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A linked worktree: the one shape where `repo_key(root)` and the git common dir differ.
+
+    Every other fixture is a bare directory, where the two candidate identities are the same
+    string, so nothing there can tell a tool that binds the wrong one.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path / "home"))
+    main = tmp_path / "main"
+    main.mkdir()
+    (main / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n' + GRAPH_CONFIG
+    )
+    (main / "m.py").write_text(SIMILAR_NAMES)
+    for args in (
+        ("init", "-q", "."),
+        ("config", "user.email", "t@t"),
+        ("config", "user.name", "t"),
+        ("add", "-A"),
+        ("commit", "-qm", "init"),
+        ("worktree", "add", "-q", str(tmp_path / "wt"), "-b", "wt"),
+    ):
+        subprocess.run(["git", *args], cwd=main, check=True, capture_output=True)
+    return tmp_path / "wt"
 
 
 @pytest.fixture

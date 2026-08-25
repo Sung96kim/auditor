@@ -185,7 +185,8 @@ async def finding_detail(file: str, rule_id: str, line: int) -> dict:
     single-file re-scan so it works whether or not the scan was incremental. The index record may
     reflect a prior scan if the file was edited since it was indexed."""
     path = _require_file(file)
-    async with tool_repo_at(find_root(path)) as repo:
+    root = find_root(path)
+    async with tool_repo_at(root) as repo:
         try:
             rel = str(path.resolve().relative_to(repo.root.resolve()))
         except ValueError:
@@ -193,7 +194,8 @@ async def finding_detail(file: str, rule_id: str, line: int) -> dict:
         for f in await repo.index.findings.cached(rel, rule_id):
             if f.line == line:
                 return f.model_dump(mode="json")
-        results = await audit_target(path, root=repo.root, apply_ignores=False)
+    # outside the handle: `audit_target` opens its own connection on the same database file
+    results = await audit_target(path, root=root, apply_ignores=False)
     for r in results:
         for f in r.findings:
             if f.rule_id == rule_id and f.line == line:

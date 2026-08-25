@@ -27,7 +27,8 @@ async def ignore_add(
     ``rule_id`` (must be a known rule unless ``force``, e.g. an untrusted local plugin rule).
     Idempotent per scope."""
     async with tool_repo(path) as repo:
-        repo.settings()  # register the repo's plugins so their rules validate
+        # the preamble loaded the repo's policy, which registered its entry-point and config
+        # plugins, so a rule one of them owns is a known rule by the time this reads the registry
         if not force and rule_id not in REGISTRY.rule_ids():
             raise ToolError(
                 f"unknown rule_id {rule_id!r}; use rules_list to see rules (or force=true)"

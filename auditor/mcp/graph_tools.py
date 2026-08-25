@@ -4,10 +4,12 @@ tools register unconditionally."""
 
 import time
 from collections import defaultdict
+from pathlib import Path
 
 from fastmcp.exceptions import ToolError
 from loguru import logger
 
+from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
@@ -25,7 +27,13 @@ from auditor.graph.model import (
 from auditor.graph.payloads import NeighborsReport, QueueRowPayload
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine.lock import RebuildLockTimeout
-from auditor.mcp.helpers import MUTATING, READ_ONLY, tool_repo
+from auditor.mcp.helpers import (
+    MUTATING,
+    READ_ONLY,
+    tool_config,
+    tool_repo,
+    tool_repo_at,
+)
 from auditor.mcp.server import mcp
 
 
@@ -35,13 +43,13 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     extraction on) so it works even if the repo never enabled the [graph] config; pass
     scan=False to build from existing cached facts only. Returns {nodes, edges, clusters,
     unresolved, findings, refined, expired}."""
-    async with tool_repo(path) as repo:
-        if scan:
-            await audit_target(
-                repo.root, incremental=True, config_overrides=GRAPH_OVERRIDE
-            )
+    root = find_root(Path(path))
+    # before the scan, which loads the config itself: a broken one is one line either way
+    settings = tool_config(root)
+    if scan:
+        await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
+    async with tool_repo_at(root) as repo:
         await repo.index.repos.register(time.time())
-        settings = repo.settings()
         try:
             report = await GraphBuilder().rebuild(
                 repo.index,
@@ -152,7 +160,7 @@ async def graph_flow(
                 include_tests=include_tests,
                 expand_hubs=expand_hubs,
                 stop_at=stop_at or (),
-                hub_fan_in=repo.settings().graph.flow_hub_fan_in,
+                hub_fan_in=repo.settings.graph.flow_hub_fan_in,
             ),
         )
     return payload.model_dump(mode="json") if payload else {}
