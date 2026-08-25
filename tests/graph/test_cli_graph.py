@@ -13,7 +13,7 @@ from auditor.cli import app
 from auditor.cli.graph import _split_kinds, graph_flow
 from auditor.cli.render import render_graph_flow
 from auditor.graph.flow import FlowNode, FlowPayload
-from auditor.graph.model import DEFAULT_FLOW_LIMIT
+from auditor.graph.model import DEFAULT_FLOW_LIMIT, Provenance
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
 from auditor.paths import partition_for
 
@@ -474,6 +474,15 @@ def test_graph_row_payload_keys_are_unchanged(graph_repo: Path, name):
     payload = cli_json(invoke(*argv, "--json"))
     assert payload, f"{name} produced no rows; pick a symbol the fixture graph holds"
     assert sorted(payload[0]) == GRAPH_ROW_KEYS[name]
+
+
+def test_graph_clusters_reports_the_provenance_as_its_stored_string(graph_repo: Path):
+    """The row model is `GraphCluster` now, so its `Provenance` enum has to reach the wire as the
+    value the column stores, not as the member name."""
+    _built(graph_repo)
+    payload = cli_json(invoke("graph", "clusters", str(graph_repo), "--json"))
+    assert payload, "the fixture repo produced no clusters"
+    assert {r["label_provenance"] for r in payload} == {Provenance.DETERMINISTIC.value}
 
 
 def test_graph_unresolved_row_keys_are_unchanged(graph_repo: Path):

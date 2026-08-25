@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import ConfigDict, Field
 
-from auditor.graph.model import QUEUE_ID_CAP, UnresolvedRow
+from auditor.graph.model import QUEUE_ID_CAP, GraphCluster, UnresolvedRow
 from auditor.payload import WirePayload, WireRows
 
 
@@ -52,17 +52,8 @@ class SearchReport(WireRows[SearchRow]):
     """``graph search``."""
 
 
-class ClusterRow(WirePayload):
-    """One concept cluster, with where its label came from."""
-
-    cluster_id: int
-    label: str
-    member_count: int
-    label_provenance: str | None = None
-
-
-class ClustersReport(WireRows[ClusterRow]):
-    """``graph clusters``."""
+class ClustersReport(WireRows[GraphCluster]):
+    """``graph clusters``, over the cluster record the build already writes."""
 
 
 class ClusterMember(WirePayload):

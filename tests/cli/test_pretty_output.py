@@ -59,10 +59,9 @@ from auditor.cli.render import (
     render_plugins_list,
     render_rules_list,
 )
-from auditor.graph.model import CallForm, FactKind, UnresolvedReason
+from auditor.graph.model import CallForm, FactKind, GraphCluster, UnresolvedReason
 from auditor.graph.payloads import (
     ClusterMember,
-    ClusterRow,
     ClustersReport,
     ConceptPayload,
     NeighborRow,
@@ -271,8 +270,8 @@ def test_render_graph_clusters_sorted_by_size():
         con,
         ClustersReport(
             (
-                ClusterRow(cluster_id=1, label="small", member_count=2),
-                ClusterRow(cluster_id=2, label="large", member_count=50),
+                GraphCluster(cluster_id=1, label="small", member_count=2),
+                GraphCluster(cluster_id=2, label="large", member_count=50),
             )
         ),
     )

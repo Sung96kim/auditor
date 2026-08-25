@@ -10,9 +10,9 @@ from auditor.graph.flow import (
     FlowPayload,
     build_flow,
 )
+from auditor.graph.model import GraphCluster
 from auditor.graph.payloads import (
     ClusterMember,
-    ClusterRow,
     ClustersReport,
     ConceptPayload,
     NeighborRow,
@@ -225,7 +225,7 @@ class GraphQuery:
     async def clusters(self) -> ClustersReport:
         return ClustersReport(
             tuple(
-                ClusterRow.model_validate(row)
+                GraphCluster.model_validate(row)
                 for row in await self.index.graph.clusters()
             )
         )
