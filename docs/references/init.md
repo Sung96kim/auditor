@@ -32,7 +32,9 @@ auditr init --json
 - `$AUDITOR_HOME/config.json`: `"$schema": "./config.schema.json"` and `"config_version": 1`, plus
   whatever keys were already there. Defaults are never written out, so a later default change is
   not pinned and a value the user chose stays distinguishable from one init wrote.
-- `$AUDITOR_HOME/config.schema.json`: generated from `UserSettings`, descriptions included.
+- `$AUDITOR_HOME/config.schema.json`: generated from `UserSettings`, descriptions included. The
+  `observer` table is grouped into `budget`, `limits`, `scheduling`, `runner` and `tuning`, so an
+  editor completes one group at a time. Re-run `auditr init` after upgrading to refresh it.
 - `--repo` adds `$AUDITOR_HOME/repos/<repo_dir_key>/config.json` with
   `"$schema": "../../config.schema.json"`, and `root.json`, the breadcrumb
   `{root, identity, created_at}`.

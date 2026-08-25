@@ -8,7 +8,12 @@ from pydantic import ValidationError
 
 from auditor.paths import ensure_repo_dir, user_config_path
 from auditor.user_settings import (
+    BudgetConfig,
+    LimitsConfig,
     ObserverConfig,
+    RunnerConfig,
+    SchedulingConfig,
+    TuningConfig,
     UserSettings,
     VectorsConfig,
     load_user_settings,
@@ -37,59 +42,111 @@ def _write_repo(root, payload: dict) -> None:
 def test_defaults_match_the_spec_table():
     observer = ObserverConfig()
     assert observer.enabled is True
-    assert observer.runner == "auto"
-    assert observer.model == "haiku"
-    assert observer.codex_model == ""
-    assert observer.min_precision == 0.95
-    assert observer.max_cost_usd_per_day == 2.0
-    assert observer.max_runs_per_day == 40
-    assert observer.max_budget_usd_per_run == 0.25
-    assert observer.max_turns == 20
-    assert observer.max_nodes_per_run == 12
-    assert observer.max_changes_per_run == 25
-    assert observer.max_utilization == 0.5
-    assert observer.min_new_unresolved == 1
-    assert observer.run_on_stale is True
-    assert observer.low_budget_fraction == 0.25
-    assert observer.debounce_seconds == 20
-    assert observer.session_expiry_minutes == 45
-    assert observer.idle_shutdown_minutes == 30
-    assert observer.skipped_retention_days == 7
     assert observer.worktrees == "main"
     assert observer.suspects is True
-    assert observer.tuning == "propose"
-    assert observer.stopwords_max == 20
     assert observer.open_browser is True
-    assert observer.codex_prices == {}
+    assert observer.skipped_retention_days == 7
+    assert observer.budget.max_cost_usd_per_day == 2.0
+    assert observer.budget.max_runs_per_day == 40
+    assert observer.budget.max_budget_usd_per_run == 0.25
+    assert observer.budget.low_budget_fraction == 0.25
+    assert observer.budget.max_utilization == 0.5
+    assert observer.limits.max_turns == 20
+    assert observer.limits.max_nodes_per_run == 12
+    assert observer.limits.max_changes_per_run == 25
+    assert observer.scheduling.debounce_seconds == 20
+    assert observer.scheduling.session_expiry_minutes == 45
+    assert observer.scheduling.idle_shutdown_minutes == 30
+    assert observer.scheduling.run_on_stale is True
+    assert observer.scheduling.min_new_unresolved == 1
+    assert observer.runner.agent == "auto"
+    assert observer.runner.model == "haiku"
+    assert observer.runner.codex_model == ""
+    assert observer.runner.codex_prices == {}
+    assert observer.tuning.mode == "propose"
+    assert observer.tuning.stopwords_max == 20
+    assert observer.tuning.min_precision == 0.95
     vectors = VectorsConfig()
     assert vectors.enabled is False
     assert vectors.model == "minishlab/potion-base-8M@bf8b056"
     assert UserSettings().config_version == 1
 
 
+def test_every_observer_field_lives_in_exactly_one_group():
+    """The five groups plus the five loose keys account for the whole knob set, so a field added
+    to a group cannot also survive at the top level."""
+    groups = ("budget", "limits", "scheduling", "runner", "tuning")
+    loose = {
+        "enabled",
+        "worktrees",
+        "suspects",
+        "open_browser",
+        "skipped_retention_days",
+    }
+    assert set(ObserverConfig.model_fields) == loose | set(groups)
+    nested = [
+        name
+        for group in groups
+        for name in ObserverConfig.model_fields[group].annotation.model_fields
+    ]
+    assert len(nested) == len(set(nested))  # no field name repeats across two groups
+    assert set(nested).isdisjoint(loose)
+
+
+def test_per_field_env_reaches_a_nested_group(project, monkeypatch):
+    monkeypatch.setenv(
+        "AUDITOR_USER_OBSERVER__BUDGET__MAX_TURNS_TYPO", "1"
+    )  # unrelated, ignored
+    monkeypatch.setenv("AUDITOR_USER_OBSERVER__LIMITS__MAX_TURNS", "7")
+    assert load_user_settings(project).observer.limits.max_turns == 7
+
+
+def test_per_field_env_leaves_its_siblings_alone(project, monkeypatch):
+    _write_global({"observer": {"limits": {"max_nodes_per_run": 3}}})
+    monkeypatch.setenv("AUDITOR_USER_OBSERVER__LIMITS__MAX_TURNS", "7")
+    settings = load_user_settings(project)
+    assert settings.observer.limits.max_turns == 7
+    assert (
+        settings.observer.limits.max_nodes_per_run == 3
+    )  # file key survives the env merge
+
+
 def test_every_field_carries_a_description():
-    for model in (ObserverConfig, VectorsConfig):
+    models = (
+        ObserverConfig,
+        VectorsConfig,
+        BudgetConfig,
+        LimitsConfig,
+        SchedulingConfig,
+        RunnerConfig,
+        TuningConfig,
+    )
+    for model in models:
         missing = [name for name, f in model.model_fields.items() if not f.description]
         assert missing == [], (model.__name__, missing)
 
 
 def test_defaults_apply_with_no_files(project):
-    assert load_user_settings(project).observer.model == "haiku"
+    assert load_user_settings(project).observer.runner.model == "haiku"
 
 
 def test_repo_config_beats_global_config(project):
-    _write_global({"observer": {"model": "sonnet", "max_turns": 5}})
-    _write_repo(project, {"observer": {"model": "haiku"}})
+    _write_global(
+        {"observer": {"runner": {"model": "sonnet"}, "limits": {"max_turns": 5}}}
+    )
+    _write_repo(project, {"observer": {"runner": {"model": "haiku"}}})
     settings = load_user_settings(project)
-    assert settings.observer.model == "haiku"  # repo layer wins
-    assert settings.observer.max_turns == 5  # untouched global key survives the merge
+    assert settings.observer.runner.model == "haiku"  # repo layer wins
+    assert (
+        settings.observer.limits.max_turns == 5
+    )  # untouched global key survives the merge
 
 
 def test_env_beats_both_files(project, monkeypatch):
-    _write_global({"observer": {"model": "haiku"}})
-    _write_repo(project, {"observer": {"model": "haiku"}})
-    monkeypatch.setenv("AUDITOR_USER_OBSERVER", '{"model": "sonnet"}')
-    assert load_user_settings(project).observer.model == "sonnet"
+    _write_global({"observer": {"runner": {"model": "haiku"}}})
+    _write_repo(project, {"observer": {"runner": {"model": "haiku"}}})
+    monkeypatch.setenv("AUDITOR_USER_OBSERVER", '{"runner": {"model": "sonnet"}}')
+    assert load_user_settings(project).observer.runner.model == "sonnet"
 
 
 def test_env_prefix_is_user_scoped(project, monkeypatch):
@@ -119,24 +176,25 @@ def test_schema_key_is_not_an_unknown_key(project):
 
 
 def test_unknown_user_keys_report_dotted_paths(project):
-    _write_global({"observer": {"runer": "claude"}})
+    _write_global({"observer": {"runner": {"agnt": "claude"}}})
     _write_repo(project, {"vektors": {"enabled": True}})
-    assert unknown_user_keys(project) == ["observer.runer", "vektors"]
+    assert unknown_user_keys(project) == ["observer.runner.agnt", "vektors"]
 
 
 def test_unknown_user_keys_do_not_fail_the_load(project):
-    _write_global({"observer": {"runer": "claude", "model": "sonnet"}})
-    assert load_user_settings(project).observer.model == "sonnet"
+    _write_global({"observer": {"runer": "claude", "runner": {"model": "sonnet"}}})
+    assert load_user_settings(project).observer.runner.model == "sonnet"
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"observer": {"runner": "gemini"}},
+        {"observer": {"runner": {"agent": "gemini"}}},
         {"observer": {"worktrees": "some"}},
-        {"observer": {"tuning": "on"}},
-        {"observer": {"model": "opus"}},
-        {"observer": {"max_utilization": 2.0}},
+        {"observer": {"tuning": {"mode": "on"}}},
+        {"observer": {"runner": {"model": "opus"}}},
+        {"observer": {"budget": {"max_utilization": 2.0}}},
+        {"observer": {"limits": {"max_turns": 0}}},
     ],
 )
 def test_invalid_enum_or_range_raises(project, payload):
@@ -147,9 +205,13 @@ def test_invalid_enum_or_range_raises(project, payload):
 
 def test_codex_prices_are_typed(project):
     _write_global(
-        {"observer": {"codex_prices": {"gpt-5": {"input": 1.25, "output": 10}}}}
+        {
+            "observer": {
+                "runner": {"codex_prices": {"gpt-5": {"input": 1.25, "output": 10}}}
+            }
+        }
     )
-    prices = load_user_settings(project).observer.codex_prices
+    prices = load_user_settings(project).observer.runner.codex_prices
     assert prices["gpt-5"].input == 1.25
     assert prices["gpt-5"].output == 10.0
 
@@ -157,11 +219,11 @@ def test_codex_prices_are_typed(project):
 def test_settings_are_frozen(project):
     settings = load_user_settings(project)
     with pytest.raises(ValidationError):
-        settings.observer.enabled = False
+        settings.observer.budget.max_runs_per_day = 0
 
 
 def test_torn_json_layer_falls_back_to_defaults(project):
     path = user_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json")
-    assert load_user_settings(project).observer.model == "haiku"
+    assert load_user_settings(project).observer.runner.model == "haiku"

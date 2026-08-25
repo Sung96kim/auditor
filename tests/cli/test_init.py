@@ -17,8 +17,9 @@ def test_init_writes_only_the_marker_keys(_isolated_auditor_home):
     assert config == {"$schema": "./config.schema.json", "config_version": 1}
     schema = json.loads((_isolated_auditor_home / "config.schema.json").read_text())
     assert "observer" in schema["properties"]
+    assert "limits" in schema["$defs"]["ObserverConfig"]["properties"]
     assert (
-        schema["$defs"]["ObserverConfig"]["properties"]["max_turns"]["description"]
+        schema["$defs"]["LimitsConfig"]["properties"]["max_turns"]["description"]
         == "Agent turns before a run is cut off."
     )
     assert payload["home"] == str(_isolated_auditor_home)
@@ -27,10 +28,10 @@ def test_init_writes_only_the_marker_keys(_isolated_auditor_home):
 def test_init_is_idempotent_and_keeps_user_keys(_isolated_auditor_home):
     invoke("init", "--json")
     path = _isolated_auditor_home / "config.json"
-    path.write_text(json.dumps({"observer": {"model": "sonnet"}}))
+    path.write_text(json.dumps({"observer": {"runner": {"model": "sonnet"}}}))
     invoke("init", "--json")
     config = json.loads(path.read_text())
-    assert config["observer"] == {"model": "sonnet"}
+    assert config["observer"] == {"runner": {"model": "sonnet"}}
     assert config["$schema"] == "./config.schema.json"
     assert config["config_version"] == 1
 

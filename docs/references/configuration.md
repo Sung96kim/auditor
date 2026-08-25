@@ -319,30 +319,50 @@ $AUDITOR_HOME/
 
 ### `observer` (`ObserverConfig`)
 
+Five keys sit at the top of the table; the rest live in five sub-tables.
+
 - `enabled` (default `true`): attach the observer to auditor-configured repos.
-- `runner` (default `"auto"`): `auto`, `claude` or `codex`.
-- `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses.
-- `codex_model` (default `""`): Codex model override; empty uses the user's Codex default.
-- `min_precision` (default `0.95`, 0 to 1): measured precision a kind needs before going active.
-- `max_cost_usd_per_day` (default `2.0`), `max_runs_per_day` (default `40`),
-  `max_budget_usd_per_run` (default `0.25`): the spend and run ceilings.
-- `max_turns` (default `20`), `max_nodes_per_run` (default `12`), `max_changes_per_run`
-  (default `25`): per-run size limits.
-- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
-- `min_new_unresolved` (default `1`): new unresolved callees an edit batch needs to earn a run.
-- `run_on_stale` (default `true`): re-run when an edit stales an existing refinement.
-- `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
-  high-value runs proceed.
-- `debounce_seconds` (default `20`), `session_expiry_minutes` (default `45`),
-  `idle_shutdown_minutes` (default `30`): the daemon's timing.
-- `skipped_retention_days` (default `7`): days of skipped-run history kept.
 - `worktrees` (default `"main"`): `main` or `all`.
 - `suspects` (default `true`): queue suspect nodes found during a build.
-- `tuning` (default `"propose"`): `propose` or `off`.
-- `stopwords_max` (default `20`): most repo-specific stopwords a tuning proposal may add.
 - `open_browser` (default `true`): open the live page when the daemon starts.
+- `skipped_retention_days` (default `7`): days of skipped-run history kept.
+
+`observer.budget` (`BudgetConfig`):
+
+- `max_cost_usd_per_day` (default `2.0`): hard ceiling on spend per day, across every repo.
+- `max_runs_per_day` (default `40`): hard ceiling on runs per day.
+- `max_budget_usd_per_run` (default `0.25`): ceiling handed to one run.
+- `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
+  high-value runs proceed.
+- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
+
+`observer.limits` (`LimitsConfig`):
+
+- `max_turns` (default `20`): agent turns before a run is cut off.
+- `max_nodes_per_run` (default `12`): graph nodes one run may look at.
+- `max_changes_per_run` (default `25`): proposals one run may commit.
+
+`observer.scheduling` (`SchedulingConfig`):
+
+- `debounce_seconds` (default `20`): quiet period after an edit before assessing it.
+- `session_expiry_minutes` (default `45`): idle minutes before a session is considered gone.
+- `idle_shutdown_minutes` (default `30`): idle minutes before the daemon exits.
+- `run_on_stale` (default `true`): re-run when an edit stales an existing refinement.
+- `min_new_unresolved` (default `1`): new unresolved callees an edit batch needs to earn a run.
+
+`observer.runner` (`RunnerConfig`):
+
+- `agent` (default `"auto"`): `auto`, `claude` or `codex`.
+- `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses.
+- `codex_model` (default `""`): Codex model override; empty uses the user's Codex default.
 - `codex_prices` (default `{}`): model to `{input, output}` in USD per million tokens. Empty uses
   the shipped table.
+
+`observer.tuning` (`TuningConfig`):
+
+- `mode` (default `"propose"`): `propose` or `off`.
+- `stopwords_max` (default `20`): most repo-specific stopwords a tuning proposal may add.
+- `min_precision` (default `0.95`, 0 to 1): measured precision a kind needs before going active.
 
 ### `vectors` (`VectorsConfig`)
 
@@ -353,9 +373,11 @@ $AUDITOR_HOME/
 
 | Form | Example | Notes |
 | --- | --- | --- |
-| Nested table | `AUDITOR_USER_OBSERVER='{"model":"sonnet"}'` | JSON value, merged over both files. |
-| Scalar field | `AUDITOR_USER_CONFIG_VERSION=1` | Field name uppercased. |
+| One nested field | `AUDITOR_USER_OBSERVER__RUNNER__MODEL=sonnet` | `__` separates levels. |
+| A whole table | `AUDITOR_USER_OBSERVER='{"runner":{"model":"sonnet"}}'` | JSON value, merged over both files. |
+| A top-level field | `AUDITOR_USER_CONFIG_VERSION=1` | Field name uppercased. |
 
+- Both forms deep-merge over the two JSON files, so setting one field leaves its siblings alone.
 - `AUDITOR_OBSERVER=0` is not a settings field. It is the kill switch the plugin hooks and the
   daemon read straight from the environment, which is why user settings use their own
   `AUDITOR_USER_` prefix.

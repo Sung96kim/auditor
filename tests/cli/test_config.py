@@ -82,10 +82,10 @@ def test_config_check_exits_non_zero_on_invalid_config(tmp_path):
 
 def test_config_show_user_prints_user_settings(tmp_path, _isolated_auditor_home):
     (_isolated_auditor_home / "config.json").write_text(
-        json.dumps({"observer": {"model": "sonnet"}})
+        json.dumps({"observer": {"runner": {"model": "sonnet"}}})
     )
     payload = cli_json(invoke("config", "show", "--user", "--root", str(tmp_path)))
-    assert payload["observer"]["model"] == "sonnet"
+    assert payload["observer"]["runner"]["model"] == "sonnet"
     assert payload["vectors"]["enabled"] is False
 
 
@@ -93,7 +93,7 @@ def test_config_show_user_exits_non_zero_on_invalid_user_config(
     tmp_path, _isolated_auditor_home
 ):
     (_isolated_auditor_home / "config.json").write_text(
-        json.dumps({"observer": {"runner": "gemini"}})
+        json.dumps({"observer": {"runner": {"agent": "gemini"}}})
     )
     result = invoke("config", "show", "--user", "--root", str(tmp_path))
     assert result.exit_code == 1
