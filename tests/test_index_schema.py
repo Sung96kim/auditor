@@ -506,6 +506,67 @@ async def test_a_racing_connect_never_rebuilds_over_a_committed_writer(
         assert {e.path for e in await store.files.list()} == {"pkg/a.py", "pkg/b.py"}
 
 
+async def test_a_prune_never_deletes_a_row_a_concurrent_scan_just_wrote(
+    tmp_path, monkeypatch
+):
+    """Prune's file list and its deletes have to be one transaction: read in autocommit, a scan
+    that rewrites a file in the gap loses the row it just committed. The barrier engages only
+    when the read was unlocked, so the fix retires it rather than leaving it to time out."""
+    db = tmp_path / "index.db"
+    repo = "/repos/one"
+    async with await IndexStore.connect(db, repo) as store:
+        await store.files.upsert(_entry("pkg/a.py"))
+        await store.files.upsert(_entry("pkg/b.py"))
+
+    pruner_read = threading.Event()  # the pruner has read its file list
+    rewritten = threading.Event()  # the racing scan re-wrote pkg/b.py
+    ran: list[str] = []  # the barrier statements, in the order they ran
+    read_locked: list[bool] = []  # was the file list read inside the write transaction?
+    real_connect = sqlite3.connect
+    trace_next = {"conn": True}  # only the pruner's connection, which is opened first
+
+    def traced_connect(*args, **kwargs) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)
+        if not trace_next["conn"]:
+            return conn
+        trace_next["conn"] = False
+
+        def trace(statement: str) -> None:
+            stmt = statement.strip()
+            if stmt.startswith("SELECT path FROM files"):
+                ran.append("read")
+                read_locked.append(conn.in_transaction)
+            elif stmt.startswith("DELETE FROM files") and "delete" not in ran:
+                ran.append("delete")
+                pruner_read.set()
+                if read_locked == [False]:  # unlocked read: the racing scan can slip in
+                    rewritten.wait(30)
+
+        conn.set_trace_callback(trace)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", traced_connect)
+    async with (
+        await IndexStore.connect(db, repo) as pruner,
+        await IndexStore.connect(db, repo) as writer,
+    ):
+        monkeypatch.undo()
+
+        async def rewrite() -> None:
+            assert await asyncio.to_thread(pruner_read.wait, 30)
+            await writer.files.upsert(_entry("pkg/b.py"))
+            rewritten.set()
+
+        pruned, _ = await asyncio.gather(pruner.prune({"pkg/a.py"}), rewrite())
+
+    assert ran == ["read", "delete"]  # both barrier statements ran, in that order
+    assert pruned == ["pkg/b.py"]
+    async with await IndexStore.connect(db, repo) as store:
+        # the racing scan's row survives: it landed after the prune, never inside it
+        assert {e.path for e in await store.files.list()} == {"pkg/a.py", "pkg/b.py"}
+    assert read_locked == [True]  # and it survives because the read held the write lock
+
+
 def test_column_names_include_the_repo_foreign_key():
     """`files` and `ignores` are the two shapes: repo_fk prepends the FK, repo_fk=False does not.
     Neither table is touched by this slice, so this assertion cannot go stale under it."""
