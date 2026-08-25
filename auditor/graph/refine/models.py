@@ -6,9 +6,9 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from auditor.graph.model import CallForm, EdgeKind
 from auditor.graph.refine.namespace import file_of
@@ -296,6 +296,10 @@ _FALLBACK_LABEL = re.compile(r"^cluster-\d+$")
 LABEL_LENGTH = (2, 40)
 ANNOTATION_MAX = 280
 
+#: validation context flag `_refinement_from_row` passes: a row written before a text rule was
+#: tightened still reads back, and every other construction is judged by the current rules
+STORED_ROW = "stored_row"
+
 
 class ProposedEdge(BaseModel):
     """The edge a proposal puts in the graph, with the queue name it answers.
@@ -320,9 +324,6 @@ class Proposal(BaseModel):
     """
 
     model_config = ConfigDict(frozen=True)
-
-    #: the text rules gate the write path only; a stored row is read back as it was written
-    enforce_text_rules: ClassVar[bool] = True
 
     kind: RefinementKind
     target: RefinementTarget = Field(default_factory=RefinementTarget)
@@ -351,20 +352,27 @@ class Proposal(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _the_text_a_reader_sees_is_usable(self) -> "Proposal":
-        """A label has to name the cluster and an annotation has to fit on a card (spec 9.2)."""
-        if not self.enforce_text_rules:
+    def _the_text_a_reader_sees_is_usable(self, info: ValidationInfo) -> "Proposal":
+        """A reason, a label that names the cluster, an annotation that fits on a card (spec 9.2).
+
+        Whitespace is not text a reader can use, so the lengths are measured on the stripped value.
+        A row read back under `STORED_ROW` keeps whatever it was written with.
+        """
+        if (info.context or {}).get(STORED_ROW):
             return self
+        if not self.reason.strip():
+            raise ValueError(f"{self.kind.value} needs a reason")
         label = self.payload.label
         low, high = LABEL_LENGTH
         if label is not None and (
-            not low <= len(label) <= high or _FALLBACK_LABEL.match(label)
+            not low <= len(label.strip()) <= high
+            or _FALLBACK_LABEL.match(label.strip())
         ):
             raise ValueError(
                 f"label must be {low} to {high} characters and not the clusterer's own cluster-N"
             )
         annotation = self.payload.annotation
-        if annotation is not None and len(annotation) > ANNOTATION_MAX:
+        if annotation is not None and len(annotation.strip()) > ANNOTATION_MAX:
             raise ValueError(f"annotation must be at most {ANNOTATION_MAX} characters")
         return self
 
@@ -411,10 +419,6 @@ class Proposal(BaseModel):
 class Refinement(Proposal):
     """One correction to the graph, owned by a run and expiring on its own (spec 5.4)."""
 
-    #: `_refinement_from_row` re-validates every stored row on every read, and every build reads
-    #: the overlay, so a text rule tightened later must never make an old row unreadable
-    enforce_text_rules: ClassVar[bool] = False
-
     refinement_id: int = 0  # assigned by the insert
     run_id: str
     repo_identity: str
@@ -438,9 +442,13 @@ class Refinement(Proposal):
         status: RefinementStatus,
         supersedes: int | None = None,
     ) -> "Refinement":
-        """The stored form of one accepted proposal (spec 9.1's commit step)."""
+        """The stored form of one accepted proposal (spec 9.1's commit step).
+
+        Only the proposal half is copied, so a stored refinement can be re-confirmed into a fresh
+        row of its own run with ``supersedes`` set (spec 5.7).
+        """
         return cls(
-            **proposal.model_dump(),
+            **proposal.model_dump(include=set(Proposal.model_fields)),
             run_id=run_id,
             repo_identity=repo_identity,
             tier=tier,

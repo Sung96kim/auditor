@@ -284,6 +284,7 @@ async def refined_facts_store(facts_store: IndexStore) -> RefinedStore:
             run_id=run_id,
             repo_identity=facts_store.partition.identity,
             kind=RefinementKind.ADD_EDGE,
+            reason="the call resolves there",
             target=RefinementTarget(
                 src="impl.py::Impl.run",
                 dst="svc.py::load_user",
