@@ -80,10 +80,12 @@ Paths are relative to the repo root.
   command payload and `cli/render.py` one `render_*` function per payload, taking that model and
   never a dict; `cli/options.py` holds the shared Typer annotations. `present` is generic over the
   payload, so it dumps the model and a renderer paired with the wrong one is a type error.
-- `payload.py`: the shells both payload modules build on, `WirePayload` (a frozen object) and
-  `WireRows` (a frozen array of one row model), so each payload declares only its own fields. The
-  graph query payloads live in `graph/payloads.py` instead, beside the query, so the CLI and the
-  MCP tools read the same shape without importing each other.
+- `payload.py`: the shells every payload module builds on, `WirePayload` (a frozen object) and
+  `WireRows` (a frozen array of one row model), so each payload declares only its own fields.
+  `cli/payloads.py` holds the command payloads; the graph ones live beside their query, in
+  `graph/payloads.py` and `graph/refine/payloads.py`, so the CLI and the MCP tools read the same
+  shape without importing each other. `graph/refine/models.py` and `graph/refine/service.py` each
+  emit one service result as itself rather than copying it into a second model.
 - `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. `cli_root` records the root
   and `load_settings` hands back the keys the loader already found, so nothing merges a config
   twice. `ConfigNotice.report()` writes the lines and marks the root as reported; the root typer
@@ -508,7 +510,8 @@ flowchart TB
   config reads the same from every tool it covers. No tool module calls `IndexStore.connect` or
   `open_repo_index`, and none holds its handle across an `audit_target` scan, which opens its own
   connection to the same database; `tests/graph/test_mcp_preamble.py` parses each one to keep it
-  that way and drives every one of them against three broken configs.
+  that way and drives every tool that reaches a repo through the preamble against three broken
+  configs.
 - Two things sit outside that seam on purpose. `rules_list` is synchronous, so it cannot hold an
   async context manager and calls `tool_config(find_root(path))` directly. `server.py`'s
   `ConfigNoticeMiddleware` resolves its own root for the config notice, so a tool call resolves one

@@ -197,10 +197,10 @@ class CallForm(StrEnum):
 
 
 def row_limit(limit: int) -> int:
-    """One log page size, bounded at both ends, so the CLI and the MCP tool cap alike.
+    """One log page size, bounded at both ends, so no caller pulls the whole table into an answer.
 
-    Floored rather than refused, because a caller asking for no rows means the smallest page, and
-    the ceiling is what keeps an unbounded ``limit`` from pulling the whole table into an answer.
+    Floored and capped rather than refused because this is the tool path; the CLI's ``RowLimit``
+    option carries the same bounds and rejects an out-of-range value before it reaches here.
     """
     return max(1, min(limit, MAX_LOG_ROWS))
 

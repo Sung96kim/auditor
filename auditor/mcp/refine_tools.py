@@ -234,7 +234,10 @@ async def graph_refinements(
     path: str = ".", status: list[str] | None = None, limit: int = LOG_ROW_LIMIT
 ) -> dict:
     """The corrections recorded for this checkout, newest first, so a page at the cap shows the
-    rows a human still has to judge rather than the superseded ones. Filter with ``status``
+    rows a human still has to judge rather than the superseded ones. This is the corrections
+    listing and takes ``status`` alone; ``graph_log(view="refinements")`` pages the same rows
+    through the same ``LogQuery``, adds a time window, and has the runs that made them in its
+    other view. Filter with ``status``
     (pending | active | stale | redundant | reverted | pinned | superseded | rejected), a
     repeatable list; an unknown value is an error. Returns {rows, filtered, refinement_count,
     truncated}; ``filtered`` says whether an empty list means "nothing matched" rather than
@@ -262,7 +265,9 @@ async def graph_log(
     limit: int = LOG_ROW_LIMIT,
 ) -> dict:
     """The provenance log: every decision (``view="runs"``) or every correction
-    (``view="refinements"``), newest first. ``status`` is validated against whichever view you
+    (``view="refinements"``), newest first. This is the time-windowed view over both halves;
+    ``graph_refinements`` is the same corrections page without the window and without the runs.
+    ``status`` is validated against whichever view you
     chose, so a run status is an error in the refinements view and the message names the valid set.
     ``since`` takes a duration (90s, 45m, 2h, 7d) or an ISO date, never a git ref. Assessment-only
     runs are hidden by default; ``skipped=true`` or ``status=["skipped"]`` shows them, and
