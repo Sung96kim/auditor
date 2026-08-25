@@ -4,13 +4,14 @@ in both directions, so every JSON column has a model rather than a raw dict."""
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from enum import StrEnum
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from auditor.graph.model import CallForm, EdgeKind
+from auditor.graph.refine.namespace import file_of
 
 
 class RunStatus(StrEnum):
@@ -183,6 +184,27 @@ class RunUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     num_turns: int = 0
+
+
+class Stratum(StrEnum):
+    """The add suite's strata (spec 10.2): how far a proposal's destination is from its source.
+
+    The tier B gate reads the one matching the proposal's own shape, because a repo's strata do
+    not measure alike; here they run 47 / 23 / 30 per cent of the add suite.
+    """
+
+    SAME_MODULE = "same-module"
+    DIRECT_IMPORT = "direct-import"
+    NEITHER = "neither"
+
+    @classmethod
+    def of(cls, src: str, dst: str, *, imports: Collection[str]) -> "Stratum":
+        """The stratum one proposed edge falls in; ``imports`` is the repo module ids the source's
+        own module imports."""
+        src_module, dst_module = file_of(src), file_of(dst)
+        if src_module == dst_module:
+            return cls.SAME_MODULE
+        return cls.DIRECT_IMPORT if dst_module in imports else cls.NEITHER
 
 
 class EvalMetrics(BaseModel):

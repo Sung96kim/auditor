@@ -16,6 +16,7 @@ from auditor.graph.refine.models import (
     RefinementKind,
     RefinementStatus,
     RunnerKind,
+    Stratum,
     Tier,
 )
 
@@ -38,12 +39,14 @@ _PRECISION_SUITES = frozenset({"add", "decoy", "fixtures"})
 
 
 class TierPolicy(BaseModel):
-    """One repo's activation policy for one runner and model."""
+    """One repo's activation policy for one runner and model, per eval stratum."""
 
     model_config = ConfigDict(frozen=True)
 
-    min_precision: float = 0.95
-    proven: frozenset[str] = frozenset()
+    #: every ``(suite, stratum)`` this runner and model has an eval row for
+    measured: frozenset[tuple[str, str]] = frozenset()
+    #: the subset of them that met the suite's own gate
+    proven: frozenset[tuple[str, str]] = frozenset()
 
     @classmethod
     def of(
@@ -54,33 +57,36 @@ class TierPolicy(BaseModel):
         runner: RunnerKind,
         model: str,
     ) -> "TierPolicy":
-        """Which suites have cleared their own gate here. S7 narrows this to the stratum matching
-        a proposal's shape; a suite-level answer is strictly the more conservative one."""
+        """What this runner and model measured here, and which strata cleared their own gate."""
+        rows = [row for row in evals if row.runner is runner and row.model == model]
         return cls(
-            min_precision=min_precision,
+            measured=frozenset((row.suite, row.stratum) for row in rows),
             proven=frozenset(
-                row.suite
-                for row in evals
-                if row.runner is runner
-                and row.model == model
-                and (
-                    row.metrics.lower_bound_95 >= min_precision
-                    if row.suite in _PRECISION_SUITES
-                    else row.metrics.false_add_rate == 0.0
-                )
+                (row.suite, row.stratum)
+                for row in rows
+                if cls._clears(row, min_precision)
             ),
         )
+
+    @staticmethod
+    def _clears(row: EvalRow, min_precision: float) -> bool:
+        """Whether one stratum met its gate: a precision suite on its Wilson lower bound, a
+        control on having produced no false add, and neither on a run of no trials (spec 10.2)."""
+        if row.metrics.n <= 0:
+            return False
+        if row.suite in _PRECISION_SUITES:
+            return row.metrics.lower_bound_95 >= min_precision
+        return row.metrics.false_add_rate == 0.0
 
     def tier(
         self, proposal: Proposal, *, row: UnresolvedRow | None, verified: bool
     ) -> Tier:
-        """Spec 9.2's tier column: the kind decides it, except `add_edge`, whose call form,
-        definer count and verifier result do."""
-        if (
-            proposal.kind in ALWAYS_ACTIVE
-            or proposal.kind is RefinementKind.RESOLVE_AMBIGUOUS
-        ):
+        """Spec 9.2's tier column: the kind decides it, except the kinds a verifier answers for,
+        whose call form, definer count and verifier result do."""
+        if proposal.kind in ALWAYS_ACTIVE:
             return Tier.A
+        if proposal.kind is RefinementKind.RESOLVE_AMBIGUOUS:
+            return Tier.A if verified else Tier.C
         if proposal.kind is not RefinementKind.ADD_EDGE or row is None:
             return Tier.C
         bounded = (
@@ -91,12 +97,32 @@ class TierPolicy(BaseModel):
         )
         return Tier.B if bounded else Tier.C
 
-    def status(self, kind: RefinementKind, tier: Tier) -> RefinementStatus:
-        """The status a proposal of this kind and tier is stored under (spec 10.3)."""
+    def status(
+        self, kind: RefinementKind, tier: Tier, *, stratum: Stratum | None = None
+    ) -> RefinementStatus:
+        """The status a proposal of this kind and tier is stored under (spec 10.3).
+
+        ``stratum`` is the add suite's stratum for this proposal's own shape; without one every
+        stratum the suite measured has to clear, which is the conservative reading.
+        """
         if tier is Tier.A and kind in ALWAYS_ACTIVE:
             return RefinementStatus.ACTIVE
-        if tier is Tier.A and "decoy" in self.proven:
+        if tier is Tier.A and self._cleared("decoy"):
             return RefinementStatus.ACTIVE
-        if tier is Tier.B and {"add", "collision"} <= self.proven:
+        if (
+            tier is Tier.B
+            and self._cleared("add", stratum)
+            and self._cleared("collision")
+        ):
             return RefinementStatus.ACTIVE
         return RefinementStatus.PENDING
+
+    def _cleared(self, suite: str, stratum: Stratum | None = None) -> bool:
+        """Whether a suite's gate is met here: the stratum matching the proposal, or every
+        stratum the suite measured when there is none to match."""
+        rows = {pair for pair in self.measured if pair[0] == suite}
+        if not rows:
+            return False
+        if stratum is None:
+            return rows <= self.proven
+        return (suite, str(stratum)) in self.proven

@@ -12,6 +12,7 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     RefinementTarget,
     RunnerKind,
+    Stratum,
     Tier,
 )
 from auditor.graph.refine.tiers import TierPolicy
@@ -38,14 +39,27 @@ def _row(**kw) -> UnresolvedRow:
     )
 
 
-def _eval(suite: str, *, lower: float = 1.0, false_adds: float = 0.0) -> EvalRow:
+def _eval(
+    suite: str,
+    *,
+    lower: float = 1.0,
+    false_adds: float = 0.0,
+    stratum: str = Stratum.SAME_MODULE.value,
+    n: int = 80,
+) -> EvalRow:
     return EvalRow(
         repo_identity="/repo/.git",
         runner=RunnerKind.CLAUDE,
         model="haiku",
         suite=suite,
-        stratum="same-module",
-        metrics=EvalMetrics(lower_bound_95=lower, false_add_rate=false_adds),
+        stratum=stratum,
+        metrics=EvalMetrics(n=n, lower_bound_95=lower, false_add_rate=false_adds),
+    )
+
+
+def _proven(*rows: EvalRow) -> TierPolicy:
+    return TierPolicy.of(
+        rows, min_precision=0.95, runner=RunnerKind.CLAUDE, model="haiku"
     )
 
 
@@ -147,41 +161,25 @@ def test_the_four_safe_kinds_go_active_with_no_eval_row(kind):
 
 
 def test_resolve_ambiguous_stays_pending_until_the_decoy_suite_clears():
-    unproven = TierPolicy()
     assert (
-        unproven.status(RefinementKind.RESOLVE_AMBIGUOUS, Tier.A)
+        TierPolicy().status(RefinementKind.RESOLVE_AMBIGUOUS, Tier.A)
         is RefinementStatus.PENDING
     )
-    proven = TierPolicy.of(
-        [_eval("decoy")], min_precision=0.95, runner=RunnerKind.CLAUDE, model="haiku"
-    )
     assert (
-        proven.status(RefinementKind.RESOLVE_AMBIGUOUS, Tier.A)
+        _proven(_eval("decoy")).status(RefinementKind.RESOLVE_AMBIGUOUS, Tier.A)
         is RefinementStatus.ACTIVE
     )
 
 
 def test_tier_b_needs_both_the_add_suite_and_the_collision_control():
-    add_only = TierPolicy.of(
-        [_eval("add")], min_precision=0.95, runner=RunnerKind.CLAUDE, model="haiku"
-    )
+    add_only = _proven(_eval("add"))
     assert add_only.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.PENDING
-    both = TierPolicy.of(
-        [_eval("add"), _eval("collision", lower=0.0)],
-        min_precision=0.95,
-        runner=RunnerKind.CLAUDE,
-        model="haiku",
-    )
+    both = _proven(_eval("add"), _eval("collision", lower=0.0))
     assert both.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.ACTIVE
 
 
 def test_a_collision_control_with_a_false_add_proves_nothing():
-    policy = TierPolicy.of(
-        [_eval("add"), _eval("collision", false_adds=0.01)],
-        min_precision=0.95,
-        runner=RunnerKind.CLAUDE,
-        model="haiku",
-    )
+    policy = _proven(_eval("add"), _eval("collision", false_adds=0.01))
     assert policy.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.PENDING
 
 
@@ -191,6 +189,92 @@ def test_another_runners_eval_row_proves_nothing_here():
         rows, min_precision=0.95, runner=RunnerKind.CODEX, model="haiku"
     )
     assert policy.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.PENDING
+
+
+def test_an_add_suite_below_the_precision_floor_proves_nothing():
+    """The gate the whole tier rests on: at 0.90 measured against a 0.95 floor, nothing
+    activates."""
+    policy = _proven(_eval("add", lower=0.90), _eval("collision", lower=0.0))
+    assert policy.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.PENDING
+
+
+def test_a_suite_that_ran_no_trials_proves_nothing():
+    """`false_add_rate == 0.0` is true of a control that never ran; spec 10.2's controls are
+    counted trials, not defaults."""
+    policy = _proven(_eval("add"), _eval("collision", lower=0.0, n=0))
+    assert policy.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.PENDING
+
+
+def test_tier_b_reads_the_add_stratum_that_matches_the_proposal():
+    """Spec 10.2: tier B's gate is the lower bound of the stratum matching its shape, so a repo
+    whose `neither` stratum measured 0.50 does not activate `neither`-shaped proposals."""
+    policy = _proven(
+        _eval("add", stratum=Stratum.SAME_MODULE.value),
+        _eval("add", lower=0.50, stratum=Stratum.NEITHER.value),
+        _eval("collision", lower=0.0),
+    )
+    assert (
+        policy.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.SAME_MODULE)
+        is RefinementStatus.ACTIVE
+    )
+    assert (
+        policy.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.NEITHER)
+        is RefinementStatus.PENDING
+    )
+
+
+def test_an_unmeasured_stratum_never_activates():
+    policy = _proven(
+        _eval("add", stratum=Stratum.SAME_MODULE.value), _eval("collision", lower=0.0)
+    )
+    assert (
+        policy.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.DIRECT_IMPORT)
+        is RefinementStatus.PENDING
+    )
+
+
+def test_a_caller_that_names_no_stratum_needs_every_measured_one():
+    """Without the proposal's shape the conservative reading is the whole suite, so one weak
+    stratum holds the gate shut."""
+    weak = _proven(
+        _eval("add", stratum=Stratum.SAME_MODULE.value),
+        _eval("add", lower=0.50, stratum=Stratum.NEITHER.value),
+        _eval("collision", lower=0.0),
+    )
+    assert weak.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.PENDING
+    strong = _proven(
+        _eval("add", stratum=Stratum.SAME_MODULE.value),
+        _eval("add", stratum=Stratum.NEITHER.value),
+        _eval("collision", lower=0.0),
+    )
+    assert strong.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.ACTIVE
+
+
+@pytest.mark.parametrize(
+    ("src", "dst", "imports", "stratum"),
+    [
+        ("a.py::f", "a.py::g", (), Stratum.SAME_MODULE),
+        ("a.py::f", "b.py::g", ("b.py",), Stratum.DIRECT_IMPORT),
+        ("a.py::f", "b.py::g", ("c.py",), Stratum.NEITHER),
+    ],
+)
+def test_the_stratum_is_read_from_the_two_modules_and_the_import_between_them(
+    src: str, dst: str, imports: tuple[str, ...], stratum: Stratum
+):
+    assert Stratum.of(src, dst, imports=imports) is stratum
+
+
+def test_resolve_ambiguous_that_failed_the_fact_check_is_not_tier_a():
+    """`resolve_ambiguous` has a verifier (spec 9.2), so discarding its verdict would activate an
+    edge the fact check refused."""
+    proposal = Proposal(
+        kind=RefinementKind.RESOLVE_AMBIGUOUS,
+        target=RefinementTarget(node_id="a.py::f", name="g", edge_kind=EdgeKind.CALLS),
+        payload=RefinementPayload(candidate="b.py::g"),
+        reason="judged by hand",
+    )
+    assert TierPolicy().tier(proposal, row=None, verified=False) is Tier.C
+    assert TierPolicy().tier(proposal, row=None, verified=True) is Tier.A
 
 
 def test_tier_c_is_always_pending():
