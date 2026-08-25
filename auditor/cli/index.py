@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import open_index, open_shared_index, present, run
+from auditor.cli.helpers import fail, open_index, open_shared_index, present, run
 from auditor.cli.options import RootArg, ScopePaths
 from auditor.cli.render import (
     render_index_add,
@@ -71,16 +71,36 @@ async def _index_repos() -> list[dict]:
 @index_app.command("forget")
 def index_forget(
     target: RootArg = Path("."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Confirm dropping the repo's persistent ignores too."
+    ),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Drop this repo's cached data from the shared global index (registry row + cascade)."""
+    """Drop this repo's rows from the shared global index (registry row + cascade).
+
+    The cascade takes the repo's persistent ignores with the cached rows, so the command
+    refuses without --yes whenever this repo has any.
+    """
     root = find_root(target)
+    key = repo_key(root)
+    ignores = run(_repo_ignores(root), "reading index…")
+    if ignores and not yes:
+        fail(
+            f"{key} has {ignores} persistent ignore(s), which forget deletes along with the "
+            f"cached rows; run `auditr ignore list -r {root}` to review them, then re-run "
+            "with --yes"
+        )
     removed = run(_index_forget(root), "forgetting repo…")
     present(
-        {"repo": repo_key(root), "removed": removed},
+        {"repo": key, "removed": removed},
         render_index_forget,
         as_json=json_,
     )
+
+
+async def _repo_ignores(root: Path) -> int:
+    async with await open_index(root) as index:
+        return len(await index.ignores.list())
 
 
 async def _index_forget(root: Path) -> bool:

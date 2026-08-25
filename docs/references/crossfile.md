@@ -27,9 +27,9 @@ auditr crossfile . --json
 - pytest fixtures defined but never referenced.
 - Module-level symbols defined but never referenced anywhere in the repo.
 - That dead-symbol rule (`PY-DEAD-SYMBOL`) exempts definitions in an `__init__.py`, files outside
-  the `production` and `script` roles, and the framework globals `revision`, `down_revision`,
+  the `production` and `script` roles, the framework globals `revision`, `down_revision`,
   `branch_labels`, `depends_on` and `pytestmark`, which a framework reads without ever naming
-  them.
+  them, and the names a `pyproject.toml` entry point or script wires up.
 - Private symbols used from outside the module that defines them.
 - Rule ids for all of these are listed by `auditr rules list`. See [rules.md](rules.md).
 
@@ -43,5 +43,7 @@ auditr crossfile . --json
   `scan` see the new set.
 - Grouping reads the shapes table, so a file takes part only after it has been scanned at least
   once with `--incremental`.
-- `scan` also exempts symbols named by `pyproject.toml` entry points from the dead-symbol rule; a
-  standalone `crossfile` run does not, so it can report symbols a scan would leave alone.
+- A standalone run reads the same `pyproject.toml` entry points `scan` does, so both exempt the
+  same symbols.
+- It then drops what `scan` drops: in-file `auditor: skip` directives and this repo's persistent
+  ignores. The printed count is what a scan of the repo would report, not the raw pass output.

@@ -99,7 +99,8 @@ auditr scan . -vvv
   human reports.
 - A bad `-f` fails before the scan starts and lists the accepted formats. `auditr plugins list`
   prints every registered reporter, including plugin-added ones.
-- `-o PATH` writes the rendered report to that path and confirms on stderr.
+- `-o PATH` writes the rendered report to that path and confirms on stderr. Missing parent
+  directories are created.
 - `--serve` renders HTML, binds an ephemeral port on `127.0.0.1`, opens a browser, and holds
   until Ctrl-C. It returns before the gate's exit code is applied, so it never exits non-zero.
 

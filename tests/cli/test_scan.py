@@ -51,6 +51,13 @@ def test_scan_output_to_file(sample_repo, tmp_path):
     assert out.name in result.output  # stdout/stderr notes where it wrote
 
 
+def test_scan_output_creates_missing_directory(sample_repo, tmp_path):
+    out = tmp_path / "reports" / "nested" / "report.json"
+    result = invoke("scan", str(sample_repo / "src"), "-o", str(out))
+    assert result.exit_code == 0, result.output
+    assert json.loads(out.read_text())["totals"]["blocking"] >= 1
+
+
 # --- severity filtering ------------------------------------------------------------------
 
 
@@ -182,6 +189,14 @@ def test_since_requires_git_repo(tmp_path):
     result = invoke("scan", str(tmp_path), "--since", "main")
     assert result.exit_code == 1
     assert "git repository" in result.output
+
+
+def test_scan_relative_target_scans_the_tree(sample_repo, monkeypatch):
+    """`auditor scan .` from inside a repo audits it: the resolved root still matches a relative
+    target."""
+    monkeypatch.chdir(sample_repo)
+    payload = cli_json(invoke("scan", ".", "--no-index", "-f", "json"))
+    assert payload["files"]
 
 
 def test_root_option_overrides_autodetected_root(tmp_path):

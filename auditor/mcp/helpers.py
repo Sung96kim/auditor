@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from pydantic import ValidationError
 
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import UnmigratableColumn
@@ -36,3 +37,10 @@ async def open_index(root: Path) -> IndexStore:
             f"the index cannot be upgraded: {exc}. Delete it and re-scan: "
             f"rm {index_db_path()}"
         ) from exc
+
+
+def config_error(exc: ValidationError) -> ToolError:
+    """A one-line tool error for a repo config that fails validation."""
+    err = exc.errors()[0]
+    loc = ".".join(str(p) for p in err["loc"])
+    return ToolError(f"invalid config: {loc + ': ' if loc else ''}{err['msg']}")

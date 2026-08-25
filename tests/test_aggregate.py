@@ -1,5 +1,8 @@
 """aggregate.py: build AUDIT.md from the index after a scan."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from auditor.aggregate import AuditAggregator
@@ -96,3 +99,44 @@ async def test_aggregate_includes_malware_only_file(tmp_path, monkeypatch):
         md = await AuditAggregator(index).markdown()
     assert "`payload.bin`" in md
     assert "blocking: 1" in md  # the AV-MAL-MATCH finding
+
+
+_WRITE_ROLLUP = """
+import asyncio
+import sys
+from pathlib import Path
+
+from auditor.aggregate import AuditAggregator
+from auditor.database import IndexStore
+
+
+async def main() -> None:
+    async with await IndexStore.connect(Path(sys.argv[1])) as index:
+        await AuditAggregator(index).write(Path(sys.argv[2]))
+
+
+asyncio.run(main())
+"""
+
+
+def test_write_uses_utf8_under_an_ascii_locale(tmp_path):
+    """The rollup's em dash survives a C-locale process, where the default encoding is ASCII."""
+    script = tmp_path / "write_rollup.py"
+    script.write_text(_WRITE_ROLLUP)
+    out = tmp_path / "AUDIT.md"
+
+    proc = subprocess.run(
+        [sys.executable, str(script), str(tmp_path / "index.db"), str(out)],
+        env={
+            **os.environ,
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PYTHONUTF8": "0",
+            "PYTHONCOERCECLOCALE": "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "—" in out.read_text(encoding="utf-8")

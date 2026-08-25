@@ -134,8 +134,9 @@ def git_changed_files(root: Path, ref: str) -> set[str] | None:
 
 
 def find_root(start: Path) -> Path:
-    """Walk up from ``start`` for a repo root (.git / pyproject.toml / .auditor)."""
-    start = start if start.is_dir() else start.parent
+    """Walk up from ``start`` for a repo root (.git / pyproject.toml / .auditor). Resolved first,
+    so a relative start such as the default ``.`` has parents to walk."""
+    start = (start if start.is_dir() else start.parent).resolve()
     for parent in [start, *start.parents]:
         if any(
             (parent / marker).exists()
@@ -254,8 +255,10 @@ class FileDiscovery:
 
     @staticmethod
     def _under(path: Path, target: Path) -> bool:
+        """Whether ``path`` sits inside ``target``. Both are resolved first, so a relative target
+        (``auditor scan .``) still matches the absolute paths git lists."""
         try:
-            path.relative_to(target)
+            path.resolve().relative_to(target.resolve())
             return True
         except ValueError:
             return False

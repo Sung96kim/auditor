@@ -10,6 +10,8 @@ from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO, git
 from loguru import logger
 from typer import rich_utils
 
+from auditor.registry import REGISTRY
+
 
 @pytest.fixture(autouse=True)
 def _plain_typer_output(monkeypatch):
@@ -54,6 +56,15 @@ def git_repo(tmp_path: Path) -> Path:
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "init")
     return repo
+
+
+@pytest.fixture
+def restore_registry():
+    """Snapshot and restore the global registry around a test that loads a repo's plugins
+    (loading registers detectors/languages/reporters/categories/sources process-wide)."""
+    state = REGISTRY.state()
+    yield
+    REGISTRY.restore(state)
 
 
 @pytest.fixture

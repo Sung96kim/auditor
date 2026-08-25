@@ -4,6 +4,7 @@ shape stays clean; editing one file re-runs the GROUP BY without re-parsing the 
 from pathlib import Path
 
 from auditor.config import load_config
+from auditor.crossfile import CrossFileInputs
 from auditor.database import IndexStore
 from auditor.engine import ScanEngine
 
@@ -185,3 +186,17 @@ async def test_within_role_scoping(tmp_path):
         }
     a_rules = {f.rule_id for f in results["pkg/a.py"].findings}
     assert "PY-XFILE-DUP-MODEL" not in a_rules
+
+
+def test_engine_and_a_standalone_run_share_the_same_inputs(tmp_path):
+    """The engine feeds the pass exactly what `auditor crossfile` derives for the same repo."""
+    _repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[project.scripts]\nx = "pkg.a:_main"\n'
+    )
+    settings = load_config(tmp_path)
+
+    assert ScanEngine(tmp_path, settings).xfile == CrossFileInputs.derive(
+        tmp_path, settings
+    )
+    assert "_main" in CrossFileInputs.derive(tmp_path, settings).entry_points

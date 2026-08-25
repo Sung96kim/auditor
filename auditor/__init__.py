@@ -1,7 +1,10 @@
 """auditor — a deterministic codebase auditor for coding agents.
 
 Public API:
-    from auditor import scan_file, scan_path, load_config, render, ScanEngine, IndexStore
+    from auditor import audit_target, load_config, render, ScanEngine, IndexStore
+
+``__all__`` adds the record models and config types those entry points return or accept. A scan of one
+file or one tree is ``ScanEngine.scan_file`` / ``ScanEngine.scan_path``.
 """
 
 from loguru import logger

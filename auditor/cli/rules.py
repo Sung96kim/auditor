@@ -1,11 +1,18 @@
 """``auditor rules list`` — enumerate every registered detector rule."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 
-from auditor.cli.helpers import fail, present
+from auditor.cli.console import err_console
+from auditor.cli.helpers import fail, format_config_error, present
+from auditor.cli.options import RootArg
 from auditor.cli.render import render_rules_list
+from auditor.config import load_config
+from auditor.discovery import find_root
+from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
 rules_app = typer.Typer(no_args_is_help=True, help="Inspect detector rules.")
@@ -14,13 +21,14 @@ rules_app = typer.Typer(no_args_is_help=True, help="Inspect detector rules.")
 def _known_standards() -> set[str]:
     return {
         ref.split(":", 1)[0]
-        for rid in REGISTRY.rule_ids()
-        for ref in REGISTRY.detector(rid).standard_refs
+        for row in REGISTRY.rule_rows()
+        for ref in row.standard_refs
     }
 
 
 @rules_app.command("list")
 def rules_list(
+    target: RootArg = Path("."),
     category: Annotated[
         str | None, typer.Option("-c", "--category", help="Filter by category.")
     ] = None,
@@ -33,7 +41,15 @@ def rules_list(
     ] = None,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """List every registered detector rule."""
+    """List every registered detector rule, plus the target repo's trusted plugin rules."""
+    loader = PluginLoader()
+    try:
+        # loads the repo's plugins as a side effect, so their rules are registered before we list
+        load_config(find_root(target), loader=loader)
+    except ValidationError as exc:
+        fail(f"invalid config — {format_config_error(exc)}")
+    for warning in loader.warnings:
+        err_console.print(f"[yellow]warning:[/] {warning}")
     if category is not None and category not in REGISTRY.categories():
         fail(
             f"unknown category {category!r}; choose from {sorted(REGISTRY.categories())}"
@@ -44,25 +60,5 @@ def rules_list(
         fail(
             f"unknown framework {framework!r}; choose from {sorted(REGISTRY.frameworks())}"
         )
-    rows = []
-    for rid in sorted(REGISTRY.rule_ids()):
-        det = REGISTRY.detector(rid)
-        if category and str(det.category) != category:
-            continue
-        if framework and getattr(det, "framework", None) != framework:
-            continue
-        refs = list(det.standard_refs)
-        if standard and not any(r.startswith(f"{standard}:") for r in refs):
-            continue
-        rows.append(
-            {
-                "rule_id": rid,
-                "category": str(det.category),
-                "framework": getattr(det, "framework", None),
-                "default_severity": det.default_severity.value,
-                "verdict_kind": det.verdict_kind.value,
-                "standard_refs": refs,
-                "source": REGISTRY.source_of("detector", rid),
-            }
-        )
-    present(rows, render_rules_list, as_json=json_)
+    rows = REGISTRY.rule_rows(category=category, standard=standard, framework=framework)
+    present([row.model_dump() for row in rows], render_rules_list, as_json=json_)

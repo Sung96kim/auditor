@@ -87,7 +87,8 @@ args = ["run", "-i", "--rm",
   role), `aggregate` (roll the incremental index into `AUDIT.md`), `finding_detail` (one finding's
   full record).
 - Rules and suppressions: `rules_list` (the detector registry, filterable by category, standard or
-  framework), `ignore_add`, `ignore_list`, `ignore_remove`.
+  framework; `root` picks the repo whose trusted plugins load, and every row carries the `source`
+  it was registered from), `ignore_add`, `ignore_list`, `ignore_remove`.
 - Malware backends: `malware_status`, `malware_update_dbs`, `malware_install`. Only
   `malware_update_dbs` and `malware_install` touch the network, and only when called.
 - Semantic graph, always registered: `graph_build`, `graph_search`, `graph_usages`,

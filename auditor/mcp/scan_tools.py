@@ -18,7 +18,7 @@ from auditor.engine import audit_target
 from auditor.gate import check_severity, gate_tripped
 from auditor.malware.tools import resolve_tool
 from auditor.mcp.artifacts import publish
-from auditor.mcp.helpers import READ_ONLY, validate_detail
+from auditor.mcp.helpers import READ_ONLY, config_error, validate_detail
 from auditor.mcp.server import mcp
 from auditor.models import ManifestEntry, ScanResult
 from auditor.paths import index_db_path, repo_key
@@ -127,11 +127,7 @@ async def scan(
             cross_file=not isolated,
         )
     except ValidationError as exc:
-        err = exc.errors()[0]
-        loc = ".".join(str(p) for p in err["loc"])
-        raise ToolError(
-            f"invalid config: {loc + ': ' if loc else ''}{err['msg']}"
-        ) from exc
+        raise config_error(exc) from exc
     gate = None
     if fail_on is not None:
         gate = {"fail_on": fail_on, "tripped": gate_tripped(results, fail_on)}

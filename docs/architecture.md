@@ -165,8 +165,10 @@ flowchart TB
 
 ## crossfile
 
-- `cli/crossfile.py` runs `crossfile.run` against the index alone and reports how many findings it
-  wrote. See [crossfile.md](references/crossfile.md).
+- `cli/crossfile.py` derives the repo's inputs with `crossfile.CrossFileInputs` (the settings the
+  pass reads plus the `pyproject.toml` entry-point names), runs the pass against the index, and
+  reports how many findings survive skip directives and persistent ignores. `ScanEngine` holds the
+  same object, so both report the same count. See [crossfile.md](references/crossfile.md).
 - `crossfile.run` clears the repo-level rules' rows, groups the `shapes` table for duplicate models
   and functions within a role, then merges four pure passes: `settings_cohesion.find_scattered`,
   `fixture_usage.find_unused`, `dead_code.find_dead`, and `private_usage.find_leaked_private`. It

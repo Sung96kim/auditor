@@ -433,7 +433,7 @@ class AuditorSettings(BaseSettings):
             for rid in value:
                 if rid not in known:
                     raise ValueError(
-                        f"unknown rule_id {rid!r}; run `auditor rules list` to see available rules"
+                        f"unknown rule_id {rid!r}: no built-in or plugin detector registers it"
                     )
         return value
 

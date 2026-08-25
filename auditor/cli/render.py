@@ -389,8 +389,8 @@ def render_manifest_list(out: Console, payload: list[dict[str, Any]]) -> None:
 
 
 def render_plugins_list(out: Console, payload: dict[str, Any]) -> None:
-    for section in ("detectors", "languages", "reporters", "profiles"):
-        items = payload.get(section)
+    for section in ("detectors", "languages", "reporters"):
+        items: dict[str, dict[str, Any]] = payload.get(section, {})
         if not items:
             continue
         t = Table(
@@ -398,13 +398,8 @@ def render_plugins_list(out: Console, payload: dict[str, Any]) -> None:
         )
         t.add_column("name")
         t.add_column("source")
-        sources: dict[str, str] = payload.get("_sources", {})
-        if isinstance(items, dict):
-            for name, _val in items.items():
-                t.add_row(name, str(sources.get(name, "")))
-        elif isinstance(items, list):
-            for name in items:
-                t.add_row(str(name), str(sources.get(str(name), "")))
+        for name, meta in items.items():
+            t.add_row(name, str(meta.get("source", "")))
         out.print(t)
     warnings: list[str] = payload.get("warnings", [])
     for w in warnings:

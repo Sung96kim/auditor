@@ -35,7 +35,14 @@ Output = Annotated[
 Format = Annotated[
     str | None, typer.Option("-f", "--format", help="json | sarif | md | html.")
 ]
-RootArg = Annotated[Path, typer.Option("-r", "--root")]
+RootArg = Annotated[
+    Path,
+    typer.Option(
+        "-r",
+        "--root",
+        help="Repo whose config and plugins load (default: walk up from here).",
+    ),
+]
 AggregateOut = Annotated[Path, typer.Option("-o", "--out", help="Write AUDIT.md here.")]
 
 Incremental = Annotated[
