@@ -75,6 +75,8 @@ async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> 
                 "cluster": n["cluster_id"],
                 "role": n["role"],
                 "findings": findings_by_node.get(nid, []),
+                "refined": bool(n["refined"]),
+                "annotation": n["annotation"],
             }
         )
 
@@ -90,6 +92,8 @@ async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> 
                     "target": e["dst"],
                     "kind": e["kind"],
                     "weight": round(e["weight"], 4),
+                    "provenance": e["provenance"],
+                    "confirmed": bool(e["confirmed"]),
                 }
             )
 

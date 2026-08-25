@@ -3,17 +3,22 @@ each working table to it, enforcement (no orphan rows), and ON DELETE CASCADE wh
 forgotten. The store's worker connection runs with ``PRAGMA foreign_keys=ON``; these assert the
 behaviour that depends on it, and introspect the on-disk schema directly."""
 
+import asyncio
 import sqlite3
+import threading
 
 import pytest
 
 from auditor.database import IndexStore
-from auditor.database.base import SCHEMA_VERSION
+from auditor.database.base import SCHEMA_VERSION, Column, UnmigratableColumn
+from auditor.database.files import FilesDB
+from auditor.database.ignores import IgnoresDB
 from auditor.models import (
     Category,
     FileRole,
     Finding,
     IndexEntry,
+    Partition,
     Severity,
     VerdictKind,
 )
@@ -230,3 +235,212 @@ async def test_findings_grouped_empty(tmp_path):
     async with await IndexStore.connect(db, "/r") as store:
         grouped = await store.findings.grouped()
     assert grouped == {}
+
+
+async def test_connect_defaults_the_identity_to_the_repo_key(tmp_path):
+    async with await IndexStore.connect(tmp_path / "index.db", "/repos/alpha") as store:
+        assert store.partition == Partition(identity="/repos/alpha", prefix="")
+        assert store.findings.partition == store.partition  # every sub-store shares it
+
+
+async def test_connect_binds_an_explicit_partition_to_every_store(tmp_path):
+    part = Partition(identity="/checkout/.git", prefix="apps/backend/")
+    async with await IndexStore.connect(
+        tmp_path / "index.db", "/checkout/apps/backend", part
+    ) as store:
+        assert store.graph.partition == part
+        assert store.repos.partition.prefix == "apps/backend/"
+        assert store.repo == "/checkout/apps/backend"  # the partition key is unchanged
+
+
+async def test_a_missing_identity_column_is_added_not_dropped(tmp_path):
+    """The reconcile pass is what lets an identity table gain a column across a version bump."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as s:
+        await s.ignores.add("PY-X", "a.py", 5, "ev", "keep me", 1.0)
+
+    raw = _raw(db)
+    raw.execute("ALTER TABLE ignores DROP COLUMN reason")  # simulate an older layout
+    raw.execute("PRAGMA user_version=1")
+    raw.commit()
+    raw.close()
+
+    async with await IndexStore.connect(db, "/r") as s:
+        rows = await s.ignores.list()
+    assert len(rows) == 1  # the row survived
+    assert rows[0]["reason"] is None  # the re-added column is NULL, not missing
+
+
+async def test_the_migrator_leaves_cache_tables_to_the_drop_sweep(tmp_path):
+    """A cache table with a stale layout is dropped and recreated, never ALTERed."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as s:
+        await s.findings.add("x.py", [_finding()])
+
+    raw = _raw(db)
+    raw.execute("ALTER TABLE findings DROP COLUMN message")
+    raw.execute("PRAGMA user_version=1")
+    raw.commit()
+    raw.close()
+
+    async with await IndexStore.connect(db, "/r") as s:
+        assert await s.findings.all() == []  # dropped and rebuilt, not migrated
+    raw = _raw(db)
+    cols = {r["name"] for r in raw.execute("PRAGMA table_info(findings)")}
+    raw.close()
+    assert "message" in cols
+
+
+def _declare(monkeypatch, extra: Column) -> None:
+    """Append one column to the `ignores` declaration for the length of a test."""
+    table = IgnoresDB.TABLES["ignores"]
+    monkeypatch.setitem(
+        IgnoresDB.TABLES,
+        "ignores",
+        table.model_copy(update={"cols": (*table.cols, extra)}),
+    )
+
+
+@pytest.mark.parametrize(
+    "bad, why",
+    [
+        (Column(name="added", type="TEXT", not_null=True), "NOT NULL"),
+        (Column(name="added", type="TEXT", references="repos (repo)"), "REFERENCES"),
+        (Column(name="added", type="TEXT", primary_key=True), "PRIMARY KEY"),
+    ],
+    ids=["not_null_without_default", "references", "primary_key"],
+)
+async def test_a_column_sqlite_cannot_add_names_itself(tmp_path, monkeypatch, bad, why):
+    """SQLite rejects all three shapes on an existing table. The migrator runs on every connect
+    for every repo, so it has to fail with the table and column rather than a bare
+    OperationalError — or, for the primary key, silently skip the column."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r"):
+        pass
+    _declare(monkeypatch, bad)
+    with pytest.raises(UnmigratableColumn, match="ignores.added") as excinfo:
+        await IndexStore.connect(db, "/r")
+    assert why in str(excinfo.value)
+    assert (excinfo.value.table, excinfo.value.column) == ("ignores", "added")
+
+
+async def test_a_not_null_column_with_a_default_migrates(tmp_path, monkeypatch):
+    """The rule the migrator's docstring states: NOT NULL is only unmigratable without a
+    default, so this shape has to keep working."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as store:
+        await store.ignores.add("PY-X", "a.py", 5, "ev", "keep me", 1.0)
+    _declare(
+        monkeypatch, Column(name="added", type="TEXT", not_null=True, default="'x'")
+    )
+    async with await IndexStore.connect(db, "/r") as store:
+        assert len(await store.ignores.list()) == 1  # the row survived the ALTER
+    raw = _raw(db)
+    added = [r["added"] for r in raw.execute("SELECT added FROM ignores")]
+    raw.close()
+    assert added == ["x"]  # the default filled the existing row
+
+
+async def test_a_failed_migration_leaves_the_version_and_the_cache_intact(
+    tmp_path, monkeypatch
+):
+    """The bump is one transaction and the reconcile runs first, so a declaration that cannot
+    land never costs a user their cached findings or their stamp."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as store:
+        await store.findings.add("x.py", [_finding()])
+    _declare(monkeypatch, Column(name="added", type="TEXT", not_null=True))
+    raw = _raw(db)
+    raw.execute("PRAGMA user_version=1")  # force the drop sweep to be reachable
+    raw.commit()
+    raw.close()
+
+    with pytest.raises(UnmigratableColumn):
+        await IndexStore.connect(db, "/r")
+
+    raw = _raw(db)
+    version = raw.execute("PRAGMA user_version").fetchone()[0]
+    findings = raw.execute("SELECT COUNT(*) AS n FROM findings").fetchone()["n"]
+    raw.close()
+    assert (version, findings) == (1, 1)
+
+
+async def test_a_failed_bump_leaves_no_worker_thread_behind(tmp_path, monkeypatch):
+    """`connect` owns the worker until it hands the store back, so a raising `_init_schema` has
+    to close it rather than leak a thread per invocation."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r"):
+        pass
+    _declare(monkeypatch, Column(name="added", type="TEXT", not_null=True))
+    before = threading.active_count()
+    with pytest.raises(UnmigratableColumn):
+        await IndexStore.connect(db, "/r")
+    for _ in range(200):
+        if threading.active_count() <= before:
+            break
+        await asyncio.sleep(0.01)
+    assert threading.active_count() <= before
+
+
+async def test_a_version_zero_index_with_rows_is_rebuilt(tmp_path):
+    """A stamp of 0 on a populated database is a lost stamp, not a fresh database: the cache
+    tables have to be dropped and rebuilt, or every later write hits the old layout."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as store:
+        await store.findings.add("x.py", [_finding()])
+        await store.ignores.add("PY-X", "a.py", 5, "ev", "keep me", 1.0)
+
+    raw = _raw(db)
+    raw.execute("ALTER TABLE findings DROP COLUMN message")  # a stale cache layout
+    raw.execute("PRAGMA user_version=0")
+    raw.commit()
+    raw.close()
+
+    async with await IndexStore.connect(db, "/r") as store:
+        assert await store.findings.all() == []  # dropped and rebuilt
+        await store.findings.add("x.py", [_finding()])  # the new layout takes writes
+        assert len(await store.findings.all()) == 1
+        assert len(await store.ignores.list()) == 1  # user state survived
+    raw = _raw(db)
+    version = raw.execute("PRAGMA user_version").fetchone()[0]
+    raw.close()
+    assert version == SCHEMA_VERSION
+
+
+async def test_a_second_connection_never_sees_a_half_bumped_schema(tmp_path):
+    """The whole bump is one IMMEDIATE transaction, so a reader either sees the old schema or
+    the new one, never a moment with the cache tables dropped and not yet recreated."""
+    db = tmp_path / "index.db"
+    async with await IndexStore.connect(db, "/r") as store:
+        await store.findings.add("x.py", [_finding()])
+    raw = _raw(db)
+    raw.execute("PRAGMA user_version=1")
+    raw.commit()
+    raw.close()
+
+    seen: list[int] = []
+    stop = threading.Event()
+
+    def poll() -> None:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        while not stop.is_set():
+            seen.append(conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0])
+        conn.close()
+
+    reader = threading.Thread(target=poll)
+    reader.start()
+    try:
+        async with await IndexStore.connect(db, "/r"):
+            pass
+    finally:
+        stop.set()
+        reader.join()
+    assert set(seen) <= {0, 1}  # never a `no such table`, never a torn count
+
+
+def test_column_names_include_the_repo_foreign_key():
+    """`files` and `ignores` are the two shapes: repo_fk prepends the FK, repo_fk=False does not.
+    Neither table is touched by this slice, so this assertion cannot go stale under it."""
+    names = FilesDB.TABLES["files"].column_names()
+    assert names[:3] == ("repo", "path", "sha256")
+    assert IgnoresDB.TABLES["ignores"].column_names()[0] == "id"

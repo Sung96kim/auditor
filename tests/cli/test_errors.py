@@ -4,6 +4,9 @@ one-line message, never a raw traceback."""
 import pytest
 from _support import invoke
 
+from auditor.database.base import Column
+from auditor.database.ignores import IgnoresDB
+
 
 def test_bare_invocation_shows_help_and_exits_zero():
     """Regression: bare `auditor` prints help and exits 0 (not Typer's no-args exit 2, which
@@ -57,4 +60,25 @@ def test_init_fails_cleanly_on_an_unusable_home(tmp_path, monkeypatch, layout):
     result = invoke(*args)
     assert result.exit_code == 1
     assert "cannot write the auditor home" in " ".join(result.output.split())
+    assert "Traceback" not in result.output
+
+
+def test_an_unmigratable_index_prints_the_repair(monkeypatch):
+    """A declaration SQLite cannot add to an identity table breaks every connect, so the CLI has
+    to name the repair instead of printing a traceback the user cannot act on."""
+    table = IgnoresDB.TABLES["ignores"]
+    invoke("index", "list")  # create the index under the isolated home
+    monkeypatch.setitem(
+        IgnoresDB.TABLES,
+        "ignores",
+        table.model_copy(
+            update={
+                "cols": (*table.cols, Column(name="added", type="TEXT", not_null=True))
+            }
+        ),
+    )
+    result = invoke("index", "list")
+    assert result.exit_code == 1
+    assert "cannot be upgraded" in result.output
+    assert "ignores.added" in result.output and "rm " in result.output
     assert "Traceback" not in result.output

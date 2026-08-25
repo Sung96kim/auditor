@@ -7,14 +7,16 @@ and one directory per repo keyed by :func:`repo_dir_key`. Repo-*authored* input
 stays in the repo and is read from there; nothing is written back into it.
 """
 
+import functools
 import hashlib
 import json
 import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from auditor.config import GlobalPaths
 from auditor.discovery import git_output
+from auditor.models import Partition
 
 
 def read_json_dict(path: Path) -> dict[str, object]:
@@ -109,6 +111,29 @@ def repo_identity(root: Path) -> str:
     if relative is not None:
         return str((root / relative).resolve())
     return repo_key(root)
+
+
+def partition_for(root: Path) -> Partition:
+    """The identity and toplevel-relative prefix that bind an index handle to one checkout.
+
+    Cached per process on the resolved root, because every CLI invocation opens the index and the
+    two git calls would otherwise land on the fast commands too.
+    """
+    return _partition_for(root.resolve())
+
+
+@functools.cache
+def _partition_for(root: Path) -> Partition:
+    """:func:`partition_for` on an already-resolved root. Outside git, and for a root that is not
+    under its own toplevel, the prefix is empty and the identity falls back to the partition key."""
+    identity = repo_identity(root)
+    toplevel = git_output(root, "rev-parse", "--show-toplevel")
+    if toplevel is None:
+        return Partition(identity=identity)
+    rel = os.path.relpath(root.resolve(), Path(toplevel).resolve()).replace(os.sep, "/")
+    if rel == "." or rel.startswith(".."):
+        return Partition(identity=identity)
+    return Partition(identity=identity, prefix=f"{PurePosixPath(rel)}/")
 
 
 def _key_for(identity: str) -> str:

@@ -1,7 +1,25 @@
+import pytest
+
 from auditor.config import AuditorSettings, GraphConfig
-from auditor.graph.build import GraphBuilder, _quality_rows, compute_abstractness
+from auditor.graph.build import (
+    _GRAPH_RULE_IDS,
+    GraphBuilder,
+    GraphWrite,
+    _concept_nodes,
+    _quality_rows,
+    compute_abstractness,
+)
 from auditor.graph.extract import extract_file_facts
-from auditor.graph.model import FactKind, GraphNode, NodeKind, UnresolvedReason
+from auditor.graph.model import (
+    EdgeKind,
+    FactKind,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+    UnresolvedReason,
+)
+from auditor.languages.python.detectors.graph_rules import GOD_CONCEPT_RULE
+from auditor.models import Category, Finding, Severity, VerdictKind
 
 STUB_CLASS = "class Base:\n    def run(self): ...\n"
 
@@ -95,9 +113,7 @@ def test_test_and_module_nodes_excluded_from_clusters():
         role="production",
     )
     nodes = [*prod, *tests, mod]
-    builder = GraphBuilder()
-    concept = builder._concept_nodes(nodes)
-    assert {n.id for n in concept} == {
+    assert {n.id for n in _concept_nodes(nodes)} == {
         n.id for n in prod
     }  # only prod symbols are clustered
 
@@ -271,3 +287,98 @@ def test_quality_rows_flag_fallback_labels_and_singletons():
         "cluster-2"
     ]
     assert all(r.fact_kind is FactKind.NODE and r.priority == 4 for r in rows)
+
+
+async def test_a_failed_persist_leaves_the_previous_graph(facts_store, monkeypatch):
+    """One transaction, so a crash between the node swap and the queue swap cannot half-land."""
+    settings = AuditorSettings()
+    settings.graph.enabled = True
+    await GraphBuilder().run(facts_store, settings)
+    before_nodes = await facts_store.graph.nodes()
+    before_queue = await facts_store.graph.unresolved()
+    assert before_nodes and before_queue
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("queue write failed")
+
+    monkeypatch.setattr(type(facts_store.graph), "write_unresolved", explode)
+    with pytest.raises(RuntimeError, match="queue write failed"):
+        await GraphBuilder().run(facts_store, settings)
+
+    assert await facts_store.graph.nodes() == before_nodes
+    assert await facts_store.graph.unresolved() == before_queue
+
+
+async def test_an_emptied_repo_clears_the_previous_graph_findings(facts_store):
+    """The empty-graph path is the same transaction as any other build, so it cannot leave the
+    last build's GRAPH-* rows behind while reporting `findings: 0`."""
+    settings = AuditorSettings(
+        graph=GraphConfig(enabled=True, name_similarity_threshold=0.2, detect=True)
+    )
+    await GraphBuilder().run(facts_store, settings)
+    await facts_store.findings.add("m.py", [_graph_finding()])
+    assert await facts_store.findings.all()
+
+    await facts_store.graph.clear_facts()
+    summary = await GraphBuilder().run(facts_store, settings)
+
+    assert summary == {
+        "nodes": 0,
+        "edges": 0,
+        "clusters": 0,
+        "unresolved": 0,
+        "findings": 0,
+    }
+    stored = await facts_store.findings.all()
+    assert [f for f in stored if f.rule_id in _GRAPH_RULE_IDS] == []
+    assert await facts_store.graph.nodes() == []
+    assert await facts_store.graph.unresolved() == []
+
+
+async def test_an_empty_build_leaves_the_findings_alone_when_detectors_are_off(
+    facts_store,
+):
+    """`detect=False` means "do not touch the findings", on the empty path as on any other."""
+    await facts_store.findings.add("m.py", [_graph_finding()])
+    settings = AuditorSettings(graph=GraphConfig(enabled=True, detect=False))
+    await facts_store.graph.clear_facts()
+    await GraphBuilder().run(facts_store, settings)
+    assert [f.rule_id for f in await facts_store.findings.all()] == [GOD_CONCEPT_RULE]
+
+
+def test_the_summary_counts_what_the_write_carries():
+    """The one place the build's counts are named, so the empty path and the full path cannot
+    report different shapes."""
+    write = GraphWrite(
+        nodes=(_node("m.py::a"),),
+        edges=(GraphEdge(src="m.py::a", dst="m.py::b", kind=EdgeKind.CALLS),),
+        findings={"m.py": [_graph_finding(), _graph_finding()]},
+    )
+    assert write.summary() == {
+        "nodes": 1,
+        "edges": 1,
+        "clusters": 0,
+        "unresolved": 0,
+        "findings": 2,
+    }
+
+
+def _node(node_id: str) -> GraphNode:
+    return GraphNode(
+        id=node_id,
+        kind=NodeKind.FUNCTION,
+        name=node_id.split("::")[-1],
+        module=node_id.split("::")[0],
+        qualname=node_id.split("::")[-1],
+    )
+
+
+def _graph_finding() -> Finding:
+    return Finding(
+        rule_id=GOD_CONCEPT_RULE,
+        category=Category.OOP_COMPOSITION,
+        severity=Severity.LOW,
+        verdict_kind=VerdictKind.CANDIDATE,
+        line=1,
+        message="stale",
+    )

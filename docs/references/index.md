@@ -61,4 +61,9 @@ auditr index list --json
 - A scan prunes indexed files under the scanned prefix that no longer exist or are now excluded,
   so a subdirectory scan never evicts files outside it.
 - The derived tables are a cache. On a schema-version bump they are dropped and rebuilt by the
-  next scan, while the repo registry and the persistent ignores are preserved.
+  next scan.
+- Preserved across that bump: the repo registry, the persistent ignores, and the identity tables
+  (`graph_runs`, `graph_refinements`, `graph_refinement_anchors`, `graph_tuning`, `graph_evals`).
+  A column added to one of them is reconciled with `ALTER TABLE` on the next connect.
+- The identity tables key on the checkout, not on the repo partition, so every worktree of one
+  checkout shares them and `forget` cannot cascade into them.

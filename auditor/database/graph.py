@@ -7,9 +7,11 @@ and clusters, and the unresolved queue."""
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from typing import Any, ClassVar
 
 from auditor.database.base import BaseDB, Column, Index, Table
+from auditor.graph.hashes import FileHashes
 from auditor.graph.model import GraphCluster, GraphEdge, GraphNode, UnresolvedRow
 
 
@@ -34,6 +36,8 @@ class GraphDB(BaseDB):
                 Column(name="path", type="TEXT", not_null=True, primary_key=True),
                 Column(name="facts_json", type="TEXT", not_null=True),
                 Column(name="content_hash", type="TEXT", not_null=True),
+                Column(name="truth_sha", type="TEXT"),
+                Column(name="facts_sha", type="TEXT"),
             ),
         ),
         "graph_nodes": Table(
@@ -48,6 +52,8 @@ class GraphDB(BaseDB):
                 Column(name="cluster_id", type="INTEGER"),
                 Column(name="abstractness", type="REAL", not_null=True, default="0"),
                 Column(name="text_sparse", type="INTEGER", not_null=True, default="0"),
+                Column(name="refined", type="INTEGER", not_null=True, default="0"),
+                Column(name="annotation", type="TEXT"),
             ),
             indexes=(
                 Index(name="graph_nodes_cluster", columns=("repo", "cluster_id")),
@@ -59,10 +65,22 @@ class GraphDB(BaseDB):
                 Column(name="dst", type="TEXT", not_null=True),
                 Column(name="kind", type="TEXT", not_null=True),
                 Column(name="weight", type="REAL", not_null=True, default="1"),
+                Column(
+                    name="provenance",
+                    type="TEXT",
+                    not_null=True,
+                    default="'deterministic'",
+                ),
+                Column(name="confirmed", type="INTEGER", not_null=True, default="0"),
             ),
             indexes=(
                 Index(name="graph_edges_src", columns=("repo", "src")),
                 Index(name="graph_edges_dst", columns=("repo", "dst")),
+                Index(
+                    name="graph_edges_key",
+                    columns=("repo", "src", "dst", "kind"),
+                    unique=True,
+                ),
             ),
         ),
         "graph_clusters": Table(
@@ -72,6 +90,12 @@ class GraphDB(BaseDB):
                 ),
                 Column(name="label", type="TEXT", not_null=True),
                 Column(name="member_count", type="INTEGER", not_null=True),
+                Column(
+                    name="label_provenance",
+                    type="TEXT",
+                    not_null=True,
+                    default="'deterministic'",
+                ),
             ),
         ),
         "graph_unresolved": Table(
@@ -106,14 +130,33 @@ class GraphDB(BaseDB):
         ),
     }
 
-    async def set_facts(self, path: str, facts_json: str, content_hash: str) -> None:
+    async def set_facts(
+        self,
+        path: str,
+        facts_json: str,
+        content_hash: str,
+        hashes: FileHashes | None = None,
+    ) -> None:
+        """Cache one file's facts. ``hashes`` is the spec 5.5 pair, which the assessment compares
+        against a re-extraction; a caller without parsed facts leaves it out, which keeps whatever
+        pair is already stored rather than erasing it."""
+
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
             conn.execute(
-                "INSERT INTO graph_facts (repo, path, facts_json, content_hash) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
-                "facts_json=excluded.facts_json, content_hash=excluded.content_hash",
-                (self.repo, path, facts_json, content_hash),
+                "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
+                "facts_json=excluded.facts_json, content_hash=excluded.content_hash, "
+                "truth_sha=COALESCE(excluded.truth_sha, graph_facts.truth_sha), "
+                "facts_sha=COALESCE(excluded.facts_sha, graph_facts.facts_sha)",
+                (
+                    self.repo,
+                    path,
+                    facts_json,
+                    content_hash,
+                    hashes.truth if hashes else None,
+                    hashes.facts if hashes else None,
+                ),
             )
             conn.commit()
 
@@ -130,20 +173,14 @@ class GraphDB(BaseDB):
         await self._worker.run(op)
 
     async def facts_hash(self, path: str) -> str | None:
-        row = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?",
-                (self.repo, path),
-            ).fetchone()
+        row = await self._fetch_one(
+            "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?", (path,)
         )
         return row["content_hash"] if row else None
 
     async def all_facts(self) -> list[str]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT facts_json FROM graph_facts WHERE repo = ? ORDER BY path",
-                (self.repo,),
-            ).fetchall()
+        rows = await self._fetch(
+            "SELECT facts_json FROM graph_facts WHERE repo = ? ORDER BY path"
         )
         return [r["facts_json"] for r in rows]
 
@@ -154,12 +191,28 @@ class GraphDB(BaseDB):
         )
         return row["facts_json"] if row else None
 
-    async def replace(
+    async def hashes(self, path: str) -> FileHashes | None:
+        """The cached spec 5.5 pair for one file, or ``None`` unless both halves are stored.
+
+        A half-written pair degrades to a miss, the way every other read here does, rather than
+        raising a ValidationError out of a cache lookup.
+        """
+        row = await self._fetch_one(
+            "SELECT truth_sha, facts_sha FROM graph_facts WHERE repo = ? AND path = ?",
+            (path,),
+        )
+        if row is None or row["truth_sha"] is None or row["facts_sha"] is None:
+            return None
+        return FileHashes(truth=row["truth_sha"], facts=row["facts_sha"])
+
+    def write_graph(
         self,
-        nodes: list[GraphNode],
-        edges: list[GraphEdge],
-        clusters: list[GraphCluster],
+        conn: sqlite3.Connection,
+        nodes: Sequence[GraphNode],
+        edges: Sequence[GraphEdge],
+        clusters: Sequence[GraphCluster],
     ) -> None:
+        """Swap this repo's graph on an open connection, without committing."""
         node_rows = [
             (
                 self.repo,
@@ -173,34 +226,56 @@ class GraphDB(BaseDB):
                 n.cluster_id,
                 n.abstractness,
                 int(n.text_sparse),
+                int(n.refined),
+                n.annotation,
             )
             for n in nodes
         ]
-        edge_rows = [(self.repo, e.src, e.dst, e.kind.value, e.weight) for e in edges]
+        edge_rows = [
+            (
+                self.repo,
+                e.src,
+                e.dst,
+                e.kind.value,
+                e.weight,
+                e.provenance.value,
+                int(e.confirmed),
+            )
+            for e in edges
+        ]
         clu_rows = [
-            (self.repo, c.cluster_id, c.label, c.member_count) for c in clusters
+            (self.repo, c.cluster_id, c.label, c.member_count, c.label_provenance.value)
+            for c in clusters
         ]
 
+        self._ensure_repo(conn)
+        for t in ("graph_nodes", "graph_edges", "graph_clusters"):
+            conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608  (table name comes from a fixed tuple)
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
+            "role, line, rank, cluster_id, abstractness, text_sparse, refined, annotation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            node_rows,
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight, provenance, confirmed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            edge_rows,
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count, label_provenance) "
+            "VALUES (?, ?, ?, ?, ?)",
+            clu_rows,
+        )
+
+    async def replace(
+        self,
+        nodes: Sequence[GraphNode],
+        edges: Sequence[GraphEdge],
+        clusters: Sequence[GraphCluster],
+    ) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            for t in ("graph_nodes", "graph_edges", "graph_clusters"):
-                conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
-                "role, line, rank, cluster_id, abstractness, text_sparse) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                node_rows,
-            )
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight) "
-                "VALUES (?, ?, ?, ?, ?)",
-                edge_rows,
-            )
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count) "
-                "VALUES (?, ?, ?, ?)",
-                clu_rows,
-            )
+            self.write_graph(conn, nodes, edges, clusters)
             conn.commit()
 
         await self._worker.run(op)
@@ -222,7 +297,10 @@ class GraphDB(BaseDB):
     async def edges_of(
         self, node_id: str, kinds: list[str] | None
     ) -> list[dict[str, Any]]:
-        sql = "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? AND (src = ? OR dst = ?)"
+        sql = (
+            "SELECT src, dst, kind, weight, provenance, confirmed FROM graph_edges "
+            "WHERE repo = ? AND (src = ? OR dst = ?)"
+        )
         params: list[Any] = [node_id, node_id]
         if kinds:
             sql += f" AND kind IN ({','.join('?' for _ in kinds)})"
@@ -235,7 +313,7 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT node_id AS id, name, module, rank FROM graph_nodes "
+                "SELECT node_id AS id, name, module, rank, refined, annotation FROM graph_nodes "
                 "WHERE repo = ? AND cluster_id = ? ORDER BY rank DESC, node_id",
                 (cluster_id,),
             )
@@ -245,7 +323,7 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT cluster_id, label, member_count FROM graph_clusters "
+                "SELECT cluster_id, label, member_count, label_provenance FROM graph_clusters "
                 "WHERE repo = ? ORDER BY member_count DESC, cluster_id"
             )
         ]
@@ -254,12 +332,15 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? ORDER BY src, dst, kind"
+                "SELECT src, dst, kind, weight, provenance, confirmed FROM graph_edges "
+                "WHERE repo = ? ORDER BY src, dst, kind"
             )
         ]
 
-    async def replace_unresolved(self, rows: list[UnresolvedRow]) -> None:
-        """Swap this repo's whole unresolved queue for ``rows``; every build rebuilds it."""
+    def write_unresolved(
+        self, conn: sqlite3.Connection, rows: Sequence[UnresolvedRow]
+    ) -> None:
+        """Swap this repo's whole unresolved queue on an open connection, without committing."""
         values = [
             (
                 self.repo,
@@ -277,17 +358,21 @@ class GraphDB(BaseDB):
             )
             for r in rows
         ]
+        self._ensure_repo(conn)
+        conn.execute("DELETE FROM graph_unresolved WHERE repo = ?", (self.repo,))
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_unresolved (repo, node_id, name, reason, "
+            "fact_kind, receiver_root, call_form, candidates_json, definers_json, "
+            "resolution_path_json, priority, externally_bound) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            values,
+        )
+
+    async def replace_unresolved(self, rows: Sequence[UnresolvedRow]) -> None:
+        """Swap this repo's whole unresolved queue for ``rows``; every build rebuilds it."""
 
         def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            conn.execute("DELETE FROM graph_unresolved WHERE repo = ?", (self.repo,))
-            conn.executemany(
-                "INSERT OR REPLACE INTO graph_unresolved (repo, node_id, name, reason, "
-                "fact_kind, receiver_root, call_form, candidates_json, definers_json, "
-                "resolution_path_json, priority, externally_bound) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                values,
-            )
+            self.write_unresolved(conn, rows)
             conn.commit()
 
         await self._worker.run(op)

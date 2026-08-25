@@ -12,6 +12,8 @@ export interface GNode {
   cluster: number | null;
   role: string;
   findings: string[];
+  refined?: boolean;
+  annotation?: string | null;
 }
 
 export interface GEdge {
@@ -19,6 +21,8 @@ export interface GEdge {
   target: string;
   kind: string;
   weight: number;
+  provenance?: string;
+  confirmed?: boolean;
 }
 
 export interface GCluster {

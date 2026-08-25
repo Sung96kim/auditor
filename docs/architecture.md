@@ -53,12 +53,15 @@ Paths are relative to the repo root.
 - `roles.py`: `RoleClassifier` labels each file production, test, test_support, script, or
   generated from path globs plus parsed content. The role picks the policy `ResolvedConfig`
   applies, so tests are classified rather than dropped.
-- `models.py`: the shared records `Finding`, `ScanResult`, `ManifestEntry`, `IndexEntry`, and the
+- `models.py`: the shared records `Finding`, `ScanResult`, `ManifestEntry`, `IndexEntry`,
+  `Partition` (the identity a checkout's worktrees share, plus the partition prefix), and the
   `Severity` / `VerdictKind` / `FileRole` enums.
 - `database/store.py`: `IndexStore.connect(db_path, repo_key)` opens the shared db and binds the
   handle to one repo's partition. `database/base.py`'s `SqliteWorker` owns the one thread-bound
   connection; every store awaits through it, so writes serialize safely.
 - `paths.py`: `auditor_home()`, `index_db_path()`, `repo_key()` (the index partition key),
+  `partition_for()` (the checkout identity plus the toplevel-relative prefix, cached per process
+  and bound by `cli/helpers.open_index`),
   `read_json_dict()` (the one tolerant JSON-object reader the home's files share), and the
   user-home layout: `user_config_path()`, `user_schema_path()`, `models_dir()`, plus
   `repo_identity()` / `repo_dir_key()` / `repo_dir()` / `ensure_repo_dir()`. The repo dir is keyed
@@ -251,9 +254,25 @@ flowchart TB
   `resolve_edges.resolve_structural` (returning a `StructuralResult` of deterministic edges plus the
   facts it could not place), `naming.name_similar_edges` (tf-idf plus LSI),
   `usage.usage_similar_edges` (callee and operand-type Jaccard), `rank.pagerank`,
-  `cluster.cluster_concepts`, persist through `IndexStore.graph.replace` and
-  `IndexStore.graph.replace_unresolved`, then `detectors.run_graph_detectors` writes the `GRAPH-*`
-  findings into the findings table.
+  `cluster.cluster_concepts`, run `detectors.run_graph_detectors`, then persist the nodes, edges,
+  clusters, the unresolved queue and the `GRAPH-*` findings through one `IndexStore.transaction`.
+- The build's write is one commit on purpose: an interrupted build must not leave a new node set
+  beside the previous queue or the previous run's findings. `IndexStore.transaction(fn)` runs `fn`
+  on the live connection and rolls back on any exception; the `write_*` halves of `graph.replace`,
+  `graph.replace_unresolved`, `findings.add` and `findings.clear_for_rules` are what it composes.
+- `build.GraphWrite` is that whole result as one frozen record: `nodes`, `edges`, `clusters`,
+  `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
+  counts, so the empty-graph build takes the same path and reports the same shape as any other.
+- The transaction idiom, and the rule that keeps it from growing dead halves:
+  - A store method that writes owns its own commit and is `async`.
+  - Its `write_*` half takes the open connection, writes, and never commits, so a caller can
+    compose several stores into one commit through `IndexStore.transaction`.
+  - A `write_*` half is added only when a transaction calls it. `refinements.write_outcomes` is
+    the one that exists ahead of its caller: the S4b overlay writes refinement verdicts inside the
+    build's transaction, so a graph and its provenance land together.
+- `BaseDB` carries two read helpers because the index has two scoping keys: `_fetch` / `_fetch_one`
+  bind `repo` (the partition), `_fetch_by_identity` / `_fetch_one_by_identity` bind
+  `partition.identity` (the checkout). A store binds one or the other, never both.
 - `resolve_edges._resolve_name` returns a frozen `Resolution` (`ids`, `gated`, `definers`, `path`,
   `reason`), which is both how an edge is chosen and the evidence a queue row carries.
 - `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to the
@@ -263,6 +282,40 @@ flowchart TB
   `ambiguous_name` and `unimportable_name` rows; the build pass adds `text_sparse`, `generic_label`
   and `singleton_cluster` rows after clustering. It is node-keyed, so `IndexStore.prune` never
   touches it. See [graph.md](references/graph.md).
+- `database/refinements.py` holds the four identity stores, one concern each:
+  - `RunsDB` (`index.runs`) owns `graph_runs`, one row per decision, model call or not.
+  - `RefinementsDB` (`index.refinements`) owns `graph_refinements` and
+    `graph_refinement_anchors`: one row per correction, plus the nodes it is pinned to with the
+    `truth_sha` they had when it was made.
+  - `TuningDB` (`index.tuning`) owns `graph_tuning`, the proposed knob changes.
+  - `EvalsDB` (`index.evals`) owns `graph_evals`, one measured accuracy per suite stratum.
+  - They key on `repo_identity` (the resolved git common dir), not on the repo partition, so every
+    worktree of a checkout shares them and `repos.forget()` cannot cascade into them. Reads bind
+    the identity; writes address a globally unique id and bind the identity too.
+- Every insert binds its columns by name through `BaseDB.insert_sql` / `insert_many_sql`, which
+  order the binds by the `Table` declaration and raise `KeyError` on a mapping that does not match
+  it. Reordering two same-typed columns can no longer transpose a row.
+- Ids inside those tables are toplevel-relative: `partition_prefix` plus the partition-relative id,
+  so a repo scanned both at its root and at a subdirectory keeps one namespace.
+- `graph_runs` rows with `status='skipped'` are the assessment-only records; the observer sweeps
+  them with `RunsDB.prune_skipped_runs` after `observer.skipped_retention_days`. Real runs
+  are never swept, and neither is a skipped run that owns a `graph_refinements` or `graph_tuning`
+  row: both reference `graph_runs.run_id` with no `ON DELETE`.
+- `graph/hashes.py` derives two hashes per node from the extracted facts: `truth_sha` over the fact
+  tuples structural edges read, and `facts_sha` over those plus `doc_tokens`.
+  - `truth_sha` decides run gating and anchor drift; `facts_sha` decides whether similarity edges
+    rebuild.
+  - Neither covers `line`, `role`, the identity strings the node id already carries, the build-pass
+    fields, the overlay fields (`refined`, `annotation`), or `local_names`.
+  - Every name a node binds is also subtracted from the fact tuples before hashing, because a local
+    identifier reaches `callees`, `class_refs`, `callback_names`, `bare_callees` and the receiver
+    slot of `attr_callees` / `typed_calls`. So a refinement survives a comment, a reformat, a
+    renamed local and a renamed parameter in its own file.
+  - `doc_tokens` keep their local identifiers, so `facts_sha` still moves on a rename. That is the
+    intent: similarity edges read the tokens.
+- `file_hashes` rolls them over the sorted `(node_id, hash)` set, so an added or deleted node moves
+  a file's hash even when every surviving node is unchanged. The scan stores that pair in
+  `graph_facts.truth_sha` / `facts_sha` next to the content hash.
 - The query commands (`related`, `neighbors`, `concept`, `clusters`, `search`, `usages`) all read
   the persisted tables through `graph.query.GraphQuery`; nothing is recomputed.
 - `graph flow` walks that same persisted graph through `graph.flow.build_flow`: breadth-first over
@@ -338,9 +391,24 @@ flowchart TB
   effective config, so editing one threshold invalidates exactly that rule instead of the whole
   cache.
 - Index location: one SQLite database at `$AUDITOR_HOME/index.db`, partitioned by `paths.repo_key`
-  rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`; on a version
-  change the derived cache tables are dropped and rebuilt on the next scan, while the `repos` and
-  `ignores` tables (user state) survive.
+  rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`.
+- Two table classes, declared by `Table.cache`:
+  - `cache=True` (partition tables): dropped and rebuilt by the next scan on a version change.
+  - `cache=False` (identity tables): never dropped. `repos`, `ignores` and the five `graph_*`
+    refinement tables. On every connect `IndexStore._migrate_identity_tables` reconciles their
+    declared columns against `PRAGMA table_info` and adds what is missing with `ALTER TABLE`.
+- A column added to an identity table after it ships must be nullable or carry a default, must
+  not be a `PRIMARY KEY`, and must not carry `REFERENCES`. `NOT NULL` with a default migrates.
+  SQLite refuses the other shapes, so the migrator raises `UnmigratableColumn` naming the table
+  and column, and the CLI turns that into a one-line repair instruction.
+- The bump is one `BEGIN IMMEDIATE` transaction in a fixed order: reconcile the identity tables,
+  drop the cache tables, create what is missing, stamp `user_version` last. A second connection
+  therefore never sees a dropped-and-not-yet-created table, and a declaration that cannot land
+  leaves the stored version and every cached row untouched.
+- A stored version of 0 on a database that already has cache tables is a lost stamp, not a fresh
+  database: it rebuilds like any other mismatch. Only an empty file skips the sweep.
+- A downgrade leaves identity tables intact but unreferenced; `graph build --rebuild` clears cached
+  facts and never touches them.
 - Repo-local state: `<repo>/.auditor/` holds authored input only (`config.toml`, `plugins/`, a
   baseline file if you point `--baseline` there). Nothing is written into the repo: generated
   state is the shared index plus `$AUDITOR_HOME/repos/<repo_dir_key>/`, which holds `status.json`,

@@ -1,6 +1,12 @@
 import pytest
 
-from auditor.graph.model import GraphNode, NodeKind
+from auditor.graph.model import (
+    EdgeKind,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+    Provenance,
+)
 from auditor.graph.viz import build_payload, to_dot
 
 
@@ -29,6 +35,8 @@ async def test_payload_shape_and_mapping(viz_store):
         "target": "m.py::Foo.bar",
         "kind": "contains",
         "weight": 1.0,
+        "provenance": "deterministic",
+        "confirmed": False,
     }
     assert p["clusters"][0]["label"] == "foo"
 
@@ -213,3 +221,42 @@ async def test_to_dot_flow_mode_on_an_empty_payload(viz_store):
     p = await build_payload(viz_store)
     d = to_dot(p, flow={})
     assert d.startswith("digraph flow") and "->" not in d
+
+
+async def test_payload_carries_edge_and_node_provenance(graph_store):
+    await graph_store.repos.register(0.0)
+    await graph_store.graph.replace(
+        [
+            GraphNode(
+                id="m.py::f",
+                kind=NodeKind.FUNCTION,
+                name="f",
+                module="m.py",
+                qualname="f",
+                annotation="entry point",
+            ),
+            GraphNode(
+                id="m.py::g",
+                kind=NodeKind.FUNCTION,
+                name="g",
+                module="m.py",
+                qualname="g",
+                refined=True,
+            ),
+        ],
+        [
+            GraphEdge(
+                src="m.py::f",
+                dst="m.py::g",
+                kind=EdgeKind.CALLS,
+                provenance=Provenance.REFINED,
+            )
+        ],
+        [],
+    )
+    p = await build_payload(graph_store)
+    assert p["edges"][0]["provenance"] == "refined"
+    assert p["edges"][0]["confirmed"] is False
+    by_id = {n["id"]: n for n in p["nodes"]}
+    assert by_id["m.py::f"]["annotation"] == "entry point"
+    assert by_id["m.py::g"]["refined"] is True

@@ -3,7 +3,9 @@
 import pytest
 import typer
 
-from auditor.cli.helpers import parse_config_json, run_staged, suggest
+from auditor import paths
+from auditor.cli.helpers import open_index, parse_config_json, run_staged, suggest
+from auditor.paths import repo_identity, repo_key
 
 
 def test_suggest_returns_closest_match():
@@ -62,3 +64,34 @@ def test_run_staged_with_spinner_returns_result():
 
     # rich auto-disables the spinner off-TTY in tests, so this won't hang.
     assert run_staged(make, "msg") == "ok"
+
+
+async def test_open_index_binds_the_checkout_identity(git_repo):
+    """Without this the identity tables key on the repo path, so two worktrees of one checkout
+    never see each other's refinements."""
+    async with await open_index(git_repo) as index:
+        assert index.partition.identity == repo_identity(git_repo)
+        assert index.partition.identity != repo_key(git_repo)  # a real checkout differs
+        assert (
+            index.refinements.partition == index.partition
+        )  # and every store shares it
+
+
+async def test_open_index_shells_out_to_git_once_per_root(git_repo, monkeypatch):
+    """`cli/lazy.py` exists to keep the fast commands cheap, so the identity lookup is cached for
+    the process rather than paid on every invocation."""
+    calls: list[tuple[str, ...]] = []
+    real = paths.git_output
+
+    def counting(root, *args):
+        calls.append(args)
+        return real(root, *args)
+
+    monkeypatch.setattr(paths, "git_output", counting)
+    async with await open_index(git_repo):
+        pass
+    first = len(calls)
+    assert first  # the first lookup really shells out
+    async with await open_index(git_repo):
+        pass
+    assert len(calls) == first

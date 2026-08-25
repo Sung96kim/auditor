@@ -4,6 +4,8 @@ import pytest
 
 from auditor.database import IndexStore
 from auditor.engine import audit_target
+from auditor.graph.hashes import file_hashes
+from auditor.graph.model import FileGraphFacts
 from auditor.paths import index_db_path, repo_key
 
 
@@ -55,3 +57,14 @@ async def test_facts_extracted_on_cache_hit_when_graph_enabled(tmp_path, monkeyp
     async with await IndexStore.connect(index_db_path(), repo_key(tmp_path)) as idx:
         blobs = await idx.graph.all_facts()
     assert blobs and "get_user" in blobs[0]
+
+
+async def test_a_scan_stores_the_file_hashes_beside_the_facts(graph_repo):
+    """Stage 1 of the assessment compares a re-extraction against these, so the scan has to have
+    written them; without this the observer would rebuild on every keystroke."""
+    await audit_target(graph_repo, incremental=True)
+    async with await IndexStore.connect(index_db_path(), repo_key(graph_repo)) as index:
+        stored = await index.graph.hashes("m.py")
+        blob = await index.graph.facts("m.py")
+    assert stored is not None
+    assert stored == file_hashes(FileGraphFacts.model_validate_json(blob).nodes)

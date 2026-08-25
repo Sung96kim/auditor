@@ -32,6 +32,13 @@ class EdgeKind(StrEnum):
     USAGE_SIMILAR = "usage_similar"
 
 
+class Provenance(StrEnum):
+    """Where a merged graph row came from. The detectors only ever see ``DETERMINISTIC``."""
+
+    DETERMINISTIC = "deterministic"
+    REFINED = "refined"
+
+
 TEST_ROLES = ("test", "test_support")  # roles grouped as "test code" across the graph
 
 
@@ -86,6 +93,8 @@ class GraphNode(BaseModel):
     rank: float = 0.0
     cluster_id: int | None = None
     text_sparse: bool = False
+    refined: bool = False
+    annotation: str | None = None
 
 
 class GraphEdge(BaseModel):
@@ -95,6 +104,8 @@ class GraphEdge(BaseModel):
     dst: str
     kind: EdgeKind
     weight: float = 1.0
+    provenance: Provenance = Provenance.DETERMINISTIC
+    confirmed: bool = False
 
 
 class GraphCluster(BaseModel):
@@ -103,6 +114,7 @@ class GraphCluster(BaseModel):
     cluster_id: int
     label: str
     member_count: int
+    label_provenance: Provenance = Provenance.DETERMINISTIC
 
 
 class FileGraphFacts(BaseModel):
@@ -113,6 +125,30 @@ class FileGraphFacts(BaseModel):
     path: str
     role: str
     nodes: list[GraphNode] = []
+
+
+#: Fact tuples unioned on a same-id merge; identity scalars keep the first def's value. The build
+#: hashes most of this list into a node's `truth_sha`, so a new field belongs here only when a
+#: refinement should expire when it changes; `graph/hashes.py` names the two exceptions.
+UNION_FACT_FIELDS = (
+    "doc_tokens",
+    "callees",
+    "param_types",
+    "decorators",
+    "bases",
+    "method_names",
+    "callback_names",
+    "class_refs",
+    "typed_calls",
+    "attr_callees",
+    "bare_callees",
+    "local_names",
+    "imports",
+    "import_bindings",
+    "external_aliases",
+    "registry_roots",
+    "semantic_profile",
+)
 
 
 class UnresolvedReason(StrEnum):
