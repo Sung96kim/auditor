@@ -77,6 +77,18 @@ def refine_abort(
     return asyncio.run(_drive(repo, proposals, reason))
 
 
+def tool_log(repo: Path, **kw: Any) -> dict[str, Any]:
+    """One page of the provenance log through the `graph_log` MCP tool, the surface the CLI mirrors."""
+
+    async def go() -> dict[str, Any]:
+        async with Client(mcp) as client:
+            return tool_data(
+                await client.call_tool("graph_log", {"path": str(repo), **kw})
+            )
+
+    return asyncio.run(go())
+
+
 def add_observer_run(repo: Path, *, status: RunStatus, age_seconds: float) -> str:
     """One observer run row written directly and aged by hand, which is the only way a test can
     have a run older than a retention window. The assessment writes `skipped` rows in S8;

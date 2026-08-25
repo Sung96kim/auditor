@@ -5,14 +5,14 @@ import shutil
 from pathlib import Path
 
 import pytest
-from _support import cli_json, one_line, tool_data
-from fastmcp import Client
+from _support import cli_json, one_line
 from graph._support import (
     GOOD_PROPOSAL,
     add_observer_run,
     cells,
     refine_run,
     render_text,
+    tool_log,
 )
 from typer.testing import CliRunner
 
@@ -28,7 +28,6 @@ from auditor.graph.refine.models import (
     RunStatus,
     Tier,
 )
-from auditor.mcp import mcp
 from auditor.paths import auditor_home, user_config_path
 
 runner = CliRunner()
@@ -41,22 +40,9 @@ def _propose(repo: Path) -> int:
     return refine_run(repo, GOOD_PROPOSAL)["committed"][0]["refinement_id"]
 
 
-def _log(repo: Path, **kw) -> dict:
-    """One page of the provenance log through the `graph_log` MCP tool, which is the surface these
-    tests read; `tests/graph/test_cli_graph_log.py` drives the CLI half."""
-
-    async def go() -> dict:
-        async with Client(mcp) as client:
-            return tool_data(
-                await client.call_tool("graph_log", {"path": str(repo), **kw})
-            )
-
-    return asyncio.run(go())
-
-
 def _runs(repo: Path, *, skipped: bool) -> list[dict]:
     """The runs half of that page."""
-    return _log(repo, skipped=skipped)["runs"]
+    return tool_log(repo, skipped=skipped)["runs"]
 
 
 def test_an_empty_list_says_it_is_empty_not_filtered(refine_repo: Path):
@@ -224,16 +210,18 @@ def test_a_transition_answers_with_the_row_the_listing_shows(refine_repo: Path):
 
 
 def test_the_default_run_view_says_it_hid_the_skipped_rows(refine_repo: Path):
-    """`filtered` is what tells an agent "nothing matched" from "nothing recorded". A repo whose
-    only runs were skipped answered `runs: [], filtered: false`, which reads as "never run"."""
+    """An agent has to tell "nothing matched" from "none you can see" from "never run", and only
+    the hidden set and its count separate the last two: `filtered` answers a different question."""
     add_observer_run(refine_repo, status=RunStatus.SKIPPED, age_seconds=0)
-    hidden = _log(refine_repo)
+    hidden = tool_log(refine_repo)
     assert hidden["runs"] == []
-    assert hidden["filtered"] is True
+    assert hidden["filtered"] is False
     assert hidden["hidden_statuses"] == ["skipped"]
-    shown = _log(refine_repo, skipped=True)
+    assert hidden["hidden_count"] == 1
+    shown = tool_log(refine_repo, skipped=True)
     assert [r["status"] for r in shown["runs"]] == ["skipped"]
     assert (shown["filtered"], shown["hidden_statuses"]) == (False, [])
+    assert shown["hidden_count"] == 0
     assert shown["run_count"] == 1
 
 

@@ -7,6 +7,7 @@ import pytest
 from auditor.graph.model import MAX_LOG_ROWS, EdgeKind, row_limit
 from auditor.graph.payloads import (
     LogFilter,
+    LogNarrowing,
     LogReport,
     LogView,
     RefinementRowPayload,
@@ -246,22 +247,62 @@ def test_an_unknown_view_is_an_error():
         LogFilter.of(view="tuning", status=None, since=None, skipped=False, limit=10)
 
 
-def test_skipped_runs_are_out_of_the_default_view_and_that_counts_as_filtered():
-    """`filtered` is what tells "nothing matched" from "nothing recorded", so a default view that
-    hides every skipped run has to say so: a repo whose only runs were skipped answered
-    `runs: [], filtered: false`, which reads as a repo that has never run anything."""
+def test_the_view_s_own_hiding_is_not_a_narrowing_the_caller_asked_for():
+    """Two questions, two fields. `filtered` answers "did the caller narrow this page", which the
+    default view must not set, and `excluded_run_statuses` answers "what did the view hide"."""
     default = LogFilter.of(
         view="runs", status=None, since=None, skipped=False, limit=10
     )
     assert default.run_statuses is None
     assert default.excluded_run_statuses == (RunStatus.SKIPPED,)
-    assert default.filtered is True
+    assert default.narrowed_by == ()
+    assert default.filtered is False
     everything = LogFilter.of(
         view="runs", status=None, since=None, skipped=True, limit=10
     )
     assert everything.run_statuses is None
     assert everything.excluded_run_statuses == ()
     assert everything.filtered is False
+
+
+@pytest.mark.parametrize(
+    ("status", "since", "expected"),
+    [
+        (None, None, ()),
+        (["succeeded"], None, (LogNarrowing.STATUS,)),
+        (None, "2h", (LogNarrowing.SINCE,)),
+        (["succeeded"], "2h", (LogNarrowing.STATUS, LogNarrowing.SINCE)),
+    ],
+)
+def test_the_filter_names_the_narrowings_the_caller_set(
+    status: list[str] | None, since: str | None, expected: tuple[LogNarrowing, ...]
+):
+    """An empty page names its cause from this, so a page emptied by the window must not blame a
+    status filter nobody set."""
+    spec = LogFilter.of(
+        view="runs", status=status, since=since, skipped=False, limit=10
+    )
+    assert spec.narrowed_by == expected
+    assert spec.filtered is bool(expected)
+
+
+def test_skipped_is_refused_in_the_view_it_cannot_mean_anything_in():
+    """`--skipped` was inert in the refinements view while its sibling `--status` errored there,
+    so two options that are individually valid and jointly meaningless both exited 0."""
+    with pytest.raises(ValueError, match="skipped applies to the runs view only"):
+        LogFilter.of(
+            view="refinements", status=None, since=None, skipped=True, limit=10
+        )
+    runs = LogFilter.of(view="runs", status=None, since=None, skipped=True, limit=10)
+    assert runs.skipped is True
+
+
+def test_the_view_is_taken_as_the_enum_a_certain_caller_already_holds():
+    """The CLI reads a bool and knows the view; only an untrusted string is re-parsed."""
+    spec = LogFilter.of(
+        view=LogView.REFINEMENTS, status=None, since=None, skipped=False, limit=10
+    )
+    assert spec.view is LogView.REFINEMENTS
 
 
 def test_the_log_report_is_built_from_the_rows_it_was_given():
@@ -276,6 +317,18 @@ def test_the_log_report_is_built_from_the_rows_it_was_given():
     assert report.view is LogView.REFINEMENTS
     assert [r.refinement_id for r in report.refinements] == [3]
     assert report.runs == ()
+    assert report.narrowed_by == (LogNarrowing.STATUS,)
     assert report.filtered is True
-    assert (report.refinement_count, report.run_count) == (4, 0)
+    assert report.rows == report.refinements
+    assert (report.refinement_count, report.run_count, report.total) == (4, 0, 4)
     assert report.truncated is True
+
+
+def test_the_report_carries_the_count_of_what_the_view_hid():
+    """The renderer says how many rows the hiding removed, so "1 skipped run hidden" is a fact
+    and not a guess made from the declared exclusion."""
+    spec = LogFilter.of(view="runs", status=None, since=None, skipped=False, limit=10)
+    report = LogReport.of(spec, runs=[], total=0, hidden=3)
+    assert report.hidden_statuses == (RunStatus.SKIPPED,)
+    assert report.hidden_count == 3
+    assert report.filtered is False

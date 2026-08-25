@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from graph._support import (
     refine_abort,
     refine_run,
     render_text,
+    tool_log,
 )
 from typer.testing import CliRunner
 
@@ -70,15 +72,16 @@ def logged_repo(refine_repo: Path) -> Path:
 
 
 def test_the_default_view_is_runs_and_hides_the_skipped_ones(logged_repo: Path):
-    """`filtered` is true on a page nobody filtered, because hiding `skipped` is a narrowing.
-    `hidden_statuses` is what says which narrowing, and it is the only thing that separates
-    "none you can see" from "none"."""
+    """A page nobody filtered is not `filtered`. What the view hid on its own is reported apart,
+    by name and by count, because that is what separates "none you can see" from "none"."""
     payload = cli_json(runner.invoke(app, ["graph", "log", str(logged_repo), "--json"]))
     assert payload["view"] == "runs"
     assert [r["status"] for r in payload["runs"]] == ["succeeded"]
     assert payload["refinements"] == []
-    assert payload["filtered"] is True
+    assert payload["filtered"] is False
+    assert payload["narrowed_by"] == []
     assert payload["hidden_statuses"] == ["skipped"]
+    assert payload["hidden_count"] == 1
     assert payload["run_count"] == 1
 
 
@@ -89,6 +92,7 @@ def test_skipped_brings_the_assessment_rows_in(logged_repo: Path):
     assert sorted(r["status"] for r in payload["runs"]) == ["skipped", "succeeded"]
     assert payload["filtered"] is False
     assert payload["hidden_statuses"] == []
+    assert payload["hidden_count"] == 0
 
 
 def test_a_run_row_carries_the_split_of_what_its_run_produced(logged_repo: Path):
@@ -110,6 +114,7 @@ def test_a_status_filter_narrows_and_says_so(logged_repo: Path):
     )
     assert [r["status"] for r in aborted["runs"]] == ["aborted"]
     assert aborted["filtered"] is True
+    assert aborted["narrowed_by"] == ["status"]
     assert aborted["hidden_statuses"] == []
     failed = cli_json(
         runner.invoke(
@@ -244,16 +249,124 @@ def test_the_limit_caps_the_rows_and_the_page_says_what_it_left(logged_repo: Pat
     assert payload["truncated"] is True
 
 
-def test_the_renderer_tells_an_empty_repo_from_a_narrowed_page_from_a_hidden_one():
-    """Three causes, three sentences. Keying the "nothing matched" line off `filtered` alone would
-    print it on a repo with nothing recorded, because the default run view sets `filtered`."""
-    assert "none recorded" in render_text(render_graph_log, LogReport())
-    assert "nothing matched" in render_text(render_graph_log, LogReport(filtered=True))
-    hidden = render_text(
-        render_graph_log, LogReport(filtered=True, hidden_statuses=(RunStatus.SKIPPED,))
+def _nothing_recorded(repo: Path) -> None:
+    """`refine_repo` is built but has never run anything, so the log is empty on its own."""
+
+
+def _a_window_that_matched_nothing(repo: Path) -> None:
+    """Runs older than any window a reader would open, and not one of them hidden."""
+    add_observer_run(repo, status=RunStatus.SUCCEEDED, age_seconds=30 * 86400)
+
+
+def _rows_the_view_hides(repo: Path) -> None:
+    add_observer_run(repo, status=RunStatus.SKIPPED, age_seconds=0)
+
+
+@pytest.mark.parametrize(
+    ("prepare", "extra", "phrase", "expected"),
+    [
+        (
+            _nothing_recorded,
+            [],
+            "none recorded",
+            {"filtered": False, "narrowed_by": [], "hidden_count": 0},
+        ),
+        (
+            _a_window_that_matched_nothing,
+            ["--since", "2h"],
+            "nothing matched --since",
+            {"filtered": True, "narrowed_by": ["since"], "hidden_count": 0},
+        ),
+        (
+            _rows_the_view_hides,
+            [],
+            "1 skipped run hidden",
+            {"filtered": False, "narrowed_by": [], "hidden_count": 1},
+        ),
+    ],
+    ids=["nothing recorded", "a window that matched nothing", "rows the view hides"],
+)
+def test_an_empty_page_names_the_cause_that_emptied_it(
+    refine_repo: Path,
+    prepare: Callable[[Path], None],
+    extra: list[str],
+    phrase: str,
+    expected: dict[str, object],
+) -> None:
+    """The page a reader gets, not one built by hand: the default runs view used to blame its own
+    hiding for a window that missed, and to offer `--skipped` on a repo with nothing in it."""
+    prepare(refine_repo)
+    payload = cli_json(
+        runner.invoke(app, ["graph", "log", str(refine_repo), *extra, "--json"])
     )
-    assert "nothing matched" not in hidden
-    assert "--skipped" in hidden
+    assert payload["runs"] == []
+    assert {key: payload[key] for key in expected} == expected
+    assert phrase in render_text(render_graph_log, LogReport.model_validate(payload))
+
+
+@pytest.mark.parametrize(
+    ("prepare", "kwargs", "expected"),
+    [
+        (
+            _nothing_recorded,
+            {},
+            {"filtered": False, "narrowed_by": [], "hidden_count": 0},
+        ),
+        (
+            _a_window_that_matched_nothing,
+            {"since": "2h"},
+            {"filtered": True, "narrowed_by": ["since"], "hidden_count": 0},
+        ),
+        (
+            _rows_the_view_hides,
+            {},
+            {"filtered": False, "narrowed_by": [], "hidden_count": 1},
+        ),
+    ],
+    ids=["nothing recorded", "a window that matched nothing", "rows the view hides"],
+)
+def test_the_tool_reports_the_same_three_causes(
+    refine_repo: Path,
+    prepare: Callable[[Path], None],
+    kwargs: dict[str, object],
+    expected: dict[str, object],
+) -> None:
+    """The agent-facing half. `filtered: false` with `hidden_count: 0` is the only shape that
+    means "nothing is recorded", and the tool docstring promises exactly that."""
+    prepare(refine_repo)
+    payload = tool_log(refine_repo, **kwargs)
+    assert payload["runs"] == []
+    assert {key: payload[key] for key in expected} == expected
+
+
+def test_the_empty_line_reads_the_hidden_set_rather_than_naming_one(logged_repo: Path):
+    """Hardcoding "skipped" here survived the whole suite: only the emptiness of the hidden set
+    was ever asserted, never its contents."""
+    page = LogReport(
+        hidden_statuses=(RunStatus.QUEUED, RunStatus.FAILED), hidden_count=4
+    )
+    printed = render_text(render_graph_log, page)
+    assert "4 queued, failed runs hidden" in printed
+    assert "skipped run" not in printed
+
+
+def test_skipped_is_refused_in_the_refinements_view(logged_repo: Path):
+    """Its sibling `--status` is validated against the view; this one was inert there, so a page
+    that answered nothing different looked like one that had."""
+    result = runner.invoke(
+        app, ["graph", "log", str(logged_repo), "--refinements", "--skipped"]
+    )
+    assert result.exit_code != 0
+    printed = one_line(result.output)
+    assert "skipped applies to the runs view only" in printed
+    assert "status, since, limit" in printed
+
+
+def test_skipped_is_accepted_in_the_runs_view(logged_repo: Path):
+    result = runner.invoke(
+        app, ["graph", "log", str(logged_repo), "--skipped", "--json"]
+    )
+    assert result.exit_code == 0
 
 
 def test_the_renderer_shows_a_run_summary_and_the_rows_its_run_owns():

@@ -234,6 +234,7 @@ def refinements_prune(
 
 
 async def _log(root: Path, spec: LogFilter) -> LogReport:
+    """One page of the provenance log, through the reader the `graph_log` MCP tool also calls."""
     async with await open_index(root) as index:
         return await LogQuery(index).page(spec)
 
@@ -248,11 +249,11 @@ def graph_log(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Who changed the graph, and what they changed. Newest first in both views. Assessment-only
-    runs are hidden until `--skipped`, and the page says so in `hidden_statuses`."""
+    runs are hidden by default; `--skipped` or `--status skipped` shows them."""
     root = cli_root(target)
     try:
         spec = LogFilter.of(
-            view=LogView.REFINEMENTS.value if refinements else LogView.RUNS.value,
+            view=LogView.REFINEMENTS if refinements else LogView.RUNS,
             status=status,
             since=since,
             skipped=skipped,

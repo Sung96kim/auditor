@@ -320,14 +320,25 @@ def render_graph_prune(out: Console, payload: PruneOutcome) -> None:
     )
 
 
+def _hidden_note(payload: LogReport) -> str:
+    """What the default runs view left out, counted and named, with both ways to see it."""
+    hidden = ", ".join(s.value for s in payload.hidden_statuses)
+    plural = "" if payload.hidden_count == 1 else "s"
+    return (
+        f"{payload.hidden_count} {hidden} run{plural} hidden; "
+        "--skipped or --status skipped shows them"
+    )
+
+
 def _log_empty(payload: LogReport) -> str:
-    """Why this page has no rows: nothing recorded, nothing matched, or nothing visible."""
-    if not payload.filtered:
-        return "(none recorded; the observer and the graph_refine_* tools write here)"
-    if payload.hidden_statuses:
-        hidden = ", ".join(s.value for s in payload.hidden_statuses)
-        return f"(no runs to show; {hidden} runs are hidden, --skipped includes them)"
-    return "(nothing matched the filter)"
+    """Why this page has no rows, in the order the page can prove: the caller's own filter, then
+    the view's hiding, then nothing recorded at all."""
+    if payload.narrowed_by:
+        narrowed = ", ".join(f"--{n.value}" for n in payload.narrowed_by)
+        return f"(nothing matched {narrowed})"
+    if payload.hidden_count:
+        return f"({_hidden_note(payload)})"
+    return "(none recorded; the observer and the graph_refine_* tools write here)"
 
 
 def _stamp(epoch: float) -> str:
@@ -376,9 +387,8 @@ def render_graph_log(out: Console, payload: LogReport) -> None:
             f"[dim]showing {len(rows)} of {total}, newest first; "
             "raise --limit for more[/]"
         )
-    if runs and payload.hidden_statuses:
-        hidden = ", ".join(s.value for s in payload.hidden_statuses)
-        out.print(f"[dim]{hidden} runs are hidden; --skipped includes them[/]")
+    if payload.hidden_count:
+        out.print(f"[dim]{_hidden_note(payload)}[/]")
 
 
 # ---------------------------------------------------------------------------

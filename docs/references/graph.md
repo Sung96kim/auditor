@@ -293,9 +293,16 @@ auditr graph log --skipped
   `2026-08-20T14:00:00`). It is not a git ref: `scan --since` scopes files, and a log is scoped by
   time.
 - Assessment-only runs, the ones the observer records when it decides an edit is not worth a
-  refinement, are hidden until `--skipped`. Hiding them is a narrowing, so the default page reports
-  `filtered: true` with `hidden_statuses: ["skipped"]`, and the table says so beneath it.
-- The page is capped by `--limit` (default 50, at most 500). `--json` carries `run_count` or
+  refinement, are hidden by default. `--skipped` or `--status skipped` shows them.
+- `--skipped` is a runs-view filter. Pairing it with `--refinements` is an error naming the filters
+  that view does take, the way a run status in that view already is.
+- An empty page names the cause it can prove, in this order: the filter you set, the rows the view
+  hid on its own (with the count), then nothing recorded at all. `--json` carries the same three as
+  `narrowed_by`, `hidden_statuses` and `hidden_count`, and `filtered` is true only when you
+  narrowed the page yourself.
+- The `when` column is local time as `MM-DD HH:MM` and carries no year, because it is for scanning
+  recent rows; `--json` carries the epoch.
+- The page is capped by `--limit` (default 50, at most 500). `--json` carries `run_count` and
   `refinement_count`, the number matching the same filters, and `truncated`.
 
 ## Refinement overlay

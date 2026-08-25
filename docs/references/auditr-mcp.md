@@ -129,9 +129,10 @@ args = ["run", "-i", "--rm",
   `kind` is an error instead, because the kind chooses the shape.
 - `graph_refinements` and `graph_log` answer the newest rows first, capped by `limit` (default 50,
   at most 500), with the total the same filters match as `refinement_count` / `run_count` and a
-  `truncated` flag, so a full page is never read as the whole list. `filtered` says why a page is
-  empty, and the default `graph_log` run view sets it because it hides assessment-only runs; the
-  statuses it hid are in `hidden_statuses`.
+  `truncated` flag, so a full page is never read as the whole list. `filtered` is true only when
+  the caller narrowed the page, and `graph_log`'s `narrowed_by` names which filters did it. What
+  the default run view hides on its own is reported apart, as `hidden_statuses` and `hidden_count`,
+  so an empty page with neither set means nothing is recorded.
 - A run's `refinements` is `{committed, rejected}`, the same split `graph_refine_status` reports and
   the same one the run's `summary` line counts.
 - Staged proposals live in the server process, so one run is opened, filled and committed through

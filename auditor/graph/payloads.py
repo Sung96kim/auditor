@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, computed_field
 
 from auditor.graph.model import (
     LOG_ROW_LIMIT,
@@ -365,6 +365,17 @@ class LogView(StrEnum):
     REFINEMENTS = "refinements"
 
 
+class LogNarrowing(StrEnum):
+    """A filter the caller set, named so an empty page can say which one emptied it.
+
+    Only the caller's own filters are here. The default runs view hides the assessment-only rows
+    on its own, and that hiding is reported by ``hidden_statuses`` instead.
+    """
+
+    STATUS = "status"
+    SINCE = "since"
+
+
 #: `90s`, `45m`, `2h`, `7d` — one number and one unit, which is every shape a log window needs
 _DURATION = re.compile(r"^(\d+)([smhd])$")
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -403,7 +414,7 @@ class LogFilter(WirePayload):
     def of(
         cls,
         *,
-        view: str,
+        view: LogView | str,
         status: Sequence[str] | None,
         since: str | None,
         skipped: bool,
@@ -411,10 +422,20 @@ class LogFilter(WirePayload):
     ) -> "LogFilter":
         """Validate every value against the enum the chosen view owns.
 
-        ``since`` is validated whenever it is given at all: an empty string is a caller that
-        thinks it set a window, not a caller that set none.
+        A caller holding the view already passes the enum; only an untrusted string is re-parsed.
+        ``since`` is validated whenever it is given at all, because an empty string is a caller
+        that thinks it set a window rather than one that set none.
         """
-        chosen = LogView(enum_value(view, LogView, "view"))
+        chosen = (
+            view
+            if isinstance(view, LogView)
+            else LogView(enum_value(view, LogView, "view"))
+        )
+        if skipped and chosen is not LogView.RUNS:
+            raise ValueError(
+                "skipped applies to the runs view only. Valid in the refinements view: "
+                "status, since, limit"
+            )
         enum = RunStatus if chosen is LogView.RUNS else RefinementStatus
         return cls(
             view=chosen,
@@ -436,7 +457,7 @@ class LogFilter(WirePayload):
         """Skipped runs are out of the default view (spec 12.2): the assessment's own decisions,
         plus any run the registry evicted or the retention sweep found stranded. Expressed as an
         exclusion rather than as an every-other-status list, so a new `RunStatus` needs no edit
-        here, and reported as a narrowing, because it is one."""
+        here. This is the view's own hiding, never something the caller asked for."""
         if self.view is not LogView.RUNS or self.skipped or self.statuses:
             return ()
         return (RunStatus.SKIPPED,)
@@ -448,31 +469,60 @@ class LogFilter(WirePayload):
         return [RefinementStatus(s) for s in self.statuses]
 
     @property
-    def filtered(self) -> bool:
-        """Whether this page is narrower than everything recorded, which is why an empty one is
-        empty. The default run view narrows too: it hides the skipped rows."""
-        return (
-            bool(self.statuses)
-            or self.since is not None
-            or bool(self.excluded_run_statuses)
+    def narrowed_by(self) -> tuple[LogNarrowing, ...]:
+        """The filters the caller set, in the order the log documents them.
+
+        The default runs view's own hiding is deliberately not here: a reader who narrowed
+        nothing must not be told a narrowing emptied the page.
+        """
+        return tuple(
+            name
+            for name, set_by_caller in (
+                (LogNarrowing.STATUS, bool(self.statuses)),
+                (LogNarrowing.SINCE, self.since is not None),
+            )
+            if set_by_caller
         )
+
+    @property
+    def filtered(self) -> bool:
+        """Whether the caller narrowed this page themselves."""
+        return bool(self.narrowed_by)
 
 
 class LogReport(WirePayload):
     """One page of the provenance log: one view, what produced it, and what it did not show.
 
-    ``hidden_statuses`` is why ``filtered`` can be true on a page nobody filtered: the default run
-    view hides the skipped rows, and an empty page there means "none you can see", not "none".
+    An empty page has three causes and the fields separate them: ``narrowed_by`` is what the
+    caller filtered, ``hidden_statuses`` and ``hidden_count`` are what the default runs view hid
+    on its own, and neither set means nothing is recorded.
     """
 
     view: LogView = LogView.RUNS
     runs: tuple[RunRowPayload, ...] = ()
     refinements: tuple[RefinementRowPayload, ...] = ()
-    filtered: bool = False
+    narrowed_by: tuple[LogNarrowing, ...] = ()
     hidden_statuses: tuple[RunStatus, ...] = ()
+    hidden_count: int = 0
     run_count: int = 0
     refinement_count: int = 0
     truncated: bool = False
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def filtered(self) -> bool:
+        """Whether the caller narrowed this page themselves, which the default view never does."""
+        return bool(self.narrowed_by)
+
+    @property
+    def rows(self) -> tuple[WirePayload, ...]:
+        """The rows of whichever view this page carries, so a reader needs no view branch."""
+        return self.runs if self.view is LogView.RUNS else self.refinements
+
+    @property
+    def total(self) -> int:
+        """How many rows the same filters match in the view this page carries."""
+        return self.run_count if self.view is LogView.RUNS else self.refinement_count
 
     @classmethod
     def of(
@@ -482,20 +532,23 @@ class LogReport(WirePayload):
         runs: Sequence[RunRowPayload] = (),
         refinements: Sequence[RefinementRowPayload] = (),
         total: int = 0,
+        hidden: int = 0,
     ) -> "LogReport":
         """One page of the provenance log, from rows a store already fetched.
 
         Pure, like every other ``of()`` in this module: `LogQuery` does the reading, because this
         module is imported by `cli/render.py` on every command and must stay free of the database.
-        ``total`` counts the chosen view under the same filters, before the limit.
+        ``total`` counts the chosen view under the same filters and ``hidden`` the rows the view
+        excluded on its own, both before the limit.
         """
         chosen = tuple(runs) if spec.view is LogView.RUNS else tuple(refinements)
         return cls(
             view=spec.view,
             runs=tuple(runs),
             refinements=tuple(refinements),
-            filtered=spec.filtered,
+            narrowed_by=spec.narrowed_by,
             hidden_statuses=spec.excluded_run_statuses,
+            hidden_count=hidden,
             run_count=total if spec.view is LogView.RUNS else 0,
             refinement_count=0 if spec.view is LogView.RUNS else total,
             truncated=total > len(chosen),

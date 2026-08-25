@@ -265,10 +265,12 @@ async def graph_log(
     (``view="refinements"``), newest first. ``status`` is validated against whichever view you
     chose, so a run status is an error in the refinements view and the message names the valid set.
     ``since`` takes a duration (90s, 45m, 2h, 7d) or an ISO date, never a git ref. Assessment-only
-    runs are hidden unless ``skipped`` is true. Returns {view, runs, refinements, filtered,
-    hidden_statuses, run_count, refinement_count, truncated}. The default run view sets
-    ``filtered`` because it hides assessment-only runs, and ``hidden_statuses`` names what it hid,
-    so an empty page there means "none you can see"."""
+    runs are hidden by default; ``skipped=true`` or ``status=["skipped"]`` shows them, and
+    ``skipped`` is a runs-view filter that the refinements view refuses. Returns {view, runs,
+    refinements, filtered, narrowed_by, hidden_statuses, hidden_count, run_count,
+    refinement_count, truncated}. ``narrowed_by`` names the filters you set and ``filtered`` is
+    true only when you set one, so an empty page with ``filtered: false`` and ``hidden_count: 0``
+    means nothing is recorded rather than nothing you can see."""
     async with tool_repo(path) as repo:
         try:
             spec = LogFilter.of(

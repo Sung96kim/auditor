@@ -315,7 +315,10 @@ LogSince = Annotated[
 ]
 LogSkipped = Annotated[
     bool,
-    typer.Option("--skipped", help="Include assessment-only runs, hidden by default."),
+    typer.Option(
+        "--skipped",
+        help="Include assessment-only runs, hidden by default (runs view only).",
+    ),
 ]
 
 # --- `graph flow` options ---

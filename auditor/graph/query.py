@@ -305,6 +305,18 @@ class LogQuery:
             total=total,
         )
 
+    async def _hidden(self, spec: LogFilter) -> int:
+        """How many rows the default runs view left out on its own, under the caller's own window.
+
+        Counted rather than assumed, so an empty page can say "nothing is recorded" instead of
+        offering a flag that would reveal nothing.
+        """
+        if not spec.excluded_run_statuses:
+            return 0
+        return await self.index.runs.count(
+            statuses=list(spec.excluded_run_statuses), since=spec.since
+        )
+
     async def page(self, spec: LogFilter) -> LogReport:
         """One page in whichever view the filter chose, newest first in both, with the total the
         same filters match so a capped page says what it left behind."""
@@ -329,6 +341,7 @@ class LogQuery:
                     RunRowPayload.of(r, refinements=counts.get(r.run_id)) for r in runs
                 ],
                 total=total,
+                hidden=await self._hidden(spec),
             )
         rows = await self.index.refinements.refinements(
             statuses=spec.refinement_statuses,
