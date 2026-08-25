@@ -415,22 +415,55 @@ class PruneOutcome(WirePayload):
     stranded_runs: int = 0
 
 
-class RunOutcome(BaseModel):
+class RunAttribution(BaseModel):
+    """What a producer records about how a run was driven: what it cost, what it called, and the
+    session it ran under (Invariant 2).
+
+    Separate from the outcome because a runner carries it through a run that may end any of four
+    ways, and a run that failed still cost money.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    usage: RunUsage = RunUsage()
+    tool_trace: tuple[ToolCall, ...] = ()
+    sdk_session_id: str | None = None
+
+
+class RunOutcome(RunAttribution):
     """A run's terminal state: what it produced, what it cost, and when it stopped (spec 5.3).
 
     One field per column ``finish_run`` updates, so the UPDATE's set list is derived rather than
     hand-ordered. ``finished_at`` of ``None`` means "stamp it now".
     """
 
-    model_config = ConfigDict(frozen=True)
-
     status: RunStatus
     summary: str | None = None
     error: str | None = None
-    usage: RunUsage = RunUsage()
-    tool_trace: tuple[ToolCall, ...] = ()
-    sdk_session_id: str | None = None
     finished_at: float | None = None
+
+    @classmethod
+    def of(
+        cls,
+        status: RunStatus,
+        *,
+        summary: str | None = None,
+        error: str | None = None,
+        attribution: RunAttribution | None = None,
+        finished_at: float | None = None,
+    ) -> "RunOutcome":
+        """A terminal state with a producer's attribution folded in, defaulted when there is none.
+
+        The service finishes runs from three places and only one of them has an attribution, so the
+        merge lives here rather than at each caller.
+        """
+        return cls(
+            status=status,
+            summary=summary,
+            error=error,
+            finished_at=finished_at,
+            **(attribution or RunAttribution()).model_dump(),
+        )
 
 
 #: what each kind must name to be applicable at all, `payload.` for the payload half (spec 5.4).

@@ -25,6 +25,7 @@ from auditor.graph.refine.models import (
     RunStatus,
     TriggerKind,
 )
+from auditor.graph.refine.service import RefinementService
 from auditor.mcp import mcp
 
 PayloadT = TypeVar("PayloadT")
@@ -145,3 +146,15 @@ def cells(rendered: str, first: str) -> list[str]:
         if len(parts) > 2 and row and row[0] == first:
             return row
     raise AssertionError(f"no row starting {first!r} in\n{rendered}")
+
+
+def with_lock_timeout(service: RefinementService, seconds: float) -> RefinementService:
+    """Shrink this service's rebuild-lock budget, so a held lock is a fast refusal."""
+    service.settings = service.settings.model_copy(
+        update={
+            "graph": service.settings.graph.model_copy(
+                update={"rebuild_lock_timeout_seconds": seconds}
+            )
+        }
+    )
+    return service

@@ -6,6 +6,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
+from graph._support import with_lock_timeout
 
 from auditor.database import IndexStore
 from auditor.database.refinements import RefinementsDB
@@ -18,9 +19,12 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     RefinementTarget,
     Run,
+    RunAttribution,
     RunOutcome,
     RunStatus,
+    RunUsage,
     Tier,
+    ToolCall,
 )
 from auditor.graph.refine.service import (
     ProposalFacts,
@@ -60,18 +64,6 @@ UNCALLED = CALL_EDGE.model_copy(
         "confidence": 0.0,
     }
 )
-
-
-def with_lock_timeout(service: RefinementService, seconds: float) -> RefinementService:
-    """Shrink this service's rebuild-lock budget, so a held lock is a fast refusal."""
-    service.settings = service.settings.model_copy(
-        update={
-            "graph": service.settings.graph.model_copy(
-                update={"rebuild_lock_timeout_seconds": seconds}
-            )
-        }
-    )
-    return service
 
 
 async def test_a_manual_run_is_attributable(refine_service: RefinementService):
@@ -712,6 +704,63 @@ async def test_the_same_proposal_twice_in_one_run_stages_once(
     assert second.refusal is RefusalKind.ALREADY_STAGED
     report = await refine_service.status(run.run_id)
     assert len(report.staged) == 1
+
+
+ATTRIBUTION = RunAttribution(
+    usage=RunUsage(cost_usd=0.004, input_tokens=100, output_tokens=20, num_turns=3),
+    tool_trace=(ToolCall(tool="mcp__graph__propose", ts=1.0, detail="staged"),),
+    sdk_session_id="sdk-1",
+)
+
+
+def _attributed(run) -> tuple:
+    return (run.usage, run.tool_trace, run.sdk_session_id)
+
+
+async def test_a_commit_records_what_the_producer_spent(
+    refine_service: RefinementService,
+):
+    """Invariant 2: the cost, the trace and the SDK session belong to the run row, not the log."""
+    run = await refine_service.begin()
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    await refine_service.commit(run.run_id, attribution=ATTRIBUTION)
+    stored = await refine_service.index.runs.run(run.run_id)
+    assert _attributed(stored) == _attributed(ATTRIBUTION)
+
+
+async def test_an_abort_keeps_the_cost_of_the_work_it_threw_away(
+    refine_service: RefinementService,
+):
+    """A run stopped at its budget still spent what it spent; only its staging is lost."""
+    run = await refine_service.begin()
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    await refine_service.abort(run.run_id, "out of budget", attribution=ATTRIBUTION)
+    stored = await refine_service.index.runs.run(run.run_id)
+    assert _attributed(stored) == _attributed(ATTRIBUTION)
+    assert await refine_service.index.refinements.of_run(run.run_id) == []
+
+
+async def test_a_run_that_failed_its_rebuild_still_reports_its_cost(
+    refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("auditor.graph.refine.service.GraphBuilder.rebuild", _boom)
+    run = await refine_service.begin()
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    with pytest.raises(RefinementRefused):
+        await refine_service.commit(run.run_id, attribution=ATTRIBUTION)
+    stored = await refine_service.index.runs.run(run.run_id)
+    assert stored.status is RunStatus.FAILED
+    assert _attributed(stored) == _attributed(ATTRIBUTION)
+
+
+async def test_a_commit_without_an_attribution_leaves_the_defaults(
+    refine_service: RefinementService,
+):
+    """The seven S5 tools pass none, so their rows must be byte-identical to before."""
+    run = await refine_service.begin()
+    await refine_service.commit(run.run_id)
+    stored = await refine_service.index.runs.run(run.run_id)
+    assert _attributed(stored) == (RunUsage(), (), None)
 
 
 async def _boom(*args, **kwargs):

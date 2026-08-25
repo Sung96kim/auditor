@@ -41,6 +41,7 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     RefusalKind,
     Run,
+    RunAttribution,
     RunnerKind,
     RunOutcome,
     RunReport,
@@ -595,7 +596,9 @@ class RefinementService:
             update={"staged": tuple(item.verdict() for item in staged.staged)}
         )
 
-    async def commit(self, run_id: str) -> CommitResult:
+    async def commit(
+        self, run_id: str, *, attribution: RunAttribution | None = None
+    ) -> CommitResult:
         """Land one run under the rebuild lock (spec 6, spec 9.1).
 
         The partition is checked while the run is still open, because a caller that committed from
@@ -610,9 +613,11 @@ class RefinementService:
                 raise RefinementRefused(moved)
             staged.closed = True
             self.registry.close(run_id)
-            return await self._land_all(staged)
+            return await self._land_all(staged, attribution)
 
-    async def _land_all(self, staged: StagedRun) -> CommitResult:
+    async def _land_all(
+        self, staged: StagedRun, attribution: RunAttribution | None = None
+    ) -> CommitResult:
         """The body of one commit: the git guard, then the lock, the inserts and the rebuild.
 
         The whole batch is decided first and inserted as one transaction, and the rebuild follows
@@ -622,13 +627,18 @@ class RefinementService:
         run_id = staged.run.run_id
         refused = await self._checkout_moved(staged.run)
         if refused is not None:
-            await self._finish(run_id, RunStatus.REJECTED, error=refused)
+            await self._finish(
+                run_id, RunStatus.REJECTED, error=refused, attribution=attribution
+            )
             raise RefinementRefused(refused)
         if not staged.staged:
             # spec 6 wants the queue rows retired in the same lock as the insert; with no insert
             # there is nothing to retire, so this takes no lock and runs no build
             await self._finish(
-                run_id, RunStatus.SUCCEEDED, summary=await self._summary(run_id)
+                run_id,
+                RunStatus.SUCCEEDED,
+                summary=await self._summary(run_id),
+                attribution=attribution,
             )
             return CommitResult(run_id=run_id, rebuilt=False)
         landed: list[Verdict] = []
@@ -643,19 +653,22 @@ class RefinementService:
                     self.index, self.settings, lock_held=True
                 )
         except RebuildLockTimeout as exc:
-            await self._retire(run_id, landed, str(exc))
+            await self._retire(run_id, landed, str(exc), attribution=attribution)
             raise RefinementRefused.lock_held(
                 exc, detail=f"run {run_id} committed nothing"
             ) from exc
         # `Exception`, not `BaseException`: a cancelled task cannot be trusted to await its own
         # bookkeeping, and catching `CancelledError` here would swallow the cancellation
         except Exception as exc:
-            await self._retire(run_id, landed, str(exc))
+            await self._retire(run_id, landed, str(exc), attribution=attribution)
             raise RefinementRefused.commit_failed(run_id, exc) from exc
         committed = tuple(v for v in landed if v.outcome is ProposalOutcome.STAGED)
         rejected = tuple(v for v in landed if v.outcome is ProposalOutcome.REJECTED)
         await self._finish(
-            run_id, RunStatus.SUCCEEDED, summary=await self._summary(run_id)
+            run_id,
+            RunStatus.SUCCEEDED,
+            summary=await self._summary(run_id),
+            attribution=attribution,
         )
         return CommitResult(
             run_id=run_id, committed=committed, rejected=rejected, build=build
@@ -692,7 +705,14 @@ class RefinementService:
         ids = await self.index.transaction(write)
         return [item.landed(rid) for item, rid in zip(landings, ids, strict=True)]
 
-    async def _retire(self, run_id: str, landed: Sequence[Verdict], error: str) -> None:
+    async def _retire(
+        self,
+        run_id: str,
+        landed: Sequence[Verdict],
+        error: str,
+        *,
+        attribution: RunAttribution | None = None,
+    ) -> None:
         """Fail the run and take back anything it inserted, so nothing it wrote stays live.
 
         The inserts are one transaction, so ``landed`` is empty unless the rebuild after them
@@ -704,16 +724,26 @@ class RefinementService:
             if v.status in (RefinementStatus.PENDING, RefinementStatus.ACTIVE)
         ]
         await self.index.refinements.set_statuses(live, RefinementStatus.REJECTED)
-        await self._finish(run_id, RunStatus.FAILED, error=error)
+        await self._finish(
+            run_id, RunStatus.FAILED, error=error, attribution=attribution
+        )
 
-    async def abort(self, run_id: str, reason: str) -> Run:
-        """Drop this run's staging and stamp it aborted (spec 9.1). Nothing was stored."""
+    async def abort(
+        self, run_id: str, reason: str, *, attribution: RunAttribution | None = None
+    ) -> Run:
+        """Drop this run's staging and stamp it aborted (spec 9.1). Nothing was stored.
+
+        The cost survives: a run that stopped at its turn or budget cap still spent what it spent,
+        and only the proposals it never promised are lost.
+        """
         staged = self.registry.require(run_id)
         async with staged.lock:
             staged.require_open()
             staged.closed = True
             self.registry.close(run_id)
-            await self._finish(run_id, RunStatus.ABORTED, error=reason)
+            await self._finish(
+                run_id, RunStatus.ABORTED, error=reason, attribution=attribution
+            )
         run = await self.index.runs.run(run_id)
         if run is None:  # the row was written by `begin`, so this cannot happen
             raise RefinementRefused.no_such_run(run_id)
@@ -988,7 +1018,11 @@ class RefinementService:
         *,
         summary: str | None = None,
         error: str | None = None,
+        attribution: RunAttribution | None = None,
     ) -> None:
         await self.index.runs.finish_run(
-            run_id, RunOutcome(status=status, summary=summary, error=error)
+            run_id,
+            RunOutcome.of(
+                status, summary=summary, error=error, attribution=attribution
+            ),
         )
