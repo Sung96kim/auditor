@@ -97,13 +97,18 @@ class ConceptPayload(WirePayload):
     members: tuple[ClusterMember, ...] = ()
 
     def capped(self, limit: int) -> CappedConcept:
-        """The first ``limit`` members with the true total alongside, for a bounded response."""
+        """The first ``limit`` members with the true total alongside, for a bounded response.
+
+        A negative limit is floored at zero: slicing from the end would answer a nonsense
+        request with a plausible-looking page of every member but the last.
+        """
+        members = self.members[: max(0, limit)]
         return CappedConcept(
             cluster_id=self.cluster_id,
             label=self.label,
             member_count=len(self.members),
-            members=self.members[:limit],
-            shown=len(self.members[:limit]),
+            members=members,
+            shown=len(members),
         )
 
 
@@ -146,14 +151,14 @@ class QueueRowPayload(UnresolvedRow):
         return f"{self.receiver_root}.{self.name}" if self.receiver_root else self.name
 
     @classmethod
-    def of(cls, row: Mapping[str, Any], cap: int = QUEUE_ID_CAP) -> "QueueRowPayload":
+    def of(cls, row: Mapping[str, Any]) -> "QueueRowPayload":
         """Cap a stored queue row's two id lists the way ``graph_overview`` caps its hub lists:
         a node can have dozens of definers."""
         return cls.model_validate(
             {
                 **row,
-                "definers": tuple(row["definers"])[:cap],
-                "candidates": tuple(row["candidates"])[:cap],
+                "definers": tuple(row["definers"])[:QUEUE_ID_CAP],
+                "candidates": tuple(row["candidates"])[:QUEUE_ID_CAP],
                 "definers_count": len(row["definers"]),
                 "candidates_count": len(row["candidates"]),
             }

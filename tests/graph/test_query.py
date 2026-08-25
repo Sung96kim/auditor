@@ -36,6 +36,17 @@ async def test_concept_no_match_returns_empty(query_store):
     assert await GraphQuery(query_store).concept("zzznotaconcept") is None
 
 
+@pytest.mark.parametrize("limit, shown", [(2, 2), (1, 1), (0, 0), (-1, 0)])
+async def test_concept_capped_never_slices_from_the_end(query_store, limit, shown):
+    """Every other bounded response clamps its limit; a negative one here used to return every
+    member but the last, with a `shown` that looked deliberate."""
+    concept = await GraphQuery(query_store).concept("user")
+    assert concept is not None and len(concept.members) == 2
+    capped = concept.capped(limit)
+    assert capped.shown == shown and len(capped.members) == shown
+    assert capped.member_count == 2
+
+
 async def test_concept_matches_by_member_name_when_no_label(query_store):
     """No cluster is labelled 'fetch', but the 'user' cluster has a fetch_user member, so a
     member-name match selects it rather than falling back to the biggest cluster."""

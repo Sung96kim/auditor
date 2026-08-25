@@ -23,7 +23,7 @@ from auditor.graph.model import (
     EdgeKind,
     UnresolvedReason,
 )
-from auditor.graph.payloads import QueueRowPayload
+from auditor.graph.payloads import NeighborsReport, QueueRowPayload
 from auditor.graph.query import GraphQuery
 from auditor.mcp.helpers import MUTATING, READ_ONLY, open_index, tool_config
 from auditor.mcp.server import mcp
@@ -63,7 +63,7 @@ async def graph_neighbors(
     root = find_root(Path(path))
     async with await open_index(root) as index:
         hits = await GraphQuery(index).neighbors(symbol, depth=depth)
-    return hits.model_dump(mode="json")[:limit]
+    return NeighborsReport(hits.root[:limit]).model_dump(mode="json")
 
 
 @mcp.tool(annotations=READ_ONLY)
