@@ -96,13 +96,8 @@ class IndexStore(BaseDB):
         # because the journal-mode pragma ignores busy_timeout and returns BUSY immediately.
         conn.execute("PRAGMA busy_timeout=30000")
         if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA journal_mode=WAL")  # refused inside a transaction
         conn.execute("PRAGMA synchronous=NORMAL")
-        stored = conn.execute("PRAGMA user_version").fetchone()[0]
-        existing = {
-            r[0]
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
         statements = [
             stmt
             for s in BaseDB._registry
@@ -112,12 +107,22 @@ class IndexStore(BaseDB):
         cache_tables = tuple(
             n for s in BaseDB._registry for n, t in s.TABLES.items() if t.cache
         )
-        # the index is a pure cache: on any stored version that is not this one, drop and rebuild
-        # rather than migrate. A stamp of 0 on a populated database is a stamp that was lost, not
-        # a fresh database, so it rebuilds too; only an empty file skips the sweep.
-        stale = stored != SCHEMA_VERSION and bool(existing & set(cache_tables))
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # both reads under the write lock: outside it they are separate WAL snapshots, and a
+            # concurrent creator's version commit can be missed while its tables are already
+            # visible — the rebuild then drops the cache under rows that creator committed.
+            stored = conn.execute("PRAGMA user_version").fetchone()[0]
+            existing = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            # the index is a pure cache: on any stored version that is not this one, drop and
+            # rebuild rather than migrate. A stamp of 0 on a populated database is a stamp that
+            # was lost, not a fresh database, so it rebuilds too; only an empty file skips the sweep.
+            stale = stored != SCHEMA_VERSION and bool(existing & set(cache_tables))
             IndexStore._migrate_identity_tables(conn)
             if stale:
                 # only the derived cache tables; repos + ignores (user state) are preserved, and
