@@ -393,7 +393,6 @@ class AuditorSettings(BaseSettings):
     overrides: list[OverrideConfig] = Field(default_factory=list)
     plugins: list[str] = Field(default_factory=list)
     trust_local_plugins: bool = False
-    lint_overlap: bool = False
     respect_skips: bool = True
     observer_allowed: bool = (
         True  # repo's hard opt-out for the graph observer; never under graph.*
@@ -542,6 +541,19 @@ def unknown_config_keys(raw: dict[str, object], model: type[BaseModel]) -> list[
     return sorted(_walk_unknown(model, raw, ""))
 
 
+class UnknownProfile(ValueError):
+    """``extends`` or ``--profile`` named a profile that is neither built in nor a readable file."""
+
+
+def _builtin_profiles() -> list[str]:
+    """The profile names shipped in ``auditor/profiles``, for the error message."""
+    return sorted(
+        entry.name.removesuffix(".toml")
+        for entry in resources.files("auditor.profiles").iterdir()
+        if entry.name.endswith(".toml")
+    )
+
+
 def _load_profile(name_or_path: str, _seen: frozenset[str] = frozenset()) -> dict:
     """Load a built-in profile by name or a TOML file by path, resolving ``extends``."""
     if name_or_path in _seen:
@@ -561,7 +573,10 @@ def _read_profile_toml(name_or_path: str) -> dict:
     res = resources.files("auditor.profiles").joinpath(f"{name_or_path}.toml")
     if res.is_file():
         return tomllib.loads(res.read_text())
-    raise FileNotFoundError(f"profile {name_or_path!r} not found (no built-in or file)")
+    raise UnknownProfile(
+        f"unknown profile {name_or_path!r}; choose a built-in ({', '.join(_builtin_profiles())}) "
+        "or a path to a .toml file"
+    )
 
 
 def _read_repo_tomls(root: Path) -> tuple[dict, dict]:

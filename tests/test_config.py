@@ -16,6 +16,7 @@ from auditor.config import (
     RolePolicy,
     RuleConfig,
     Threshold,
+    UnknownProfile,
     _NonPolicyEnvSource,
     is_configured,
     load_config,
@@ -333,12 +334,6 @@ def test_threshold_merged_with_all_unset_returns_self():
     assert t.merged(empty) is t
 
 
-def test_unknown_profile_raises_file_not_found(tmp_path):
-    """load_config with a non-existent profile name raises FileNotFoundError."""
-    with pytest.raises(FileNotFoundError):
-        load_config(tmp_path, profile="no-such-profile")
-
-
 def test_role_mode_script_enables_dangerous_eval():
     """SCRIPT role uses strict mode → PY-SEC-DANGEROUS-EVAL is enabled."""
     rc = ResolvedConfig(AuditorSettings(), role=FileRole.SCRIPT, rel_path="x.py")
@@ -553,3 +548,37 @@ def test_load_config_report_is_gone():
     """The two-entry-point era is over; a straggling import must fail loudly, not resolve."""
     assert not hasattr(config_module, "load_config_report")
     assert not hasattr(config_module, "ConfigReport")
+
+
+def test_lint_overlap_is_gone():
+    """It was accepted and never read; a repo that set it now sees it as an unknown key."""
+    assert "lint_overlap" not in AuditorSettings.model_fields
+    assert unknown_config_keys({"lint_overlap": True}, AuditorSettings) == [
+        "lint_overlap"
+    ]
+
+
+def test_unknown_profile_raises_a_named_error(tmp_path):
+    """A profile nothing resolves is a config error, not a missing file: the CLI turns the named
+    error into one line, and a bare FileNotFoundError read as a broken install."""
+    with pytest.raises(UnknownProfile) as caught:
+        load_config(tmp_path, profile="no-such-profile")
+    assert "no-such-profile" in str(caught.value)
+    assert "strict" in str(caught.value)  # the message lists the built-ins
+
+
+def test_env_cannot_choose_a_profile(tmp_path, monkeypatch):
+    """Regression: `extends` is repo policy. The allow-list keeps it out of the env source and the
+    loader writes the resolved profile last, so neither lock may be removed without this failing.
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    monkeypatch.setenv("AUDITOR_EXTENDS", "strict")
+    assert load_config(tmp_path).extends == "base"
+    assert "extends" not in _NonPolicyEnvSource.ENV_SETTABLE
+
+
+def test_env_can_still_reach_the_one_allowed_field(tmp_path, monkeypatch):
+    """The counterpart: the allow-list is not simply dead."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    monkeypatch.setenv("AUDITOR_RESPECT_GITIGNORE", "false")
+    assert load_config(tmp_path).respect_gitignore is False

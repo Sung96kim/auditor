@@ -4,13 +4,11 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from pydantic import ValidationError
 
 from auditor.cli.console import err_console
-from auditor.cli.helpers import fail, format_config_error, present
+from auditor.cli.helpers import fail, load_settings, present
 from auditor.cli.options import RootArg
 from auditor.cli.render import render_rules_list
-from auditor.config import load_config
 from auditor.discovery import find_root
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
@@ -43,11 +41,8 @@ def rules_list(
 ) -> None:
     """List every registered detector rule, plus the target repo's trusted plugin rules."""
     loader = PluginLoader()
-    try:
-        # loads the repo's plugins as a side effect, so their rules are registered before we list
-        load_config(find_root(target), loader=loader)
-    except ValidationError as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+    # loads the repo's plugins as a side effect, so their rules are registered before we list
+    load_settings(find_root(target), loader=loader)
     for warning in loader.warnings:
         err_console.print(f"[yellow]warning:[/] {warning}")
     if category is not None and category not in REGISTRY.categories():

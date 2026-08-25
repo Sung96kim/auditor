@@ -64,7 +64,6 @@ security = { min_severity = "high" }
   blessed home for `BaseSettings` subclasses (`PY-CONFIG-SCATTERED-SETTINGS`).
 - `settings_cohesion` (default `true`): also bless the de-facto home, the module where settings
   classes already cluster.
-- `lint_overlap` (bool, default `false`): accepted and currently unused; no code reads it.
 - `cli_frameworks` (default `["typer", "click"]`): CLI frameworks whose free-function-command idiom
   exempts a module from the OOP orchestrator and cross-file duplicate-function heuristics. Extend
   it for an in-house framework.
@@ -407,8 +406,10 @@ The environment reaches one field, not the whole model.
   policy until someone puts it there on purpose.
 - The environment is the lowest layer. It is deep-merged under the TOML layers, so an `AUDITOR_*`
   value only reaches keys no profile or repo file sets.
-- `AUDITOR_EXTENDS` never applies: the loader always writes `extends` into the merged config. Use
-  `extends` in TOML or `scan --profile`.
+- `AUDITOR_EXTENDS` never applies, and two independent locks keep it that way: `extends` is not on
+  `_NonPolicyEnvSource`'s allow-list, and the loader writes the resolved profile into the merged
+  config as its last step. Use `extends` in TOML or `scan --profile`. `tests/test_config.py`'s
+  `test_env_cannot_choose_a_profile` pins both.
 - Personal settings live under a different prefix entirely, `AUDITOR_USER_*`. See
   [User settings](#user-settings-auditor_home).
 

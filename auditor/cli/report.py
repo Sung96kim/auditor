@@ -23,7 +23,7 @@ from auditor.cli.options import (
     ReportFile,
     ShowIgnored,
 )
-from auditor.config import unknown_repo_keys
+from auditor.config import UnknownProfile, unknown_repo_keys
 from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.reporters import render
@@ -55,6 +55,6 @@ def report(
             ),
             f"auditing {file.name}…",
         )
-    except ValidationError as exc:
+    except (UnknownProfile, ValidationError) as exc:
         fail(f"invalid config — {format_config_error(exc)}")
     emit(render(results, fmt), output)

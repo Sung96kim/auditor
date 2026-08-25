@@ -12,11 +12,14 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import ValidationError
 
 from auditor.cli.console import ACCENT, err_console
 from auditor.cli.graph_refine import register as register_refine
 from auditor.cli.helpers import (
     fail,
+    format_config_error,
+    load_settings,
     open_index,
     present,
     run,
@@ -46,7 +49,7 @@ from auditor.cli.render import (
     render_graph_search,
     render_graph_usages,
 )
-from auditor.config import AuditorSettings, load_config, unknown_repo_keys
+from auditor.config import AuditorSettings, UnknownProfile, unknown_repo_keys
 from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
@@ -106,7 +109,7 @@ def graph_build(
         )
     root = find_root(target)
     warn_unknown_config(unknown_repo_keys(root))
-    settings = load_config(root)
+    settings = load_settings(root)
 
     async def do_build(report: Callable[[str], None]) -> dict:
         async with await open_index(root) as index:
@@ -128,7 +131,11 @@ def graph_build(
             report("building graph…")
             return await _build(root, settings, report, lock_held=True)
 
-    present(run_staged(do_build, "building graph…"), render_graph_build, as_json=json_)
+    try:
+        summary = run_staged(do_build, "building graph…")
+    except (UnknownProfile, ValidationError) as exc:
+        fail(f"invalid config — {format_config_error(exc)}")
+    present(summary, render_graph_build, as_json=json_)
 
 
 def _query_cmd(
@@ -270,7 +277,7 @@ def graph_flow(
         include_tests=include_tests,
         expand_hubs=expand_hubs,
         stop_at=tuple(stop_at or ()),
-        hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+        hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
     )
     present(
         run(_query_cmd("flow")(root, symbol=symbol, options=options), "tracing flow…"),
@@ -290,7 +297,7 @@ async def _serve_html(
         report("scanning repository…")
         await _autoscan(root)
         report("building graph…")
-        await _build(root, load_config(root), report)
+        await _build(root, load_settings(root), report)
     report("preparing UI…")
     async with await open_index(root) as index:
         return render_app(await build_payload(index))
@@ -311,10 +318,13 @@ def graph_serve(
     """Serve the interactive graph UI. Serves the already-built graph when present (fast); only
     scans + builds when it's missing. Pass --rebuild to force a fresh build."""
     root = find_root(target)
-    html = run_staged(
-        lambda report: _serve_html(root, rebuild=rebuild, report=report),
-        "preparing graph UI…",
-    )
+    try:
+        html = run_staged(
+            lambda report: _serve_html(root, rebuild=rebuild, report=report),
+            "preparing graph UI…",
+        )
+    except (UnknownProfile, ValidationError) as exc:
+        fail(f"invalid config — {format_config_error(exc)}")
     server = ReportServer(html)
     err_console.print(
         f"[{ACCENT}]◆[/] serving graph UI at [bold]{server.url}[/bold]  [dim](Ctrl-C to stop)[/dim]"
@@ -357,7 +367,7 @@ def graph_export(
                 FlowOptions(
                     direction=FlowDirection.IN if inbound else FlowDirection.OUT,
                     depth=4 if depth is None else depth,
-                    hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+                    hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
                 ),
             )
         return to_dot(payload, flow=tree) if tree else None

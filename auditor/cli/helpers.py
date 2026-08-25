@@ -17,9 +17,11 @@ from rich.console import Console
 from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
+from auditor.config import AuditorSettings, UnknownProfile, load_config
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
 from auditor.paths import index_db_path
+from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
 
 _T = TypeVar("_T")
@@ -89,15 +91,43 @@ def warn_unknown_config(keys: Sequence[str]) -> None:
 _NON_FIELD_LOC = ("", "[key]")
 
 
-def format_config_error(exc: ValidationError) -> str:
-    """First validation error as ``'<dotted loc>: <msg>'`` for a clean one-line failure.
+def format_config_error(exc: UnknownProfile | ValidationError) -> str:
+    """One line naming what is wrong with the configuration, for a failure with no traceback.
 
-    Parts that name no field are dropped, so a bad role or category key reads ``roles.tets``
-    rather than ``roles.tets.``.
+    A bad profile speaks for itself; a validation error becomes ``'<dotted loc>: <msg>'`` with the
+    parts that name no field dropped, so a bad role or category key reads ``roles.tets`` rather
+    than ``roles.tets.``.
     """
+    if isinstance(exc, UnknownProfile):
+        return str(exc)
     err = exc.errors()[0]
     loc = ".".join(str(p) for p in err["loc"] if str(p) not in _NON_FIELD_LOC)
     return f"{loc}: {err['msg']}" if loc else err["msg"]
+
+
+def load_settings(
+    root: Path,
+    *,
+    profile: str | None = None,
+    allow_local_plugins: bool = False,
+    loader: PluginLoader | None = None,
+    overrides: dict[str, object] | None = None,
+) -> AuditorSettings:
+    """:func:`auditor.config.load_config` with both config failures turned into one clean line.
+
+    The same split as :func:`_connect`: the library raises so a caller can handle it, and the CLI
+    edge is where a traceback becomes a message.
+    """
+    try:
+        return load_config(
+            root,
+            profile=profile,
+            allow_local_plugins=allow_local_plugins,
+            loader=loader,
+            overrides=overrides,
+        )
+    except (UnknownProfile, ValidationError) as exc:
+        fail(f"invalid config — {format_config_error(exc)}")
 
 
 def require_exists(path: Path) -> None:

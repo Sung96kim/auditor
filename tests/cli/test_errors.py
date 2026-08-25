@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from _support import invoke
 
+import auditor.cli
 from auditor.database.base import Column
 from auditor.database.ignores import IgnoresDB
 
@@ -113,3 +114,52 @@ def test_unwritable_output_path_fails_cleanly(
     assert result.exit_code == 1
     assert "cannot write" in result.output
     assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["config", "show", "--config-json", '{"extends":"nope"}', "-r"],
+        ["config", "check", "--config-json", '{"extends":"nope"}', "-r"],
+        ["discover", "--config-json", '{"extends":"nope"}'],
+    ],
+)
+def test_a_bad_profile_fails_on_one_line(tmp_path, argv):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    result = invoke(*argv, str(tmp_path))
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "nope" in result.output
+
+
+def test_a_bad_profile_flag_fails_on_one_line(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    (tmp_path / "a.py").write_text("x = 1\n")
+    result = invoke("scan", str(tmp_path), "--profile", "nope", "--no-index")
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("argv", [["crossfile"], ["graph", "build"]])
+def test_a_bad_extends_in_the_repo_toml_fails_on_one_line(tmp_path, argv):
+    """The same defect reached every command through the repo's own TOML, not just --profile, and
+    `graph build` reaches the loader twice: once directly and once through the auto-scan."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends = "nope"\n'
+    )
+    result = invoke(*argv, str(tmp_path))
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+
+
+def test_only_the_cli_edge_calls_load_config_directly():
+    """Every command loads through `load_settings`, so a config failure is a line and not a
+    traceback. A new command that calls the loader directly re-opens the bug. `helpers.py` is the
+    one exception: it holds `load_settings`, which is where the call belongs."""
+    offenders = [
+        path.name
+        for path in sorted(Path(auditor.cli.__file__).parent.glob("*.py"))
+        if path.name != "helpers.py"
+        and "load_config(" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []

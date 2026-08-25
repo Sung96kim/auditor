@@ -8,13 +8,13 @@ from pydantic import BaseModel, ValidationError
 from auditor.cli.helpers import (
     fail,
     format_config_error,
+    load_settings,
     parse_config_json,
     present,
     warn_unknown_config,
 )
 from auditor.cli.options import ConfigJson, RootArg, UserConfig
 from auditor.cli.render import render_config_check, render_config_show
-from auditor.config import load_config
 from auditor.discovery import find_root
 from auditor.user_settings import load_user_settings, unknown_user_keys
 
@@ -42,10 +42,7 @@ def config_show(
             fail(f"invalid user config — {format_config_error(exc)}")
         warn_unknown_config(unknown_user_keys(root))
     else:
-        try:
-            settings = load_config(root, overrides=parse_config_json(config_json))
-        except ValidationError as exc:
-            fail(f"invalid config — {format_config_error(exc)}")
+        settings = load_settings(root, overrides=parse_config_json(config_json))
         warn_unknown_config(settings.unknown_keys)
     present(settings.model_dump(mode="json"), render_config_show, as_json=json_)
 
@@ -59,10 +56,7 @@ def config_check(
     """Report config keys no model declares. Exits non-zero when a value fails validation."""
     root = find_root(target)
     overrides = parse_config_json(config_json)
-    try:
-        settings = load_config(root, overrides=overrides)
-    except ValidationError as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+    settings = load_settings(root, overrides=overrides)
     try:
         load_user_settings(root)
     except ValidationError as exc:

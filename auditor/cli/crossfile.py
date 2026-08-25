@@ -5,10 +5,16 @@ from pathlib import Path
 import typer
 
 from auditor.cli.apps import app
-from auditor.cli.helpers import open_index, present, run, warn_unknown_config
+from auditor.cli.helpers import (
+    load_settings,
+    open_index,
+    present,
+    run,
+    warn_unknown_config,
+)
 from auditor.cli.options import DirTarget
 from auditor.cli.render import render_crossfile
-from auditor.config import load_config, unknown_repo_keys
+from auditor.config import unknown_repo_keys
 from auditor.crossfile import CrossFileInputs
 from auditor.discovery import find_root
 from auditor.ignores import IgnoreList
@@ -27,7 +33,7 @@ def crossfile(
 
 
 async def _crossfile(root: Path) -> int:
-    inputs = CrossFileInputs.derive(root, load_config(root))
+    inputs = CrossFileInputs.derive(root, load_settings(root))
     async with await open_index(root) as index:
         per_file = await inputs.recompute(index)
         ignores = IgnoreList.from_rows(await index.ignores.list())

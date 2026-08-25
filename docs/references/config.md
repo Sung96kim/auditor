@@ -66,6 +66,9 @@ auditr config check
 - `--config-json` takes a JSON object in the same shape as the TOML config and is merged as the
   highest layer. `scan`, `report`, and `discover` accept the same flag.
 - Invalid JSON, or JSON that is not an object, fails with a one-line error and no traceback.
+- A profile name that is neither a built-in nor a readable `.toml` path fails the same way, naming
+  the built-ins. It applies to `--profile`, to `extends` in the repo's TOML, and to an `extends`
+  passed through `--config-json`.
 - A value that fails validation fails the same way, naming the offending field and the reason.
 - Rule ids and categories in the config are validated against the runtime registry, so plugin
   rules are admissible; see [plugins.md](plugins.md).

@@ -3,12 +3,10 @@
 from pathlib import Path
 
 import typer
-from pydantic import ValidationError
 
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
-    fail,
-    format_config_error,
+    load_settings,
     parse_config_json,
     present,
     require_exists,
@@ -16,7 +14,6 @@ from auditor.cli.helpers import (
 )
 from auditor.cli.options import ConfigJson, DirTarget
 from auditor.cli.render import render_discover
-from auditor.config import load_config
 from auditor.discovery import FileDiscovery, find_root
 from auditor.roles import RoleClassifier
 
@@ -30,10 +27,7 @@ def discover(
     """List auditable files with their classified role."""
     require_exists(target)
     root = find_root(target)
-    try:
-        settings = load_config(root, overrides=parse_config_json(config_json))
-    except ValidationError as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
+    settings = load_settings(root, overrides=parse_config_json(config_json))
     warn_unknown_config(settings.unknown_keys)
     classifier = RoleClassifier(settings.role_globs)
     out = []

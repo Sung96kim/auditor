@@ -15,6 +15,7 @@ from auditor.cli.helpers import (
     emit,
     fail,
     format_config_error,
+    load_settings,
     parse_config_json,
     require_exists,
     run_live,
@@ -51,7 +52,7 @@ from auditor.cli.options import (
     WriteBaseline,
 )
 from auditor.cli.summary import print_summary
-from auditor.config import is_configured, load_config, unknown_repo_keys
+from auditor.config import UnknownProfile, is_configured, unknown_repo_keys
 from auditor.discovery import default_base_ref, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity as _check_severity
@@ -130,7 +131,7 @@ def _diff_report_only(
     root = root or find_root(target)
     ref: str | None = None
     if vs_base:
-        ref = load_config(root).diff_base or default_base_ref(root)
+        ref = load_settings(root).diff_base or default_base_ref(root)
         if ref is None:
             fail(
                 "no base branch found (tried main/master/develop/development); "
@@ -231,7 +232,7 @@ def scan(
             f"auditing {target_label}",
             spinner=not verbose,
         )
-    except ValidationError as exc:
+    except (UnknownProfile, ValidationError) as exc:
         fail(f"invalid config — {format_config_error(exc)}")
 
     if write_baseline is not None:
