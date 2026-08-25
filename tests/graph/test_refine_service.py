@@ -5,7 +5,6 @@ import time
 from contextlib import suppress
 
 import pytest
-from pydantic import ValidationError
 
 from auditor.database.refinements import RefinementsDB
 from auditor.graph.model import EdgeKind
@@ -125,13 +124,14 @@ async def test_a_payload_with_no_reason_is_stored_as_a_rejection(
     assert stored is not None and stored.status is RefinementStatus.REJECTED
 
 
-async def test_a_payload_no_lenient_read_can_rescue_raises(
+async def test_a_payload_no_lenient_read_can_rescue_is_refused_not_raised(
     refine_service: RefinementService,
 ):
     """A missing `dst` is not a text rule `STORED_ROW` relaxes, so there is no proposal to
-    attribute a rejection to and the caller gets the validator's error."""
+    attribute a rejection to. The refusal is still the service's own error type: a caller that has
+    to tell a pydantic traceback from a verdict has two contracts instead of one."""
     run = await refine_service.begin()
-    with pytest.raises(ValidationError, match="missing"):
+    with pytest.raises(RefinementRefused, match="not a proposal"):
         await refine_service.propose(
             run.run_id, {"kind": "add_edge", "target": {"src": "impl.py::Impl.run"}}
         )
@@ -275,7 +275,7 @@ async def test_accepting_a_pending_refinement_makes_the_next_build_apply_it(
     await refine_service.propose(run.run_id, CALL_EDGE)
     result = await refine_service.commit(run.run_id)
     assert result.build is not None and result.build.refined == 0
-    accepted = await refine_service.accept(result.committed[0].refinement_id)
+    accepted = await refine_service.ledger.accept(result.committed[0].refinement_id)
     assert accepted.status is RefinementStatus.ACTIVE
     summary = await refine_service.rebuild()
     assert summary.refined == 1
@@ -287,7 +287,7 @@ async def test_a_second_identical_proposal_commits_as_a_confirmation(
     first = await refine_service.begin()
     await refine_service.propose(first.run_id, CALL_EDGE)
     committed = await refine_service.commit(first.run_id)
-    await refine_service.accept(committed.committed[0].refinement_id)
+    await refine_service.ledger.accept(committed.committed[0].refinement_id)
     second = await refine_service.begin()
     await refine_service.propose(second.run_id, CALL_EDGE)
     result = await refine_service.commit(second.run_id)
@@ -493,34 +493,82 @@ async def test_status_of_a_run_this_process_did_not_open_says_so(
     assert report.staged == ()
 
 
-@pytest.mark.parametrize(
-    ("method", "expected"),
-    [("revert", RefinementStatus.REVERTED), ("pin", RefinementStatus.PINNED)],
-)
-async def test_the_hand_transitions(
-    refine_service: RefinementService, method: str, expected: RefinementStatus
-):
+_TRANSITIONS = {
+    "accept": RefinementStatus.ACTIVE,
+    "revert": RefinementStatus.REVERTED,
+    "pin": RefinementStatus.PINNED,
+}
+
+
+@pytest.mark.parametrize("method", sorted(_TRANSITIONS))
+async def test_the_hand_transitions(refine_service: RefinementService, method: str):
     run = await refine_service.begin()
     await refine_service.propose(run.run_id, CALL_EDGE)
     result = await refine_service.commit(run.run_id)
-    moved = await getattr(refine_service, method)(result.committed[0].refinement_id)
-    assert moved.status is expected
+    moved = await getattr(refine_service.ledger, method)(
+        result.committed[0].refinement_id
+    )
+    assert moved.status is _TRANSITIONS[method]
 
 
+@pytest.mark.parametrize("method", sorted(_TRANSITIONS))
 async def test_a_terminal_refinement_refuses_every_transition(
-    refine_service: RefinementService,
+    refine_service: RefinementService, method: str
 ):
+    """`rejected` is in none of the three allowed sets, so the claim is true today; widening any
+    of them would have left this green while only `accept` was ever called."""
     run = await refine_service.begin()
     verdict = await refine_service.propose(run.run_id, UNCALLED)
     with pytest.raises(RefinementRefused, match="rejected"):
-        await refine_service.accept(verdict.refinement_id)
+        await getattr(refine_service.ledger, method)(verdict.refinement_id)
+
+
+async def test_prune_drops_only_the_skipped_runs_past_the_window(
+    refine_service: RefinementService,
+):
+    """The one public method with no coverage; `skipped_retention_days` is the window it reads."""
+    refine_service.user = UserSettings.model_validate(
+        {"observer": {"skipped_retention_days": 0}}
+    )
+    kept = await refine_service.begin()
+    refine_service.registry.max_open = 1
+    await refine_service.begin()
+    assert await refine_service.prune() == 1
+    assert await refine_service.index.runs.run(kept.run_id) is None
+    remaining = await refine_service.index.runs.runs()
+    assert [r.status for r in remaining] == [RunStatus.QUEUED]
+
+
+async def test_a_partition_prefix_reaches_every_stored_id(
+    refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
+):
+    """A caller names ids the way its own partition shows them; identity rows are toplevel
+    relative. Every fixture has an empty prefix, so nothing here made the rebasing observable."""
+    monkeypatch.setattr(type(refine_service), "prefix", property(lambda self: "sub/"))
+    run = await refine_service.begin()
+    assert (await refine_service.propose(run.run_id, CALL_EDGE)).outcome is (
+        ProposalOutcome.STAGED
+    )
+    result = await refine_service.commit(run.run_id)
+    rid = result.committed[0].refinement_id
+    stored = await refine_service.ledger.refinement(rid)
+    assert (stored.target.src, stored.target.dst) == (
+        "sub/impl.py::Impl.run",
+        "sub/svc.py::load_user",
+    )
+    anchors = await refine_service.index.refinements.anchors([rid])
+    assert {a.node_id for a in anchors[rid]} == {
+        "sub/impl.py::Impl.run",
+        "sub/svc.py::load_user",
+    }
+    assert {a.path for a in anchors[rid]} == {"sub/impl.py", "sub/svc.py"}
 
 
 async def test_an_unknown_refinement_id_is_named_not_ignored(
     refine_service: RefinementService,
 ):
     with pytest.raises(RefinementRefused, match="4242"):
-        await refine_service.accept(4242)
+        await refine_service.ledger.accept(4242)
 
 
 async def test_a_commit_with_nothing_staged_neither_locks_nor_rebuilds(

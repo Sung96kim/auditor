@@ -97,6 +97,9 @@ class LimitsConfig(BaseModel):
     max_changes_per_run: int = Field(
         25, ge=1, description="Proposals one run may commit."
     )
+    max_open_runs: int = Field(
+        8, ge=1, description="Runs one process may hold staged at once."
+    )
 
 
 class SchedulingConfig(BaseModel):

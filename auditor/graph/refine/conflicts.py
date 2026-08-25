@@ -74,7 +74,7 @@ class ConflictRules(BaseModel):
     def of(
         cls, active: Sequence[Refinement], edges: Sequence[GraphEdge]
     ) -> "ConflictRules":
-        """Keep the active edge-shaped refinements and the resolver's own edges leaving the source.
+        """Keep the active edge-shaped refinements and the resolver's own deterministic edges.
 
         A `refined` edge is another refinement's work, which the first rule already covers; counting
         it here would reject a proposal for being its own duplicate.

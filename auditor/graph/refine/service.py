@@ -23,12 +23,11 @@ from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.discovery import git_output
 from auditor.graph.build import GraphBuilder
-from auditor.graph.model import GraphEdge, NodeKind, UnresolvedRow
+from auditor.graph.model import EdgeKind, GraphEdge, NodeKind, UnresolvedRow
 from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.refine.conflicts import ConflictRules
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
 from auditor.graph.refine.models import (
-    STORED_ROW,
     Anchor,
     ClientKind,
     ProducerKind,
@@ -42,7 +41,6 @@ from auditor.graph.refine.models import (
     RunStatus,
     Stratum,
     Tier,
-    TriggerDetail,
     TriggerKind,
 )
 from auditor.graph.refine.namespace import (
@@ -61,7 +59,7 @@ from auditor.graph.refine.verify import (
 )
 from auditor.graph.resolve_edges import NameBindings
 from auditor.roles import RoleClassifier
-from auditor.user_settings import UserSettings
+from auditor.user_settings import LimitsConfig, UserSettings
 
 #: statuses a hand transition may leave; everything else is terminal (spec 5.4, 5.7)
 _ACCEPT_FROM = frozenset({RefinementStatus.PENDING})
@@ -80,6 +78,15 @@ class RefinementRefused(RuntimeError):
     def lock_held(cls, exc: RebuildLockTimeout, *, detail: str) -> "RefinementRefused":
         """Another build held this checkout's rebuild lock for the whole budget."""
         return cls(f"{detail}: {exc.advice}")
+
+    @classmethod
+    def not_a_proposal(cls, exc: ValidationError) -> "RefinementRefused":
+        """A payload no lenient read can rescue, refused in the service's own error type.
+
+        There is no proposal to attribute a stored rejection to, and a caller that has to tell a
+        pydantic traceback from a verdict has two contracts instead of one.
+        """
+        return cls(f"this payload is not a proposal: {exc.errors()[0]['msg']}")
 
     @classmethod
     def commit_failed(cls, run_id: str, exc: BaseException) -> "RefinementRefused":
@@ -106,22 +113,6 @@ class RefusalKind(StrEnum):
     ALREADY_STAGED = "already_staged"
     INTRA_BATCH = "intra_batch"
     OUT_OF_PARTITION = "out_of_partition"
-
-
-def _read_proposal(raw: Proposal | Mapping[str, Any]) -> tuple[Proposal, str]:
-    """One proposal, and the validator's complaint about it when it is not a legal one.
-
-    An illegal payload is re-read under `STORED_ROW` so the rejection spec 9.2 requires can be
-    stored. A target no kind could ever fill is not a text rule that context relaxes and raises
-    instead: there is no proposal to attribute a rejection to.
-    """
-    if isinstance(raw, Proposal):
-        return raw, ""
-    try:
-        return Proposal.model_validate(raw), ""
-    except ValidationError as exc:
-        lenient = Proposal.model_validate(raw, context={STORED_ROW: True})
-        return lenient, str(exc.errors()[0]["msg"])
 
 
 class Verdict(BaseModel):
@@ -182,12 +173,72 @@ class RunReport(BaseModel):
     rejected: tuple[int, ...] = ()
 
 
+class FactReader(BaseModel):
+    """The three reads one proposal is judged against, over the collaborators they need.
+
+    `verify.FactVerifier` is pure by contract, so the reading belongs to an object of its own
+    rather than to the service, where it was four private methods and a four-collaborator call.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    index: IndexStore
+    root: Path
+    roles: RoleClassifier
+
+    async def queue_row(self, proposal: Proposal) -> UnresolvedRow | None:
+        """The `graph_unresolved` row this proposal answers, if there is one."""
+        node_id = proposal.target.node_id or proposal.target.src
+        name = proposal.target.name
+        if not node_id or not name:
+            return None
+        rows = await self.index.graph.unresolved(node_ids=[node_id])
+        return next(
+            (UnresolvedRow.model_validate(r) for r in rows if r["name"] == name), None
+        )
+
+    async def definers(
+        self, proposal: Proposal, row: UnresolvedRow | None
+    ) -> Sequence[str]:
+        """The role-filtered definitions of the called name: the queue row's when there is one,
+        otherwise the graph's own answer (spec 9.2's `retarget_edge` row needs it)."""
+        if row is not None:
+            return row.definers
+        name = proposal.target.name
+        return await self.index.graph.definers(name) if name else []
+
+    async def verifier(
+        self, proposal: Proposal, row: UnresolvedRow | None
+    ) -> FactVerifier:
+        """A verifier holding the files this proposal names, re-read from disk."""
+        files: dict[str, FileFacts] = {}
+        missing: set[str] = set()
+        for path in FactVerifier.paths_named(proposal, row):
+            if not (self.root / path).is_file():
+                missing.add(path)  # a path that never existed, not a file that moved
+                continue
+            cached = await self.index.graph.hashes(path)
+            if cached is None:
+                continue  # left out, so the verifier answers not_loaded rather than guessing
+            files[path] = FileFacts.of(self.root, path, cached.truth, self.roles)
+        modules = [
+            node
+            for facts in files.values()
+            for node in facts.nodes
+            if node.kind is NodeKind.MODULE
+        ]
+        return FactVerifier(
+            files=files,
+            bindings=NameBindings.of(
+                modules, module_ids=await self.index.graph.module_ids()
+            ),
+            missing=frozenset(missing),
+        )
+
+
 class ProposalFacts(BaseModel):
     """Everything one proposal is judged against, read once: the queue row it answers, the
     role-filtered definitions of the name, and a verifier over the files it names.
-
-    `verify.FactVerifier` is pure by contract, so the reading is here rather than in the service,
-    where it was four private methods and a four-collaborator call site.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -197,15 +248,13 @@ class ProposalFacts(BaseModel):
     verifier: FactVerifier = Field(default_factory=FactVerifier)
 
     @classmethod
-    async def of(
-        cls, index: IndexStore, root: Path, roles: RoleClassifier, proposal: Proposal
-    ) -> "ProposalFacts":
+    async def of(cls, reader: FactReader, proposal: Proposal) -> "ProposalFacts":
         """Read all three in the caller's own namespace, before any id has been rebased."""
-        row = await cls._queue_row(index, proposal)
+        row = await reader.queue_row(proposal)
         return cls(
             row=row,
-            definers=tuple(await cls._definers(index, proposal, row)),
-            verifier=await cls._verifier(index, root, roles, proposal, row),
+            definers=tuple(await reader.definers(proposal, row)),
+            verifier=await reader.verifier(proposal, row),
         )
 
     def check(self, proposal: Proposal) -> VerifyResult:
@@ -222,62 +271,6 @@ class ProposalFacts(BaseModel):
             return None
         imports = self.verifier.bindings.imported_module_ids(file_of(edge.src))
         return Stratum.of(edge.src, edge.dst, imports=imports)
-
-    @staticmethod
-    async def _queue_row(index: IndexStore, proposal: Proposal) -> UnresolvedRow | None:
-        """The `graph_unresolved` row this proposal answers, if there is one."""
-        node_id = proposal.target.node_id or proposal.target.src
-        name = proposal.target.name
-        if not node_id or not name:
-            return None
-        rows = await index.graph.unresolved(node_ids=[node_id])
-        return next(
-            (UnresolvedRow.model_validate(r) for r in rows if r["name"] == name), None
-        )
-
-    @staticmethod
-    async def _definers(
-        index: IndexStore, proposal: Proposal, row: UnresolvedRow | None
-    ) -> Sequence[str]:
-        """The role-filtered definitions of the called name: the queue row's when there is one,
-        otherwise the graph's own answer (spec 9.2's `retarget_edge` row needs it)."""
-        if row is not None:
-            return row.definers
-        name = proposal.target.name
-        return await index.graph.definers(name) if name else []
-
-    @staticmethod
-    async def _verifier(
-        index: IndexStore,
-        root: Path,
-        roles: RoleClassifier,
-        proposal: Proposal,
-        row: UnresolvedRow | None,
-    ) -> FactVerifier:
-        """A verifier holding the files this proposal names, re-read from disk."""
-        files: dict[str, FileFacts] = {}
-        missing: set[str] = set()
-        for path in FactVerifier.paths_named(proposal, row):
-            if not (root / path).is_file():
-                missing.add(path)  # a path that never existed, not a file that moved
-                continue
-            cached = await index.graph.hashes(path)
-            if cached is None:
-                continue  # left out, so the verifier answers not_loaded rather than guessing
-            files[path] = FileFacts.of(root, path, cached.truth, roles)
-        modules = [
-            node
-            for facts in files.values()
-            for node in facts.nodes
-            if node.kind is NodeKind.MODULE
-        ]
-        return FactVerifier(
-            files=files,
-            bindings=NameBindings.of(
-                modules, module_ids=await index.graph.module_ids()
-            ),
-            missing=frozenset(missing),
-        )
 
 
 class StagedProposal(BaseModel):
@@ -392,7 +385,8 @@ class RunRegistry(BaseModel):
     REMEMBERED: ClassVar[int] = 64
 
     open_runs: dict[str, StagedRun] = Field(default_factory=dict)
-    max_open: int = 8
+    #: overwritten from `user.observer.limits.max_open_runs` by every service built on it
+    max_open: int = int(LimitsConfig.model_fields["max_open_runs"].default)
     evicted: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
@@ -453,6 +447,56 @@ class RunRegistry(BaseModel):
 _PROCESS_RUNS = RunRegistry()
 
 
+class RefinementLedger(BaseModel):
+    """The by-hand half of the lifecycle: spec 5.4 and 5.7's status transitions and the retention
+    sweep, over one index handle.
+
+    It needs neither a checkout root nor a run registry nor a git guard, which is what a
+    `graph refinements accept <id>` surface has to work without.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    index: IndexStore
+
+    async def accept(self, refinement_id: int) -> Refinement:
+        """Activate a pending refinement. The next build applies it; this takes no lock."""
+        return await self._moved(refinement_id, RefinementStatus.ACTIVE, _ACCEPT_FROM)
+
+    async def revert(self, refinement_id: int) -> Refinement:
+        return await self._moved(refinement_id, RefinementStatus.REVERTED, _REVERT_FROM)
+
+    async def pin(self, refinement_id: int) -> Refinement:
+        return await self._moved(refinement_id, RefinementStatus.PINNED, _PIN_FROM)
+
+    async def prune(self, retention_days: int) -> int:
+        """Drop the assessment-only runs older than the retention window (spec 5.1)."""
+        return await self.index.runs.prune_skipped_runs(retention_days)
+
+    async def refinement(self, refinement_id: int) -> Refinement:
+        """One refinement by id, refused by name rather than answered with ``None``."""
+        found = await self.index.refinements.refinement(refinement_id)
+        if found is None:
+            raise RefinementRefused(f"no refinement {refinement_id} on this checkout")
+        return found
+
+    async def _moved(
+        self,
+        refinement_id: int,
+        status: RefinementStatus,
+        allowed: frozenset[RefinementStatus],
+    ) -> Refinement:
+        """One hand transition, refusing by name rather than updating nothing."""
+        current = await self.refinement(refinement_id)
+        if current.status not in allowed:
+            raise RefinementRefused(
+                f"refinement {refinement_id} is {current.status.value}; "
+                f"only {sorted(s.value for s in allowed)} can become {status.value}"
+            )
+        await self.index.refinements.set_status(refinement_id, status)
+        return await self.refinement(refinement_id)
+
+
 class RefinementService:
     """Spec 9.1's lifecycle over one index handle and one checkout."""
 
@@ -469,7 +513,13 @@ class RefinementService:
         self.settings = settings
         self.user = user
         self.registry = registry if registry is not None else RunRegistry.process()
-        self.roles = RoleClassifier(settings.role_globs)
+        # the registry is process-scoped and so is the user's own settings file, so the cap this
+        # service was built with is the cap the process runs under
+        self.registry.max_open = user.observer.limits.max_open_runs
+        self.ledger = RefinementLedger(index=index)
+        self.facts = FactReader(
+            index=index, root=root, roles=RoleClassifier(settings.role_globs)
+        )
 
     @property
     def identity(self) -> str:
@@ -513,21 +563,18 @@ class RefinementService:
             scope = scope_path(scope)
         except ValueError as exc:
             raise RefinementRefused(str(exc)) from exc
-        branch, commit_sha = await self._head()
-        run = Run(
-            repo_identity=self.identity,
-            origin_partition=self.index.repo,
-            partition_prefix=self.prefix,
+        run = Run.begin(
+            partition=self.partition,
+            origin=self.index.repo,
+            scope=scope,
+            checkout=await self._head(),
             client=client,
             producer=producer,
             runner=runner,
-            trigger_kind=trigger,
-            trigger_detail=TriggerDetail(files=(scope,) if scope else ()),
+            trigger=trigger,
+            model=model,
             session_id=session_id,
             agent_name=agent_name,
-            branch=branch,
-            commit_sha=commit_sha,
-            model=model,
         )
         await self.index.runs.add_run(run)
         _staged, evicted = self.registry.opened(run, scope, self.partition)
@@ -555,7 +602,10 @@ class RefinementService:
     ) -> Verdict:
         """One proposal, under the run's lock: admissibility, facts, tier, staging."""
         run_id = staged.run.run_id
-        proposal, complaint = _read_proposal(raw)
+        try:
+            proposal, complaint = Proposal.read(raw)
+        except ValidationError as exc:
+            raise RefinementRefused.not_a_proposal(exc) from exc
         stored = proposal.rebased(self.prefix)
         if complaint:
             return await self._reject(
@@ -568,7 +618,7 @@ class RefinementService:
         refused = await self._refused(staged, proposal, stored)
         if refused is not None:
             return refused
-        facts = await ProposalFacts.of(self.index, self.root, self.roles, proposal)
+        facts = await ProposalFacts.of(self.facts, proposal)
         result = facts.check(proposal)
         if not result.accepted:
             return await self._reject(run_id, stored, result.status, result.detail)
@@ -722,25 +772,9 @@ class RefinementService:
             raise RefinementRefused(f"no run {run_id} on this checkout")
         return run
 
-    async def accept(self, refinement_id: int) -> Refinement:
-        """Activate a pending refinement. The next build applies it; this takes no lock."""
-        return await self._transition(
-            refinement_id, RefinementStatus.ACTIVE, _ACCEPT_FROM
-        )
-
-    async def revert(self, refinement_id: int) -> Refinement:
-        return await self._transition(
-            refinement_id, RefinementStatus.REVERTED, _REVERT_FROM
-        )
-
-    async def pin(self, refinement_id: int) -> Refinement:
-        return await self._transition(refinement_id, RefinementStatus.PINNED, _PIN_FROM)
-
     async def prune(self) -> int:
-        """Drop the assessment-only runs older than the retention window (spec 5.1)."""
-        return await self.index.runs.prune_skipped_runs(
-            self.user.observer.skipped_retention_days
-        )
+        """The ledger's retention sweep at this user's configured window (spec 5.1)."""
+        return await self.ledger.prune(self.user.observer.skipped_retention_days)
 
     async def rebuild(self) -> GraphBuildReport:
         """A build under the same lock a commit takes, and under the same timeout.
@@ -828,26 +862,27 @@ class RefinementService:
         proposals and the active refinements already use.
 
         `graph_edges` is a partition table, so its src has to go down into the partition for the
-        query and the rows have to come back up as models.
+        query and the rows have to come back up as models. `edges_of` answers `src = ? OR dst = ?`
+        and every rule keys on `src`, so the inbound half is inert rather than filtered out.
         """
-        edges: list[GraphEdge] = []
+        edges: dict[tuple[str, str, EdgeKind], GraphEdge] = {}
         for item in staged.staged:
             src, _dst = item.proposal.edge_pair()
             local = to_partition(src, self.prefix) if src is not None else None
             if local is None:
                 continue
-            edges += [
-                GraphEdge.model_validate(
+            for row in await self.index.graph.edges_of(local, None):
+                edge = GraphEdge.model_validate(
                     {
-                        **edge,
-                        "src": to_toplevel(str(edge["src"]), self.prefix),
-                        "dst": to_toplevel(str(edge["dst"]), self.prefix),
+                        **row,
+                        "src": to_toplevel(str(row["src"]), self.prefix),
+                        "dst": to_toplevel(str(row["dst"]), self.prefix),
                     }
                 )
-                for edge in await self.index.graph.edges_of(local, None)
-                if str(edge["src"]) == local  # edges_of answers `src = ? OR dst = ?`
-            ]
-        return ConflictRules.of(await self.index.refinements.active(), edges)
+                edges[(edge.src, edge.dst, edge.kind)] = edge
+        return ConflictRules.of(
+            await self.index.refinements.active(), list(edges.values())
+        )
 
     def _decide(
         self,
@@ -972,27 +1007,6 @@ class RefinementService:
             for item in gone.staged:
                 await self._reject(gone.run.run_id, item.proposal, item.verify, detail)
             await self._finish(gone.run.run_id, RunStatus.SKIPPED, error=detail)
-
-    async def _transition(
-        self,
-        refinement_id: int,
-        status: RefinementStatus,
-        allowed: frozenset[RefinementStatus],
-    ) -> Refinement:
-        """One hand transition, refusing by name rather than updating nothing."""
-        current = await self.index.refinements.refinement(refinement_id)
-        if current is None:
-            raise RefinementRefused(f"no refinement {refinement_id} on this checkout")
-        if current.status not in allowed:
-            raise RefinementRefused(
-                f"refinement {refinement_id} is {current.status.value}; "
-                f"only {sorted(s.value for s in allowed)} can become {status.value}"
-            )
-        await self.index.refinements.set_status(refinement_id, status)
-        moved = await self.index.refinements.refinement(refinement_id)
-        if moved is None:  # the row was read a line ago
-            raise RefinementRefused(f"no refinement {refinement_id} on this checkout")
-        return moved
 
     async def _head(self) -> tuple[str | None, str | None]:
         """This checkout's branch and HEAD, read off the event loop.

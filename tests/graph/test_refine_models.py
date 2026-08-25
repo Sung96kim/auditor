@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     STORED_ROW,
+    Anchor,
     Proposal,
     Refinement,
     RefinementKind,
@@ -311,3 +312,52 @@ def test_a_refinement_is_built_from_the_proposal_it_stores():
     assert stored.target == proposal.target
     assert (stored.run_id, stored.tier, stored.confidence) == ("r1", Tier.B, 0.8)
     assert stored.created_at > 0 and stored.status_at == stored.created_at
+
+
+def test_rebasing_moves_every_id_a_proposal_names_into_the_toplevel_namespace():
+    """Identity rows are toplevel relative and a caller names ids the way its own partition shows
+    them (spec 5.2). `move_node` is the kind that names both a node and a member set."""
+    proposal = Proposal(
+        kind=RefinementKind.MOVE_NODE,
+        target=RefinementTarget(node_id="a.py::f", members=("b.py::g", "c.py::h")),
+        reason="f belongs with the b/c cluster",
+    )
+    rebased = proposal.rebased("sub/")
+    assert rebased.target.node_id == "sub/a.py::f"
+    assert rebased.target.members == ("sub/b.py::g", "sub/c.py::h")
+    assert proposal.rebased("") is proposal
+
+
+def test_rebasing_moves_a_retarget_and_the_candidate_a_choice_names():
+    retarget = Proposal(
+        kind=RefinementKind.RETARGET_EDGE,
+        target=RefinementTarget(
+            src="a.py::f",
+            from_dst="b.py::g",
+            to_dst="c.py::g",
+            edge_kind=EdgeKind.CALLS,
+            name="g",
+        ),
+        reason="the call resolves in c.py, not b.py",
+    ).rebased("sub/")
+    assert (retarget.target.src, retarget.target.from_dst, retarget.target.to_dst) == (
+        "sub/a.py::f",
+        "sub/b.py::g",
+        "sub/c.py::g",
+    )
+    chosen = Proposal(
+        kind=RefinementKind.RESOLVE_AMBIGUOUS,
+        target=RefinementTarget(node_id="a.py::f", name="g", edge_kind=EdgeKind.CALLS),
+        payload=RefinementPayload(candidate="b.py::g"),
+        reason="b.py is the one this module imports",
+    ).rebased("sub/")
+    assert chosen.payload.candidate == "sub/b.py::g"
+
+
+def test_an_anchor_rebases_its_path_the_way_it_rebases_its_node():
+    """A partition prefix is a path prefix, which is why one reader answers for both halves."""
+    anchor = Anchor(node_id="a.py::f", path="a.py", truth_sha="t").rebased("sub/")
+    assert (anchor.node_id, anchor.path) == ("sub/a.py::f", "sub/a.py")
+    assert Anchor(node_id="a.py::f", path="a.py", truth_sha="t").rebased("") == Anchor(
+        node_id="a.py::f", path="a.py", truth_sha="t"
+    )

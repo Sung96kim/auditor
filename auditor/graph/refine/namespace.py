@@ -13,9 +13,13 @@ def to_partition(node_id: str, prefix: str) -> str | None:
     return node_id[len(prefix) :] if node_id.startswith(prefix) else None
 
 
-def to_toplevel(node_id: str, prefix: str) -> str:
-    """A partition-local node id in the toplevel-relative form the identity tables store."""
-    return f"{prefix}{node_id}"
+def to_toplevel(value: str, prefix: str) -> str:
+    """A partition-local node id or file path in the toplevel-relative form identity rows store.
+
+    A partition prefix is a path prefix, so an anchor's ``path`` takes it the same way its
+    ``node_id`` does.
+    """
+    return f"{prefix}{value}"
 
 
 def in_scope(node_id: str, prefix: str) -> bool:

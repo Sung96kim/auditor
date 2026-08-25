@@ -451,18 +451,6 @@ class RefinementsDB(BaseDB):
             )
         ]
 
-    async def counts_by_run(self, run_ids: Sequence[str]) -> dict[str, int]:
-        """How many refinements each run owns, for the run log's last column."""
-        if not run_ids:
-            return {}
-        placeholders = ",".join("?" for _ in run_ids)
-        rows = await self._fetch_by_identity(
-            "SELECT run_id, COUNT(*) AS n FROM graph_refinements WHERE repo_identity = ? "
-            f"AND run_id IN ({placeholders}) GROUP BY run_id",  # noqa: S608  (placeholders only)
-            tuple(run_ids),
-        )
-        return {r["run_id"]: int(r["n"]) for r in rows}
-
     async def anchors(
         self, refinement_ids: Sequence[int]
     ) -> dict[int, tuple[Anchor, ...]]:

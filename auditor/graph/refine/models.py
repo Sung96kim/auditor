@@ -4,14 +4,21 @@ in both directions, so every JSON column has a model rather than a raw dict."""
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    model_validator,
+)
 
 from auditor.graph.model import CallForm, EdgeKind
-from auditor.graph.refine.namespace import file_of
+from auditor.graph.refine.namespace import file_of, to_toplevel
 
 
 class RunStatus(StrEnum):
@@ -253,6 +260,45 @@ class Run(BaseModel):
     started_at: float = Field(default_factory=time.time)
     finished_at: float | None = None
 
+    @classmethod
+    def begin(
+        cls,
+        *,
+        partition: tuple[str, str],
+        origin: str,
+        scope: str,
+        checkout: tuple[str | None, str | None],
+        client: ClientKind,
+        producer: ProducerKind,
+        runner: RunnerKind,
+        trigger: TriggerKind,
+        model: str | None = None,
+        session_id: str | None = None,
+        agent_name: str | None = None,
+    ) -> "Run":
+        """A queued run, from what its caller has to derive and what it was told (Invariant 2).
+
+        The partition pair, the scope and the branch/HEAD pair each fan out into more than one
+        stored column, which is what made this a thirteen-argument construction at the caller.
+        """
+        identity, prefix = partition
+        branch, commit_sha = checkout
+        return cls(
+            repo_identity=identity,
+            origin_partition=origin,
+            partition_prefix=prefix,
+            trigger_detail=TriggerDetail(files=(scope,) if scope else ()),
+            branch=branch,
+            commit_sha=commit_sha,
+            client=client,
+            producer=producer,
+            runner=runner,
+            trigger_kind=trigger,
+            model=model,
+            session_id=session_id,
+            agent_name=agent_name,
+        )
+
 
 class RunOutcome(BaseModel):
     """A run's terminal state: what it produced, what it cost, and when it stopped (spec 5.3).
@@ -405,6 +451,22 @@ class Proposal(BaseModel):
         edge = self.edge()
         return (edge.src, edge.dst) if edge is not None else (None, None)
 
+    @classmethod
+    def read(cls, raw: "Proposal | Mapping[str, Any]") -> tuple["Proposal", str]:
+        """One proposal, and the validator's complaint about it when it is not a legal one.
+
+        An illegal payload is re-read under `STORED_ROW` so the rejection spec 9.2 requires can be
+        stored. A target no kind could ever fill is not a text rule that context relaxes: it raises
+        `ValidationError`, because there is no proposal to attribute a rejection to.
+        """
+        if isinstance(raw, Proposal):
+            return raw, ""
+        try:
+            return cls.model_validate(raw), ""
+        except ValidationError as exc:
+            lenient = cls.model_validate(raw, context={STORED_ROW: True})
+            return lenient, str(exc.errors()[0]["msg"])
+
     def rebased(self, prefix: str) -> "Proposal":
         """This proposal with every node id in the toplevel-relative form identity rows store.
 
@@ -415,7 +477,7 @@ class Proposal(BaseModel):
             return self
         target = self.target
         moved = {
-            field: f"{prefix}{value}"
+            field: to_toplevel(value, prefix)
             for field, value in (
                 ("src", target.src),
                 ("dst", target.dst),
@@ -431,11 +493,13 @@ class Proposal(BaseModel):
                 "target": target.model_copy(
                     update={
                         **moved,
-                        "members": tuple(f"{prefix}{m}" for m in target.members),
+                        "members": tuple(
+                            to_toplevel(m, prefix) for m in target.members
+                        ),
                     }
                 ),
                 "payload": self.payload.model_copy(
-                    update={"candidate": f"{prefix}{candidate}"}
+                    update={"candidate": to_toplevel(candidate, prefix)}
                 )
                 if candidate
                 else self.payload,
@@ -557,8 +621,8 @@ class Anchor(BaseModel):
             return self
         return self.model_copy(
             update={
-                "node_id": f"{prefix}{self.node_id}",
-                "path": f"{prefix}{self.path}",
+                "node_id": to_toplevel(self.node_id, prefix),
+                "path": to_toplevel(self.path, prefix),
             }
         )
 
