@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
+from auditor.graph.payloads import CommitResult
 from auditor.graph.refine.brief import Brief
 from auditor.graph.refine.models import (
     ClientKind,
@@ -27,11 +28,7 @@ from auditor.graph.refine.models import (
     TriggerKind,
 )
 from auditor.graph.refine.prompts import GRAPH_SERVER, RunAnswer
-from auditor.graph.refine.service import (
-    CommitResult,
-    RefinementRefused,
-    RefinementService,
-)
+from auditor.graph.refine.service import RefinementRefused, RefinementService
 
 #: the in-process tool a proposal arrives through, as the trace names it
 PROPOSE_TOOL = f"mcp__{GRAPH_SERVER}__propose"

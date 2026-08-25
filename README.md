@@ -52,8 +52,11 @@ docker compose run --rm auditor scan .
   `auditr[graph]` install commands and `uv tool` receipts keep resolving. It costs every install
   about 175 MB: scipy 91 MB (a transitive dependency of scikit-learn), scikit-learn 36 MB,
   numpy 33 MB, networkx 13 MB, snowballstemmer 2 MB.
-- `observer-claude`, `observer-codex`, `observer` and `vectors` are declared but nothing uses them
-  yet. Each pulls a large SDK, so leave them out until a release says otherwise.
+- `observer-claude` is what `auditr graph refine` needs: it pulls `claude-agent-sdk`, which bundles
+  its own 342 MB `claude` binary. Install it with `pip install "auditr[observer-claude]"` only if
+  you want model-driven refinement; every other command works without it.
+- `observer-codex`, `observer` and `vectors` are declared but nothing uses them yet. Each pulls a
+  large SDK, so leave them out until a release says otherwise.
 - Claude Code plugin: `claude plugin marketplace add Sung96kim/auditor`, then
   `/plugin install auditor` in a session. See
   [claude-code-plugin](docs/references/claude-code-plugin.md).
@@ -91,6 +94,8 @@ auditr malware status
 auditr graph build .
 # the corrections recorded for this checkout
 auditr graph refinements list
+# let a model work the unresolved queue under a path
+auditr graph refine auditor/cli
 # check PyPI for a newer release and install it
 auditr self update
 # print the installed version

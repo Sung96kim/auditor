@@ -37,6 +37,7 @@ from auditor.graph.refine.models import (
     RunStatus,
     Tier,
     TriggerKind,
+    Verdict,
 )
 from auditor.payload import WirePayload, WireRows
 
@@ -304,6 +305,27 @@ class RefinementsReport(WirePayload):
         )
 
 
+class CommitResult(WirePayload):
+    """What one commit landed, and the build that followed it. This is the wire shape too, so
+    `graph_refine_commit` has no second copy of it to keep in step.
+
+    ``rebuilt`` is false, and ``build`` ``None``, for a run that staged nothing: there is no insert,
+    so there is no queue row to retire and nothing for a build to merge.
+    """
+
+    run_id: str
+    committed: tuple[Verdict, ...] = ()
+    rejected: tuple[Verdict, ...] = ()
+    rebuilt: bool = True
+    build: GraphBuildReport | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def landed(self) -> int:
+        """How many refinement rows this commit inserted."""
+        return len(self.committed)
+
+
 class RunRowPayload(WirePayload):
     """One run as the log shows it: who made it, against which checkout, and what it cost.
 
@@ -327,6 +349,11 @@ class RunRowPayload(WirePayload):
     cost_usd: float = 0.0
     cost_estimated: bool = False
     num_turns: int = 0
+    #: Invariant 2 on the wire, in three numbers: the verbatim brief stays on the row, where it
+    #: cannot fight the log's row cap or the response-limiting middleware
+    system_prompt_sha: str | None = None
+    prompt_chars: int = 0
+    tool_calls: int = 0
     refinements: RefinementCounts = RefinementCounts()
     started_at: float = 0.0
     finished_at: float | None = None
@@ -352,6 +379,9 @@ class RunRowPayload(WirePayload):
             cost_usd=run.usage.cost_usd,
             cost_estimated=run.usage.cost_estimated,
             num_turns=run.usage.num_turns,
+            system_prompt_sha=run.system_prompt_sha,
+            prompt_chars=len(run.prompt or ""),
+            tool_calls=len(run.tool_trace),
             refinements=refinements or RefinementCounts(),
             started_at=run.started_at,
             finished_at=run.finished_at,

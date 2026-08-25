@@ -5,9 +5,15 @@ which no fast CLI command loads. `Verdict` and `CommitResult` are emitted as the
 `RunReport`, which carries a whole 30-field `Run`, needs narrowing.
 """
 
-from auditor.graph.payloads import RunRowPayload
+from auditor.graph.payloads import CommitResult, GraphBuildReport, RunRowPayload
 from auditor.graph.refine.brief import Brief, BriefLimits, BriefTarget, StaleNote
-from auditor.graph.refine.models import RefinementCounts, RunReport, Verdict
+from auditor.graph.refine.models import (
+    RefinementCounts,
+    RunnerChoiceCode,
+    RunnerKind,
+    RunReport,
+    Verdict,
+)
 from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA
 from auditor.payload import WirePayload
 
@@ -69,4 +75,47 @@ class BriefPayload(WirePayload):
             staged=brief.staged,
             prompt=brief.render(),
             system_prompt_sha=SYSTEM_PROMPT_SHA,
+        )
+
+
+class RefinePayload(WirePayload):
+    """One `auditr graph refine` answer: the run row, what it was briefed on, and what it landed.
+
+    ``choice`` is the machine code the runner was selected under; a refusal never reaches here,
+    because `drive.refine` raises rather than returning a payload with no run behind it.
+    """
+
+    run: RunRowPayload
+    runner: RunnerKind
+    choice: RunnerChoiceCode
+    scope: str = ""
+    targets: int = 0
+    queue_total: int = 0
+    committed: tuple[Verdict, ...] = ()
+    rejected: tuple[Verdict, ...] = ()
+    build: GraphBuildReport | None = None
+
+    @classmethod
+    def of(
+        cls,
+        report: RunReport,
+        brief: Brief,
+        landed: CommitResult | None,
+        choice: RunnerChoiceCode,
+    ) -> "RefinePayload":
+        return cls(
+            run=RunRowPayload.of(
+                report.run,
+                refinements=RefinementCounts(
+                    committed=len(report.committed), rejected=len(report.rejected)
+                ),
+            ),
+            runner=report.run.runner,
+            choice=choice,
+            scope=brief.scope,
+            targets=len(brief.targets),
+            queue_total=brief.queue_total,
+            committed=landed.committed if landed else (),
+            rejected=landed.rejected if landed else (),
+            build=landed.build if landed else None,
         )

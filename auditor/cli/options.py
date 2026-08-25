@@ -252,6 +252,16 @@ InitForce = Annotated[
 
 # --- `graph` sub-app options ---
 GraphTarget = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
+RefineRunner = Annotated[
+    str | None,
+    typer.Option(
+        "--runner", help="auto, claude or codex; the configured runner when omitted."
+    ),
+]
+RefineModel = Annotated[
+    str | None,
+    typer.Option("--model", help="haiku or sonnet; the configured model when omitted."),
+]
 QueueReason = Annotated[
     list[UnresolvedReason] | None,
     typer.Option("--reason", help="Only these queue reasons (repeatable)."),

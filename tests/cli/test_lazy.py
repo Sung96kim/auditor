@@ -41,6 +41,7 @@ _SUBCOMMANDS = (
     "usages",
     "flow",
     "unresolved",
+    "refine",
     "refinements",
     "log",
 )

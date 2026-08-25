@@ -8,6 +8,7 @@ back, so the ``graph`` sub-app stays a one-way dependency.
 from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
+from typing import get_args
 
 import typer
 
@@ -32,11 +33,15 @@ from auditor.cli.options import (
     QueueReason,
     RefinementId,
     RefinementStatusFilter,
+    RefineModel,
+    RefineRunner,
     RowLimit,
 )
 from auditor.cli.render import (
+    render_graph_brief,
     render_graph_log,
     render_graph_prune,
+    render_graph_refine,
     render_graph_refinement,
     render_graph_refinements,
     render_graph_unresolved,
@@ -58,13 +63,21 @@ from auditor.graph.payloads import (
     RefinementsReport,
 )
 from auditor.graph.query import LogQuery
-from auditor.graph.refine.models import PruneOutcome, Refinement, RefinementStatus
+from auditor.graph.refine import drive
+from auditor.graph.refine.models import (
+    PruneOutcome,
+    Refinement,
+    RefinementStatus,
+    RunStatus,
+)
+from auditor.graph.refine.payloads import BriefPayload, RefinePayload
+from auditor.graph.refine.runner import RefinementJob, RunnerUnavailable
 from auditor.graph.refine.service import (
     RefinementLedger,
     RefinementRefused,
     RefinementService,
 )
-from auditor.user_settings import UserSettings
+from auditor.user_settings import ClaudeModel, Runner, UserSettings
 
 
 async def _unresolved_rows(
@@ -264,8 +277,79 @@ def graph_log(
     present(run(_log(root, spec), "reading log…"), render_graph_log, as_json=json_)
 
 
+async def _refine(
+    root: Path, scope: str, runner: str | None, model: str | None
+) -> RefinePayload:
+    """One model-driven run, through the same call the `graph_refine` tool makes."""
+    settings = load_settings(root)
+    user = load_user(root)
+    async with await open_index(root) as index:
+        return await drive.refine(
+            index,
+            root,
+            settings,
+            user,
+            job=RefinementJob(scope=scope, model=model),
+            requested=runner,
+        )
+
+
+async def _brief(root: Path, scope: str) -> BriefPayload:
+    """The brief a run over this scope would be given, with no run opened."""
+    settings = load_settings(root)
+    user = load_user(root)
+    async with await open_index(root) as index:
+        return await drive.brief(index, root, settings, user, scope)
+
+
+def _one_of(value: str | None, allowed: tuple[str, ...], option: str) -> str | None:
+    """One option value checked against its `Literal`, refused at exit 2 like any bad flag.
+
+    `enum_value` cannot be reused: it takes a `StrEnum`, and both of these are `Literal`s.
+    """
+    if value is not None and value not in allowed:
+        raise typer.BadParameter(
+            f"unknown {option}: {value}. Valid: {', '.join(allowed)}"
+        )
+    return value
+
+
+def graph_refine(
+    scope: str = typer.Argument(
+        "", help="Path prefix under the repo; empty means the whole repo."
+    ),
+    target: GraphTarget = Path("."),
+    runner: RefineRunner = None,
+    model: RefineModel = None,
+    brief: bool = typer.Option(
+        False, "--brief", help="Render the brief for the scope and stop; opens no run."
+    ),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Let a model work the unresolved queue under a path. Corrections land pending until
+    accepted. Exits 1 when no runner can run or the run did not succeed, 2 on a bad option."""
+    root = cli_root(target)
+    runner = _one_of(runner, get_args(Runner), "--runner")
+    model = _one_of(model, get_args(ClaudeModel), "--model")
+    if brief:
+        try:
+            payload = run(_brief(root, scope), "reading queue…")
+        except (RefinementRefused, ValueError) as exc:
+            fail(str(exc))
+        present(payload, render_graph_brief, as_json=json_)
+        return
+    try:
+        report = run(_refine(root, scope, runner, model), "refining…")
+    except (RefinementRefused, RunnerUnavailable, ValueError) as exc:
+        fail(str(exc))
+    present(report, render_graph_refine, as_json=json_)
+    if report.run.status is not RunStatus.SUCCEEDED:
+        raise typer.Exit(1)
+
+
 def register(app: typer.Typer) -> None:
     """Mount this module's commands onto the ``graph`` sub-app."""
     app.command("unresolved")(graph_unresolved)
+    app.command("refine")(graph_refine)
     app.command("log")(graph_log)
     app.add_typer(refinements_app, name="refinements")

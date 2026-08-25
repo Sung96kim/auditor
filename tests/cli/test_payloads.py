@@ -364,7 +364,11 @@ def test_every_present_call_pairs_its_payload_with_its_renderer(
 
 def test_the_pairing_sweep_finds_every_command_whose_payload_can_be_read():
     """A sweep that matched nothing would make the case above vacuous. The commands missing here
-    build their payload in a helper the call site cannot name."""
+    build their payload in a helper the call site cannot name.
+
+    `graph_refine.py` must stay out: the moment one of its `present(...)` call sites names a
+    payload model, its payloads join this sweep and every renderer pairing here has to know about
+    the refine half, which no fast CLI command may import."""
     assert {module for module, _, _ in _present_pairs()} == {
         "config.py",
         "crossfile.py",

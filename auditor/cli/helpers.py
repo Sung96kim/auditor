@@ -15,6 +15,7 @@ from typing import Any, NoReturn, TypeVar
 import typer
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
+from rich.markup import escape
 from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
@@ -62,8 +63,12 @@ def present(
 
 
 def fail(message: str) -> NoReturn:
-    """Emit a clean one-line error to stderr and exit non-zero (no traceback)."""
-    err_console.print(f"[red]error:[/red] {message}")
+    """Emit a clean one-line error to stderr and exit non-zero (no traceback).
+
+    The message is escaped: an error naming `auditr[observer-claude]` or a `list[str]` annotation
+    is text, and rich would read the brackets as markup and swallow them.
+    """
+    err_console.print(f"[red]error:[/red] {escape(message)}")
     raise typer.Exit(1)
 
 

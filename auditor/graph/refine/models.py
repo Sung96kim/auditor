@@ -51,6 +51,15 @@ class RunnerKind(StrEnum):
     NONE = "none"  # assessment-only and synthetic rows
 
 
+class RunnerChoiceCode(StrEnum):
+    """What came of asking for a runner: one runner, or one reason there is none."""
+
+    CLAUDE = "claude"
+    PAUSED_AUTH = "paused:auth"
+    UNAVAILABLE_SDK = "unavailable:sdk"
+    UNAVAILABLE_CODEX = "unavailable:codex"
+
+
 class TriggerKind(StrEnum):
     SESSION_START = "session_start"
     EDIT = "edit"
@@ -334,6 +343,20 @@ class Run(BaseModel):
             session_id=session_id,
             agent_name=agent_name,
         )
+
+
+class RunnerChoice(BaseModel):
+    """The runner a request resolved to, the machine code for it, and the sentence a human reads.
+
+    The code is what the wire carries and the detail is what a person acts on, so a refusal never
+    has to be parsed out of prose.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: RunnerKind | None
+    code: RunnerChoiceCode
+    detail: str = ""
 
 
 class Verdict(BaseModel):

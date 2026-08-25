@@ -27,6 +27,7 @@ from auditor.graph.refine.models import (
     RunStatus,
     RunUsage,
     Tier,
+    ToolCall,
 )
 
 
@@ -174,6 +175,30 @@ def test_a_run_row_carries_its_cost_its_count_and_who_made_it():
     assert payload.status is RunStatus.SUCCEEDED
     assert (payload.session_id, payload.agent_name) == ("s-1", "claude")
     assert (payload.branch, payload.commit_sha) == ("feat/x", "deadbeef")
+
+
+def test_a_run_row_reports_what_the_producer_recorded():
+    """Invariant 2 on the wire: the shape of the brief and the trace, not the brief itself, which
+    would fight the log's row cap."""
+    run = Run(
+        repo_identity="/r/.git",
+        prompt="Refinement brief\n\nscope: auditor/cli\n",
+        system_prompt_sha="ab" * 32,
+        tool_trace=(ToolCall(tool="Read"), ToolCall(tool="mcp__graph__propose")),
+    )
+    payload = RunRowPayload.of(run)
+    assert payload.system_prompt_sha == "ab" * 32
+    assert payload.prompt_chars == len(run.prompt)
+    assert payload.tool_calls == 2
+
+
+def test_a_run_row_with_no_producer_behind_it_reports_nothing():
+    payload = RunRowPayload.of(Run(repo_identity="/r/.git"))
+    assert (payload.system_prompt_sha, payload.prompt_chars, payload.tool_calls) == (
+        None,
+        0,
+        0,
+    )
 
 
 @pytest.mark.parametrize(

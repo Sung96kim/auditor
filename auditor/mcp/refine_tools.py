@@ -11,6 +11,7 @@ from auditor.config import GlobalPaths
 from auditor.graph.model import LOG_ROW_LIMIT, enum_value, enum_values
 from auditor.graph.payloads import LogFilter, RunRowPayload
 from auditor.graph.query import LogQuery
+from auditor.graph.refine import drive
 from auditor.graph.refine.models import (
     ClientKind,
     ProducerKind,
@@ -18,7 +19,8 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     TriggerKind,
 )
-from auditor.graph.refine.payloads import RunReportPayload
+from auditor.graph.refine.payloads import BriefPayload, RunReportPayload
+from auditor.graph.refine.runner import RefinementJob, RunnerUnavailable
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.mcp.helpers import (
     MUTATING,
@@ -227,6 +229,63 @@ async def graph_refine_status(path: str = ".", run_id: str | None = None) -> dic
         except RefinementRefused as exc:
             raise ToolError(str(exc)) from exc
     return RunReportPayload.of(report).model_dump(mode="json")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def graph_refine_brief(path: str = ".", run_id: str | None = None) -> dict:
+    """The brief a runner would send for this run: the queue rows under its scope, each with the
+    facts the verifier will check a proposal against, plus the corrections here the graph no longer
+    trusts. Reading it records the prompt and the hash of the rules on the run row, so a run that
+    dies later still shows what it was asked. ``staged`` lists the verdicts this run has earned so
+    far, and ``prompt`` is the rendered text itself. Returns {run_id, scope, commit_sha, targets,
+    queue_total, stale, limits, staged, prompt, system_prompt_sha}."""
+    async with tool_repo(path) as repo:
+        service = await _service(repo)
+        resolved = _run_id(run_id)
+        try:
+            brief = await service.brief(resolved)
+        except RefinementRefused as exc:
+            raise ToolError(str(exc)) from exc
+    return BriefPayload.of(brief, run_id=resolved).model_dump(mode="json")
+
+
+@mcp.tool(annotations=MUTATING)
+async def graph_refine(
+    path: str = ".",
+    scope: str = "",
+    runner: str | None = None,
+    model: str | None = None,
+    session_id: str | None = None,
+    agent_name: str | None = None,
+) -> dict:
+    """Run a model over the unresolved queue under ``scope`` and commit what it proposes, in this
+    server's own process. Bounded by the configured ``max_turns`` and ``max_budget_usd_per_run``,
+    and by ``max_nodes_per_run`` targets. Corrections land ``pending`` until a human accepts them.
+    ``scope`` is a repo-relative path prefix; empty means the whole repo. Not the tool to call from
+    inside a refinement run: the bound ``propose`` is that surface. Returns {run, runner, choice,
+    scope, targets, queue_total, committed, rejected, build}."""
+    async with tool_repo(path) as repo:
+        user = await tool_user(repo)
+        try:
+            return (
+                await drive.refine(
+                    repo.index,
+                    repo.root,
+                    repo.settings,
+                    user,
+                    job=RefinementJob(
+                        scope=scope,
+                        model=model,
+                        producer=ProducerKind.AGENT,
+                        client=ClientKind.CLAUDE_CODE,
+                        session_id=session_id,
+                        agent_name=agent_name,
+                    ),
+                    requested=runner,
+                )
+            ).model_dump(mode="json")
+        except (RefinementRefused, RunnerUnavailable, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(annotations=READ_ONLY)

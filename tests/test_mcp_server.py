@@ -41,6 +41,8 @@ _GRAPH_TOOLS = {
     "graph_usages",
     "graph_overview",
     "graph_unresolved",
+    "graph_refine",
+    "graph_refine_brief",
 }
 
 
@@ -770,7 +772,9 @@ async def test_every_graph_tool_registers_unconditionally():
 #: mutating and not destructive on purpose (it drops staging that was never written), and the two
 #: that open or stage work of their own are not idempotent, so a retried timeout is visible.
 _REFINE_ANNOTATIONS = {
+    "graph_refine": (False, True),
     "graph_refine_begin": (False, False),
+    "graph_refine_brief": (True, True),
     "graph_refine_propose": (False, False),
     "graph_refine_commit": (False, True),
     "graph_refine_abort": (False, True),

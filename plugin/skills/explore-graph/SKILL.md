@@ -30,6 +30,8 @@ check first: the graph libraries are core dependencies of `auditr`, so the CLI s
      to tell "the graph has no edge here" from "there is genuinely no caller" before trusting an
      empty `used_by`. `--reason ambiguous_name` is the short, high-signal end; rows flagged
      `ext-bound` name a non-repo import, sort last and are noise (`--no-external` hides them).
+   - `graph refine <scope>` runs a model over the queue under a path and commits what it proposes;
+     `graph refine <scope> --brief` shows what that run would be asked, without opening one.
    - `graph refinements list` and `graph log` are the recorded corrections and the runs that made
      them, newest first. Read them before proposing a correction of your own: a `pending` row is
      one a human still has to accept, so the graph does not carry it yet.

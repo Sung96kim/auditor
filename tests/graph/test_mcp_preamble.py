@@ -184,8 +184,10 @@ PREAMBLE_TOOLS: dict[str, dict[str, object]] = {
     "graph_flow": {"symbol": "get_user"},
     "graph_log": {},
     "graph_overview": {},
+    "graph_refine": {},
     "graph_refine_abort": {"run_id": "no-such-run"},
     "graph_refine_begin": {},
+    "graph_refine_brief": {"run_id": "no-such-run"},
     "graph_refine_commit": {"run_id": "no-such-run"},
     "graph_refine_propose": {"run_id": "no-such-run", "kind": "confirm_edge"},
     "graph_refine_status": {"run_id": "no-such-run"},
@@ -227,7 +229,7 @@ async def test_every_refinement_tool_is_in_the_matrix():
     }
     async with Client(mcp) as client:
         registered = {tool.name for tool in await client.list_tools()}
-    assert len(tools) == 7 and tools <= registered
+    assert len(tools) == 9 and tools <= registered
     assert tools <= set(PREAMBLE_TOOLS)
 
 

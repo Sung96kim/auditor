@@ -49,7 +49,8 @@ from auditor.graph.payloads import (
     SearchReport,
     UsagesPayload,
 )
-from auditor.graph.refine.models import PruneOutcome, RefinementStatus
+from auditor.graph.refine.models import PruneOutcome, RefinementStatus, RunStatus
+from auditor.graph.refine.payloads import BriefPayload, RefinePayload
 from auditor.user_settings import UserSettings
 
 _ACCENT = "#7C7CFF"
@@ -353,6 +354,40 @@ def render_graph_refinement(out: Console, payload: RefinementRowPayload) -> None
     out.print(Panel(t, title="refinement", border_style=_BORDER))
     if payload.status is RefinementStatus.ACTIVE:
         out.print("[dim]run `auditr graph build` to apply it[/dim]")
+
+
+def render_graph_refine(out: Console, payload: RefinePayload) -> None:
+    t = Table.grid(padding=(0, 3))
+    t.add_column(style="bold")
+    t.add_column(style=_ACCENT)
+    run = payload.run
+    colour = "green" if run.status is RunStatus.SUCCEEDED else "red"
+    ids = ", ".join(str(v.refinement_id) for v in payload.committed) or "none"
+    for label, value in (
+        ("run", run.run_id),
+        ("runner", f"{payload.choice.value} {run.model or ''}".strip()),
+        ("status", f"[{colour}]{run.status.value}[/]"),
+        ("summary", run.error or run.summary or ""),
+        ("briefed", f"{payload.targets} of {payload.queue_total} queue rows"),
+        ("committed", f"{len(payload.committed)} ({ids})"),
+        ("rejected", str(len(payload.rejected))),
+        ("cost", f"${run.cost_usd:.4f} over {run.num_turns} turns"),
+    ):
+        t.add_row(label, value)
+    out.print(Panel(t, title="graph refined", border_style=_BORDER))
+    if payload.build is not None:
+        render_graph_build(out, payload.build)
+    if payload.committed:
+        out.print(
+            "[dim]corrections are pending until "
+            "`auditr graph refinements accept <id>`[/dim]"
+        )
+
+
+def render_graph_brief(out: Console, payload: BriefPayload) -> None:
+    where = f"run {payload.run_id}" if payload.run_id else "no run opened"
+    out.print(f"[dim]brief for {payload.scope or 'the whole repo'} ({where})[/dim]")
+    out.print(payload.prompt, highlight=False, markup=False)
 
 
 def render_graph_prune(out: Console, payload: PruneOutcome) -> None:

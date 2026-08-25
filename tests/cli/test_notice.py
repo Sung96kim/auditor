@@ -32,6 +32,7 @@ WARNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("graph", "log"),
         ("graph", "neighbors"),
         ("graph", "related"),
+        ("graph", "refine"),
         ("graph", "refinements", "accept"),
         ("graph", "refinements", "list"),
         ("graph", "refinements", "pin"),

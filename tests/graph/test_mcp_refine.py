@@ -6,13 +6,24 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
-from _support import tool_data
+from _support import cli_json, invoke, tool_data
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from graph.test_cli_graph_refine import ClaudeShaped
 
+from auditor.graph.refine import drive
+from auditor.graph.refine.models import RunnerKind
 from auditor.mcp import mcp
 from auditor.paths import user_config_path
 from auditor.user_settings import load_user_settings
+
+
+@pytest.fixture
+def claude_runner(monkeypatch):
+    """A logged-in machine with the extra installed, driving the CLI test's fake runner."""
+    monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
+    monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: True)
+    monkeypatch.setitem(drive.RUNNERS, RunnerKind.CLAUDE, ClaudeShaped)
 
 
 async def _begin(client, repo: Path, **kw) -> str:
@@ -401,3 +412,83 @@ async def test_the_refinements_limit_caps_the_rows(refine_repo: Path):
             )
         )
         assert len(capped["rows"]) == 1
+
+
+async def test_the_brief_tool_returns_the_prompt_and_records_it(refine_repo: Path):
+    async with Client(mcp) as client:
+        run_id = await _begin(client, refine_repo)
+        brief = tool_data(
+            await client.call_tool(
+                "graph_refine_brief", {"path": str(refine_repo), "run_id": run_id}
+            )
+        )
+        assert brief["run_id"] == run_id
+        assert "Refinement brief" in brief["prompt"]
+        assert len(brief["system_prompt_sha"]) == 64
+        log = tool_data(await client.call_tool("graph_log", {"path": str(refine_repo)}))
+    (row,) = [r for r in log["runs"] if r["run_id"] == run_id]
+    assert row["system_prompt_sha"] == brief["system_prompt_sha"]
+    assert row["prompt_chars"] > 0
+
+
+async def test_the_brief_tool_lists_the_verdicts_so_far(refine_repo: Path):
+    async with Client(mcp) as client:
+        run_id = await _begin(client, refine_repo)
+        await client.call_tool("graph_refine_propose", _add_edge(refine_repo, run_id))
+        brief = tool_data(
+            await client.call_tool(
+                "graph_refine_brief", {"path": str(refine_repo), "run_id": run_id}
+            )
+        )
+    assert [v["outcome"] for v in brief["staged"]] == ["staged"]
+
+
+async def test_the_brief_tool_refuses_a_run_it_does_not_know(refine_repo: Path):
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="not open in this process"):
+            await client.call_tool(
+                "graph_refine_brief",
+                {"path": str(refine_repo), "run_id": "no-such-run"},
+            )
+
+
+async def test_the_refine_tool_runs_a_model_and_attributes_it_to_the_agent(
+    refine_repo: Path, claude_runner
+):
+    async with Client(mcp) as client:
+        payload = tool_data(
+            await client.call_tool("graph_refine", {"path": str(refine_repo)})
+        )
+    assert payload["run"]["status"] == "succeeded"
+    assert payload["run"]["producer"] == "agent"
+    assert payload["run"]["client"] == "claude-code"
+    assert payload["choice"] == "claude"
+    assert [v["outcome"] for v in payload["committed"]] == ["staged"]
+
+
+async def test_the_refine_tool_reports_a_refusal_as_the_choice_detail(
+    refine_repo: Path, monkeypatch
+):
+    monkeypatch.setattr(drive, "SDK_AVAILABLE", False)
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="observer-claude"):
+            await client.call_tool("graph_refine", {"path": str(refine_repo)})
+
+
+def test_the_cli_and_the_tool_report_the_same_run(refine_repo: Path, claude_runner):
+    """One `drive.refine` behind both, so a caller cannot get two answers to one question.
+
+    Sync on purpose: the CLI calls `asyncio.run`, which no running loop allows.
+    """
+
+    async def via_tool() -> dict:
+        async with Client(mcp) as client:
+            return tool_data(
+                await client.call_tool("graph_refine", {"path": str(refine_repo)})
+            )
+
+    from_tool = asyncio.run(via_tool())
+    from_cli = cli_json(invoke("graph", "refine", "", str(refine_repo), "--json"))
+    assert sorted(from_tool) == sorted(from_cli)
+    assert from_tool["run"]["status"] == from_cli["run"]["status"]
+    assert from_tool["choice"] == from_cli["choice"]

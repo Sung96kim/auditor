@@ -279,15 +279,32 @@ flowchart TB
 - `build.GraphWrite` is that whole result as one frozen record: `nodes`, `edges`, `clusters`,
   `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
   counts, so the empty-graph build takes the same path and reports the same shape as any other.
-- `graph/refine/` is the refinement layer. Stdlib, pydantic and `config.py`, no database:
+- `graph/refine/` is the refinement layer. The pure half is stdlib, pydantic and `config.py` with no
+  database; `facts.py` and everything above it read one:
   - `models.py` holds the frozen records: `Proposal` and the per-kind target rules, the stored
-    `Refinement`, the anchors, and the eval rows a tier gate reads.
+    `Refinement`, the anchors, the eval rows a tier gate reads, and the shapes every other module
+    here shares (`Verdict`, `RunReport`, `VerifyStatus`, `RunAttribution`, `RunnerChoice`).
   - `namespace.py` owns the node id: partition-relative against toplevel-relative, plus the
     readers that take an id apart (`short_name`, `file_of`).
   - `overlay.py` is the pure merge one build applies, and `lock.py` the cross-process rebuild lock.
   - `verify.py` is the AST-fact check over the files a proposal names.
   - `tiers.py` turns a verified proposal into a tier and the status that tier starts in.
   - `conflicts.py` is the commit-time collision check against prior work.
+  - `facts.py` is the reader a proposal and a brief are both judged against: the queue row, the
+    role-filtered definers, and the files re-read from disk.
+  - `prompts.py` is what a model-driven run is told: the system prompt and its sha, the
+    structured-answer schema, and the tool allow-list. It imports nothing from this package.
+  - `brief.py` builds and renders that run's brief from the queue rows under a scope.
+  - `runner.py` is the producer ABC (`RefinementJob`, `RefinementRunner`, `RunProduct`) plus
+    `FakeRunner`.
+  - `sdk_runner.py` is the Claude producer, deliberately SDK-free: the message loop, the init check
+    and the outcome mapping, over an injected client factory.
+  - `sdk_client.py` is the only module that imports `claude_agent_sdk`.
+  - `drive.py` is the runner choice and the one `refine` call both surfaces make, and it owns the
+    single `observer-claude` import guard.
+  - The import order among the last four is one-directional and mandatory:
+    `runner.py` <- `sdk_runner.py` <- `sdk_client.py` <- `drive.py`. A two-way edge is an
+    `ImportError` at module top, and a deferred import is not an option here.
 - `refine/verify.py` re-reads every file a proposal names, re-extracts it, and refuses when the file
   no longer hashes to what the build cached. It then checks the destination's short name against the
   src node's own fact tuple for that edge kind and call form, refuses a destination outside the
@@ -311,8 +328,9 @@ flowchart TB
   anything is written and inserted as one `IndexStore.transaction`, and a rebuild that fails after
   it rejects every row the commit inserted, so a run that dies leaves nothing a later `accept`
   could activate and a retry cannot land the same change twice.
-- `graph/refine/payloads.py` holds the one wire model that narrows a service result,
-  `RunReportPayload`, because a `RunReport` carries a whole `Run`. It is separate from
+- `graph/refine/payloads.py` holds the wire models that narrow a service result:
+  `RunReportPayload`, because a `RunReport` carries a whole `Run`, plus `BriefPayload` and
+  `RefinePayload`. It is separate from
   `graph/payloads.py` because it imports the service, and therefore the graph build and numpy,
   which no fast CLI command may load. `Verdict` and `refine/service.py`'s `CommitResult` are
   emitted as themselves rather than copied into a second model.
@@ -321,9 +339,11 @@ flowchart TB
   never does database I/O and so the CLI and the MCP tools read one page one way. Every filter and
   every time window is a SQL clause, applied before the `LIMIT`, and both surfaces page newest
   first.
-- `mcp/refine_tools.py` is spec 9.5's in-session producer: `graph_refine_begin | propose | commit |
-  abort | status`, plus `graph_refinements` and `graph_log`. It builds a `RefinementService` per
-  call over the process registry for that repo identity and never constructs one of its own. There
+- `mcp/refine_tools.py` is spec 9.5's producer surface: the refinement tools an agent drives by
+  hand (`graph_refine_begin | propose | commit | abort | status | brief`), `graph_refine`, which
+  runs a model over the queue in this process through `refine.drive`, and the two readers
+  `graph_refinements` and `graph_log`. It builds a `RefinementService` per call over the process
+  registry for that repo identity and never constructs one of its own. There
   is deliberately no tool for `accept`, `revert`, `pin` or `prune`: under spec 10.3 activating a
   correction is a human step, and `auditr graph refinements` is where it happens.
 - `RefinementLedger` is the by-hand half over the index handle alone: `accept`, `revert` and `pin`

@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
@@ -24,7 +24,7 @@ from auditor.database.refinements import NoSuchRun
 from auditor.discovery import git_output
 from auditor.graph.build import GraphBuilder
 from auditor.graph.model import EdgeKind, GraphEdge, UnresolvedRow
-from auditor.graph.payloads import GraphBuildReport
+from auditor.graph.payloads import CommitResult, GraphBuildReport
 from auditor.graph.refine.brief import Brief, BriefBuilder
 from auditor.graph.refine.conflicts import ConflictRules
 from auditor.graph.refine.facts import FactReader
@@ -62,7 +62,6 @@ from auditor.graph.refine.namespace import (
 from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA
 from auditor.graph.refine.tiers import TierPolicy
 from auditor.graph.refine.verify import FactVerifier, VerifyResult
-from auditor.payload import WirePayload
 from auditor.roles import RoleClassifier
 from auditor.user_settings import LimitsConfig, UserSettings
 
@@ -105,27 +104,6 @@ class RefinementRefused(RuntimeError):
             f"run {run_id} failed to commit: {exc}. Nothing it inserted is live, so a retry "
             "cannot land the same change twice."
         )
-
-
-class CommitResult(WirePayload):
-    """What one commit landed, and the build that followed it. This is the wire shape too, so
-    `graph_refine_commit` has no second copy of it to keep in step.
-
-    ``rebuilt`` is false, and ``build`` ``None``, for a run that staged nothing: there is no insert,
-    so there is no queue row to retire and nothing for a build to merge.
-    """
-
-    run_id: str
-    committed: tuple[Verdict, ...] = ()
-    rejected: tuple[Verdict, ...] = ()
-    rebuilt: bool = True
-    build: GraphBuildReport | None = None
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def landed(self) -> int:
-        """How many refinement rows this commit inserted."""
-        return len(self.committed)
 
 
 class ProposalFacts(BaseModel):
@@ -483,7 +461,7 @@ class RefinementService:
             partition=self.partition,
             origin=self.index.repo,
             scope=scope,
-            checkout=await self._head(),
+            checkout=await self.head(),
             client=client,
             producer=producer,
             runner=runner,
@@ -1004,7 +982,7 @@ class RefinementService:
                 await self._reject(gone.run.run_id, item.proposal, item.verify, detail)
             await self._finish(gone.run.run_id, RunStatus.SKIPPED, error=detail)
 
-    async def _head(self) -> tuple[str | None, str | None]:
+    async def head(self) -> tuple[str | None, str | None]:
         """This checkout's branch and HEAD, read off the event loop.
 
         `git_output` shells out with a 30 s timeout, and every other coroutine on the loop, which
@@ -1026,7 +1004,7 @@ class RefinementService:
         """
         if run.commit_sha is None:
             return None
-        branch, commit = await self._head()
+        branch, commit = await self.head()
         if branch == run.branch and commit == run.commit_sha:
             return None
         return (

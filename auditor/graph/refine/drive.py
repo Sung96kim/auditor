@@ -7,20 +7,22 @@ drift on the choice logic or on the payload. This is also the only place that re
 
 import os
 from collections.abc import Mapping
-from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
-
-from auditor.graph.refine.models import RunnerKind
+from auditor.config import AuditorSettings
+from auditor.database import IndexStore
+from auditor.graph.refine.brief import BriefBuilder
+from auditor.graph.refine.models import RunnerChoice, RunnerChoiceCode, RunnerKind
+from auditor.graph.refine.payloads import BriefPayload, RefinePayload
 from auditor.graph.refine.runner import (
     FakeRunner,
+    RefinementJob,
     RefinementRunner,
     RunnerUnavailable,
 )
 from auditor.graph.refine.sdk_runner import ClientFactory, SdkRunner
 from auditor.graph.refine.service import RefinementService
-from auditor.user_settings import Runner, RunnerConfig
+from auditor.user_settings import Runner, RunnerConfig, UserSettings
 
 # the [observer-claude] extra; a genuine ImportError inside `sdk_client` is not swallowed
 try:
@@ -42,25 +44,6 @@ RUNNERS: dict[RunnerKind, type[RefinementRunner]] = {
     RunnerKind.FAKE: FakeRunner,
     RunnerKind.CLAUDE: SdkRunner,
 }
-
-
-class RunnerChoiceCode(StrEnum):
-    """What came of asking for a runner: one runner, or one reason there is none."""
-
-    CLAUDE = "claude"
-    PAUSED_AUTH = "paused:auth"
-    UNAVAILABLE_SDK = "unavailable:sdk"
-    UNAVAILABLE_CODEX = "unavailable:codex"
-
-
-class RunnerChoice(BaseModel):
-    """The runner a request resolved to, the machine code for it, and the sentence a human reads."""
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: RunnerKind | None
-    code: RunnerChoiceCode
-    detail: str = ""
 
 
 def auth_hinted(env: Mapping[str, str] = os.environ, home: Path | None = None) -> bool:
@@ -121,13 +104,67 @@ def build_runner(
     client_factory: ClientFactory | None = None,
 ) -> RefinementRunner:
     """One runner of the given kind, with its client injected or built here."""
-    return RUNNERS[kind](service, client_factory or _default_factory(kind))
+    runner = RUNNERS[kind]
+    return runner(service, client_factory or _default_factory(runner))
 
 
-def _default_factory(kind: RunnerKind) -> ClientFactory | None:
-    """The client a runner of this kind talks through when the caller injected none."""
-    if kind is not RunnerKind.CLAUDE:
+def _default_factory(runner: type[RefinementRunner]) -> ClientFactory | None:
+    """The client this runner talks through when the caller injected none.
+
+    Keyed on the class, not the kind: a test that registers a fake under `claude` wants the choice
+    logic, not the SDK.
+    """
+    if not issubclass(runner, SdkRunner):
         return None
     if not SDK_AVAILABLE:
         raise RunnerUnavailable(NEEDS_EXTRA)
     return SdkClientFactory()
+
+
+async def refine(
+    index: IndexStore,
+    root: Path,
+    settings: AuditorSettings,
+    user: UserSettings,
+    *,
+    job: RefinementJob,
+    requested: Runner | None = None,
+) -> RefinePayload:
+    """Run one model-driven refinement and report what it did.
+
+    The one call both surfaces make, so the CLI and the MCP tool cannot drift on the choice logic
+    or on the payload.
+
+    Raises:
+        RunnerUnavailable: no runner can drive this request, with the reason in the message.
+    """
+    choice = select_runner(user.observer.runner, requested=requested)
+    if choice.kind is None:
+        raise RunnerUnavailable(choice.detail)
+    service = RefinementService(index, root, settings, user)
+    product = await build_runner(choice.kind, service).run(job)
+    return RefinePayload.of(
+        await service.status(product.run.run_id),
+        product.brief,
+        product.landed,
+        choice.code,
+    )
+
+
+async def brief(
+    index: IndexStore,
+    root: Path,
+    settings: AuditorSettings,
+    user: UserSettings,
+    scope: str,
+) -> BriefPayload:
+    """Render the brief a run over ``scope`` would be given, without opening one.
+
+    Raises:
+        ValueError: the scope could never name a node in this checkout.
+    """
+    service = RefinementService(index, root, settings, user)
+    built = await BriefBuilder(facts=service.facts, limits=user.observer.limits).build(
+        scope, commit_sha=(await service.head())[1]
+    )
+    return BriefPayload.of(built)

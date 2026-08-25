@@ -43,6 +43,12 @@ auditr graph clusters .
 # what the deterministic resolver could not place, worst first
 auditr graph unresolved .
 
+# let a model work the queue under a directory
+auditr graph refine auditor/cli
+
+# see the brief a run would send, without opening one
+auditr graph refine . --brief
+
 # who changed the graph and what they changed
 auditr graph log .
 
@@ -269,6 +275,57 @@ auditr graph refinements prune
   together with the `rejected` refinements they own, and never a run that owns a live refinement or
   a tuning row. Nothing live is ever deleted.
 
+## Refine
+
+```bash
+# let a model work the unresolved queue under a path
+auditr graph refine auditor/cli
+# the whole repo, on a named model
+auditr graph refine "" --model sonnet
+# what a run would be asked, with no run opened
+auditr graph refine auditor/cli --brief
+```
+
+- One run is: open a row, render the brief for the queue rows under the scope, hand it to a model
+  that reads the checkout with `Read`/`Grep`/`Glob` and proposes through an in-process `propose`
+  tool, then commit under the rebuild lock. Every proposal goes through the same verifier an agent's
+  does, so the runner has no way to write a correction the tools would refuse.
+- `SCOPE` is the first positional and `TARGET` the second, like every other graph command. The scope
+  is a repo-relative path prefix; `.` and `""` both mean the whole repo. A run may only propose
+  corrections whose every endpoint is under its scope, so a cross-directory edge needs a wider run.
+- `--runner` takes `auto`, `claude` or `codex`. `auto` and `claude` both resolve to the Claude
+  runner today; `codex` is refused, naming the slice it lands in. `--model` takes `haiku` or
+  `sonnet`. An unknown value for either exits 2 naming the valid set.
+- Three refusals, all exit 1 with one line: the extra is not installed
+  (`pip install 'auditr[observer-claude]'`), no Claude credentials were found, or the Codex runner
+  was asked for.
+- The SDK ships its own `claude` binary (342 MB). The runner uses the `claude` on your PATH when
+  there is one and falls back to that bundle otherwise.
+- Limits live in `config.json` under `observer`:
+  - `limits.max_nodes_per_run` caps how many queue rows one brief carries.
+  - `limits.max_changes_per_run` caps how many corrections one run may stage.
+  - `limits.max_turns` caps the conversation.
+  - `budget.max_budget_usd_per_run` stops the run after a turn that crosses it.
+- Rule of thumb: `max_turns >= 2 * max_nodes_per_run + 2`. A target costs about two turns and the
+  structured answer costs one more.
+- The budget is an advisory post-turn stop, not a hard cap: the turn in flight runs to completion,
+  so a small budget can overshoot. The 180 s timeout and `max_turns` are the real bounds, and the
+  cost recorded on the run is the one actually spent.
+- A run that stops at its turn or budget cap is `aborted`, and an aborted run keeps its cost but
+  loses its staging: nothing it proposed is stored. Only the proposals the verifier refused survive,
+  because those are written the moment they are made.
+- Corrections land `pending`. Nothing here activates one; that stays
+  `auditr graph refinements accept <id>` until the eval suite lands.
+- The run row records the verbatim brief, the sha of the rules it was written under, the tool trace,
+  the usage, the SDK session id, the model, the runner, the branch and the commit. `graph log --json`
+  carries `system_prompt_sha`, `prompt_chars` and `tool_calls`; the brief itself stays on the row,
+  where it cannot fight the log's row cap.
+- The log shows `queued` until the run finishes. Nothing writes `running` yet.
+- Exit codes: 0 when the run succeeded, 1 when no runner could run or the run did not succeed
+  (the payload is still printed, `--json` included), 2 for a bad `--runner` or `--model` value.
+- `--brief` renders the brief for a scope and stops. It opens no run and records nothing, so it is
+  the way to see what a run would be asked before spending anything.
+
 ## Provenance log
 
 ```bash
@@ -304,6 +361,9 @@ auditr graph log --skipped
   recent rows; `--json` carries the epoch.
 - The page is capped by `--limit` (default 50, at most 500). `--json` carries `run_count` and
   `refinement_count`, the number matching the same filters, and `truncated`.
+- A model-driven run adds three keys to the runs view under `--json`: `system_prompt_sha`,
+  `prompt_chars` and `tool_calls`. The human table does not show them; they are there so a reader
+  can tell a run that was given a brief from one that was not.
 
 ## Refinement overlay
 

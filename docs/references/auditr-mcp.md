@@ -116,9 +116,16 @@ args = ["run", "-i", "--rm",
   `definers` and `candidates` lists and reports the true totals as `definers_count` and
   `candidates_count`; `auditr graph unresolved --json` returns the same keys.
 - Refinements: `graph_refine_begin`, `graph_refine_propose`, `graph_refine_commit`,
-  `graph_refine_abort`, `graph_refine_status`, `graph_refinements`, `graph_log`. The flow is: read
-  `graph_unresolved`, `graph_refine_begin` to open a run, one `graph_refine_propose` per correction,
-  then `graph_refine_commit` (which rebuilds) or `graph_refine_abort`.
+  `graph_refine_abort`, `graph_refine_status`, `graph_refine_brief`, `graph_refine`,
+  `graph_refinements`, `graph_log`. The flow is: read `graph_unresolved`, `graph_refine_begin` to
+  open a run, one `graph_refine_propose` per correction, then `graph_refine_commit` (which rebuilds)
+  or `graph_refine_abort`. `graph_refine_brief` renders what a model-driven run would be asked for
+  the same queue rows, and records that prompt on the run.
+- `graph_refine` runs a model over the queue itself, in this server's own process and under the same
+  limits as `auditr graph refine`: `max_nodes_per_run` targets, `max_turns` turns and
+  `max_budget_usd_per_run`. It needs the `observer-claude` extra and Claude credentials; without
+  either it comes back as a one-line error naming the fix. Do not call it from inside a refinement
+  run: the bound `propose` tool is that surface.
 - A proposal is checked against the source file's own AST facts: the destination's short name has to
   appear in the caller's facts for that edge kind and call form, the file has to still hash to what
   the build cached, the name must not be imported from outside the repo, and the destination must
@@ -146,8 +153,8 @@ args = ["run", "-i", "--rm",
   no MCP tool for `accept`, `revert`, `pin` or `prune`: activating a correction is a human step.
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs`,
-  `malware_install` and the four `graph_refine_*` tools that write (`begin`, `propose`, `commit`,
-  `abort`), destructive for `ignore_remove`. Destructive means a row is deleted, which is why
+  `malware_install` and the five tools that write (`graph_refine_begin`, `graph_refine_propose`,
+  `graph_refine_commit`, `graph_refine_abort`, `graph_refine`), destructive for `ignore_remove`. Destructive means a row is deleted, which is why
   `graph_refine_abort` is only mutating: it drops staging that was never written.
   `graph_refine_begin` and `graph_refine_propose` are additionally marked non-idempotent, because
   each call opens a run or stages another proposal: a client must not silently retry them. No tool
