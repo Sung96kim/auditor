@@ -1,8 +1,12 @@
 """The refinement lifecycle (spec 9.1), driven by hand with no runner."""
 
+import asyncio
+import time
+
 import pytest
 from pydantic import ValidationError
 
+from auditor.database.refinements import RefinementsDB
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.refine.models import (
@@ -34,6 +38,33 @@ CALL_EDGE = Proposal(
     reason="Impl.run calls load_user, which svc.py defines",
     confidence=0.9,
 )
+#: a second proposal that stages: another kind, another target, no edge to collide with
+NOTE = Proposal(
+    kind=RefinementKind.ANNOTATE_NODE,
+    target=RefinementTarget(node_id="impl.py::Impl.run"),
+    payload=RefinementPayload(annotation="the entry point"),
+    reason="worth a note",
+)
+#: the name `Impl.run` does not call, which is what the verifier refuses
+UNCALLED = CALL_EDGE.model_copy(
+    update={
+        "target": CALL_EDGE.target.model_copy(update={"name": "never_called"}),
+        "reason": "a name Impl.run does not call",
+        "confidence": 0.0,
+    }
+)
+
+
+def with_lock_timeout(service: RefinementService, seconds: float) -> RefinementService:
+    """Shrink this service's rebuild-lock budget, so a held lock is a fast refusal."""
+    service.settings = service.settings.model_copy(
+        update={
+            "graph": service.settings.graph.model_copy(
+                update={"rebuild_lock_timeout_seconds": seconds}
+            )
+        }
+    )
+    return service
 
 
 async def test_a_manual_run_is_attributable(refine_service: RefinementService):
@@ -61,19 +92,7 @@ async def test_a_rejection_is_stored_the_moment_it_is_made(
     refine_service: RefinementService,
 ):
     run = await refine_service.begin()
-    verdict = await refine_service.propose(
-        run.run_id,
-        Proposal(
-            kind=RefinementKind.ADD_EDGE,
-            target=RefinementTarget(
-                src="impl.py::Impl.run",
-                dst="svc.py::load_user",
-                edge_kind=EdgeKind.CALLS,
-                name="never_called",
-            ),
-            reason="a name Impl.run does not call",
-        ),
-    )
+    verdict = await refine_service.propose(run.run_id, UNCALLED)
     assert verdict.outcome is ProposalOutcome.REJECTED
     assert verdict.verify is VerifyStatus.NOT_A_DEFINER
     stored = await refine_service.index.refinements.refinement(verdict.refinement_id)
@@ -261,15 +280,7 @@ async def test_the_change_cap_refuses_the_proposal_past_the_limit(
     assert (
         await refine_service.propose(run.run_id, CALL_EDGE)
     ).outcome is ProposalOutcome.STAGED
-    second = await refine_service.propose(
-        run.run_id,
-        Proposal(
-            kind=RefinementKind.ANNOTATE_NODE,
-            target=RefinementTarget(node_id="impl.py::Impl.run"),
-            payload=RefinementPayload(annotation="the entry point"),
-            reason="worth a note",
-        ),
-    )
+    second = await refine_service.propose(run.run_id, NOTE)
     assert second.outcome is ProposalOutcome.REJECTED
     assert second.refusal is RefusalKind.OVER_CAP
     assert "max_changes_per_run" in second.detail
@@ -321,19 +332,7 @@ async def test_a_terminal_refinement_refuses_every_transition(
     refine_service: RefinementService,
 ):
     run = await refine_service.begin()
-    verdict = await refine_service.propose(
-        run.run_id,
-        Proposal(
-            kind=RefinementKind.ADD_EDGE,
-            target=RefinementTarget(
-                src="impl.py::Impl.run",
-                dst="svc.py::load_user",
-                edge_kind=EdgeKind.CALLS,
-                name="never_called",
-            ),
-            reason="a name Impl.run does not call",
-        ),
-    )
+    verdict = await refine_service.propose(run.run_id, UNCALLED)
     with pytest.raises(RefinementRefused, match="rejected"):
         await refine_service.accept(verdict.refinement_id)
 
@@ -385,22 +384,90 @@ async def test_the_same_proposal_twice_in_one_run_stages_once(
     assert len(report.staged) == 1
 
 
-async def test_a_build_that_blows_up_leaves_the_run_failed(
+async def _boom(*args, **kwargs):
+    raise RuntimeError("the build blew up")
+
+
+async def test_a_build_that_blows_up_takes_back_what_the_commit_inserted(
     refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
 ):
-    async def boom(*args, **kwargs):
-        raise RuntimeError("the build blew up")
-
-    monkeypatch.setattr("auditor.graph.refine.service.GraphBuilder.rebuild", boom)
+    """The rebuild runs after the insert transaction has committed, so the compensating step is
+    the only thing stopping `accept` from activating a row whose commit never finished."""
+    monkeypatch.setattr("auditor.graph.refine.service.GraphBuilder.rebuild", _boom)
     run = await refine_service.begin()
     await refine_service.propose(run.run_id, CALL_EDGE)
-    with pytest.raises(RuntimeError, match="blew up"):
+    with pytest.raises(RefinementRefused, match="blew up") as refusal:
         await refine_service.commit(run.run_id)
+    assert run.run_id in str(refusal.value)
     finished = await refine_service.index.runs.run(run.run_id)
     assert finished is not None and finished.status is RunStatus.FAILED
     assert "blew up" in (finished.error or "")
+    stored = await refine_service.index.refinements.of_run(run.run_id)
+    assert [r.status for r in stored] == [RefinementStatus.REJECTED]
     with pytest.raises(RefinementRefused, match="not open"):
         await refine_service.commit(run.run_id)
+
+
+async def test_a_retry_after_a_failed_commit_leaves_one_live_refinement(
+    refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
+):
+    """The conflict rules read active rows only, so two `pending` rows for one edge would both be
+    acceptable and produce it twice. The failed run's row is rejected, so the retry is the only
+    live one."""
+    monkeypatch.setattr("auditor.graph.refine.service.GraphBuilder.rebuild", _boom)
+    first = await refine_service.begin()
+    await refine_service.propose(first.run_id, CALL_EDGE)
+    with pytest.raises(RefinementRefused):
+        await refine_service.commit(first.run_id)
+    monkeypatch.undo()
+    second = await refine_service.begin()
+    await refine_service.propose(second.run_id, CALL_EDGE)
+    assert (await refine_service.commit(second.run_id)).landed == 1
+    rows = await refine_service.index.refinements.refinements()
+    live = [r for r in rows if r.status is not RefinementStatus.REJECTED]
+    assert [(r.run_id, r.target.dst) for r in live] == [
+        (second.run_id, "svc.py::load_user")
+    ]
+
+
+async def test_an_insert_that_fails_rolls_the_whole_batch_back(
+    refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
+):
+    """One transaction for the batch: the second row failing has to take the first with it, or a
+    commit that raised would still have half-landed."""
+    written = 0
+    real = RefinementsDB.write_refinement
+
+    def explode(self, conn, refinement, anchors=()):
+        nonlocal written
+        written += 1
+        if written == 2:
+            raise RuntimeError("the insert blew up")
+        return real(self, conn, refinement, anchors)
+
+    run = await refine_service.begin()
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    await refine_service.propose(run.run_id, NOTE)
+    monkeypatch.setattr(RefinementsDB, "write_refinement", explode)
+    with pytest.raises(RefinementRefused, match="insert blew up"):
+        await refine_service.commit(run.run_id)
+    monkeypatch.undo()
+    assert await refine_service.index.refinements.of_run(run.run_id) == []
+    finished = await refine_service.index.runs.run(run.run_id)
+    assert finished is not None and finished.status is RunStatus.FAILED
+
+
+async def test_a_held_rebuild_lock_bounds_the_service_rebuild_too(
+    refine_service: RefinementService,
+):
+    """`commit` was bounded and `rebuild` was not, and `rebuild` is what a caller runs after an
+    `accept`: a wedged `auditr graph build` would hang it for ever."""
+    with_lock_timeout(refine_service, 0.05)
+    started = time.monotonic()
+    async with rebuild_lock(refine_service.identity):
+        with pytest.raises(RefinementRefused, match="rebuild lock"):
+            await asyncio.wait_for(refine_service.rebuild(), timeout=10)
+    assert time.monotonic() - started < 5
 
 
 async def test_a_held_rebuild_lock_becomes_a_refusal_naming_the_lock(
@@ -408,13 +475,7 @@ async def test_a_held_rebuild_lock_becomes_a_refusal_naming_the_lock(
 ):
     """`flock` is per open file description, so a second handle in this process waits exactly the
     way another process would."""
-    refine_service.settings = refine_service.settings.model_copy(
-        update={
-            "graph": refine_service.settings.graph.model_copy(
-                update={"rebuild_lock_timeout_seconds": 0.05}
-            )
-        }
-    )
+    with_lock_timeout(refine_service, 0.05)
     run = await refine_service.begin()
     await refine_service.propose(run.run_id, CALL_EDGE)
     async with rebuild_lock(refine_service.identity):

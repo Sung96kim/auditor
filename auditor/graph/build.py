@@ -374,16 +374,19 @@ class GraphBuilder:
         progress: Callable[[str], None] | None = None,
         lock_held: bool = False,
         snapshot: Snapshot | None = None,
+        timeout: float | None = None,
     ) -> GraphBuildReport:
         """:meth:`run` under this checkout's rebuild lock. Pass ``lock_held`` when the caller
-        already holds it, and ``snapshot`` to see the queue immediately before and after the write
-        without another build landing in between."""
+        already holds it, ``snapshot`` to see the queue immediately before and after the write
+        without another build landing in between, and ``timeout`` to give up with
+        `RebuildLockTimeout` rather than wait for another build for ever."""
         report = progress or (lambda _m: None)
         async with rebuild_lock(
             index.partition.identity,
             held=lock_held,
             waiting=lambda: report("waiting for the observer's rebuild"),
             poll=settings.graph.rebuild_lock_poll_seconds,
+            timeout=timeout,
         ):
             return await self.run(index, settings, progress=progress, snapshot=snapshot)
 

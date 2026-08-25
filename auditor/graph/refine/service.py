@@ -10,6 +10,7 @@ before their first real await.
 """
 
 import asyncio
+import sqlite3
 import time
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
@@ -68,6 +69,19 @@ _PIN_FROM = frozenset(
 
 class RefinementRefused(RuntimeError):
     """A caller asked for something the service will not do, with the reason in the message."""
+
+    @classmethod
+    def lock_held(cls, exc: RebuildLockTimeout, *, detail: str) -> "RefinementRefused":
+        """Another build held this checkout's rebuild lock for the whole budget."""
+        return cls(f"{detail}: {exc.advice}")
+
+    @classmethod
+    def commit_failed(cls, run_id: str, exc: BaseException) -> "RefinementRefused":
+        """A commit died after its git guard, so the caller learns which run to look up."""
+        return cls(
+            f"run {run_id} failed to commit: {exc}. Nothing it inserted is live, so a retry "
+            "cannot land the same change twice."
+        )
 
 
 class ProposalOutcome(StrEnum):
@@ -275,6 +289,24 @@ class StagedProposal(BaseModel):
             verify=self.verify,
             refinement_id=refinement_id,
         )
+
+
+class Landing(BaseModel):
+    """One staged proposal's decided fate at commit: the row to insert and the verdict it earns.
+
+    Deciding the whole batch before writing any of it is what lets the inserts be one transaction,
+    so a commit that dies part way through leaves nothing behind (spec 6).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    refinement: Refinement
+    anchors: tuple[Anchor, ...] = ()
+    verdict: Verdict
+
+    def landed(self, refinement_id: int) -> Verdict:
+        """The verdict with the id the insert assigned its row."""
+        return self.verdict.model_copy(update={"refinement_id": refinement_id})
 
 
 class StagedRun(BaseModel):
@@ -525,7 +557,12 @@ class RefinementService:
             return await self._land_all(staged)
 
     async def _land_all(self, staged: StagedRun) -> CommitResult:
-        """The body of one commit: the git guard, then the lock, the inserts and the rebuild."""
+        """The body of one commit: the git guard, then the lock, the inserts and the rebuild.
+
+        The whole batch is decided first and inserted as one transaction, and the rebuild follows
+        inside the same lock, so a commit that dies leaves no live row a later `accept` could
+        activate and no queue row retired by a build that never happened (spec 6).
+        """
         run_id = staged.run.run_id
         refused = self._checkout_moved(staged.run)
         if refused is not None:
@@ -536,50 +573,73 @@ class RefinementService:
             # there is nothing to retire, so this takes no lock and runs no build
             await self._finish(run_id, RunStatus.SUCCEEDED, summary="nothing staged")
             return CommitResult(run_id=run_id, rebuilt=False)
-        committed: list[Verdict] = []
-        rejected: list[Verdict] = []
-        build: GraphBuildReport | None = None
+        landed: list[Verdict] = []
         try:
             async with rebuild_lock(
                 self.identity,
                 poll=self.settings.graph.rebuild_lock_poll_seconds,
                 timeout=self.settings.graph.rebuild_lock_timeout_seconds,
             ):
-                rules = await self._conflict_rules(staged)
-                policy = await self._policy(staged.run)
-                for item in staged.staged:
-                    verdict = await self._land(run_id, item, rules, policy)
-                    (
-                        committed
-                        if verdict.outcome is ProposalOutcome.STAGED
-                        else rejected
-                    ).append(verdict)
+                landed = await self._insert(await self._decided(staged))
                 build = await GraphBuilder().rebuild(
                     self.index, self.settings, lock_held=True
                 )
-                await self._finish(
-                    run_id,
-                    RunStatus.SUCCEEDED,
-                    summary=f"{len(committed)} committed, {len(rejected)} rejected",
-                )
         except RebuildLockTimeout as exc:
-            await self._finish(run_id, RunStatus.FAILED, error=str(exc))
-            raise RefinementRefused(
-                f"another build is holding the rebuild lock {exc.path}; it did not finish "
-                f"within {exc.timeout}s, so nothing was committed. Try again, or check for a "
-                "stuck `auditr graph build`."
+            await self._retire(run_id, landed, str(exc))
+            raise RefinementRefused.lock_held(
+                exc, detail=f"run {run_id} committed nothing"
             ) from exc
         # `Exception`, not `BaseException`: a cancelled task cannot be trusted to await its own
         # bookkeeping, and catching `CancelledError` here would swallow the cancellation
         except Exception as exc:
-            await self._finish(run_id, RunStatus.FAILED, error=str(exc))
-            raise
-        return CommitResult(
-            run_id=run_id,
-            committed=tuple(committed),
-            rejected=tuple(rejected),
-            build=build,
+            await self._retire(run_id, landed, str(exc))
+            raise RefinementRefused.commit_failed(run_id, exc) from exc
+        committed = tuple(v for v in landed if v.outcome is ProposalOutcome.STAGED)
+        rejected = tuple(v for v in landed if v.outcome is ProposalOutcome.REJECTED)
+        await self._finish(
+            run_id,
+            RunStatus.SUCCEEDED,
+            summary=f"{len(committed)} committed, {len(rejected)} rejected",
         )
+        return CommitResult(
+            run_id=run_id, committed=committed, rejected=rejected, build=build
+        )
+
+    async def _decided(self, staged: StagedRun) -> list[Landing]:
+        """What this commit will insert, worked out before anything is written."""
+        rules = await self._conflict_rules(staged)
+        policy = await self._policy(staged.run)
+        return [
+            self._decide(staged.run.run_id, item, rules, policy)
+            for item in staged.staged
+        ]
+
+    async def _insert(self, landings: Sequence[Landing]) -> list[Verdict]:
+        """Write one commit's whole batch as a single transaction: all of it, or none of it."""
+        refinements = self.index.refinements
+
+        def write(conn: sqlite3.Connection) -> list[int]:
+            return [
+                refinements.write_refinement(conn, item.refinement, item.anchors)
+                for item in landings
+            ]
+
+        ids = await self.index.transaction(write)
+        return [item.landed(rid) for item, rid in zip(landings, ids, strict=True)]
+
+    async def _retire(self, run_id: str, landed: Sequence[Verdict], error: str) -> None:
+        """Fail the run and take back anything it inserted, so nothing it wrote stays live.
+
+        The inserts are one transaction, so ``landed`` is empty unless the rebuild after them
+        failed; those rows are real, and `accept` reads a refinement's own status, never its run's.
+        """
+        live = [
+            v.refinement_id
+            for v in landed
+            if v.status in (RefinementStatus.PENDING, RefinementStatus.ACTIVE)
+        ]
+        await self.index.refinements.set_statuses(live, RefinementStatus.REJECTED)
+        await self._finish(run_id, RunStatus.FAILED, error=error)
 
     async def abort(self, run_id: str, reason: str) -> Run:
         """Drop this run's staging and stamp it aborted (spec 9.1). Nothing was stored."""
@@ -616,8 +676,21 @@ class RefinementService:
         )
 
     async def rebuild(self) -> GraphBuildReport:
-        """A build under the same lock a commit takes, for a caller that changed a status."""
-        return await GraphBuilder().rebuild(self.index, self.settings)
+        """A build under the same lock a commit takes, and under the same timeout.
+
+        A caller that changed a status by hand has to see the graph move; waiting on the lock for
+        ever behind a wedged `auditr graph build` would hang whatever asked.
+        """
+        try:
+            return await GraphBuilder().rebuild(
+                self.index,
+                self.settings,
+                timeout=self.settings.graph.rebuild_lock_timeout_seconds,
+            )
+        except RebuildLockTimeout as exc:
+            raise RefinementRefused.lock_held(
+                exc, detail="the rebuild did not run"
+            ) from exc
 
     async def _refused(
         self, staged: StagedRun, proposal: Proposal, stored: Proposal
@@ -709,20 +782,25 @@ class RefinementService:
             ]
         return ConflictRules.of(await self.index.refinements.active(), edges)
 
-    async def _land(
+    def _decide(
         self,
         run_id: str,
         item: StagedProposal,
         rules: ConflictRules,
         policy: TierPolicy,
-    ) -> Verdict:
-        """Insert one staged proposal, or the rejection a conflict earns it (spec 9.1)."""
+    ) -> Landing:
+        """The row one staged proposal earns, or the rejection a conflict earns it (spec 9.1).
+
+        Pure: nothing here reads or writes the store, so a whole commit's decisions exist before
+        its first insert does.
+        """
         conflict = rules.check(item.proposal)
         if conflict is None:
-            rid = await self._store(
-                run_id, item.proposal, item.tier, item.status, item.anchors
+            return Landing(
+                refinement=self._row(item.proposal, run_id, item.tier, item.status),
+                anchors=item.anchors,
+                verdict=item.verdict(),
             )
-            return item.verdict(refinement_id=rid)
         if (
             conflict.rewrite_as_confirm
             and item.proposal.kind is RefinementKind.ADD_EDGE
@@ -740,41 +818,45 @@ class RefinementService:
                 confirmation, row=None, verified=item.verify is VerifyStatus.OK
             )
             status = policy.status(confirmation.kind, tier)
-            rid = await self._store(run_id, confirmation, tier, status, item.anchors)
-            return Verdict(
-                outcome=ProposalOutcome.STAGED,
-                kind=RefinementKind.CONFIRM_EDGE,
-                tier=tier,
-                status=status,
-                verify=item.verify,
-                detail=conflict.detail,
-                refinement_id=rid,
+            return Landing(
+                refinement=self._row(confirmation, run_id, tier, status),
+                anchors=item.anchors,
+                verdict=Verdict(
+                    outcome=ProposalOutcome.STAGED,
+                    kind=RefinementKind.CONFIRM_EDGE,
+                    tier=tier,
+                    status=status,
+                    verify=item.verify,
+                    detail=conflict.detail,
+                ),
             )
-        return await self._reject(
-            run_id,
-            item.proposal,
-            item.verify,
-            conflict.detail,
-            status=conflict.stored_status,
-        )
-
-    async def _store(
-        self,
-        run_id: str,
-        proposal: Proposal,
-        tier: Tier,
-        status: RefinementStatus,
-        anchors: Sequence[Anchor],
-    ) -> int:
-        return await self.index.refinements.add_refinement(
-            Refinement.of(
-                proposal,
+        return Landing(
+            refinement=Refinement.rejected(
+                item.proposal,
                 run_id=run_id,
                 repo_identity=self.identity,
-                tier=tier,
-                status=status,
+                detail=conflict.detail,
+                status=conflict.stored_status,
             ),
-            list(anchors),
+            verdict=Verdict(
+                outcome=ProposalOutcome.REJECTED,
+                kind=item.proposal.kind,
+                status=conflict.stored_status,
+                verify=item.verify,
+                detail=conflict.detail,
+            ),
+        )
+
+    def _row(
+        self, proposal: Proposal, run_id: str, tier: Tier, status: RefinementStatus
+    ) -> Refinement:
+        """One accepted proposal as the row this checkout stores it as."""
+        return Refinement.of(
+            proposal,
+            run_id=run_id,
+            repo_identity=self.identity,
+            tier=tier,
+            status=status,
         )
 
     async def _reject(
@@ -790,23 +872,14 @@ class RefinementService:
         """Store the rejection the moment it is made, so an aborted run still explains itself.
 
         ``proposal`` is already toplevel-relative: every caller rebases before it gets here.
-        ``status`` is `redundant` when the resolver already produces the edge, which spec 5.4 makes
-        terminal and never re-briefed. The row is built under `STORED_ROW` rather than through
-        `Refinement.of`, because an illegal payload is exactly the thing that has to be recordable.
         """
-        rejected = proposal.model_copy(
-            update={"reason": f"{proposal.reason} [rejected: {detail}]".strip()}
-        )
         rid = await self.index.refinements.add_refinement(
-            Refinement.model_validate(
-                {
-                    **rejected.model_dump(include=set(Proposal.model_fields)),
-                    "run_id": run_id,
-                    "repo_identity": self.identity,
-                    "tier": Tier.C,
-                    "status": status,
-                },
-                context={STORED_ROW: True},
+            Refinement.rejected(
+                proposal,
+                run_id=run_id,
+                repo_identity=self.identity,
+                detail=detail,
+                status=status,
             )
         )
         return Verdict(

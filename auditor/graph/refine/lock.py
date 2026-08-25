@@ -33,6 +33,14 @@ class RebuildLockTimeout(RuntimeError):
         self.path = path
         self.timeout = timeout
 
+    @property
+    def advice(self) -> str:
+        """The sentence every surface that waits on this lock tells its caller."""
+        return (
+            f"another build is holding the rebuild lock {self.path}; it did not finish within "
+            f"{self.timeout}s. Try again, or check for a stuck `auditr graph build`."
+        )
+
 
 def rebuild_lock_path(identity: str) -> Path:
     """The lock every rebuild of one checkout takes. Under the home, so no repo is written to."""

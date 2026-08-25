@@ -493,6 +493,35 @@ class Refinement(Proposal):
             supersedes=supersedes,
         )
 
+    @classmethod
+    def rejected(
+        cls,
+        proposal: Proposal,
+        *,
+        run_id: str,
+        repo_identity: str,
+        detail: str,
+        status: RefinementStatus = RefinementStatus.REJECTED,
+    ) -> "Refinement":
+        """The stored form of one refusal, with the reason a reader sees carrying it (spec 9.2).
+
+        Read under `STORED_ROW` because an illegal payload is exactly the thing that has to be
+        recordable; ``status`` is `redundant` when the resolver already produces the edge.
+        """
+        annotated = proposal.model_copy(
+            update={"reason": f"{proposal.reason} [rejected: {detail}]".strip()}
+        )
+        return cls.model_validate(
+            {
+                **annotated.model_dump(include=set(Proposal.model_fields)),
+                "run_id": run_id,
+                "repo_identity": repo_identity,
+                "tier": Tier.C,
+                "status": status,
+            },
+            context={STORED_ROW: True},
+        )
+
     @model_validator(mode="before")
     @classmethod
     def _one_timestamp_until_it_moves(cls, data: Any) -> Any:

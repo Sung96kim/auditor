@@ -341,32 +341,45 @@ class RefinementsDB(BaseDB):
         ),
     }
 
+    def write_refinement(
+        self,
+        conn: sqlite3.Connection,
+        refinement: Refinement,
+        anchors: Sequence[Anchor] = (),
+    ) -> int:
+        """Insert one refinement and its anchors on the open connection, without committing.
+
+        The caller's transaction owns the commit, so one commit's whole batch lands together or
+        not at all; `write_outcomes` below is the same arrangement for a build.
+        """
+        sql, binds = self.insert_sql(
+            "graph_refinements", _refinement_values(refinement)
+        )
+        new_id = int(conn.execute(sql, binds).lastrowid)
+        anchor_sql, anchor_binds = self.insert_many_sql(
+            "graph_refinement_anchors",
+            [
+                {
+                    "refinement_id": new_id,
+                    "node_id": a.node_id,
+                    "path": a.path,
+                    "truth_sha": a.truth_sha,
+                    "file_sha": a.file_sha,
+                }
+                for a in anchors
+            ],
+            or_replace=True,
+        )
+        conn.executemany(anchor_sql, anchor_binds)
+        return new_id
+
     async def add_refinement(
         self, refinement: Refinement, anchors: Sequence[Anchor] = ()
     ) -> int:
         """Insert one refinement and its anchors together; returns the assigned id."""
-        sql, binds = self.insert_sql(
-            "graph_refinements", _refinement_values(refinement)
-        )
 
         def op(conn: sqlite3.Connection) -> int:
-            cur = conn.execute(sql, binds)
-            new_id = int(cur.lastrowid)
-            anchor_sql, anchor_binds = self.insert_many_sql(
-                "graph_refinement_anchors",
-                [
-                    {
-                        "refinement_id": new_id,
-                        "node_id": a.node_id,
-                        "path": a.path,
-                        "truth_sha": a.truth_sha,
-                        "file_sha": a.file_sha,
-                    }
-                    for a in anchors
-                ],
-                or_replace=True,
-            )
-            conn.executemany(anchor_sql, anchor_binds)
+            new_id = self.write_refinement(conn, refinement, anchors)
             conn.commit()
             return new_id
 
@@ -463,6 +476,34 @@ class RefinementsDB(BaseDB):
                 "UPDATE graph_refinements SET status=?, status_at=? "
                 "WHERE refinement_id=? AND repo_identity=?",
                 (status.value, stamp, refinement_id, identity),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+    async def set_statuses(
+        self,
+        refinement_ids: Sequence[int],
+        status: RefinementStatus,
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Move several refinements to one status as a single write.
+
+        A commit whose build failed takes its own inserts back; doing it row by row would leave a
+        window where half of them are still live.
+        """
+        if not refinement_ids:
+            return
+        stamp = time.time() if now is None else now
+        identity = self.partition.identity
+        binds = [(status.value, stamp, rid, identity) for rid in refinement_ids]
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.executemany(
+                "UPDATE graph_refinements SET status=?, status_at=? "
+                "WHERE refinement_id=? AND repo_identity=?",
+                binds,
             )
             conn.commit()
 

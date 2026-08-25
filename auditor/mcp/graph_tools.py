@@ -5,6 +5,7 @@ tools register unconditionally."""
 import time
 from collections import defaultdict
 
+from fastmcp.exceptions import ToolError
 from loguru import logger
 
 from auditor.engine import audit_target
@@ -23,6 +24,7 @@ from auditor.graph.model import (
 )
 from auditor.graph.payloads import NeighborsReport, QueueRowPayload
 from auditor.graph.query import GraphQuery
+from auditor.graph.refine.lock import RebuildLockTimeout
 from auditor.mcp.helpers import MUTATING, READ_ONLY, tool_repo
 from auditor.mcp.server import mcp
 
@@ -39,9 +41,16 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
                 repo.root, incremental=True, config_overrides=GRAPH_OVERRIDE
             )
         await repo.index.repos.register(time.time())
-        return (await GraphBuilder().rebuild(repo.index, repo.settings())).model_dump(
-            mode="json"
-        )
+        settings = repo.settings()
+        try:
+            report = await GraphBuilder().rebuild(
+                repo.index,
+                settings,
+                timeout=settings.graph.rebuild_lock_timeout_seconds,
+            )
+        except RebuildLockTimeout as exc:
+            raise ToolError(exc.advice) from exc
+    return report.model_dump(mode="json")
 
 
 @mcp.tool(annotations=READ_ONLY)
