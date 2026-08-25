@@ -19,6 +19,7 @@ from auditor.graph.refine.models import (
     Tier,
 )
 from auditor.graph.refine.service import (
+    ProposalFacts,
     ProposalOutcome,
     RefinementRefused,
     RefinementService,
@@ -483,6 +484,78 @@ async def test_a_held_rebuild_lock_becomes_a_refusal_naming_the_lock(
             await refine_service.commit(run.run_id)
     finished = await refine_service.index.runs.run(run.run_id)
     assert finished is not None and finished.status is RunStatus.FAILED
+
+
+def note(index: int) -> Proposal:
+    """One of a batch of distinct staging proposals: same node, different annotation."""
+    return NOTE.model_copy(
+        update={"payload": RefinementPayload(annotation=f"the entry point {index}")}
+    )
+
+
+def slow_facts(monkeypatch: pytest.MonkeyPatch, delay: float = 0.05) -> None:
+    """Force a real await between `_refused`'s cap read and the append that depends on it."""
+    real = ProposalFacts.of.__func__
+
+    async def slowly(cls, *args, **kwargs):
+        await asyncio.sleep(delay)
+        return await real(cls, *args, **kwargs)
+
+    monkeypatch.setattr(ProposalFacts, "of", classmethod(slowly))
+
+
+async def test_concurrent_proposes_admit_exactly_the_cap(
+    refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
+):
+    """`_refused` reads the staged count against the cap and then awaits the database twice before
+    it appends. Without the run's lock every concurrent proposal passes a cap of three."""
+    cap = 3
+    refine_service.user = UserSettings.model_validate(
+        {"observer": {"limits": {"max_changes_per_run": cap}}}
+    )
+    slow_facts(monkeypatch)
+    run = await refine_service.begin()
+    verdicts = await asyncio.gather(
+        *(refine_service.propose(run.run_id, note(i)) for i in range(cap + 3))
+    )
+    staged = [v for v in verdicts if v.outcome is ProposalOutcome.STAGED]
+    over_cap = [v for v in verdicts if v.refusal is RefusalKind.OVER_CAP]
+    assert (len(staged), len(over_cap)) == (cap, 3)
+    assert len((await refine_service.status(run.run_id)).staged) == cap
+
+
+async def test_a_commit_waits_for_a_propose_already_in_flight(
+    refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
+):
+    """The run's lock is the only thing holding the commit back: without it the commit reads the
+    staged list, lands one row, and the in-flight proposal appends to a run nobody will insert."""
+    slow_facts(monkeypatch)
+    run = await refine_service.begin()
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    in_flight = asyncio.create_task(refine_service.propose(run.run_id, NOTE))
+    await asyncio.sleep(0)  # let it take the lock and reach its await
+    result = await refine_service.commit(run.run_id)
+    assert (await in_flight).outcome is ProposalOutcome.STAGED
+    assert result.landed == 2
+    assert len(await refine_service.index.refinements.of_run(run.run_id)) == 2
+
+
+async def test_an_abort_racing_a_commit_cannot_overwrite_it(
+    refine_service: RefinementService,
+):
+    """Both terminal methods close the run before their first real await, so the loser is refused
+    by name rather than stamping `aborted` over a run that committed."""
+    run = await refine_service.begin()
+    await refine_service.propose(run.run_id, CALL_EDGE)
+    result, aborted = await asyncio.gather(
+        refine_service.commit(run.run_id),
+        refine_service.abort(run.run_id, "the agent changed its mind"),
+        return_exceptions=True,
+    )
+    assert not isinstance(result, BaseException) and result.landed == 1
+    assert isinstance(aborted, RefinementRefused)
+    finished = await refine_service.index.runs.run(run.run_id)
+    assert finished is not None and finished.status is RunStatus.SUCCEEDED
 
 
 async def test_a_commit_that_resolves_another_partition_is_refused(
