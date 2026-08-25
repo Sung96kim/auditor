@@ -8,8 +8,11 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from auditor.config import AuditorSettings
 from auditor.database import IndexStore
+from auditor.graph.build import GraphBuilder
 from auditor.graph.extract import extract_file_facts
+from auditor.graph.hashes import file_hashes
 from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
 from auditor.graph.refine.models import (
     Refinement,
@@ -18,6 +21,8 @@ from auditor.graph.refine.models import (
     RefinementTarget,
     Run,
 )
+from auditor.graph.refine.service import RefinementService
+from auditor.user_settings import UserSettings
 
 GRAPH_CONFIG = "[tool.auditor.graph]\nenabled=true\nname_similarity_threshold=0.2\n"
 SIMILAR_NAMES = (
@@ -247,10 +252,9 @@ _FACTS_FILES = (
 async def _cache_facts(store: IndexStore, paths: tuple[str, ...]) -> None:
     for path, src, digest in _FACTS_FILES:
         if path in paths:
+            facts = extract_file_facts(path, src, "production")
             await store.graph.set_facts(
-                path,
-                extract_file_facts(path, src, "production").model_dump_json(),
-                digest,
+                path, facts.model_dump_json(), digest, file_hashes(facts.nodes)
             )
 
 
@@ -304,3 +308,36 @@ async def half_scanned_refined_store(refined_facts_store: RefinedStore) -> Refin
     await refined_facts_store.store.graph.clear_facts()
     await _cache_facts(refined_facts_store.store, ("base.py", "impl.py"))
     return refined_facts_store
+
+
+def _write_facts_sources(root: Path) -> Path:
+    """The three files behind `facts_store`, on disk, so the verifier can re-read them."""
+    root.mkdir(parents=True, exist_ok=True)
+    for rel, source in (
+        ("base.py", BASE_SRC),
+        ("impl.py", IMPL_SRC),
+        ("svc.py", SVC_SRC),
+    ):
+        (root / rel).write_text(source)
+    return root
+
+
+@pytest.fixture
+async def refine_service(facts_store: IndexStore, tmp_path: Path) -> RefinementService:
+    """A service over `facts_store`'s three files, written to disk and built once, so a proposal
+    has both a queue row and a file the verifier can re-extract."""
+    root = _write_facts_sources(tmp_path / "src")
+    settings = AuditorSettings()
+    await GraphBuilder().run(facts_store, settings)
+    return RefinementService(facts_store, root, settings, UserSettings())
+
+
+@pytest.fixture
+async def refine_service_other(refine_service: RefinementService) -> RefinementService:
+    """A second service over the same index with its own registry: what another MCP process sees."""
+    return RefinementService(
+        refine_service.index,
+        refine_service.root,
+        refine_service.settings,
+        refine_service.user,
+    )

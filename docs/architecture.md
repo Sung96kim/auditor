@@ -301,6 +301,29 @@ flowchart TB
 - `refine/conflicts.py` answers a proposal against the resolver's own edges first (an edge the
   resolver now produces is `redundant` and terminal) and then against the active refinements (the
   same edge is a confirmation, another destination for the same name contradicts).
+- `refine/service.py` is the lifecycle. `begin` writes a `graph_runs` row with the branch and HEAD
+  it started against; `propose` validates the shape, verifies the facts, assigns a tier and stages
+  the proposal in memory, storing a rejection immediately so an aborted run still explains itself;
+  `commit` takes this checkout's rebuild lock once and does the git guard, the conflict checks, the
+  inserts and `GraphBuilder.rebuild(lock_held=True)` inside it. `accept`, `revert` and `pin` are
+  status transitions only, because the build is the one merge point.
+- A proposal is refused before any file is read when it is not a legal `Proposal` (the model's own
+  validators own that rule), when the run is at `max_changes_per_run`, when it names ids outside
+  the run's scope or outside this partition, when the run already staged it, or when the run
+  already answers that queue name with another destination. Every one of those is stored, so an
+  aborted run still explains itself.
+- Staged proposals never reach the database. `RunRegistry` is process-local and bounded, so a run
+  whose process dies loses exactly the work that was never promised, and `graph_refine_status`
+  reports `staged_here: false` in any other process rather than an empty list. Evicting a run to
+  make room finishes its `graph_runs` row `skipped` and stores its staging as rejections, so no row
+  is left `queued`.
+- One run is one critical section. Each `StagedRun` owns an `asyncio.Lock` held for the whole body
+  of `propose`, `commit` and `abort`, and both terminal methods close the run before their first
+  real await, so a second `commit` is refused rather than inserting the same rows twice. The
+  rebuild lock is taken with a bounded timeout: a build holding it becomes a refusal naming the
+  lock file, never a hung tool call, and any failure inside it finishes the run `failed`.
+- A commit that staged nothing takes no lock and runs no build. Spec 6 requires the queue rows to
+  be retired in the same lock as the insert; with no insert there is nothing to retire.
 - `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
   the active rows against their anchors and the passes are its methods: `edges` merges the edge
   kinds into the resolver's output, `nodes` applies the node and cluster kinds to the ranked and

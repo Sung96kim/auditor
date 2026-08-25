@@ -1,0 +1,884 @@
+"""The refinement lifecycle (spec 9.1).
+
+`propose` judges one proposal against the facts and stages it; `commit` takes this checkout's
+rebuild lock once and does the conflict checks, the inserts and the rebuild inside it. Staged
+proposals live in the process that staged them and never touch the database, so a run that dies
+loses exactly the work that was never promised.
+
+One run is one critical section: `StagedRun` owns the lock, and `commit` and `abort` close the run
+before their first real await.
+"""
+
+import asyncio
+import time
+from collections.abc import Mapping, Sequence
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from auditor.config import AuditorSettings
+from auditor.database import IndexStore
+from auditor.discovery import git_output
+from auditor.graph.build import GraphBuilder
+from auditor.graph.model import GraphEdge, NodeKind, UnresolvedRow
+from auditor.graph.payloads import GraphBuildReport
+from auditor.graph.refine.conflicts import ConflictRules
+from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
+from auditor.graph.refine.models import (
+    STORED_ROW,
+    Anchor,
+    ClientKind,
+    ProducerKind,
+    Proposal,
+    Refinement,
+    RefinementKind,
+    RefinementStatus,
+    Run,
+    RunnerKind,
+    RunOutcome,
+    RunStatus,
+    Stratum,
+    Tier,
+    TriggerDetail,
+    TriggerKind,
+)
+from auditor.graph.refine.namespace import file_of, to_partition, to_toplevel
+from auditor.graph.refine.tiers import TierPolicy
+from auditor.graph.refine.verify import (
+    FactVerifier,
+    FileFacts,
+    VerifyResult,
+    VerifyStatus,
+)
+from auditor.graph.resolve_edges import NameBindings
+from auditor.roles import RoleClassifier
+from auditor.user_settings import UserSettings
+
+#: statuses a hand transition may leave; everything else is terminal (spec 5.4, 5.7)
+_ACCEPT_FROM = frozenset({RefinementStatus.PENDING})
+_REVERT_FROM = frozenset(
+    {RefinementStatus.PENDING, RefinementStatus.ACTIVE, RefinementStatus.PINNED}
+)
+_PIN_FROM = frozenset(
+    {RefinementStatus.PENDING, RefinementStatus.ACTIVE, RefinementStatus.STALE}
+)
+
+
+class RefinementRefused(RuntimeError):
+    """A caller asked for something the service will not do, with the reason in the message."""
+
+
+class ProposalOutcome(StrEnum):
+    """What `propose` did with one proposal."""
+
+    STAGED = "staged"
+    REJECTED = "rejected"
+
+
+class RefusalKind(StrEnum):
+    """Why a proposal was never judged against the facts at all (spec 9.2's validation rules)."""
+
+    INVALID = "invalid"  # `Proposal`'s own validators refused it; the message is theirs
+    OVER_CAP = "over_cap"
+    OUT_OF_SCOPE = "out_of_scope"
+    ALREADY_STAGED = "already_staged"
+    INTRA_BATCH = "intra_batch"
+    OUT_OF_PARTITION = "out_of_partition"
+
+
+def _read_proposal(raw: Proposal | Mapping[str, Any]) -> tuple[Proposal, str]:
+    """One proposal, and the validator's complaint about it when it is not a legal one.
+
+    An illegal payload is re-read under `STORED_ROW` so the rejection spec 9.2 requires can be
+    stored. A target no kind could ever fill is not a text rule that context relaxes and raises
+    instead: there is no proposal to attribute a rejection to.
+    """
+    if isinstance(raw, Proposal):
+        return raw, ""
+    try:
+        return Proposal.model_validate(raw), ""
+    except ValidationError as exc:
+        lenient = Proposal.model_validate(raw, context={STORED_ROW: True})
+        return lenient, str(exc.errors()[0]["msg"])
+
+
+class Verdict(BaseModel):
+    """The service's answer about one proposal (spec 9.1).
+
+    ``refinement_id`` is filled the moment a row exists: at `propose` for a rejection, at `commit`
+    for an acceptance.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    outcome: ProposalOutcome
+    kind: RefinementKind
+    tier: Tier = Tier.C
+    status: RefinementStatus = RefinementStatus.PENDING
+    verify: VerifyStatus = VerifyStatus.UNVERIFIED
+    #: set when the proposal never reached the verifier, so "unverified" is not read as a check
+    refusal: RefusalKind | None = None
+    detail: str = ""
+    refinement_id: int = 0
+
+
+class CommitResult(BaseModel):
+    """What one commit landed, and the build that followed it.
+
+    ``rebuilt`` is false, and ``build`` ``None``, for a run that staged nothing: there is no insert,
+    so there is no queue row to retire and nothing for a build to merge.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    committed: tuple[Verdict, ...] = ()
+    rejected: tuple[Verdict, ...] = ()
+    rebuilt: bool = True
+    build: GraphBuildReport | None = None
+
+    @property
+    def landed(self) -> int:
+        """How many refinement rows this commit inserted."""
+        return len(self.committed)
+
+
+class RunReport(BaseModel):
+    """One run's state. ``staged_here`` is false in a process that did not open the run, so a
+    reader never mistakes another process's staging for an empty run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run: Run
+    staged: tuple[Verdict, ...] = ()
+    staged_here: bool = True
+    committed: tuple[int, ...] = ()
+
+
+class ProposalFacts(BaseModel):
+    """Everything one proposal is judged against, read once: the queue row it answers, the
+    role-filtered definitions of the name, and a verifier over the files it names.
+
+    `verify.FactVerifier` is pure by contract, so the reading is here rather than in the service,
+    where it was four private methods and a four-collaborator call site.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    row: UnresolvedRow | None = None
+    definers: tuple[str, ...] = ()
+    verifier: FactVerifier = Field(default_factory=FactVerifier)
+
+    @classmethod
+    async def of(
+        cls, index: IndexStore, root: Path, roles: RoleClassifier, proposal: Proposal
+    ) -> "ProposalFacts":
+        """Read all three in the caller's own namespace, before any id has been rebased."""
+        row = await cls._queue_row(index, proposal)
+        return cls(
+            row=row,
+            definers=tuple(await cls._definers(index, proposal, row)),
+            verifier=await cls._verifier(index, root, roles, proposal, row),
+        )
+
+    def check(self, proposal: Proposal) -> VerifyResult:
+        return self.verifier.check(proposal, row=self.row, definers=self.definers)
+
+    def anchors(self, proposal: Proposal) -> tuple[Anchor, ...]:
+        return self.verifier.anchors(proposal, row=self.row)
+
+    def stratum(self, proposal: Proposal) -> Stratum | None:
+        """The add suite's stratum for this proposal's own edge, which is what tier B's gate reads
+        (spec 10.2); ``None`` for a kind that names no edge."""
+        edge = proposal.edge()
+        if edge is None:
+            return None
+        imports = self.verifier.bindings.imported_module_ids(file_of(edge.src))
+        return Stratum.of(edge.src, edge.dst, imports=imports)
+
+    @staticmethod
+    async def _queue_row(index: IndexStore, proposal: Proposal) -> UnresolvedRow | None:
+        """The `graph_unresolved` row this proposal answers, if there is one."""
+        node_id = proposal.target.node_id or proposal.target.src
+        name = proposal.target.name
+        if not node_id or not name:
+            return None
+        rows = await index.graph.unresolved(node_ids=[node_id])
+        return next(
+            (UnresolvedRow.model_validate(r) for r in rows if r["name"] == name), None
+        )
+
+    @staticmethod
+    async def _definers(
+        index: IndexStore, proposal: Proposal, row: UnresolvedRow | None
+    ) -> Sequence[str]:
+        """The role-filtered definitions of the called name: the queue row's when there is one,
+        otherwise the graph's own answer (spec 9.2's `retarget_edge` row needs it)."""
+        if row is not None:
+            return row.definers
+        name = proposal.target.name
+        return await index.graph.definers(name) if name else []
+
+    @staticmethod
+    async def _verifier(
+        index: IndexStore,
+        root: Path,
+        roles: RoleClassifier,
+        proposal: Proposal,
+        row: UnresolvedRow | None,
+    ) -> FactVerifier:
+        """A verifier holding the files this proposal names, re-read from disk."""
+        files: dict[str, FileFacts] = {}
+        missing: set[str] = set()
+        for path in FactVerifier.paths_named(proposal, row):
+            if not (root / path).is_file():
+                missing.add(path)  # a path that never existed, not a file that moved
+                continue
+            cached = await index.graph.hashes(path)
+            if cached is None:
+                continue  # left out, so the verifier answers not_loaded rather than guessing
+            files[path] = FileFacts.of(root, path, cached.truth, roles)
+        modules = [
+            node
+            for facts in files.values()
+            for node in facts.nodes
+            if node.kind is NodeKind.MODULE
+        ]
+        return FactVerifier(
+            files=files,
+            bindings=NameBindings.of(
+                modules, module_ids=await index.graph.module_ids()
+            ),
+            missing=frozenset(missing),
+        )
+
+
+class StagedProposal(BaseModel):
+    """One accepted proposal waiting for `commit`, with the judgement that accepted it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    proposal: Proposal
+    tier: Tier
+    status: RefinementStatus
+    verify: VerifyStatus
+    anchors: tuple[Anchor, ...] = ()
+
+    def verdict(self, *, refinement_id: int = 0) -> Verdict:
+        return Verdict(
+            outcome=ProposalOutcome.STAGED,
+            kind=self.proposal.kind,
+            tier=self.tier,
+            status=self.status,
+            verify=self.verify,
+            refinement_id=refinement_id,
+        )
+
+
+class StagedRun(BaseModel):
+    """One open run: its row, the partition it was opened against, the scope it may touch, and what
+    it has staged.
+
+    Deliberately mutable: it is filled in as the run proceeds and read when it commits. ``lock``
+    makes one run one critical section, so two tool calls on the same run cannot interleave between
+    a read and the write that depends on it. ``closed`` is set before a terminal method does any
+    real work, so the second caller is refused rather than repeating it.
+    """
+
+    model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
+
+    run: Run
+    partition: tuple[str, str]  # (identity, prefix) as `begin` resolved them
+    scope: str = ""
+    staged: list[StagedProposal] = Field(default_factory=list)
+    closed: bool = False
+    opened_at: float = Field(default_factory=time.time)
+    lock: asyncio.Lock = Field(default_factory=asyncio.Lock)
+
+    def covers(self, proposal: Proposal) -> bool:
+        """Whether every node id the proposal names falls under this run's scope."""
+        if not self.scope:
+            return True
+        src, dst = proposal.edge_pair()
+        named = [i for i in (src, dst, proposal.target.node_id) if i]
+        return all(i.startswith(self.scope) for i in named)
+
+    def holds(self, proposal: Proposal) -> bool:
+        """Whether this run already staged exactly this proposal.
+
+        The conflict rules only see other runs' committed work, so without this a run that proposed
+        the same edge twice would insert it twice.
+        """
+        return any(item.proposal == proposal for item in self.staged)
+
+    def collides(self, proposal: Proposal) -> str | None:
+        """A staged proposal that already answers this (src, kind, short name) with another dst.
+
+        `ConflictRules` reads `ACTIVE_STATUSES` rows, so it can see neither this run's staging nor
+        its own just-inserted rows: two `add_edge`s for one queue name would both land `pending`
+        and contradict each other the moment either is accepted.
+        """
+        edge = proposal.edge()
+        if edge is None:
+            return None
+        for item in self.staged:
+            other = item.proposal.edge()
+            if other is None or other.src != edge.src or other.kind is not edge.kind:
+                continue
+            if other.name == edge.name and other.dst != edge.dst:
+                return (
+                    f"this run already points {edge.src} at {other.dst} for {edge.name}"
+                )
+        return None
+
+
+class RunRegistry(BaseModel):
+    """The runs one process has open. Process-local by design (spec 9.1's staging step).
+
+    Bounded: an agent that opens a run and then stops is the normal end of a session, and a
+    long-lived MCP server would otherwise hold every one of them, with their proposals and anchors,
+    for the life of the process.
+    """
+
+    model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
+
+    open_runs: dict[str, StagedRun] = Field(default_factory=dict)
+    max_open: int = 8
+
+    def opened(
+        self, run: Run, scope: str, partition: tuple[str, str]
+    ) -> tuple[StagedRun, list[StagedRun]]:
+        """Register a run, and hand back the runs evicted to make room for it.
+
+        Eviction drops staging that was never promised; finishing the `graph_runs` row each evicted
+        run owns needs a store, so it belongs to the caller (Invariant 2).
+        """
+        evicted: list[StagedRun] = []
+        while len(self.open_runs) >= self.max_open:
+            oldest = min(self.open_runs.values(), key=lambda s: s.opened_at)
+            oldest.closed = True
+            evicted.append(self.open_runs.pop(oldest.run.run_id))
+        staged = StagedRun(run=run, scope=scope, partition=partition)
+        self.open_runs[run.run_id] = staged
+        return staged, evicted
+
+    def require(self, run_id: str) -> StagedRun:
+        staged = self.open_runs.get(run_id)
+        if staged is None:
+            raise RefinementRefused(f"run {run_id} is not open in this process")
+        return staged
+
+    def close(self, run_id: str) -> None:
+        self.open_runs.pop(run_id, None)
+
+
+class RefinementService:
+    """Spec 9.1's lifecycle over one index handle and one checkout."""
+
+    def __init__(
+        self,
+        index: IndexStore,
+        root: Path,
+        settings: AuditorSettings,
+        user: UserSettings,
+        registry: RunRegistry | None = None,
+    ) -> None:
+        self.index = index
+        self.root = root
+        self.settings = settings
+        self.user = user
+        self.registry = registry if registry is not None else RunRegistry()
+        self.roles = RoleClassifier(settings.role_globs)
+
+    @property
+    def identity(self) -> str:
+        return self.index.partition.identity
+
+    @property
+    def prefix(self) -> str:
+        return self.index.partition.prefix
+
+    @property
+    def partition(self) -> tuple[str, str]:
+        """What every stored id in a run is relative to: a commit must resolve the same pair."""
+        return (self.identity, self.prefix)
+
+    async def begin(
+        self,
+        *,
+        scope: str = "",
+        producer: ProducerKind = ProducerKind.AGENT,
+        client: ClientKind = ClientKind.CLI,
+        trigger: TriggerKind = TriggerKind.MANUAL,
+        runner: RunnerKind = RunnerKind.NONE,
+        model: str | None = None,
+        session_id: str | None = None,
+        agent_name: str | None = None,
+    ) -> Run:
+        """Open a run and record who asked and against which checkout state (Invariant 2)."""
+        run = Run(
+            repo_identity=self.identity,
+            origin_partition=self.index.repo,
+            partition_prefix=self.prefix,
+            client=client,
+            producer=producer,
+            runner=runner,
+            trigger_kind=trigger,
+            trigger_detail=TriggerDetail(files=(scope,) if scope else ()),
+            session_id=session_id,
+            agent_name=agent_name,
+            branch=git_output(self.root, "rev-parse", "--abbrev-ref", "HEAD"),
+            commit_sha=git_output(self.root, "rev-parse", "HEAD"),
+            model=model,
+        )
+        await self.index.runs.add_run(run)
+        _staged, evicted = self.registry.opened(run, scope, self.partition)
+        for gone in evicted:
+            await self._evict(gone)
+        return run
+
+    async def propose(
+        self, run_id: str, proposal: Proposal | Mapping[str, Any]
+    ) -> Verdict:
+        """Validate, verify and tier one proposal, then stage it or store the rejection.
+
+        ``proposal`` may be the payload a tool was called with: `Proposal` owns spec 9.2's shape
+        and text rules, so an illegal one is refused here rather than re-checked. The caller names
+        ids the way its own partition sees them; everything from staging on is toplevel-relative,
+        which is the namespace the identity tables use (spec 5.2).
+        """
+        staged = self.registry.require(run_id)
+        async with staged.lock:
+            if staged.closed:
+                raise RefinementRefused(f"run {run_id} is not open in this process")
+            return await self._judge(staged, proposal)
+
+    async def _judge(
+        self, staged: StagedRun, raw: Proposal | Mapping[str, Any]
+    ) -> Verdict:
+        """One proposal, under the run's lock: admissibility, facts, tier, staging."""
+        run_id = staged.run.run_id
+        proposal, complaint = _read_proposal(raw)
+        stored = proposal.rebased(self.prefix)
+        if complaint:
+            return await self._reject(
+                run_id,
+                stored,
+                VerifyStatus.UNVERIFIED,
+                complaint,
+                refusal=RefusalKind.INVALID,
+            )
+        refused = await self._refused(staged, proposal, stored)
+        if refused is not None:
+            return refused
+        facts = await ProposalFacts.of(self.index, self.root, self.roles, proposal)
+        result = facts.check(proposal)
+        if not result.accepted:
+            return await self._reject(run_id, stored, result.status, result.detail)
+        policy = await self._policy(staged.run)
+        tier = policy.tier(proposal, row=facts.row, verified=result.checked)
+        item = StagedProposal(
+            proposal=stored,
+            tier=tier,
+            status=policy.status(proposal.kind, tier, stratum=facts.stratum(proposal)),
+            verify=result.status,
+            anchors=tuple(a.rebased(self.prefix) for a in facts.anchors(proposal)),
+        )
+        staged.staged.append(item)
+        return item.verdict()
+
+    async def status(self, run_id: str) -> RunReport:
+        """One run as a reader sees it: the stored row, plus this process's staging."""
+        run = await self.index.runs.run(run_id)
+        if run is None:
+            raise RefinementRefused(f"no run {run_id} on this checkout")
+        open_run = self.registry.open_runs.get(run_id)
+        return RunReport(
+            run=run,
+            staged=tuple(item.verdict() for item in open_run.staged)
+            if open_run
+            else (),
+            staged_here=open_run is not None,
+            committed=tuple(
+                r.refinement_id for r in await self.index.refinements.of_run(run_id)
+            ),
+        )
+
+    async def commit(self, run_id: str) -> CommitResult:
+        """Land one run under the rebuild lock (spec 6, spec 9.1).
+
+        The partition is checked while the run is still open, because a caller that committed from
+        the wrong root has to be able to retry from the right one. Everything after that closes the
+        run first, so a second `commit` is refused by name rather than inserting the same rows again.
+        """
+        staged = self.registry.require(run_id)
+        async with staged.lock:
+            if staged.closed:
+                raise RefinementRefused(f"run {run_id} is not open in this process")
+            moved = self._partition_moved(staged)
+            if moved is not None:
+                raise RefinementRefused(moved)
+            staged.closed = True
+            self.registry.close(run_id)
+            return await self._land_all(staged)
+
+    async def _land_all(self, staged: StagedRun) -> CommitResult:
+        """The body of one commit: the git guard, then the lock, the inserts and the rebuild."""
+        run_id = staged.run.run_id
+        refused = self._checkout_moved(staged.run)
+        if refused is not None:
+            await self._finish(run_id, RunStatus.REJECTED, error=refused)
+            raise RefinementRefused(refused)
+        if not staged.staged:
+            # spec 6 wants the queue rows retired in the same lock as the insert; with no insert
+            # there is nothing to retire, so this takes no lock and runs no build
+            await self._finish(run_id, RunStatus.SUCCEEDED, summary="nothing staged")
+            return CommitResult(run_id=run_id, rebuilt=False)
+        committed: list[Verdict] = []
+        rejected: list[Verdict] = []
+        build: GraphBuildReport | None = None
+        try:
+            async with rebuild_lock(
+                self.identity,
+                poll=self.settings.graph.rebuild_lock_poll_seconds,
+                timeout=self.settings.graph.rebuild_lock_timeout_seconds,
+            ):
+                rules = await self._conflict_rules(staged)
+                policy = await self._policy(staged.run)
+                for item in staged.staged:
+                    verdict = await self._land(run_id, item, rules, policy)
+                    (
+                        committed
+                        if verdict.outcome is ProposalOutcome.STAGED
+                        else rejected
+                    ).append(verdict)
+                build = await GraphBuilder().rebuild(
+                    self.index, self.settings, lock_held=True
+                )
+                await self._finish(
+                    run_id,
+                    RunStatus.SUCCEEDED,
+                    summary=f"{len(committed)} committed, {len(rejected)} rejected",
+                )
+        except RebuildLockTimeout as exc:
+            await self._finish(run_id, RunStatus.FAILED, error=str(exc))
+            raise RefinementRefused(
+                f"another build is holding the rebuild lock {exc.path}; it did not finish "
+                f"within {exc.timeout}s, so nothing was committed. Try again, or check for a "
+                "stuck `auditr graph build`."
+            ) from exc
+        # `Exception`, not `BaseException`: a cancelled task cannot be trusted to await its own
+        # bookkeeping, and catching `CancelledError` here would swallow the cancellation
+        except Exception as exc:
+            await self._finish(run_id, RunStatus.FAILED, error=str(exc))
+            raise
+        return CommitResult(
+            run_id=run_id,
+            committed=tuple(committed),
+            rejected=tuple(rejected),
+            build=build,
+        )
+
+    async def abort(self, run_id: str, reason: str) -> Run:
+        """Drop this run's staging and stamp it aborted (spec 9.1). Nothing was stored."""
+        staged = self.registry.require(run_id)
+        async with staged.lock:
+            if staged.closed:
+                raise RefinementRefused(f"run {run_id} is not open in this process")
+            staged.closed = True
+            self.registry.close(run_id)
+            await self._finish(run_id, RunStatus.ABORTED, error=reason)
+        run = await self.index.runs.run(run_id)
+        if run is None:  # the row was written by `begin`, so this cannot happen
+            raise RefinementRefused(f"no run {run_id} on this checkout")
+        return run
+
+    async def accept(self, refinement_id: int) -> Refinement:
+        """Activate a pending refinement. The next build applies it; this takes no lock."""
+        return await self._transition(
+            refinement_id, RefinementStatus.ACTIVE, _ACCEPT_FROM
+        )
+
+    async def revert(self, refinement_id: int) -> Refinement:
+        return await self._transition(
+            refinement_id, RefinementStatus.REVERTED, _REVERT_FROM
+        )
+
+    async def pin(self, refinement_id: int) -> Refinement:
+        return await self._transition(refinement_id, RefinementStatus.PINNED, _PIN_FROM)
+
+    async def prune(self) -> int:
+        """Drop the assessment-only runs older than the retention window (spec 5.1)."""
+        return await self.index.runs.prune_skipped_runs(
+            self.user.observer.skipped_retention_days
+        )
+
+    async def rebuild(self) -> GraphBuildReport:
+        """A build under the same lock a commit takes, for a caller that changed a status."""
+        return await GraphBuilder().rebuild(self.index, self.settings)
+
+    async def _refused(
+        self, staged: StagedRun, proposal: Proposal, stored: Proposal
+    ) -> Verdict | None:
+        """The stored rejection this proposal earns before any fact is read, or ``None``.
+
+        Cheapest rule first: only the last one reads the database, so a refusal that needs no query
+        costs none. Every one of them is stored, which is what spec 9.2 asks for.
+        """
+        run_id = staged.run.run_id
+        cap = self.user.observer.limits.max_changes_per_run
+        collision = staged.collides(stored)
+        rules: tuple[tuple[bool, RefusalKind, str], ...] = (
+            (
+                len(staged.staged) >= cap,
+                RefusalKind.OVER_CAP,
+                f"this run is at max_changes_per_run ({cap})",
+            ),
+            (
+                not staged.covers(proposal),
+                RefusalKind.OUT_OF_SCOPE,
+                f"the proposal names ids outside this run's scope {staged.scope!r}",
+            ),
+            (
+                staged.holds(stored),
+                RefusalKind.ALREADY_STAGED,
+                "this run already staged an identical proposal",
+            ),
+            (collision is not None, RefusalKind.INTRA_BATCH, collision or ""),
+        )
+        for tripped, kind, detail in rules:
+            if tripped:
+                return await self._reject(
+                    run_id, stored, VerifyStatus.UNVERIFIED, detail, refusal=kind
+                )
+        for node_id in proposal.anchored_ids():
+            if await self.index.graph.node(node_id) is None:
+                return await self._reject(
+                    run_id,
+                    stored,
+                    VerifyStatus.UNVERIFIED,
+                    f"{node_id} is not a node in this partition; name ids the way "
+                    "graph_unresolved shows them",
+                    refusal=RefusalKind.OUT_OF_PARTITION,
+                )
+        return None
+
+    def _partition_moved(self, staged: StagedRun) -> str | None:
+        """Whether this handle resolves the partition the run's ids were rebased with."""
+        if self.partition == staged.partition:
+            return None
+        return (
+            f"this run was opened against partition {staged.partition} and this call resolved "
+            f"{self.partition}; commit from the same root you began on"
+        )
+
+    async def _policy(self, run: Run) -> TierPolicy:
+        """This repo's activation policy for the run's runner and model (spec 10.3)."""
+        return TierPolicy.of(
+            await self.index.evals.evals(runner=run.runner, model=run.model),
+            min_precision=self.user.observer.tuning.min_precision,
+            runner=run.runner,
+            model=run.model or "",
+        )
+
+    async def _conflict_rules(self, staged: StagedRun) -> ConflictRules:
+        """The prior work this commit is checked against, in the toplevel namespace the staged
+        proposals and the active refinements already use.
+
+        `graph_edges` is a partition table, so its src has to go down into the partition for the
+        query and the rows have to come back up as models.
+        """
+        edges: list[GraphEdge] = []
+        for item in staged.staged:
+            src, _dst = item.proposal.edge_pair()
+            local = to_partition(src, self.prefix) if src is not None else None
+            if local is None:
+                continue
+            edges += [
+                GraphEdge.model_validate(
+                    {
+                        **edge,
+                        "src": to_toplevel(str(edge["src"]), self.prefix),
+                        "dst": to_toplevel(str(edge["dst"]), self.prefix),
+                    }
+                )
+                for edge in await self.index.graph.edges_of(local, None)
+                if str(edge["src"]) == local  # edges_of answers `src = ? OR dst = ?`
+            ]
+        return ConflictRules.of(await self.index.refinements.active(), edges)
+
+    async def _land(
+        self,
+        run_id: str,
+        item: StagedProposal,
+        rules: ConflictRules,
+        policy: TierPolicy,
+    ) -> Verdict:
+        """Insert one staged proposal, or the rejection a conflict earns it (spec 9.1)."""
+        conflict = rules.check(item.proposal)
+        if conflict is None:
+            rid = await self._store(
+                run_id, item.proposal, item.tier, item.status, item.anchors
+            )
+            return item.verdict(refinement_id=rid)
+        if (
+            conflict.rewrite_as_confirm
+            and item.proposal.kind is RefinementKind.ADD_EDGE
+        ):
+            confirmation = Proposal(
+                kind=RefinementKind.CONFIRM_EDGE,
+                target=item.proposal.target,
+                payload=item.proposal.payload,
+                reason=f"{item.proposal.reason} ({conflict.detail})",
+                evidence=item.proposal.evidence,
+                confidence=item.proposal.confidence,
+            )
+            # the tier and status of a confirmation are `tiers.py`'s answer, not a literal here
+            tier = policy.tier(
+                confirmation, row=None, verified=item.verify is VerifyStatus.OK
+            )
+            status = policy.status(confirmation.kind, tier)
+            rid = await self._store(run_id, confirmation, tier, status, item.anchors)
+            return Verdict(
+                outcome=ProposalOutcome.STAGED,
+                kind=RefinementKind.CONFIRM_EDGE,
+                tier=tier,
+                status=status,
+                verify=item.verify,
+                detail=conflict.detail,
+                refinement_id=rid,
+            )
+        return await self._reject(
+            run_id,
+            item.proposal,
+            item.verify,
+            conflict.detail,
+            status=conflict.stored_status,
+        )
+
+    async def _store(
+        self,
+        run_id: str,
+        proposal: Proposal,
+        tier: Tier,
+        status: RefinementStatus,
+        anchors: Sequence[Anchor],
+    ) -> int:
+        return await self.index.refinements.add_refinement(
+            Refinement.of(
+                proposal,
+                run_id=run_id,
+                repo_identity=self.identity,
+                tier=tier,
+                status=status,
+            ),
+            list(anchors),
+        )
+
+    async def _reject(
+        self,
+        run_id: str,
+        proposal: Proposal,
+        verify: VerifyStatus,
+        detail: str,
+        *,
+        status: RefinementStatus = RefinementStatus.REJECTED,
+        refusal: RefusalKind | None = None,
+    ) -> Verdict:
+        """Store the rejection the moment it is made, so an aborted run still explains itself.
+
+        ``proposal`` is already toplevel-relative: every caller rebases before it gets here.
+        ``status`` is `redundant` when the resolver already produces the edge, which spec 5.4 makes
+        terminal and never re-briefed. The row is built under `STORED_ROW` rather than through
+        `Refinement.of`, because an illegal payload is exactly the thing that has to be recordable.
+        """
+        rejected = proposal.model_copy(
+            update={"reason": f"{proposal.reason} [rejected: {detail}]".strip()}
+        )
+        rid = await self.index.refinements.add_refinement(
+            Refinement.model_validate(
+                {
+                    **rejected.model_dump(include=set(Proposal.model_fields)),
+                    "run_id": run_id,
+                    "repo_identity": self.identity,
+                    "tier": Tier.C,
+                    "status": status,
+                },
+                context={STORED_ROW: True},
+            )
+        )
+        return Verdict(
+            outcome=ProposalOutcome.REJECTED,
+            kind=proposal.kind,
+            status=status,
+            verify=verify,
+            refusal=refusal,
+            detail=detail,
+            refinement_id=rid,
+        )
+
+    async def _evict(self, gone: StagedRun) -> None:
+        """Finish a run the registry dropped, so no row is left `queued` (Invariant 2).
+
+        Its staging was never promised, but it is stored as rejections rather than vanishing, and
+        the row goes `skipped`, which is the one status `prune_skipped_runs` can ever reap.
+        """
+        detail = f"evicted: registry full (max_open={self.registry.max_open})"
+        async with (
+            gone.lock
+        ):  # a propose already in flight finishes before its run is retired
+            for item in gone.staged:
+                await self._reject(gone.run.run_id, item.proposal, item.verify, detail)
+            await self._finish(gone.run.run_id, RunStatus.SKIPPED, error=detail)
+
+    async def _transition(
+        self,
+        refinement_id: int,
+        status: RefinementStatus,
+        allowed: frozenset[RefinementStatus],
+    ) -> Refinement:
+        """One hand transition, refusing by name rather than updating nothing."""
+        current = await self.index.refinements.refinement(refinement_id)
+        if current is None:
+            raise RefinementRefused(f"no refinement {refinement_id} on this checkout")
+        if current.status not in allowed:
+            raise RefinementRefused(
+                f"refinement {refinement_id} is {current.status.value}; "
+                f"only {sorted(s.value for s in allowed)} can become {status.value}"
+            )
+        await self.index.refinements.set_status(refinement_id, status)
+        moved = await self.index.refinements.refinement(refinement_id)
+        if moved is None:  # the row was read a line ago
+            raise RefinementRefused(f"no refinement {refinement_id} on this checkout")
+        return moved
+
+    def _checkout_moved(self, run: Run) -> str | None:
+        """Whether HEAD or the branch changed since `begin`, which invalidates every anchor.
+
+        A run that did not start in a git checkout has nothing to compare and is never refused;
+        an edit is not a move, and the verifier already caught that per file.
+        """
+        if run.commit_sha is None:
+            return None
+        branch = git_output(self.root, "rev-parse", "--abbrev-ref", "HEAD")
+        commit = git_output(self.root, "rev-parse", "HEAD")
+        if branch == run.branch and commit == run.commit_sha:
+            return None
+        return (
+            f"the checkout moved during the run ({run.branch}@{run.commit_sha} to "
+            f"{branch}@{commit}); start a new run"
+        )
+
+    async def _finish(
+        self,
+        run_id: str,
+        status: RunStatus,
+        *,
+        summary: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        await self.index.runs.finish_run(
+            run_id, RunOutcome(status=status, summary=summary, error=error)
+        )

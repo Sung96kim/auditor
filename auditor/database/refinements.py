@@ -400,6 +400,37 @@ class RefinementsDB(BaseDB):
         """The refinements a build applies: `active` plus `pinned` (spec 5.7)."""
         return await self.refinements(statuses=sorted(ACTIVE_STATUSES))
 
+    async def refinement(self, refinement_id: int) -> Refinement | None:
+        """One row by id, so a caller never renders a refinement it did not read."""
+        row = await self._fetch_one_by_identity(
+            "SELECT * FROM graph_refinements WHERE repo_identity = ? AND refinement_id = ?",
+            (refinement_id,),
+        )
+        return _refinement_from_row(row) if row else None
+
+    async def of_run(self, run_id: str) -> list[Refinement]:
+        """Every refinement one run owns, rejected ones included (spec 9.2)."""
+        return [
+            _refinement_from_row(r)
+            for r in await self._fetch_by_identity(
+                "SELECT * FROM graph_refinements WHERE repo_identity = ? AND run_id = ? "
+                "ORDER BY refinement_id",
+                (run_id,),
+            )
+        ]
+
+    async def counts_by_run(self, run_ids: Sequence[str]) -> dict[str, int]:
+        """How many refinements each run owns, for the run log's last column."""
+        if not run_ids:
+            return {}
+        placeholders = ",".join("?" for _ in run_ids)
+        rows = await self._fetch_by_identity(
+            "SELECT run_id, COUNT(*) AS n FROM graph_refinements WHERE repo_identity = ? "
+            f"AND run_id IN ({placeholders}) GROUP BY run_id",  # noqa: S608  (placeholders only)
+            tuple(run_ids),
+        )
+        return {r["run_id"]: int(r["n"]) for r in rows}
+
     async def anchors(
         self, refinement_ids: Sequence[int]
     ) -> dict[int, tuple[Anchor, ...]]:

@@ -405,6 +405,43 @@ class Proposal(BaseModel):
         edge = self.edge()
         return (edge.src, edge.dst) if edge is not None else (None, None)
 
+    def rebased(self, prefix: str) -> "Proposal":
+        """This proposal with every node id in the toplevel-relative form identity rows store.
+
+        A caller names ids the way its own partition sees them, because that is what the queue and
+        the graph show it (spec 5.2).
+        """
+        if not prefix:
+            return self
+        target = self.target
+        moved = {
+            field: f"{prefix}{value}"
+            for field, value in (
+                ("src", target.src),
+                ("dst", target.dst),
+                ("from_dst", target.from_dst),
+                ("to_dst", target.to_dst),
+                ("node_id", target.node_id),
+            )
+            if value is not None
+        }
+        candidate = self.payload.candidate
+        return self.model_copy(
+            update={
+                "target": target.model_copy(
+                    update={
+                        **moved,
+                        "members": tuple(f"{prefix}{m}" for m in target.members),
+                    }
+                ),
+                "payload": self.payload.model_copy(
+                    update={"candidate": f"{prefix}{candidate}"}
+                )
+                if candidate
+                else self.payload,
+            }
+        )
+
     def anchored_ids(self) -> tuple[str, ...]:
         """Every node id this proposal is pinned to (spec 5.5), each one once.
 
@@ -484,6 +521,17 @@ class Anchor(BaseModel):
     path: str
     truth_sha: str
     file_sha: str = ""
+
+    def rebased(self, prefix: str) -> "Anchor":
+        """This anchor in the toplevel-relative form identity rows store."""
+        if not prefix:
+            return self
+        return self.model_copy(
+            update={
+                "node_id": f"{prefix}{self.node_id}",
+                "path": f"{prefix}{self.path}",
+            }
+        )
 
 
 class RefinementOutcome(BaseModel):

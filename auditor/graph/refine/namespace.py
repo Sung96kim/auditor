@@ -13,6 +13,11 @@ def to_partition(node_id: str, prefix: str) -> str | None:
     return node_id[len(prefix) :] if node_id.startswith(prefix) else None
 
 
+def to_toplevel(node_id: str, prefix: str) -> str:
+    """A partition-local node id in the toplevel-relative form the identity tables store."""
+    return f"{prefix}{node_id}"
+
+
 def in_scope(node_id: str, prefix: str) -> bool:
     return to_partition(node_id, prefix) is not None
 

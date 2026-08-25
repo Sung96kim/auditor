@@ -130,15 +130,27 @@ class NameBindings(BaseModel):
             dotted_to_id=dotted,
         )
 
-    def is_repo_source(self, module_id: str, src: str) -> bool:
-        """Whether an import source names a repo module: by its full dotted path, or as a sibling
-        of the caller's own package (`from _common import x` inside ``plugin/hooks/``)."""
+    def _module_id_of(self, module_id: str, src: str) -> str | None:
+        """The repo module an import source names: by its full dotted path, or as a sibling of the
+        caller's own package (`from _common import x` inside ``plugin/hooks/``)."""
         if src in self.dotted_to_id:
-            return True
+            return self.dotted_to_id[src]
         parent = module_id.rsplit("/", 1)[0]
         if parent == module_id:
-            return False
-        return f"{parent.replace('/', '.')}.{src}" in self.dotted_to_id
+            return None
+        return self.dotted_to_id.get(f"{parent.replace('/', '.')}.{src}")
+
+    def is_repo_source(self, module_id: str, src: str) -> bool:
+        """Whether an import source names a repo module."""
+        return self._module_id_of(module_id, src) is not None
+
+    def imported_module_ids(self, module_id: str) -> frozenset[str]:
+        """The repo modules this module imports, which is what the add suite's stratum reads."""
+        return frozenset(
+            found
+            for src in self.bindings_by_module.get(module_id, {}).values()
+            if (found := self._module_id_of(module_id, src)) is not None
+        )
 
     def externally_bound(self, module_id: str, *names: str | None) -> bool:
         """Whether the caller's module binds any of ``names`` from a non-repo import (``re``,

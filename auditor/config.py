@@ -304,6 +304,7 @@ class GraphConfig(BaseModel):
     refine_cluster_jaccard: float = Field(default=0.5, ge=0.0, le=1.0)
     refine_max_noop_builds: int = Field(default=3, ge=1)
     rebuild_lock_poll_seconds: float = Field(default=0.25, gt=0.0)
+    rebuild_lock_timeout_seconds: float = Field(default=120.0, gt=0.0)
 
 
 class MalwareScanConfig(BaseModel):
