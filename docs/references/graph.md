@@ -22,6 +22,12 @@ auditr graph usages ComponentBlueprint .
 # structural neighbors two hops out
 auditr graph neighbors get_user . --depth 2
 
+# read the code path out of an entry point, four hops deep
+auditr graph flow auditor/cli/scan.py::scan .
+
+# who reaches a symbol, instead of what it reaches
+auditr graph flow audit_target . --in
+
 # nearest semantic neighbors (name and usage similarity)
 auditr graph related get_user .
 
@@ -85,6 +91,53 @@ auditr graph export . --format dot > graph.dot
 - `clusters` lists every concept cluster with its id, label and member count.
 - Worked recipes with real command output live in the plugin's
   [explore-graph recipes](../../plugin/skills/explore-graph/references/recipes.md).
+
+## Flow
+
+`graph flow` answers "what does this code path do" in one call, instead of a chain of `neighbors`
+queries. It walks the graph breadth-first from one symbol and prints a tree.
+
+- Outward it follows `calls` and `callback_arg`. `--in` reverses that: what reaches the symbol.
+- The start symbol always expands, however wide it is. Hub collapsing applies to what it reaches.
+- A reached method with overriders expands each overrider as `dispatches_to`, so a call to a base
+  method shows the implementations it can land in. `--in` walks the other way, from an overrider
+  to its base.
+- A symbol registered in a registry module shows that module as a leaf. `--in` on the registry
+  module expands every symbol registered there, which is how decorator-driven dispatch reads.
+- The `modules` line above the tree is the ordered list of modules the path touches. That line,
+  not the tree, is usually the architecture answer.
+- Flags: `--depth` (default 4, 0 to 64), `--limit` (default 200 nodes, 1 to 1000, shallow levels
+  finish first), `--kinds a,b` to follow extra edge kinds on top of the two defaults,
+  `--include-tests` to keep test symbols, `--stop-at GLOB` (repeatable) to stop expanding inside a
+  module, `--expand-hubs` to open a node the hub rule elided, `--json` for the raw payload.
+- `--kinds` is validated against the edge kinds, so a typo is an error rather than a tree that
+  silently omits the relation you asked for. `--stop-at` stays a free glob: a glob that matches
+  nothing is a legitimate query.
+- Markers in the tree:
+  - `⊕ N elided` is a hub the walk refused to expand. A node is a hub when either count reaches
+    `graph.flow_hub_fan_in` (default 40): the symbols that reach it, dispatch children included,
+    or the children it would emit. `⊕ N hub` is the same fan on a node that expanded anyway: the
+    start symbol, any node under `--expand-hubs`, and a hub on the last level `--depth` reached.
+    Both counts are over production symbols only, whatever `--include-tests` says, so the mark
+    describes the symbol and not the query: `--include-tests` can only widen the tree.
+  - In the JSON payload that pair is one `hub` object, `{"count": N, "kind": "fan_in", "collapsed":
+    true}`, or `null` on a node whose fan stayed under the floor.
+  - `↺ seen` is a node already shown elsewhere in the tree, `↺ cycle` a node that is its own
+    ancestor. Both are shown once and not expanded again.
+  - `⊣ stop` is a node a `--stop-at` glob matched: the path reached it, the tree does not go in.
+  - `? name` is a call the resolver could not place, dimmed when the name is bound from outside
+    the repo.
+- Bare names resolve the same way `usages` does: the highest-rank match becomes `resolved` and the
+  rest are listed under `ambiguous`.
+- `graph export --flow <symbol>` renders the same walk as Graphviz DOT.
+
+```bash
+# stop at the database layer and keep the tree readable
+auditr graph flow auditor/engine.py::audit_target . --stop-at 'auditor/database/*'
+
+# follow inheritance too, and open the hubs
+auditr graph flow auditor/models.py::Finding . --kinds inherits --expand-hubs
+```
 
 ## The unresolved queue
 
@@ -191,3 +244,15 @@ auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json
   binary; without graphviz installed it fails and tells you to use `--format dot`.
 - `--cluster <id>` exports one cluster and `--symbol <name>` with `--depth` exports a symbol's
   ego-graph. With neither, it exports the whole graph.
+- `--flow <symbol>` exports the flow tree instead: `rankdir=LR` with one `rank=same` row per depth,
+  so the picture reads left to right as the call path. `--in` reverses it and `--depth` sets the
+  hops (4 by default in flow mode, 1 in `--symbol` ego mode).
+- The DOT carries the same marks the tree shows: a hub is doubled and magenta, a `--stop-at` node
+  is dashed, a cycle is orange, an already-shown node is dotted, and a node with unplaced calls
+  gets a `? N` second line in its label.
+- The modes pick different node sets, so combining them is an error rather than a silent
+  preference: `--flow` with `--symbol` or `--cluster`, `--symbol` with `--cluster`, and `--in`
+  without `--flow`. A `--flow` symbol the graph does not hold is an error too, not an empty DOT.
+- Export has no `--limit`: the flow walk keeps its 200-node cap and the DOT records it in a
+  comment on the second line, with `truncated` when the cap was hit. Use `auditr graph flow
+  --limit N --json` when you need a different cap.

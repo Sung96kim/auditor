@@ -1,4 +1,4 @@
-"""``auditor graph`` — semantic-graph commands: build|related|neighbors|concept|clusters|export.
+"""``auditor graph`` — the semantic-graph command group; ``auditr graph --help`` lists the set.
 
 Imported on the first ``graph`` subcommand by ``cli/lazy.py``, so the rest of the CLI never pays
 this module's numpy/scikit-learn/networkx import.
@@ -15,13 +15,25 @@ import typer
 
 from auditor.cli.console import ACCENT, err_console
 from auditor.cli.graph_refine import register as register_refine
-from auditor.cli.helpers import present, run, run_staged, warn_unknown_config
+from auditor.cli.helpers import fail, present, run, run_staged, warn_unknown_config
 from auditor.cli.lazy import GRAPH_HELP
-from auditor.cli.options import GraphTarget
+from auditor.cli.options import (
+    ExportDepth,
+    FlowDepth,
+    FlowExpandHubs,
+    FlowIn,
+    FlowIncludeTests,
+    FlowKinds,
+    FlowLimit,
+    FlowStopAt,
+    FlowSymbol,
+    GraphTarget,
+)
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
     render_graph_concept,
+    render_graph_flow,
     render_graph_neighbors,
     render_graph_related,
     render_graph_search,
@@ -33,6 +45,8 @@ from auditor.discovery import find_root
 from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
+from auditor.graph.flow import FlowDirection, FlowOptions
+from auditor.graph.model import DEFAULT_FLOW_LIMIT, EdgeKind
 from auditor.graph.query import GraphQuery
 from auditor.graph.viz import build_payload, render_app, to_dot
 from auditor.paths import index_db_path, repo_key
@@ -193,6 +207,50 @@ def graph_usages(
     )
 
 
+def _split_kinds(raw: str | None) -> list[str]:
+    """Parse --kinds, rejecting a typo rather than returning a tree that silently omits it."""
+    kinds = [k.strip() for k in (raw or "").split(",") if k.strip()]
+    allowed = sorted(e.value for e in EdgeKind)
+    unknown = [k for k in kinds if k not in allowed]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --kinds: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
+        )
+    return kinds
+
+
+@graph_app.command("flow")
+def graph_flow(
+    symbol: str,
+    target: GraphTarget = Path("."),
+    inbound: FlowIn = False,
+    depth: FlowDepth = 4,
+    limit: FlowLimit = DEFAULT_FLOW_LIMIT,
+    kinds: FlowKinds = None,
+    include_tests: FlowIncludeTests = False,
+    expand_hubs: FlowExpandHubs = False,
+    stop_at: FlowStopAt = None,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Read a code path from a symbol: what it calls, or with --in what reaches it."""
+    root = find_root(target)
+    options = FlowOptions(
+        direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+        depth=depth,
+        limit=limit,
+        kinds=tuple(_split_kinds(kinds)),
+        include_tests=include_tests,
+        expand_hubs=expand_hubs,
+        stop_at=tuple(stop_at or ()),
+        hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+    )
+    present(
+        run(_query_cmd("flow")(root, symbol=symbol, options=options), "tracing flow…"),
+        render_graph_flow,
+        as_json=json_,
+    )
+
+
 async def _serve_html(
     root: Path, *, rebuild: bool, report: Callable[[str], None]
 ) -> str:
@@ -242,17 +300,43 @@ def graph_export(
     fmt: Annotated[str, typer.Option("--format")] = "dot",
     cluster: str | None = None,
     symbol: str | None = None,
-    depth: int = 1,
+    depth: ExportDepth = None,
+    flow: FlowSymbol = None,
+    inbound: FlowIn = False,
 ) -> None:
-    """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego."""
+    """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego/flow."""
     root = find_root(target)
+    if flow is not None and (symbol is not None or cluster is not None):
+        raise typer.BadParameter("--flow cannot be combined with --symbol or --cluster")
+    if symbol is not None and cluster is not None:
+        raise typer.BadParameter("--symbol cannot be combined with --cluster")
+    if inbound and flow is None:
+        raise typer.BadParameter("--in only applies to --flow")
 
-    async def do_export() -> str:
+    async def do_export() -> str | None:
+        """``None`` when --flow named a symbol the graph does not hold."""
         async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
             payload = await build_payload(index)
-        return to_dot(payload, cluster=cluster, symbol=symbol, depth=depth)
+            if flow is None:
+                return to_dot(
+                    payload,
+                    cluster=cluster,
+                    symbol=symbol,
+                    depth=1 if depth is None else depth,
+                )
+            tree = await GraphQuery(index).flow(
+                flow,
+                FlowOptions(
+                    direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+                    depth=4 if depth is None else depth,
+                    hub_fan_in=load_config(root).graph.flow_hub_fan_in,
+                ),
+            )
+        return to_dot(payload, flow=tree) if tree else None
 
     dot = run(do_export(), "exporting…")
+    if dot is None:
+        fail(f"no such symbol: {flow}")
     if fmt == "dot":
         typer.echo(dot)
         return

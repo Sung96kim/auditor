@@ -188,6 +188,11 @@ Opt-in per repo, but no extra to install: the graph libraries ship in the core d
   modules and module-to-member ratio before a concept counts as scattered.
 - `naming_verb_distance` (default `0.15`, `ge=0`), `naming_object_jaccard` (default `0.6`, 0 to 1),
   `naming_min_verb_count` (default `20`, `ge=1`): thresholds for the naming-inconsistency detector.
+- `flow_hub_fan_in` (default `40`, `ge=1`): the fan at which `auditr graph flow` collapses a node
+  instead of expanding it. Two counts are compared against it: how many symbols reach the node
+  (dispatch children included) and how many children it would emit. Either one crossing makes it a
+  hub, which is why a helper called from 90 places collapses even though it calls one thing.
+  `--expand-hubs` ignores the floor for one run.
 
 ### Malware scan (`[tool.auditor.malware_scan]`, `MalwareScanConfig`)
 

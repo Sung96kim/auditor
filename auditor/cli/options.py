@@ -5,7 +5,13 @@ from typing import Annotated
 
 import typer
 
-from auditor.graph.model import QUEUE_ROW_LIMIT, CallForm, UnresolvedReason
+from auditor.graph.model import (
+    MAX_FLOW_DEPTH,
+    MAX_FLOW_LIMIT,
+    QUEUE_ROW_LIMIT,
+    CallForm,
+    UnresolvedReason,
+)
 from auditor.models import RuleId
 
 ScanTarget = Annotated[Path, typer.Argument(help="File or directory to audit.")]
@@ -248,5 +254,62 @@ QueueExternal = Annotated[
     typer.Option(
         "--external/--no-external",
         help="Show rows bound to a non-repo import (dimmed, sorted last).",
+    ),
+]
+
+
+# --- `graph flow` options ---
+FlowIn = Annotated[
+    bool,
+    typer.Option(
+        "--in", help="Reverse the walk: what reaches the symbol, not what it reaches."
+    ),
+]
+FlowDepth = Annotated[
+    int,
+    typer.Option(
+        "--depth",
+        min=0,
+        max=MAX_FLOW_DEPTH,
+        help="Hops to follow from the symbol.",
+    ),
+]
+FlowLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit",
+        min=1,
+        max=MAX_FLOW_LIMIT,
+        help="Cap on nodes emitted; shallow levels complete first.",
+    ),
+]
+FlowKinds = Annotated[
+    str | None,
+    typer.Option(
+        "--kinds",
+        help="Extra edge kinds to follow, comma separated, e.g. --kinds inherits,references_type.",
+    ),
+]
+FlowIncludeTests = Annotated[
+    bool,
+    typer.Option(
+        "--include-tests", help="Keep test and test-support symbols in the tree."
+    ),
+]
+FlowExpandHubs = Annotated[
+    bool, typer.Option("--expand-hubs", help="Expand hubs instead of eliding them.")
+]
+FlowStopAt = Annotated[
+    list[str] | None,
+    typer.Option("--stop-at", help="Module glob to stop expanding at (repeatable)."),
+]
+FlowSymbol = Annotated[
+    str | None,
+    typer.Option("--flow", help="Export the flow tree from this symbol instead."),
+]
+ExportDepth = Annotated[
+    int | None,
+    typer.Option(
+        "--depth", help="Hops for --symbol (default 1) or --flow (default 4)."
     ),
 ]

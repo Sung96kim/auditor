@@ -33,6 +33,7 @@ _GRAPH_TOOLS = {
     "graph_build",
     "graph_related",
     "graph_neighbors",
+    "graph_flow",
     "graph_concept",
     "graph_clusters",
     "graph_search",

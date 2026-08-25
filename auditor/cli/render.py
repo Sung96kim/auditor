@@ -12,6 +12,7 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.tree import Tree
 
 _ACCENT = "#7C7CFF"
 _BORDER = "dim"
@@ -140,6 +141,63 @@ def render_graph_usages(out: Console, payload: dict[str, Any]) -> None:
             sample = ", ".join(s.split("::")[-1] for s in info.get("sample", []))
             t.add_row(edge, str(info["count"]), sample)
         out.print(t)
+
+
+_FLOW_GLYPH = {
+    "calls": "→",
+    "callback_arg": "⇢",
+    "dispatches_to": "↳",
+    "registered_in": "↳",
+}
+
+
+def _flow_label(node: dict[str, Any], *, root: bool = False) -> str:
+    nid = str(node["id"])
+    glyph = "" if root else f"{_FLOW_GLYPH.get(node.get('edge') or '', '→')} "
+    marks = []
+    if node.get("cycle"):
+        marks.append("[yellow]↺ cycle[/]")
+    elif node.get("seen_ref"):
+        marks.append("[dim]↺ seen[/]")
+    if node.get("stopped"):
+        marks.append("[cyan]⊣ stop[/]")
+    hub = node.get("hub")
+    if hub:
+        kept = "elided" if hub.get("collapsed") else "hub"
+        marks.append(f"[magenta]⊕ {hub['count']} {kept}[/]")
+    marks += [
+        f"[{'dim' if u.get('external') else 'yellow'}]? {u['name']}[/]"
+        for u in node.get("unresolved", [])
+    ]
+    tail = ("  " + " ".join(marks)) if marks else ""
+    return f"{glyph}[bold]{nid.split('::')[-1]}[/] [dim]{nid.split('::')[0]}[/]{tail}"
+
+
+def _flow_branch(parent: Tree, node: dict[str, Any]) -> None:
+    for child in node.get("children", []):
+        _flow_branch(parent.add(_flow_label(child)), child)
+
+
+def render_graph_flow(out: Console, payload: dict[str, Any]) -> None:
+    if not payload:
+        out.print("[dim]no such symbol[/]")
+        return
+    out.print(
+        f"[bold {_ACCENT}]{payload.get('resolved', '')}[/] "
+        f"[dim]flow ({payload.get('direction', 'out')})[/]"
+    )
+    modules = payload.get("modules", [])
+    if modules:
+        out.print(f"[bold {_ACCENT}]modules[/]  " + " · ".join(modules))
+    ambiguous = payload.get("ambiguous", [])
+    if ambiguous:
+        out.print("[yellow]ambiguous[/] — also matched: " + ", ".join(ambiguous))
+    root = payload["root"]
+    tree = Tree(_flow_label(root, root=True))
+    _flow_branch(tree, root)
+    out.print(tree)
+    if payload.get("truncated"):
+        out.print(f"[yellow]truncated[/] at --limit {payload.get('limit')}")
 
 
 def _queue_name(row: dict[str, Any]) -> str:

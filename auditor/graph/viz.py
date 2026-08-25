@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from auditor.graph.model import NodeKind
+from auditor.graph.model import DEFAULT_FLOW_LIMIT, NodeKind
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -130,20 +130,81 @@ def render_app(payload: dict) -> str:
     return html + inject
 
 
+_FLOW_DOT_STYLE = {
+    "hub": ' color="magenta" peripheries=2',
+    "stopped": ' color="cyan" style="rounded,dashed"',
+    "cycle": ' color="orange"',
+    "seen_ref": ' style="rounded,dotted"',
+}
+
+
+def _flow_declare(node: dict, nodes: dict[str, dict]) -> str:
+    """One DOT node line carrying the tree's ⊕/⊣/↺ marks and its unresolved count, so a pruned
+    branch cannot read as an ordinary leaf."""
+    nid = node["id"]
+    label = nodes.get(nid, {}).get("label") or nid.split("::")[-1]
+    queued = len(node.get("unresolved") or ())
+    if queued:
+        label = f"{label}\\n? {queued}"
+    marks = "".join(a for mark, a in _FLOW_DOT_STYLE.items() if node.get(mark))
+    return f'  "{nid}" [label="{label}"{marks}];'
+
+
+def _flow_dot(flow: dict, nodes: dict[str, dict]) -> str:
+    """A flow tree as DOT: one ``rank=same`` row per depth, edges labelled by relation, nodes
+    carrying the same marks the tree renderer shows."""
+    declared: dict[str, str] = {}
+    levels: dict[int, list[str]] = {}
+    links: set[tuple[str, str, str]] = set()
+
+    def walk(node: dict) -> None:
+        if node["id"] not in declared:  # a revisited node keeps its first-seen row
+            declared[node["id"]] = _flow_declare(node, nodes)
+            levels.setdefault(node["depth"], []).append(node["id"])
+        for child in node.get("children", []):
+            links.add((node["id"], child["id"], child.get("edge") or ""))
+            walk(child)
+
+    root = flow.get("root")
+    if root is not None:
+        walk(root)
+    cap = flow.get("limit", DEFAULT_FLOW_LIMIT)
+    cut = ", truncated" if flow.get("truncated") else ""
+    lines = [
+        "digraph flow {",
+        f"  // {flow.get('direction', 'out')}, at most {cap} nodes{cut}",
+        "  rankdir=LR;",
+        "  node [shape=box, style=rounded];",
+    ]
+    lines.extend(declared[nid] for nid in sorted(declared))
+    for level in sorted(levels):
+        lines.append(
+            "  { rank=same; " + " ".join(f'"{n}";' for n in levels[level]) + " }"
+        )
+    for src, dst, kind in sorted(links):
+        lines.append(f'  "{src}" -> "{dst}" [label="{kind}"];')
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def to_dot(
     payload: dict,
     *,
     cluster: str | None = None,
     symbol: str | None = None,
     depth: int = 1,
+    flow: dict | None = None,
 ) -> str:
     """Return a deterministic Graphviz DOT string for the payload.
 
     Default: overview (all kept nodes).
     ``cluster``: members of the cluster with that label.
     ``symbol``: BFS ego graph from matching node(s) to ``depth``.
+    ``flow``: a ``GraphQuery.flow`` payload, ranked one row per depth.
     """
     nodes = {n["id"]: n for n in payload["nodes"]}
+    if flow is not None:
+        return _flow_dot(flow, nodes)
     edges = payload["edges"]
     keep: set[str]
     if symbol is not None:

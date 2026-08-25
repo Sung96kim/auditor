@@ -3,6 +3,14 @@
 from collections import Counter
 from typing import TYPE_CHECKING
 
+from auditor.graph.cache import GraphCache, QueueRow, resolve_ids
+from auditor.graph.flow import (
+    DEFAULT_OPTIONS,
+    FlowOptions,
+    FlowPayload,
+    build_flow,
+)
+
 if TYPE_CHECKING:
     from auditor.database import IndexStore
 
@@ -16,6 +24,7 @@ _STRUCTURAL = [
     "contains",
     "imports",
 ]
+_STRUCTURAL_KINDS = frozenset(_STRUCTURAL)
 _SEMANTIC = ["name_similar", "usage_similar"]
 
 
@@ -28,12 +37,8 @@ class GraphQuery:
         sorted. A bare name can legitimately match several nodes (same-named symbols)."""
         if await self.index.graph.node(symbol):
             return [symbol]
-        return sorted(
-            n["node_id"]
-            for n in await self.index.graph.nodes()
-            if n["node_id"] == symbol
-            or n["node_id"].endswith(f"::{symbol}")
-            or n["node_id"].endswith(f".{symbol}")
+        return resolve_ids(
+            [n["node_id"] for n in await self.index.graph.nodes()], symbol
         )
 
     async def _resolve(self, symbol: str) -> str | None:
@@ -62,17 +67,32 @@ class GraphQuery:
         return out[:limit]
 
     async def neighbors(self, symbol: str, depth: int = 1) -> list[dict]:
+        """Structural neighbours within ``depth`` hops of ``symbol``, breadth-first.
+
+        The whole-partition ``GraphCache`` is loaded only past depth 1: one hop visits a single
+        node, which one indexed ``edges_of`` read serves for a fraction of the load's cost.
+        """
         nid = await self._resolve(symbol)
         if nid is None:
             return []
-        kinds = {n["node_id"]: n["kind"] for n in await self.index.graph.nodes()}
+        cache = await GraphCache.load(self.index) if depth > 1 else None
+        kind_of = (
+            {n: row["kind"] for n, row in cache.nodes.items()}
+            if cache is not None
+            else {n["node_id"]: n["kind"] for n in await self.index.graph.nodes()}
+        )
         seen = {nid}
         frontier = [nid]
         out: list[dict] = []
         for hop in range(1, depth + 1):
             nxt: list[str] = []
             for cur in frontier:
-                for e in await self.index.graph.edges_of(cur, _STRUCTURAL):
+                edges = (
+                    cache.incident(cur, _STRUCTURAL_KINDS)
+                    if cache is not None
+                    else await self.index.graph.edges_of(cur, _STRUCTURAL)
+                )
+                for e in edges:
                     other, direction = (
                         (e["dst"], "out") if e["src"] == cur else (e["src"], "in")
                     )
@@ -82,7 +102,7 @@ class GraphQuery:
                         out.append(
                             {
                                 "id": other,
-                                "kind": kinds.get(other, "?"),
+                                "kind": kind_of.get(other, "?"),
                                 "edge": e["kind"],
                                 "direction": direction,
                                 "hops": hop,
@@ -148,6 +168,41 @@ class GraphQuery:
             "total_in": sum(v["count"] for v in used.values()),
             "total_out": sum(v["count"] for v in deps.values()),
         }
+
+    async def _unresolved_by_node(
+        self, node_ids: list[str]
+    ) -> dict[str, list[QueueRow]]:
+        """``graph_unresolved`` rows for ``node_ids`` only, keyed by node id.
+
+        Scoped to what the walk reached, so a flow over a dozen symbols never pulls the whole
+        partition back.
+        """
+        out: dict[str, list[QueueRow]] = {}
+        for row in await self.index.graph.unresolved(node_ids=node_ids):
+            out.setdefault(row["node_id"], []).append(row)
+        return out
+
+    async def flow(self, symbol: str, options: FlowOptions = DEFAULT_OPTIONS) -> dict:
+        """A directed code path from ``symbol`` as a nested tree (spec §7).
+
+        Picks the highest-rank node when the name is ambiguous and lists the rest under
+        ``ambiguous``; ``{}`` when the symbol is not in the graph.
+        """
+        cache = await GraphCache.load(self.index)
+        matches = resolve_ids(cache.nodes, symbol)
+        if not matches:
+            return {}
+        primary = max(matches, key=cache.rank)
+        result = build_flow(cache, primary, options=options)
+        result = result.with_unresolved(
+            await self._unresolved_by_node(result.node_ids())
+        )
+        return FlowPayload.of(
+            result,
+            symbol=symbol,
+            resolved=primary,
+            ambiguous=tuple(m for m in matches if m != primary),
+        ).model_dump(mode="json")
 
     async def clusters(self) -> list[dict]:
         return await self.index.graph.clusters()

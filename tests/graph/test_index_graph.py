@@ -1,5 +1,9 @@
+import inspect
+import re
+
 import pytest
 
+from auditor.database.graph import GraphDB
 from auditor.graph.model import (
     CallForm,
     EdgeKind,
@@ -48,6 +52,39 @@ async def test_replace_graph_and_query(graph_store):
     # replace is idempotent (clears prior rows)
     await graph_store.graph.replace([_n("a")], [], [])
     assert await graph_store.graph.node("b") is None
+
+
+def test_edge_provenance_reads_a_column_the_loader_selects():
+    """`flow._source` degrades to "deterministic" on a missing key, so adding the S4 `source`
+    column without widening this SELECT would look like a walk regression."""
+    selected = set(
+        re.search(
+            r"SELECT ([\w, ]+) FROM graph_edges", inspect.getsource(GraphDB.all_edges)
+        )
+        .group(1)
+        .split(", ")
+    )
+    declared = {c.name for c in GraphDB.TABLES["graph_edges"].cols}
+    assert ("source" in selected) == ("source" in declared)
+
+
+async def test_edges_of_is_ordered_like_all_edges(graph_store):
+    """`neighbors` reads one node at depth 1 and the whole partition above it; unordered rows
+    made the reported ``edge``/``direction`` depend on which path was taken."""
+    nodes = [_n("a"), _n("b"), _n("c")]
+    edges = [
+        GraphEdge(src="a", dst="c", kind=EdgeKind.CALLS, weight=1.0),
+        GraphEdge(src="a", dst="b", kind=EdgeKind.IMPORTS, weight=1.0),
+        GraphEdge(src="b", dst="a", kind=EdgeKind.CALLS, weight=1.0),
+    ]
+    await graph_store.graph.replace(nodes, edges, [])
+    rows = await graph_store.graph.edges_of("a", None)
+    assert [(r["src"], r["dst"], r["kind"]) for r in rows] == [
+        ("a", "b", "imports"),
+        ("a", "c", "calls"),
+        ("b", "a", "calls"),
+    ]
+    assert rows == await graph_store.graph.edges_of("a", None)
 
 
 async def test_all_edges(graph_store):

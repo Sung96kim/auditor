@@ -1,10 +1,12 @@
 # Query recipes
 
 Source of truth: `auditor/graph/query.py` (`GraphQuery` — `related`/`neighbors`/`search`/
-`usages`/`clusters`/`concept`), `auditor/mcp/graph_tools.py` (the `graph_*` MCP tools + docstrings),
-`auditor/cli/graph.py` (CLI subcommands), `auditor/graph/detectors.py` (`GRAPH-*` rules). All
-example output below is real, captured against this repo (`auditor/graph/query.py` module and
-friends) — node ids and counts will differ on yours, but the shape won't.
+`usages`/`clusters`/`concept`/`flow`), `auditor/graph/flow.py` (`build_flow`),
+`auditor/graph/cache.py` (`GraphCache`),
+`auditor/mcp/graph_tools.py` (the `graph_*` MCP tools + docstrings), `auditor/cli/graph.py` (CLI
+subcommands), `auditor/graph/detectors.py` (`GRAPH-*` rules). All example output below is real,
+captured 2026-08-23 against this repo at 3,880 nodes / 36,736 edges. Node ids and counts differ on
+your repo and drift on this one as it changes; the shape does not.
 
 ## Is symbol X dead?
 
@@ -74,6 +76,113 @@ For a symbol you're about to change: run `usages`, look at `total_in` for a roug
 number, then skim the `sample` (rank-ordered, so the highest-rank callers surface first) to see
 *what kind* of code depends on it — a handful of test fixtures is a different risk profile than
 30 production call sites across unrelated modules.
+
+## Read the architecture from an entry point
+
+```
+auditr graph flow <symbol> [--in] [--depth N] [--stop-at GLOB] --json
+```
+
+One call replaces a chain of `neighbors` queries. It walks `calls` and `callback_arg` outward from
+a symbol, expands a base method's overriders and a registry module's members as `dispatches_to`,
+and prints a tree plus the ordered list of modules the path touches. Start here when the question
+is "what does this command actually do" rather than "who uses this symbol".
+
+Real output, this repo, `auditr graph flow auditor/cli/scan.py::scan .` at the default depth of 4
+(149 nodes in the 2026-08-23 snapshot above), trimmed here to four of `scan`'s branches:
+
+```
+auditor/cli/scan.py::scan flow (out)
+modules  auditor/cli/scan.py · auditor/baseline.py · auditor/cli/helpers.py · auditor/cli/summary.py
+· auditor/config.py · auditor/discovery.py · auditor/engine.py · auditor/malware/tools.py ·
+auditor/status.py · auditor/cli/apps.py · auditor/registry.py · auditor/models.py · auditor/serve.py
+· auditor/database/base.py · auditor/database/store.py · auditor/paths.py ·
+auditor/malware/passes.py · auditor/ignores.py · auditor/plugins.py · auditor/fingerprints.py ·
+auditor/roles.py · auditor/crossfile.py · auditor/languages/base.py
+scan auditor/cli/scan.py  ? render
+├── → Baseline.from_results auditor/baseline.py
+│   └── → finding_fingerprint auditor/baseline.py
+├── → check_format auditor/cli/helpers.py
+│   ├── → fail auditor/cli/helpers.py  ↺ seen
+│   ├── → Registry.formats auditor/registry.py
+│   └── → Registry.reporter auditor/registry.py
+├── → _diff_report_only auditor/cli/scan.py
+│   ├── → fail auditor/cli/helpers.py  ↺ seen
+│   ├── → load_config auditor/config.py
+│   │   └── → load_config_report auditor/config.py
+│   │       ├── → merged_config_dict auditor/config.py  ↺ seen
+│   │       ├── → unknown_config_keys auditor/config.py  ↺ seen
+│   │       ├── → PluginLoader.load_config_modules auditor/plugins.py
+│   │       ├── → PluginLoader.load_entry_points auditor/plugins.py
+│   │       └── → PluginLoader.load_local auditor/plugins.py
+│   ├── → default_base_ref auditor/discovery.py
+│   │   └── → _git auditor/discovery.py  ? run
+│   ├── → find_root auditor/discovery.py  ↺ seen ⊕ 48 hub
+│   └── → git_changed_files auditor/discovery.py
+│       └── → _git auditor/discovery.py  ↺ seen ? run
+├── → find_root auditor/discovery.py  ⊕ 48 elided
+```
+
+`find_root` shows both hub labels in one tree: `elided` where the hub rule cut it, `hub` on the
+occurrence the `↺ seen` rule had already stopped.
+
+The `modules` line is the answer to the architecture question. The tree tells you where each hop
+went.
+
+Reverse it to find the callers of a shared entry point, which is the same question `usages` answers
+one hop at a time:
+
+```
+auditr graph flow auditor/engine.py::audit_target . --in --depth 1
+```
+
+```
+auditor/engine.py::audit_target flow (in)
+modules  auditor/engine.py · auditor/cli/graph.py · auditor/cli/report.py · auditor/cli/scan.py ·
+auditor/mcp/graph_tools.py · auditor/mcp/scan_tools.py
+audit_target auditor/engine.py  ? register
+├── → _autoscan auditor/cli/graph.py
+├── → report auditor/cli/report.py  ? render
+├── → scan auditor/cli/scan.py  ? render
+├── → finding_evidence_at auditor/engine.py
+├── → graph_build auditor/mcp/graph_tools.py  ? run ? register
+├── → finding_detail auditor/mcp/scan_tools.py  ? cached ? resolve
+├── → report auditor/mcp/scan_tools.py
+└── → scan auditor/mcp/scan_tools.py
+```
+
+That is the CLI side and the MCP side of the same entry point in one call.
+
+Reading the markers:
+
+- `⊕ N elided`: a hub the walk refused to expand. A node is a hub when either count reaches
+  `graph.flow_hub_fan_in` (40 by default): the symbols that reach it, dispatch children included,
+  or the children it would emit. `--expand-hubs` opens it. `⊕ N hub` is the same fan on a node
+  that expanded anyway: the start symbol, anything under `--expand-hubs`, and a hub sitting on the
+  last level `--depth` reached. Both counts skip test callers, so `--include-tests` only ever
+  widens the tree. In JSON the mark is one `hub` object,
+  `{"count": N, "kind": "fan_in", "collapsed": true}`.
+- `graph usages` is not the hub measure and will report a larger number: it counts all eight
+  structural kinds and includes test callers, while the hub fan counts production `calls` and
+  `callback_arg` plus dispatch children. Here `find_root` is 48 to the hub rule and 53 to
+  `usages`; `Detector.make_finding` is 128 against 131.
+- `↺ seen`: already shown elsewhere in this tree. `↺ cycle`: the node is its own ancestor.
+- `⊣ stop`: a `--stop-at` glob matched this module. The path reached it; the tree stops there.
+- `? name`: a call the resolver could not place, dimmed when the name comes from outside the repo
+  (`re.search`, `subprocess.run`).
+- `→` follows a `calls` edge, `⇢` a `callback_arg`, `↳` a `dispatches_to` hop through an override
+  or a registry.
+
+Keep a large tree readable with `--stop-at`, which stops expanding inside matching modules but
+still shows that the path reached them:
+
+```
+auditr graph flow auditor/engine.py::audit_target . --stop-at 'auditor/database/*' --depth 4
+```
+
+MCP: `graph_flow(symbol, path, direction, depth, limit, kinds, include_tests, expand_hubs,
+stop_at)` returns the same payload with the same knobs. `graph export
+--flow <symbol>` renders it as Graphviz DOT, left to right, one rank per depth.
 
 ## Hotspots / god-concepts
 

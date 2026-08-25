@@ -28,6 +28,24 @@ IMPL_SRC = (
     "        return load_user() or _local()\n\ndef _local():\n    return 1\n"
 )
 SVC_SRC = "def load_user():\n    return get_user_record()\n"
+# a three-link chain inside one module, so a flow query has something to walk end to end
+FLOW_CALLS = (
+    "def leaf(uid):\n    return uid\n\n"
+    "def middle(uid):\n    return leaf(uid)\n\n"
+    "def entry(uid):\n    return middle(uid)\n"
+)
+
+
+# leaf is called from two places, so a floor of 2 makes it a hub; the second module is what
+# --stop-at cuts, and the test-role caller is what --include-tests adds
+HUB_MAIN = (
+    "from svc import leaf\n\n"
+    "def middle(uid):\n    return leaf(uid)\n\n"
+    "def other(uid):\n    return leaf(uid)\n\n"
+    "def entry(uid):\n    return middle(uid) or other(uid)\n"
+)
+HUB_SVC = "def leaf(uid):\n    return uid\n"
+HUB_TEST = "from m import entry\n\ndef test_entry():\n    return entry(1)\n"
 
 
 def _write_graph_repo(
@@ -36,6 +54,7 @@ def _write_graph_repo(
     *,
     module_source: str = SIMILAR_NAMES,
     graph_config: str = GRAPH_CONFIG,
+    extra_files: dict[str, str] | None = None,
 ) -> Path:
     """A one-module repo (pyproject + m.py) with its own AUDITOR_HOME, so no index is shared."""
     monkeypatch.setenv("AUDITOR_HOME", str(root / "home"))
@@ -43,6 +62,10 @@ def _write_graph_repo(
         '[project]\nname="x"\nversion="0"\n' + graph_config
     )
     (root / "m.py").write_text(module_source)
+    for rel, source in (extra_files or {}).items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
     return root
 
 
@@ -62,6 +85,25 @@ def graph_repo_unconfigured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def graph_repo_with_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Calls that resolve inside the module, so structural neighbors exist to cap."""
     return _write_graph_repo(tmp_path, monkeypatch, module_source=RESOLVABLE_CALLS)
+
+
+@pytest.fixture
+def graph_repo_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A three-link call chain (entry -> middle -> leaf), the repo the flow surfaces walk."""
+    return _write_graph_repo(tmp_path, monkeypatch, module_source=FLOW_CALLS)
+
+
+@pytest.fixture
+def graph_repo_flow_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Two modules, a hub (``leaf``, called twice) and a test caller, with the hub floor at 2 —
+    the repo the flow flags are exercised against end to end."""
+    return _write_graph_repo(
+        tmp_path,
+        monkeypatch,
+        module_source=HUB_MAIN,
+        graph_config=GRAPH_CONFIG + "flow_hub_fan_in=2\n",
+        extra_files={"svc.py": HUB_SVC, "tests/test_entry.py": HUB_TEST},
+    )
 
 
 @pytest.fixture
