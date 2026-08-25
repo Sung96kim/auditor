@@ -438,6 +438,72 @@ async def test_a_second_connection_never_sees_a_half_bumped_schema(tmp_path):
     assert set(seen) <= {0, 1}  # never a `no such table`, never a torn count
 
 
+async def test_a_racing_connect_never_rebuilds_over_a_committed_writer(
+    tmp_path, monkeypatch
+):
+    """A connect whose version read raced a concurrent creator must not drop the cache tables
+    under rows that creator already committed: the decision has to come from one snapshot taken
+    under the write lock. Both barriers fire only outside a transaction, so the fix ends them."""
+    db = tmp_path / "index.db"
+    connected = threading.Event()  # the creator's connection exists
+    racer_ready = threading.Event()  # the racer is at (or past) its version read
+    rows_committed = threading.Event()  # the creator committed its schema and rows
+    role = {"name": "creator"}
+    armed = {"creator": True, "racer": True}
+    real_connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)
+        who = role["name"]
+
+        def trace(statement: str) -> None:
+            stmt = statement.strip()
+            if who == "racer" and stmt == "PRAGMA synchronous=NORMAL":
+                racer_ready.set()
+            elif (
+                who == "creator"
+                and stmt == "PRAGMA user_version"
+                and armed["creator"]
+                and not conn.in_transaction
+            ):
+                armed["creator"] = False
+                racer_ready.wait(5)  # let the racer snapshot the pre-commit version
+            elif (
+                who == "racer"
+                and stmt.startswith("SELECT name FROM sqlite_master")
+                and armed["racer"]
+                and not conn.in_transaction
+            ):
+                armed["racer"] = False
+                rows_committed.wait(5)  # let the creator commit schema and rows
+
+        conn.set_trace_callback(trace)
+        connected.set()
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", traced_connect)
+
+    async def creator() -> None:
+        async with await IndexStore.connect(db) as store:
+            await store.files.upsert(_entry("pkg/a.py"))
+            await store.files.upsert(_entry("pkg/b.py"))
+            rows_committed.set()
+            await asyncio.sleep(0.2)  # stay open while the racer decides
+
+    async def racer() -> None:
+        # gate the second connect so the role assignment above stays deterministic
+        await asyncio.to_thread(connected.wait, 5)
+        role["name"] = "racer"
+        async with await IndexStore.connect(db):
+            pass
+
+    await asyncio.gather(creator(), racer())
+    monkeypatch.undo()
+
+    async with await IndexStore.connect(db) as store:
+        assert {e.path for e in await store.files.list()} == {"pkg/a.py", "pkg/b.py"}
+
+
 def test_column_names_include_the_repo_foreign_key():
     """`files` and `ignores` are the two shapes: repo_fk prepends the FK, repo_fk=False does not.
     Neither table is touched by this slice, so this assertion cannot go stale under it."""
