@@ -21,13 +21,19 @@ from auditor.graph.model import (
     NodeKind,
     UnresolvedRow,
 )
-from auditor.graph.refine.models import EDGE_PROPOSAL_KINDS, Anchor, Proposal
+from auditor.graph.refine.models import (
+    EDGE_PROPOSAL_KINDS,
+    Anchor,
+    Proposal,
+    ProposedEdge,
+    RefinementKind,
+)
 from auditor.graph.refine.namespace import file_of, short_name
 from auditor.graph.resolve_edges import NameBindings, call_forms, form_for
 from auditor.roles import RoleClassifier
 
-#: node kinds each edge kind's endpoints must have (spec 9.2 "src/dst kinds obey the resolver's
-#: rules"): the resolver only ever emits these pairings.
+#: the node kinds the resolver's own endpoints have, src first (spec 9.2 "src/dst kinds obey the
+#: resolver's rules"): `overrides` runs method to method, `resolve_edges.py:552`.
 _ENDPOINT_KINDS: dict[EdgeKind, tuple[frozenset[NodeKind], frozenset[NodeKind]]] = {
     EdgeKind.CALLS: (frozenset(FUNCTION_KINDS), frozenset(FUNCTION_KINDS)),
     EdgeKind.REFERENCES_TYPE: (
@@ -36,9 +42,8 @@ _ENDPOINT_KINDS: dict[EdgeKind, tuple[frozenset[NodeKind], frozenset[NodeKind]]]
     ),
     EdgeKind.CALLBACK_ARG: (frozenset(FUNCTION_KINDS), frozenset(FUNCTION_KINDS)),
     EdgeKind.INHERITS: (frozenset({NodeKind.CLASS}), frozenset({NodeKind.CLASS})),
-    # the src half is the *owner* `_owner` resolved, which for `overrides` is the class
     EdgeKind.OVERRIDES: (
-        frozenset({NodeKind.CLASS}),
+        frozenset({NodeKind.METHOD}),
         frozenset({NodeKind.METHOD}),
     ),
 }
@@ -53,6 +58,7 @@ class VerifyStatus(StrEnum):
     )
     STALE_FILE = "stale_file"
     NO_SUCH_PATH = "no_such_path"
+    NOT_LOADED = "not_loaded"
     NO_SRC_NODE = "no_src_node"
     NO_FACT = "no_fact"
     EXTERNALLY_BOUND = "externally_bound"
@@ -132,15 +138,20 @@ class FactVerifier(BaseModel):
     missing: frozenset[str] = frozenset()
 
     @staticmethod
+    def _anchored_ids(proposal: Proposal, row: UnresolvedRow | None) -> tuple[str, ...]:
+        """Every node id a proposal is pinned to, its resolution path included, each one once."""
+        ids = (*proposal.anchored_ids(), *(row.resolution_path if row else ()))
+        return tuple(dict.fromkeys(ids))
+
+    @staticmethod
     def paths_named(proposal: Proposal, row: UnresolvedRow | None) -> tuple[str, ...]:
-        """Every file a proposal touches: its endpoints, its target node, and the modules the
-        resolver walked to reach the name (spec 5.5)."""
-        src, dst = proposal.edge_pair()
-        ids = [
-            *(i for i in (src, dst, proposal.target.node_id) if i),
-            *(row.resolution_path if row else ()),
-        ]
-        return tuple(dict.fromkeys(file_of(i) for i in ids))
+        """Every file a proposal touches, which is what a caller loads before building one.
+
+        Its anchored nodes (spec 5.5) plus the modules the resolver walked to reach the name.
+        """
+        return tuple(
+            dict.fromkeys(file_of(i) for i in FactVerifier._anchored_ids(proposal, row))
+        )
 
     def check(
         self,
@@ -149,19 +160,21 @@ class FactVerifier(BaseModel):
         row: UnresolvedRow | None,
         definers: Sequence[str],
     ) -> VerifyResult:
-        """Spec 9.2's table for one proposal, in the order that gives the most useful message."""
+        """Spec 9.2's table for one proposal, in the order that gives the most useful message.
+
+        A name the caller's module imported from outside the repo is answered as such before the
+        endpoint kinds are read: the node kind is a true statement about the wrong problem.
+        """
         unusable = self._unusable_path(proposal, row)
         if unusable is not None:
             return unusable
         edge = proposal.edge()
         if proposal.kind not in EDGE_PROPOSAL_KINDS or edge is None:
             return VerifyResult(status=VerifyStatus.UNVERIFIED)
+        outside = self._outside_the_answer(edge, proposal.kind, row, definers)
+        if outside is not None:
+            return outside
         src, dst, kind = edge.src, edge.dst, edge.kind
-        if dst not in definers:
-            return VerifyResult(
-                status=VerifyStatus.NOT_A_DEFINER,
-                detail=f"{dst} does not define {edge.name}",
-            )
         if kind is EdgeKind.OVERRIDES and "." not in src.partition("::")[2]:
             return VerifyResult(
                 status=VerifyStatus.BAD_NODE_KIND,
@@ -170,17 +183,16 @@ class FactVerifier(BaseModel):
         owner = self._owner(src, kind)
         if owner is None:
             return VerifyResult(status=VerifyStatus.NO_SRC_NODE, detail=src)
-        endpoint = self._endpoint_kinds(owner, dst, kind)
-        if endpoint is not None:
-            return VerifyResult(status=VerifyStatus.BAD_NODE_KIND, detail=endpoint)
         forms = call_forms(owner)
         short = short_name(dst)
-        call_form, receivers = self._call_site(owner, forms, short, row)
-        if short not in self._facts(owner, forms, kind, call_form):
+        site = self._call_site(owner, forms, short, row)
+        if site is None and kind is EdgeKind.CALLS:
             return VerifyResult(
                 status=VerifyStatus.NO_FACT,
-                detail=f"{src} has no {kind.value} fact naming {short} as a {call_form.value} call",
+                detail=f"{src} binds {short} itself, so its call is no calls fact",
             )
+        # only `calls` picks its fact tuple by call form; the other four have one tuple each
+        call_form, receivers = site or (CallForm.BARE, ())
         if self.bindings.externally_bound(owner.module, short, *receivers):
             return VerifyResult(
                 status=VerifyStatus.EXTERNALLY_BOUND,
@@ -189,19 +201,23 @@ class FactVerifier(BaseModel):
                     f"{', '.join(r for r in receivers if r) or short} from outside the repo"
                 ),
             )
+        endpoint = self._endpoint_kinds(src, dst, kind)
+        if endpoint is not None:
+            return VerifyResult(status=VerifyStatus.BAD_NODE_KIND, detail=endpoint)
+        if short not in self._facts(owner, forms, kind, call_form):
+            named = f" as a {call_form.value} call" if kind is EdgeKind.CALLS else ""
+            return VerifyResult(
+                status=VerifyStatus.NO_FACT,
+                detail=f"{src} has no {kind.value} fact naming {short}{named}",
+            )
         return VerifyResult(status=VerifyStatus.OK)
 
     def anchors(
         self, proposal: Proposal, *, row: UnresolvedRow | None
     ) -> tuple[Anchor, ...]:
         """One anchor per node the proposal depends on, hashed from the facts on disk (spec 5.5)."""
-        src, dst = proposal.edge_pair()
-        ids = [
-            *(i for i in (src, dst, proposal.target.node_id) if i),
-            *(row.resolution_path if row else ()),
-        ]
         out: list[Anchor] = []
-        for node_id in dict.fromkeys(ids):
+        for node_id in self._anchored_ids(proposal, row):
             facts = self.files.get(file_of(node_id))
             node = facts.node(node_id) if facts else None
             if facts is not None and node is not None:
@@ -220,8 +236,8 @@ class FactVerifier(BaseModel):
     ) -> VerifyResult | None:
         """The first file the proposal names that this checkout cannot answer for, as a result.
 
-        A path with no file on disk is a different answer than a file whose facts moved: telling an
-        agent to rebuild the graph over a typo sends it around the loop again.
+        A path with no file, a path the caller never loaded and a file whose facts moved are three
+        different answers: only the last one is fixed by rebuilding the graph.
         """
         for path in self.paths_named(proposal, row):
             if path in self.missing:
@@ -230,7 +246,12 @@ class FactVerifier(BaseModel):
                     detail=f"{path} is not a file in this checkout",
                 )
             facts = self.files.get(path)
-            if facts is None or not facts.current:
+            if facts is None:
+                return VerifyResult(
+                    status=VerifyStatus.NOT_LOADED,
+                    detail=f"{path} was never loaded, so nothing here can answer for it",
+                )
+            if not facts.current:
                 return VerifyResult(
                     status=VerifyStatus.STALE_FILE,
                     detail=(
@@ -238,6 +259,37 @@ class FactVerifier(BaseModel):
                         "run `auditr graph build` first"
                     ),
                 )
+        return None
+
+    def _outside_the_answer(
+        self,
+        edge: ProposedEdge,
+        kind: RefinementKind,
+        row: UnresolvedRow | None,
+        definers: Sequence[str],
+    ) -> VerifyResult | None:
+        """Whether the destination is outside the set spec 9.2 lets this kind choose from.
+
+        `resolve_ambiguous` picks from the row's gated candidates, which is narrower than the
+        role-filtered definers every other kind is held to.
+        """
+        if edge.dst not in definers:
+            return VerifyResult(
+                status=VerifyStatus.NOT_A_DEFINER,
+                detail=f"{edge.dst} does not define {edge.name}",
+            )
+        if (
+            kind is RefinementKind.RESOLVE_AMBIGUOUS
+            and row is not None
+            and edge.dst not in row.candidates
+        ):
+            return VerifyResult(
+                status=VerifyStatus.NOT_A_DEFINER,
+                detail=(
+                    f"{edge.dst} is not one of the candidates the resolver gated "
+                    f"for {edge.name}"
+                ),
+            )
         return None
 
     def _owner(self, src: str, kind: EdgeKind) -> GraphNode | None:
@@ -260,30 +312,27 @@ class FactVerifier(BaseModel):
         forms: dict[tuple[str, CallForm], tuple[str | None, ...]],
         short: str,
         row: UnresolvedRow | None,
-    ) -> tuple[CallForm, tuple[str | None, ...]]:
-        """How the src really calls ``short``, and on which receiver roots.
+    ) -> tuple[CallForm, tuple[str | None, ...]] | None:
+        """How the src really calls ``short`` and on which receiver roots, or ``None`` when the
+        queue's own rule says there is no placeable fact.
 
-        The queue row answers when there is one, because that is the row the proposal is answering;
-        otherwise the src node's own facts answer, exactly the way the queue derived a row. The
-        caller's ``payload.call_form`` is a claim and is never read here: a caller that said "bare"
-        about an attribute call would buy itself the bare fact set and the receiver the
-        externally-bound rule needs.
+        The row answers when there is one; otherwise `form_for` answers from the same facts under
+        the same rule, so a name the src binds itself is dropped here exactly as the queue drops it.
         """
         if row is not None:
             return row.call_form, (row.receiver_root,)
         return form_for(forms, short, owner.local_names)
 
-    def _endpoint_kinds(self, owner: GraphNode, dst: str, kind: EdgeKind) -> str | None:
+    def _endpoint_kinds(self, src: str, dst: str, kind: EdgeKind) -> str | None:
         """The reason the endpoints do not obey the resolver's kind rules, or ``None``."""
-        src_kinds, dst_kinds = _ENDPOINT_KINDS[kind]
-        if owner.kind not in src_kinds:
-            return f"{owner.id} is a {owner.kind.value}, not one of {sorted(k.value for k in src_kinds)}"
-        facts = self.files.get(file_of(dst))
-        node = facts.node(dst) if facts else None
-        if node is None:
-            return f"{dst} is not a node in its file"
-        if node.kind not in dst_kinds:
-            return f"{dst} is a {node.kind.value}, not one of {sorted(k.value for k in dst_kinds)}"
+        for node_id, allowed in zip((src, dst), _ENDPOINT_KINDS[kind], strict=True):
+            facts = self.files.get(file_of(node_id))
+            node = facts.node(node_id) if facts else None
+            if node is None:
+                return f"{node_id} is not a node in its file"
+            if node.kind not in allowed:
+                kinds = sorted(k.value for k in allowed)
+                return f"{node_id} is a {node.kind.value}, not one of {kinds}"
         return None
 
     def _facts(
@@ -302,4 +351,6 @@ class FactVerifier(BaseModel):
             return frozenset(owner.callback_names)
         if kind is EdgeKind.INHERITS:
             return frozenset(owner.bases)
-        return frozenset(owner.method_names)
+        return frozenset(
+            owner.method_names
+        )  # `overrides`, the fifth and last of the kinds

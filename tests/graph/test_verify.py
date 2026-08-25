@@ -8,13 +8,19 @@ from auditor.graph.extract import extract_file_facts
 from auditor.graph.hashes import file_hashes
 from auditor.graph.model import CallForm, EdgeKind, NodeKind, UnresolvedRow
 from auditor.graph.refine.models import (
+    REFINABLE_EDGE_KINDS,
     Proposal,
     RefinementKind,
     RefinementPayload,
     RefinementTarget,
 )
-from auditor.graph.refine.verify import FactVerifier, FileFacts, VerifyStatus
-from auditor.graph.resolve_edges import NameBindings
+from auditor.graph.refine.verify import (
+    _ENDPOINT_KINDS,
+    FactVerifier,
+    FileFacts,
+    VerifyStatus,
+)
+from auditor.graph.resolve_edges import NameBindings, resolve_structural
 from auditor.roles import RoleClassifier
 
 CALLER = "from helper import unrelated\n\n\ndef main():\n    return read_event()\n"
@@ -334,3 +340,332 @@ def test_anchors_cover_the_endpoints_and_the_resolution_path(tmp_path: Path):
         "helper.py",
     }
     assert all(len(a.truth_sha) == 64 and a.file_sha for a in anchors)
+
+
+#: one repo carrying all five refinable edge kinds, plus same-named decoys of the wrong node kind
+SHAPES = (
+    "class Box:\n    def area(self):\n        return 1\n\n"
+    "    def size(self):\n        return 2\n\n\n"
+    "class Crate:\n    def area(self):\n        return 3\n"
+)
+FUNCS = "def Box():\n    return 1\n\n\ndef area():\n    return 0\n"
+KIDS = "from shapes import Box\n\n\nclass Kid(Box):\n    def area(self):\n        return 3\n"
+USERS = (
+    "from shapes import Box\nfrom helper import read_event, unrelated\n\n\n"
+    "def main(box: Box):\n    register(read_event)\n    return read_event()\n"
+)
+KINDS_REPO = {
+    "shapes.py": SHAPES,
+    "funcs.py": FUNCS,
+    "kids.py": KIDS,
+    "users.py": USERS,
+    "helper.py": HELPER,
+}
+
+
+def test_the_endpoint_table_covers_exactly_the_kinds_a_proposal_may_name():
+    """`_ENDPOINT_KINDS[kind]` is a bare lookup, so a sixth refinable kind upstream would raise
+    here rather than answer."""
+    assert set(_ENDPOINT_KINDS) == REFINABLE_EDGE_KINDS
+
+
+def test_the_endpoint_table_says_what_the_resolver_emits(tmp_path: Path):
+    """The table is checked against real resolver output, not against its own comment: `overrides`
+    runs method to method, which is what `_class_edges` builds."""
+    _write(tmp_path, KINDS_REPO)
+    roles = RoleClassifier()
+    nodes = [
+        node
+        for rel, source in KINDS_REPO.items()
+        for node in extract_file_facts(
+            rel, source, roles.classify(rel, source).value
+        ).nodes
+    ]
+    by_id = {n.id: n for n in nodes}
+    emitted = {
+        e.kind for e in resolve_structural(nodes).edges if e.kind in _ENDPOINT_KINDS
+    }
+    assert EdgeKind.OVERRIDES in emitted  # the row the comment used to get wrong
+    for edge in resolve_structural(nodes).edges:
+        if edge.kind not in _ENDPOINT_KINDS:
+            continue
+        src_kinds, dst_kinds = _ENDPOINT_KINDS[edge.kind]
+        assert by_id[edge.src].kind in src_kinds, edge
+        assert by_id[edge.dst].kind in dst_kinds, edge
+
+
+@pytest.mark.parametrize(
+    ("kind", "src", "dst", "name", "status"),
+    [
+        (
+            EdgeKind.CALLS,
+            "users.py::main",
+            "helper.py::read_event",
+            "read_event",
+            VerifyStatus.OK,
+        ),
+        (
+            EdgeKind.CALLS,
+            "users.py::main",
+            "helper.py::unrelated",
+            "unrelated",
+            VerifyStatus.NO_FACT,
+        ),
+        (
+            EdgeKind.REFERENCES_TYPE,
+            "users.py::main",
+            "shapes.py::Box",
+            "Box",
+            VerifyStatus.OK,
+        ),
+        (
+            EdgeKind.REFERENCES_TYPE,
+            "users.py::main",
+            "shapes.py::Crate",
+            "Crate",
+            VerifyStatus.NO_FACT,
+        ),
+        (
+            EdgeKind.CALLBACK_ARG,
+            "users.py::main",
+            "helper.py::read_event",
+            "read_event",
+            VerifyStatus.OK,
+        ),
+        (
+            EdgeKind.CALLBACK_ARG,
+            "users.py::main",
+            "helper.py::unrelated",
+            "unrelated",
+            VerifyStatus.NO_FACT,
+        ),
+        (EdgeKind.INHERITS, "kids.py::Kid", "shapes.py::Box", "Box", VerifyStatus.OK),
+        (
+            EdgeKind.INHERITS,
+            "kids.py::Kid",
+            "shapes.py::Crate",
+            "Crate",
+            VerifyStatus.NO_FACT,
+        ),
+        (
+            EdgeKind.OVERRIDES,
+            "kids.py::Kid.area",
+            "shapes.py::Box.area",
+            "area",
+            VerifyStatus.OK,
+        ),
+        (
+            EdgeKind.OVERRIDES,
+            "kids.py::Kid.area",
+            "shapes.py::Box.size",
+            "size",
+            VerifyStatus.NO_FACT,
+        ),
+    ],
+)
+def test_every_edge_kind_is_checked_against_its_own_fact_tuple(
+    tmp_path: Path, kind: EdgeKind, src: str, dst: str, name: str, status: VerifyStatus
+):
+    _write(tmp_path, KINDS_REPO)
+    result = _verifier(tmp_path, KINDS_REPO).check(
+        _add_edge(src, dst, name, kind=kind), row=None, definers=(dst,)
+    )
+    assert result.status is status, result.detail
+    if status is VerifyStatus.NO_FACT and kind is not EdgeKind.CALLS:
+        assert "as a" not in result.detail  # only `calls` picks a tuple by call form
+
+
+@pytest.mark.parametrize(
+    ("kind", "src", "dst", "name", "reason"),
+    [
+        (
+            EdgeKind.REFERENCES_TYPE,
+            "shapes.py::Box",
+            "shapes.py::Crate",
+            "Crate",
+            "is a class",
+        ),
+        (EdgeKind.INHERITS, "kids.py::Kid", "funcs.py::Box", "Box", "is a function"),
+        (
+            EdgeKind.OVERRIDES,
+            "kids.py::Kid.area",
+            "funcs.py::area",
+            "area",
+            "is a function",
+        ),
+        (
+            EdgeKind.REFERENCES_TYPE,
+            "users.py::main",
+            "shapes.py::Ghost",
+            "Ghost",
+            "is not a node in its file",
+        ),
+    ],
+)
+def test_endpoints_that_break_the_resolvers_kind_rules_are_refused(
+    tmp_path: Path, kind: EdgeKind, src: str, dst: str, name: str, reason: str
+):
+    _write(tmp_path, KINDS_REPO)
+    result = _verifier(tmp_path, KINDS_REPO).check(
+        _add_edge(src, dst, name, kind=kind), row=None, definers=(dst,)
+    )
+    assert result.status is VerifyStatus.BAD_NODE_KIND
+    assert reason in result.detail
+
+
+def test_a_source_that_is_not_a_method_overrides_nothing(tmp_path: Path):
+    _write(tmp_path, KINDS_REPO)
+    result = _verifier(tmp_path, KINDS_REPO).check(
+        _add_edge(
+            "users.py::main", "shapes.py::Box.area", "area", kind=EdgeKind.OVERRIDES
+        ),
+        row=None,
+        definers=("shapes.py::Box.area",),
+    )
+    assert result.status is VerifyStatus.BAD_NODE_KIND
+    assert "overrides nothing" in result.detail
+
+
+def _resolve_ambiguous(candidate: str, name: str = "read_event") -> Proposal:
+    return Proposal(
+        kind=RefinementKind.RESOLVE_AMBIGUOUS,
+        target=RefinementTarget(
+            node_id="users.py::main", name=name, edge_kind=EdgeKind.CALLS
+        ),
+        payload=RefinementPayload(candidate=candidate),
+        reason="the import pins it to the helper",
+    )
+
+
+@pytest.mark.parametrize(
+    ("candidates", "status"),
+    [
+        (("helper.py::read_event",), VerifyStatus.OK),
+        (("other.py::read_event",), VerifyStatus.NOT_A_DEFINER),
+    ],
+)
+def test_resolve_ambiguous_may_only_choose_from_the_gated_candidates(
+    tmp_path: Path, candidates: tuple[str, ...], status: VerifyStatus
+):
+    """Spec 9.2 requires `candidate_id` to be in `candidates_json`, which is narrower than the
+    role-filtered definers: a definer outside the gated set is not an answer to this row."""
+    _write(tmp_path, KINDS_REPO)
+    row = _row(
+        "users.py::main",
+        "read_event",
+        ("helper.py::read_event", "other.py::read_event"),
+        candidates=candidates,
+    )
+    result = _verifier(tmp_path, KINDS_REPO).check(
+        _resolve_ambiguous("helper.py::read_event"),
+        row=row,
+        definers=("helper.py::read_event", "other.py::read_event"),
+    )
+    assert result.status is status
+    if status is VerifyStatus.NOT_A_DEFINER:
+        assert "candidates" in result.detail
+
+
+BOUND_CALLER = "def run(handler):\n    return handler()\n"
+BOUND_HELPER = "def handler():\n    return 1\n"
+
+
+def test_a_bare_name_the_source_binds_itself_is_no_fact(tmp_path: Path):
+    """The queue drops a bare name the node binds itself, so the no-row path must drop it too:
+    `handler` here is the parameter, not the repo function of the same name."""
+    files = {"a.py": BOUND_CALLER, "b.py": BOUND_HELPER}
+    _write(tmp_path, files)
+    result = _verifier(tmp_path, files).check(
+        _add_edge("a.py::run", "b.py::handler", "handler"),
+        row=None,
+        definers=("b.py::handler",),
+    )
+    assert result.status is VerifyStatus.NO_FACT
+    assert "binds handler itself" in result.detail
+
+
+def test_the_queue_drops_the_same_bare_name_the_verifier_does(tmp_path: Path):
+    """The parity claim, measured: the resolver produces no row for the shape above, so a verifier
+    that accepted it would be answering a question the queue never asked."""
+    files = {"a.py": BOUND_CALLER, "b.py": BOUND_HELPER}
+    roles = RoleClassifier()
+    nodes = [
+        node
+        for rel, source in files.items()
+        for node in extract_file_facts(
+            rel, source, roles.classify(rel, source).value
+        ).nodes
+    ]
+    rows = resolve_structural(nodes).unresolved
+    assert [r for r in rows if r.node_id == "a.py::run" and r.name == "handler"] == []
+
+
+EXTERNAL_TABLE = "from rich.table import Table\n\n\ndef main():\n    return Table()\n"
+REPO_TABLE = "class Table:\n    def add(self):\n        return 1\n"
+
+
+def test_an_externally_bound_name_beats_the_endpoint_kind(tmp_path: Path):
+    """The collision control is built from rows exactly like this one, and it grades a runner on
+    answering `unresolvable`; a node-kind message steers it away from that verdict."""
+    files = {"caller.py": EXTERNAL_TABLE, "base.py": REPO_TABLE}
+    _write(tmp_path, files)
+    result = _verifier(tmp_path, files).check(
+        _add_edge("caller.py::main", "base.py::Table", "Table"),
+        row=None,
+        definers=("base.py::Table",),
+    )
+    assert result.status is VerifyStatus.EXTERNALLY_BOUND
+    assert "rich" not in result.detail and "binds Table" in result.detail
+
+
+def test_a_path_the_caller_never_loaded_is_not_reported_as_stale(tmp_path: Path):
+    """Rebuilding the graph cannot fix a file the caller forgot to hand in, so the two answers
+    are kept apart."""
+    files = {"caller.py": CALLER, "helper.py": HELPER}
+    _write(tmp_path, files)
+    verifier = FactVerifier(
+        files={"caller.py": _verifier(tmp_path, files).files["caller.py"]}
+    )
+    result = verifier.check(
+        _add_edge("caller.py::main", "helper.py::read_event", "read_event"),
+        row=None,
+        definers=("helper.py::read_event",),
+    )
+    assert result.status is VerifyStatus.NOT_LOADED
+    assert "helper.py" in result.detail
+    assert "graph build" not in result.detail
+
+
+@pytest.mark.parametrize(
+    ("kind", "target", "payload"),
+    [
+        (
+            RefinementKind.RELABEL_CLUSTER,
+            RefinementTarget(members=("caller.py::main", "helper.py::read_event")),
+            RefinementPayload(label="ingest"),
+        ),
+        (
+            RefinementKind.MOVE_NODE,
+            RefinementTarget(
+                node_id="caller.py::main", members=("helper.py::read_event",)
+            ),
+            RefinementPayload(),
+        ),
+    ],
+)
+def test_a_cluster_kind_anchors_every_member_it_names(
+    tmp_path: Path,
+    kind: RefinementKind,
+    target: RefinementTarget,
+    payload: RefinementPayload,
+):
+    """ "One anchor per node the proposal depends on" has to include the members, or a cluster
+    kind is pinned to nothing at all."""
+    files = {"caller.py": CALLER, "helper.py": HELPER}
+    _write(tmp_path, files)
+    proposal = Proposal(
+        kind=kind, target=target, payload=payload, reason="the members are one concept"
+    )
+    assert set(FactVerifier.paths_named(proposal, None)) == {"caller.py", "helper.py"}
+    anchors = _verifier(tmp_path, files).anchors(proposal, row=None)
+    assert {a.node_id for a in anchors} == {"caller.py::main", "helper.py::read_event"}

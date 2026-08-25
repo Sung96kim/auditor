@@ -2,7 +2,7 @@
 place (spec §5.6). Needs pydantic; no other third-party import."""
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,16 +61,19 @@ def form_for(
     forms: dict[tuple[str, CallForm], tuple[str | None, ...]],
     name: str,
     local_names: tuple[str, ...],
-) -> tuple[CallForm, tuple[str | None, ...]]:
-    """The form a row records for ``name``: the most tractable form it was called in that the
-    node does not itself bind, so `handle()` beside `job.handle()` reports the bare call unless
-    `handle` is a parameter, in which case the attribute call is the miss worth reporting."""
+) -> tuple[CallForm, tuple[str | None, ...]] | None:
+    """The form a row records for ``name``, or ``None`` when the node binds the name itself and
+    calls it no other way, which is no placeable fact at all.
+
+    The most tractable form wins, so `handle()` beside `job.handle()` reports the bare call unless
+    `handle` is a parameter, in which case the attribute call is the miss worth reporting.
+    """
     for form in _FORM_PREFERENCE:
         if (name, form) in forms and not (
             form is CallForm.BARE and name in local_names
         ):
             return form, forms[(name, form)]
-    return CallForm.BARE, (None,)
+    return None
 
 
 class _NotedFact(BaseModel):
@@ -96,9 +99,9 @@ class NameBindings(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    bindings_by_module: dict[str, dict[str, str]] = Field(default_factory=dict)
-    aliases_by_module: dict[str, dict[str, str]] = Field(default_factory=dict)
-    dotted_to_id: dict[str, str] = Field(default_factory=dict)
+    bindings_by_module: Mapping[str, Mapping[str, str]] = Field(default_factory=dict)
+    aliases_by_module: Mapping[str, Mapping[str, str]] = Field(default_factory=dict)
+    dotted_to_id: Mapping[str, str] = Field(default_factory=dict)
 
     @classmethod
     def of(
@@ -437,7 +440,10 @@ class StructuralResolver:
                 res = self._resolve_name(callee, n, self.by_fn_name)
                 for dst in res.ids:
                     self._add(n.id, dst, EdgeKind.CALLS)
-                form, roots = form_for(forms, callee, n.local_names)
+                site = form_for(forms, callee, n.local_names)
+                if site is None:
+                    continue
+                form, roots = site
                 self.collector.note(
                     n,
                     res,

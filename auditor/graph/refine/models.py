@@ -375,6 +375,16 @@ class Proposal(BaseModel):
         edge = self.edge()
         return (edge.src, edge.dst) if edge is not None else (None, None)
 
+    def anchored_ids(self) -> tuple[str, ...]:
+        """Every node id this proposal is pinned to (spec 5.5), each one once.
+
+        Its endpoints, its target node, and the members a cluster kind moves: the cluster kinds
+        depend on every member, so an anchor per member is what "the nodes it depends on" means.
+        """
+        src, dst = self.edge_pair()
+        ids = (src, dst, self.target.node_id, *self.target.members)
+        return tuple(dict.fromkeys(i for i in ids if i))
+
 
 class Refinement(Proposal):
     """One correction to the graph, owned by a run and expiring on its own (spec 5.4)."""
