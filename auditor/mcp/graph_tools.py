@@ -32,7 +32,7 @@ from auditor.mcp.server import mcp
 @mcp.tool(annotations=MUTATING)
 async def graph_build(path: str = ".", scan: bool = True) -> dict:
     """Build the semantic graph. By default it first runs a forced incremental scan (graph
-    extraction on) so it works even if the repo never enabled the [graph] config — pass
+    extraction on) so it works even if the repo never enabled the [graph] config; pass
     scan=False to build from existing cached facts only. Returns {nodes, edges, clusters,
     unresolved, findings, refined, expired}."""
     root = find_root(Path(path))
@@ -106,10 +106,10 @@ async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict
 @mcp.tool(annotations=READ_ONLY)
 async def graph_usages(symbol: str, path: str = ".", sample: int = 5) -> dict:
     """How a symbol is used/connected: structural edges grouped by kind with FULL counts
-    and a rank-ordered sample, split into ``used_by`` (incoming — who depends on it) and
+    and a rank-ordered sample, split into ``used_by`` (incoming: who depends on it) and
     ``depends_on`` (outgoing). Same-named symbols are disambiguated via ``ambiguous`` (the
     highest-rank match is used). Returns {} if not found. Prefer this over graph_neighbors
-    for 'how is X used' — neighbors truncates silently with no totals."""
+    for 'how is X used': neighbors truncates silently with no totals."""
     root = find_root(Path(path))
     async with await open_index(root) as index:
         return await GraphQuery(index).usages(symbol, sample=sample)
@@ -180,8 +180,8 @@ async def graph_overview(path: str = ".") -> dict:
     """One compact call to orient: counts, the largest clusters, and the worst graph hubs.
     Returns {nodes, edges, clusters, top_clusters, god_concepts, god_concept_count,
     bottlenecks, bottleneck_count}. The two hub lists are capped at 5 and the counts are the
-    totals. If the graph isn't built yet (0 nodes), the counts are zero and the lists empty —
-    no error. A subkind neither hub list names is logged as a warning, so the two counts need
+    totals. If the graph isn't built yet (0 nodes), the counts are zero and the lists empty,
+    not an error. A subkind neither hub list names is logged as a warning, so the two counts need
     not add up to the finding count.
     """
     root = find_root(Path(path))

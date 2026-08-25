@@ -33,7 +33,7 @@ def report(
     show_ignored: ShowIgnored = False,
     config_json: ConfigJson = None,
 ) -> None:
-    """Audit one file (stateless) — manifest + findings in one call."""
+    """Audit one file (stateless): manifest + findings in one call."""
     require_file(file)
     check_format(fmt)
     overrides = parse_config_json(config_json)

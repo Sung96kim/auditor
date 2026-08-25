@@ -28,7 +28,7 @@ async def ignore_add(
     """Persistently ignore findings so future scans hide them. Scope by what you pass: nothing =
     the rule across the whole repo; ``file`` = that file; ``file`` + ``line`` = that one finding
     (its offending text is snapshotted so the ignore follows the code when lines shift). Keyed by
-    ``rule_id`` (must be a known rule unless ``force`` — e.g. an untrusted local plugin rule).
+    ``rule_id`` (must be a known rule unless ``force``, e.g. an untrusted local plugin rule).
     Idempotent per scope."""
     root = find_root(Path(path))
     tool_config(

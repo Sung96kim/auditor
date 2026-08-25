@@ -75,7 +75,7 @@ async def scan(
 ) -> dict | ResourceLink:
     """Audit a file or directory → ``{files, totals}`` (plus ``gate``/``omitted`` when set).
 
-    - ``since`` (git ref): scope output to files changed vs the ref — the whole repo is still
+    - ``since`` (git ref): scope output to files changed vs the ref; the whole repo is still
       scanned so cross-file rules hold. ``isolated``: one file, no index, no cross-file.
       ``incremental``: reuse/update the shared cache so only changed files re-parse.
     - ``severity`` (blocking|high|medium|low|suggestion) / ``rule`` (str or list): keep only
@@ -83,11 +83,11 @@ async def scan(
       ``show_ignored``: include persistent ignores.
     - ``profile`` (base|strict|pydantic|all-strict) and ``config`` (dict of overrides): tune rules.
       ``strict_tests``: audit test files at full production strength. ``malware=true``: opt-in
-      malware pass (needs a backend — see malware_status/malware_install).
+      malware pass (needs a backend: see malware_status/malware_install).
     - ``detail`` (summary|compact|full, default compact) + ``limit`` (compact, default 50: worst-N,
       rest under ``omitted``): size control. ``full`` returns a ResourceLink; recover dropped
       ``evidence`` with finding_detail.
-    - ``fail_on`` (blocking|high|medium|low|suggestion): adds ``gate: {fail_on, tripped}`` — auto
+    - ``fail_on`` (blocking|high|medium|low|suggestion): adds ``gate: {fail_on, tripped}``, auto
       findings only, for CI."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
@@ -161,7 +161,7 @@ async def report(
     limit: int | None = 50,
 ) -> dict | ResourceLink:
     """Audit a single file statelessly (manifest + findings). ``detail``: summary|compact|full
-    (default compact — hoists rule metadata, slims findings, drops evidence; use finding_detail
+    (default compact: hoists rule metadata, slims findings, drops evidence; use finding_detail
     to recover a finding's evidence). ``limit`` (compact only, default 50) caps to the worst-N
     findings with the surplus under `omitted`. ``detail='full'`` is returned as a ResourceLink to
     fetch on demand rather than inline."""
@@ -175,7 +175,7 @@ async def report(
 
 @mcp.tool(annotations=READ_ONLY)
 async def finding_detail(file: str, rule_id: str, line: int) -> dict:
-    """Full record for one finding — `evidence`, `suggestion`, `standard_refs`, etc. — that the
+    """Full record for one finding (`evidence`, `suggestion`, `standard_refs`, etc.) that the
     compact `scan`/`report` output omits. Reads the persisted index first; falls back to a fresh
     single-file re-scan so it works whether or not the scan was incremental. The index record may
     reflect a prior scan if the file was edited since it was indexed."""
@@ -226,7 +226,7 @@ def discover(
     """List auditable files under a path with their classified role. Returns {total, shown,
     roles, files}: ``roles`` is a role→count histogram (a cheap overview without the full list),
     ``total`` the full match count, ``files`` the (capped) listing. ``role`` filters to one role
-    (e.g. 'source'|'test'); ``limit`` caps ``files`` — the list can be enormous on a big repo, so
+    (e.g. 'source'|'test'); ``limit`` caps ``files``: the list can be enormous on a big repo, so
     it is unbounded only when you ask for it (limit=null)."""
     root = find_root(Path(path))
     settings = tool_config(root)
@@ -259,7 +259,7 @@ def discover(
 @mcp.tool(annotations=READ_ONLY)
 async def aggregate(path: str = ".") -> ResourceLink:
     """Roll up the index into a consolidated AUDIT.md (run scan with incremental=True first).
-    The report is large, so it is returned as a ResourceLink — read that resource for the
+    The report is large, so it is returned as a ResourceLink; read that resource for the
     markdown rather than receiving it inline."""
     root = find_root(Path(path))
     async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:

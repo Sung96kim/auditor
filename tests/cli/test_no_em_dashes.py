@@ -1,7 +1,8 @@
 """No em dash in a string the CLI or the MCP server prints.
 
-Docstrings and comments are deliberately out of scope: the rule is about what a user reads, and a
-blanket ban would rewrite hundreds of explanatory comments for nothing.
+Comments and explanatory docstrings are deliberately out of scope: the rule is about what a user
+reads, and a blanket ban would rewrite hundreds of them for nothing. A command's or a tool's own
+docstring is in scope, because that one is printed as its help or sent as its description.
 """
 
 import ast
@@ -16,8 +17,28 @@ EM_DASH = "—"
 PACKAGES = (Path(auditor.cli.__file__).parent, Path(auditor.mcp.__file__).parent)
 
 
-def _docstring_ids(tree: ast.AST) -> set[int]:
-    """The identity of every node that is a module, class or function docstring."""
+# typer prints a command's docstring as its help; fastmcp sends a tool's as its description.
+HELP_DECORATORS = ("command", "tool")
+
+
+def _prints_its_docstring(node: ast.AST) -> bool:
+    """True when a function's own docstring is a string a user or an agent is shown."""
+    if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return False
+    for decorator in node.decorator_list:
+        called = decorator.func if isinstance(decorator, ast.Call) else decorator
+        name = (
+            called.attr
+            if isinstance(called, ast.Attribute)
+            else getattr(called, "id", "")
+        )
+        if name in HELP_DECORATORS:
+            return True
+    return False
+
+
+def _exempt_docstrings(tree: ast.AST) -> set[int]:
+    """The identity of every docstring that explains code rather than being shown to a user."""
     out: set[int] = set()
     for node in ast.walk(tree):
         if not isinstance(
@@ -30,17 +51,20 @@ def _docstring_ids(tree: ast.AST) -> set[int]:
             and isinstance(body[0], ast.Expr)
             and isinstance(body[0].value, ast.Constant)
             and isinstance(body[0].value.value, str)
+            and not _prints_its_docstring(node)
         ):
             out.add(id(body[0].value))
     return out
 
 
 def _offenders(path: Path) -> list[str]:
-    source = path.read_text(encoding="utf-8")
-    if EM_DASH not in source:
-        return []
-    tree = ast.parse(source)
-    docstrings = _docstring_ids(tree)
+    """Every string constant in ``path`` that a user could read carrying an em dash.
+
+    Reads the decoded value of each constant, never the source text: an escaped `\u2014` is
+    invisible to a grep over the file and present in the string the CLI prints.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = _exempt_docstrings(tree)
     return [
         f"{path.name}:{node.lineno}: {node.value.splitlines()[0]}"
         for node in ast.walk(tree)
