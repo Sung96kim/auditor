@@ -7,15 +7,14 @@ and neither imports the other.
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import Field
 
 from auditor.graph.model import QUEUE_ID_CAP, UnresolvedRow
+from auditor.payload import WirePayload, WireRows
 
 
-class RelatedRow(BaseModel):
+class RelatedRow(WirePayload):
     """One semantic neighbour of a symbol, with the edge weight that found it."""
-
-    model_config = ConfigDict(frozen=True)
 
     id: str
     kind: str
@@ -23,16 +22,12 @@ class RelatedRow(BaseModel):
     rank: float
 
 
-class RelatedReport(RootModel[tuple[RelatedRow, ...]]):
+class RelatedReport(WireRows[RelatedRow]):
     """``graph related``."""
 
-    model_config = ConfigDict(frozen=True)
 
-
-class NeighborRow(BaseModel):
+class NeighborRow(WirePayload):
     """One structural neighbour, with the relation and the hop count that reached it."""
-
-    model_config = ConfigDict(frozen=True)
 
     id: str
     kind: str
@@ -41,32 +36,24 @@ class NeighborRow(BaseModel):
     hops: int
 
 
-class NeighborsReport(RootModel[tuple[NeighborRow, ...]]):
+class NeighborsReport(WireRows[NeighborRow]):
     """``graph neighbors``."""
 
-    model_config = ConfigDict(frozen=True)
 
-
-class SearchRow(BaseModel):
+class SearchRow(WirePayload):
     """One symbol whose id contains the search term."""
-
-    model_config = ConfigDict(frozen=True)
 
     id: str
     kind: str
     rank: float
 
 
-class SearchReport(RootModel[tuple[SearchRow, ...]]):
+class SearchReport(WireRows[SearchRow]):
     """``graph search``."""
 
-    model_config = ConfigDict(frozen=True)
 
-
-class ClusterRow(BaseModel):
+class ClusterRow(WirePayload):
     """One concept cluster, with where its label came from."""
-
-    model_config = ConfigDict(frozen=True)
 
     cluster_id: int
     label: str
@@ -74,16 +61,12 @@ class ClusterRow(BaseModel):
     label_provenance: str | None = None
 
 
-class ClustersReport(RootModel[tuple[ClusterRow, ...]]):
+class ClustersReport(WireRows[ClusterRow]):
     """``graph clusters``."""
 
-    model_config = ConfigDict(frozen=True)
 
-
-class ClusterMember(BaseModel):
+class ClusterMember(WirePayload):
     """One node inside a concept cluster."""
-
-    model_config = ConfigDict(frozen=True)
 
     id: str
     name: str
@@ -93,10 +76,8 @@ class ClusterMember(BaseModel):
     annotation: str | None = None
 
 
-class CappedConcept(BaseModel):
+class CappedConcept(WirePayload):
     """A concept with its member list truncated and the true total alongside."""
-
-    model_config = ConfigDict(frozen=True)
 
     cluster_id: int
     label: str
@@ -105,10 +86,8 @@ class CappedConcept(BaseModel):
     shown: int = 0
 
 
-class ConceptPayload(BaseModel):
+class ConceptPayload(WirePayload):
     """``graph concept``: the cluster a term resolved to, and every member it holds."""
-
-    model_config = ConfigDict(frozen=True)
 
     cluster_id: int
     label: str
@@ -125,19 +104,15 @@ class ConceptPayload(BaseModel):
         )
 
 
-class UsageGroup(BaseModel):
+class UsageGroup(WirePayload):
     """One edge kind's usage count and a rank-ordered sample of the symbols on the other end."""
-
-    model_config = ConfigDict(frozen=True)
 
     count: int
     sample: tuple[str, ...] = ()
 
 
-class UsagesPayload(BaseModel):
+class UsagesPayload(WirePayload):
     """``graph usages``: structural edges grouped by kind, split by direction."""
-
-    model_config = ConfigDict(frozen=True)
 
     symbol: str
     resolved: str
@@ -176,7 +151,5 @@ class QueueRowPayload(UnresolvedRow):
         )
 
 
-class QueueReport(RootModel[tuple[QueueRowPayload, ...]]):
+class QueueReport(WireRows[QueueRowPayload]):
     """``graph unresolved``."""
-
-    model_config = ConfigDict(frozen=True)
