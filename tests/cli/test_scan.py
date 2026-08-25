@@ -6,6 +6,8 @@ import json
 import pytest
 from _support import cli_json, git, invoke
 
+from auditor.status import status_path
+
 # --- output formats ----------------------------------------------------------------------
 
 
@@ -267,16 +269,16 @@ def test_profile_override_enables_oop(sample_repo):
     assert "PY-OOP-CONSTRUCTOR-WALL" in strict_rules
 
 
-# --- status-cache write (.auditor/.status.json) -------------------------------------------
+# --- status-cache write ($AUDITOR_HOME/repos/<key>/status.json) ---------------------------
 
 
 def test_scan_dir_writes_status_cache(sample_repo):
     result = invoke("scan", str(sample_repo), "--no-index")
     assert result.exit_code == 0, result.output
 
-    status_file = sample_repo / ".auditor" / ".status.json"
+    status_file = status_path(sample_repo)
     assert status_file.exists()
-    data = json.loads(status_file.read_text())
+    data = json.loads(status_file.read_text())["scan"]
     assert data["severity"]["blocking"] >= 1
     # the fixture's pyproject.toml has a [tool.auditor] table — configured, even
     # though there's no standalone .auditor/config.toml
@@ -295,8 +297,7 @@ def test_scan_dir_writes_status_cache_configured_false_without_pyproject_table(
     result = invoke("scan", str(sample_repo), "--no-index")
     assert result.exit_code == 0, result.output
 
-    status_file = sample_repo / ".auditor" / ".status.json"
-    data = json.loads(status_file.read_text())
+    data = json.loads(status_path(sample_repo).read_text())["scan"]
     assert data["configured"] is False
 
 
@@ -307,10 +308,35 @@ def test_scan_dir_writes_status_cache_configured_true(sample_repo):
 
     invoke("scan", str(sample_repo), "--no-index")
 
-    status_file = sample_repo / ".auditor" / ".status.json"
+    status_file = status_path(sample_repo)
     assert status_file.exists()
-    data = json.loads(status_file.read_text())
+    data = json.loads(status_file.read_text())["scan"]
     assert data["configured"] is True
+
+
+@pytest.mark.parametrize("scope", ["subtree", "since"])
+def test_scoped_scan_leaves_the_root_status_cache_alone(sample_repo, scope):
+    """A subtree or diff scan reports part of the tree; filing that roll-up as the repo's posture
+    made the status line drop findings that are still there. The plugin's Stop hook runs
+    `scan --since HEAD` every turn, so this was the normal case, not an edge one."""
+    if scope == "since":
+        git(sample_repo, "init", "-q")
+        git(sample_repo, "config", "user.email", "t@example.com")
+        git(sample_repo, "config", "user.name", "auditor tests")
+        git(sample_repo, "add", "-A")
+        git(sample_repo, "commit", "-qm", "init")
+    assert invoke("scan", str(sample_repo), "--no-index").exit_code == 0
+    before = json.loads(status_path(sample_repo).read_text())["scan"]
+    assert before["severity"]["blocking"] >= 1
+
+    args = (
+        ["scan", str(sample_repo / "src")]
+        if scope == "subtree"
+        else ["scan", str(sample_repo), "--since", "HEAD"]
+    )
+    assert invoke(*args, "--no-index", "--root", str(sample_repo)).exit_code == 0
+
+    assert json.loads(status_path(sample_repo).read_text())["scan"] == before
 
 
 def test_scan_file_target_does_not_write_status_cache(sample_repo):
@@ -318,7 +344,15 @@ def test_scan_file_target_does_not_write_status_cache(sample_repo):
     result = invoke("scan", str(clean), "--no-index")
     assert result.exit_code == 0, result.output
 
-    assert not (sample_repo / ".auditor" / ".status.json").exists()
+    assert not status_path(sample_repo).exists()
+
+
+def test_scan_dir_writes_nothing_into_the_repo(sample_repo):
+    """Invariant 6: a scan leaves the repository byte-identical."""
+    before = set(sample_repo.rglob("*"))
+    result = invoke("scan", str(sample_repo), "--no-index")
+    assert result.exit_code == 0, result.output
+    assert set(sample_repo.rglob("*")) == before
 
 
 # --- gitignore + migration soft-skip -----------------------------------------------------
@@ -420,11 +454,40 @@ def test_scan_config_json_bad_json_errors(tmp_path):
     assert "invalid --config-json" in res.output
 
 
-def test_scan_config_json_unknown_key_errors(tmp_path):
+def test_scan_config_json_invalid_value_errors(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    res = invoke("scan", str(tmp_path), "--config-json", '{"nope": 1}')
+    res = invoke(
+        "scan", str(tmp_path), "--config-json", '{"respect_gitignore": "nope"}'
+    )
     assert res.exit_code == 1
     assert "invalid config" in " ".join(res.output.split())
+
+
+def test_scan_invalid_repo_config_exits_non_zero(tmp_path):
+    """Regression: `scan` on a repo with an invalid config exits 1, never 0 (D8)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nrespect_skips = "yes-please"\n'
+    )
+    (tmp_path / "a.py").write_text("x = 1\n")
+    res = invoke("scan", str(tmp_path), "--no-index")
+    assert res.exit_code == 1
+    assert "invalid config" in " ".join(res.output.split())
+    assert "Traceback" not in res.output
+
+
+def test_scan_json_stays_pure_with_an_unknown_config_key(tmp_path):
+    """Regression: the unknown-key warning goes to stderr only, so `-f json` on stdout still
+    parses. A `warnings.warn` in the loader, or a print on stdout, would break every agent."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nbogus = 1\n'
+    )
+    (tmp_path / "a.py").write_text("x = 1\n")
+    res = invoke("scan", str(tmp_path), "-f", "json", "--no-index")
+    payload = cli_json(res)  # parses => stdout is pure JSON
+    assert "files" in payload
+    assert "bogus" not in res.stdout
+    assert "unknown config key: bogus" in res.stderr
+    assert res.stderr.count("unknown config key") == 1  # one block per run
 
 
 def test_scan_config_json_activates_greenlet_rule(tmp_path):

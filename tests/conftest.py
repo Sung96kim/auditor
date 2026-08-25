@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO
+from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO, git
 from typer import rich_utils
 
 
@@ -24,6 +24,21 @@ def _isolated_auditor_home(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("auditor_home")
     monkeypatch.setenv("AUDITOR_HOME", str(home))
     return home
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    """A one-commit git repo. The identity helpers need a real .git, and `worktree add` needs
+    a HEAD to branch from."""
+    repo = tmp_path / "main"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "t@example.com")
+    git(repo, "config", "user.name", "auditor tests")
+    (repo / "a.txt").write_text("x\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "init")
+    return repo
 
 
 @pytest.fixture

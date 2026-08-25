@@ -1,9 +1,10 @@
 # config reference
 
 `auditr config show` prints the configuration the auditor resolved for a repo, after layering the
-profile chain, the repo's TOML, and any injected override. `auditr config show --help` lists every
-flag. What each field means and which environment variables exist is in
-[configuration.md](configuration.md); this page covers how a value gets its final form.
+profile chain, the repo's TOML, and any injected override. `auditr config check` reports keys no
+model declares. `auditr config --help` lists every flag. What each field means and which
+environment variables exist is in [configuration.md](configuration.md); this page covers how a
+value gets its final form.
 
 ## Common invocations
 
@@ -19,6 +20,12 @@ auditr config show --config-json '{"threshold":{"size":{"max_complexity":8}}}'
 
 # raw JSON
 auditr config show --json
+
+# the personal settings resolved for this repo ($AUDITOR_HOME plus AUDITOR_USER_*)
+auditr config show --user
+
+# list config keys no model declares, in both the repo policy and the user settings
+auditr config check
 ```
 
 ## How a value is resolved
@@ -31,6 +38,22 @@ auditr config show --json
 - `extends` in the output is the profile the run actually used.
 - The repo root is the nearest directory at or above `-r`/`--root` (default `.`) that holds
   `.git`, `pyproject.toml`, or `.auditor`.
+
+## Checking a config
+
+- `config check` prints one row per unknown key with its dotted path, for the repo policy and for
+  the user settings, under the root it resolved. Unknown keys are ignored at load time, so this
+  is how a typo surfaces.
+- It exits 0 with warnings and 1 when a value fails validation, naming the field and the reason.
+- Field *names* are reported as unknown keys and never fail the command. *Values*, and the keys of
+  a keyed table (a role name, a category name), are validated and fail it: `[roles.tets]` exits 1
+  naming `roles.tets`, it is not listed as an unknown key.
+- `config show --user` prints the resolved `UserSettings` instead of the repo policy: model
+  defaults, `$AUDITOR_HOME/config.json`, `$AUDITOR_HOME/repos/<key>/config.json`, then
+  `AUDITOR_USER_*`. It warns about unknown user keys the same way the repo branch does.
+- `--config-json` is repo policy, so combining it with `--user` exits non-zero rather than being
+  silently dropped.
+- The files themselves are created by [`auditr init`](init.md).
 
 ## Profiles
 

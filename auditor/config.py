@@ -1,18 +1,22 @@
 """Configuration: typed Pydantic models, layered TOML loading, per-file resolution.
 
 Layering (later wins): built-in ``extends`` profile chain -> ``pyproject [tool.auditor]``
--> ``.auditor/config.toml`` -> environment. A repo tailors rules/severities/thresholds and
-per-role/per-glob policy. ``load_config`` performs the two-phase plugin/config load so a
-config may reference plugin-contributed rules.
+-> ``.auditor/config.toml`` -> injected ``--config-json`` overrides. The environment is the
+*lowest* layer: it only fills keys no TOML layer sets, and reaches one non-policy field (see
+``_NonPolicyEnvSource``). A repo tailors rules/severities/thresholds and per-role/per-glob
+policy. ``load_config`` performs the two-phase plugin/config load so a config may reference
+plugin-contributed rules.
 """
 
 # auditor: skip-file: PY-TYPING-UNTYPED-DICT  (raw-TOML layer boundary — tomllib dicts pre-validation)
 
 import tomllib
+from collections.abc import Iterator, Mapping
 from fnmatch import fnmatch
 from importlib import resources
 from pathlib import Path
-from typing import Literal
+from types import UnionType
+from typing import Any, ClassVar, Literal, Union, get_args, get_origin
 
 from pydantic import (
     BaseModel,
@@ -22,7 +26,13 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import (
+    BaseSettings,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 import auditor.builtins  # noqa: F401  (registers built-in detectors before validation)
 from auditor.models import FileRole, RuleId, Severity, VerdictKind, severity_rank
@@ -35,7 +45,7 @@ RoleMode = Literal["relaxed", "strict", "excluded"]
 class OopThreshold(BaseModel):
     """Floors for the OOP/composition-shape detectors."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     wall_kwarg_min: int = Field(
         12, ge=1, description="kwargs in a constructor call before it's a 'wall'"
@@ -70,7 +80,7 @@ class OopThreshold(BaseModel):
 class SizeThreshold(BaseModel):
     """Floors for the size/complexity detectors."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     file_max_lines: int = Field(
         800, ge=1, description="split a module past this many lines"
@@ -97,7 +107,7 @@ class SizeThreshold(BaseModel):
 class DryThreshold(BaseModel):
     """Floors for the duplication / parameterize-me detectors."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     dup_block_min_statements: int = Field(
         3, ge=1, description="statements in a repeated block before flagging"
@@ -125,7 +135,7 @@ class DryThreshold(BaseModel):
 class JsxThreshold(BaseModel):
     """Floors for the React/JSX structural detectors."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     max_jsx_depth: int = Field(6, ge=1, description="JSX nesting depth before flagging")
     repeated_jsx_min: int = Field(
@@ -139,7 +149,7 @@ class JsxThreshold(BaseModel):
 class TestThreshold(BaseModel):
     """Floors for the structural pytest test-quality detectors."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     parametrize_min_clones: int = Field(
         3,
@@ -167,7 +177,7 @@ class Threshold(BaseModel):
     repo can tune one floor (e.g. ``threshold.dry.dup_block_min_statements``) without restating
     the rest."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     oop: OopThreshold = Field(default_factory=OopThreshold)
     size: SizeThreshold = Field(default_factory=SizeThreshold)
@@ -181,13 +191,13 @@ class Threshold(BaseModel):
         sparse = override.model_dump(exclude_unset=True)
         if not sparse:
             return self
-        return Threshold.model_validate(_deep_merge(self.model_dump(), sparse))
+        return Threshold.model_validate(deep_merge(self.model_dump(), sparse))
 
 
 class RuleConfig(BaseModel):
     """Per-rule override. All fields optional — unset means inherit."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     enabled: bool | None = None
     severity: Severity | None = None
@@ -196,7 +206,7 @@ class RuleConfig(BaseModel):
 
 
 class CategoryConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     enabled: bool | None = None
     min_severity: Severity | None = None
@@ -206,7 +216,7 @@ class RolePolicy(BaseModel):
     """How a file role is audited. ``relaxed`` applies the declared rule/category
     overrides; ``strict`` ignores them (full production ruleset); ``excluded`` skips."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     mode: RoleMode = "strict"
     rules: dict[RuleId, RuleConfig] = Field(default_factory=dict)
@@ -216,7 +226,7 @@ class RolePolicy(BaseModel):
 class OverrideConfig(BaseModel):
     """Per-glob (or per-role) overrides, applied last — ruff per-file-ignores model."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     path: str | None = None
     role: FileRole | None = None
@@ -229,7 +239,7 @@ class DesignSystemPrimitive(BaseModel):
     project supply its own vocabulary so the auditor can check 'this should be <Badge>'
     without the tool hardcoding any component."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     component: str  # the primitive to recommend, e.g. "Badge"
     when_class: str | None = (
@@ -247,7 +257,7 @@ class DesignSystem(BaseModel):
     """A project's declared design system. Empty by default — the DS rules only fire when a
     repo opts in by declaring its shell / primitives."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     ui_paths: list[str] = Field(
         default_factory=list
@@ -261,7 +271,7 @@ class SqlAlchemyConfig(BaseModel):
     accurate instead of guessing (the real factory often lives in a shared lib the auditor can't see).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     expire_on_commit: bool = (
         False  # async session setting; True activates SA-GREENLET-ATTR-AFTER-COMMIT
@@ -274,7 +284,7 @@ class SqlAlchemyConfig(BaseModel):
 class GraphConfig(BaseModel):
     """[tool.auditor.graph] — the semantic graph is opt-in (needs the `graph` extra)."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     enabled: bool = False
     name_similarity_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
@@ -297,7 +307,7 @@ class MalwareScanConfig(BaseModel):
     and osv-scanner (known-bad dependency versions). No pip extra; the backends are
     system binaries resolved at runtime (see auditor.malware.tools)."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     enabled: bool = False
     content: bool = True  # ClamAV pass
@@ -315,18 +325,44 @@ class GlobalPaths(BaseSettings):
     ``$AUDITOR_HOME`` (default ``~/.auditor``); ``code_mode`` ← ``$AUDITOR_CODE_MODE`` gates the
     experimental Code Mode MCP transform. Lives here so the project's BaseSettings stay together
     (see ``PY-CONFIG-SCATTERED-SETTINGS``); ``auditor.paths`` re-exports the ``home`` helper.
+
+    ``env_ignore_empty`` makes ``AUDITOR_HOME=`` mean unset rather than ``Path(".")``, which would
+    write the shared index and every repo's state into whatever directory the user is standing in.
     """
 
-    model_config = SettingsConfigDict(env_prefix="AUDITOR_")
+    model_config = SettingsConfigDict(env_prefix="AUDITOR_", env_ignore_empty=True)
     home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
     code_mode: bool = False
+
+
+class _NonPolicyEnvSource(EnvSettingsSource):
+    """The ``AUDITOR_`` env source narrowed to the keys the environment may set.
+
+    Repo policy is shared through git and drives CI, so the environment must not reach it: an
+    ``AUDITOR_*`` var could otherwise disable a rule the repo never mentions. The allow-list fails
+    closed, so a field nobody classified stays policy instead of shipping env-reachable.
+    """
+
+    ENV_SETTABLE: ClassVar[frozenset[str]] = frozenset({"respect_gitignore"})
+
+    def get_field_value(
+        self, field: FieldInfo, field_name: str
+    ) -> tuple[Any, str, bool]:
+        """The env value for one field, or a miss for every field outside the allow-list.
+
+        Filtering here rather than on the result matters: the base source JSON-decodes complex
+        fields first, so a policy key with an unparseable value would hard-fail the command.
+        """
+        if field_name not in self.ENV_SETTABLE:
+            return None, field_name, False
+        return super().get_field_value(field, field_name)
 
 
 class AuditorSettings(BaseSettings):
     """The merged repo configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="AUDITOR_", extra="forbid", validate_default=False
+        env_prefix="AUDITOR_", extra="ignore", validate_default=False
     )
 
     extends: str = "base"
@@ -348,6 +384,9 @@ class AuditorSettings(BaseSettings):
     trust_local_plugins: bool = False
     lint_overlap: bool = False
     respect_skips: bool = True
+    observer_allowed: bool = (
+        True  # repo's hard opt-out for the graph observer; never under graph.*
+    )
     # PY-CONFIG-SCATTERED-SETTINGS: modules that may hold BaseSettings, and whether to also bless
     # the de-facto home (the module where settings classes already cluster).
     settings_modules: list[str] = Field(default_factory=lambda: ["config", "settings"])
@@ -363,6 +402,22 @@ class AuditorSettings(BaseSettings):
     sqlalchemy: SqlAlchemyConfig = Field(default_factory=SqlAlchemyConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
     malware_scan: MalwareScanConfig = Field(default_factory=MalwareScanConfig)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            _NonPolicyEnvSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     @field_validator("rules", mode="after")
     @classmethod
@@ -407,15 +462,79 @@ class AuditorSettings(BaseSettings):
 # --------------------------------------------------------------------------- loading
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(
+    base: Mapping[str, object], override: Mapping[str, object]
+) -> dict[str, object]:
     """Recursive dict merge; later wins. Scalars/lists replaced, dicts merged."""
-    out = dict(base)
+    out: dict[str, object] = dict(base)
     for key, val in override.items():
-        if isinstance(val, dict) and isinstance(out.get(key), dict):
-            out[key] = _deep_merge(out[key], val)
+        current = out.get(key)
+        if isinstance(val, dict) and isinstance(current, dict):
+            out[key] = deep_merge(current, val)
         else:
             out[key] = val
     return out
+
+
+def _walk_unknown(
+    model: type[BaseModel], raw: dict[str, object], prefix: str
+) -> Iterator[str]:
+    for key, value in raw.items():
+        path = f"{prefix}{key}"
+        field = model.model_fields.get(key)
+        if field is None:
+            yield path
+        else:
+            yield from _walk_unknown_value(field.annotation, value, path)
+
+
+def _walk_unknown_value(annotation: object, value: object, path: str) -> Iterator[str]:
+    """Descend one field's declared type into the raw value, so a typo inside a nested table,
+    a keyed table or a list of tables reports its full dotted path."""
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        # A key is unknown only if no member declares it; taking members[0] alone reported
+        # every key valid for a later member of a two-model union.
+        per_member = [
+            set(_walk_unknown_value(arg, value, path))
+            for arg in get_args(annotation)
+            if arg is not type(None)
+        ]
+        if per_member:
+            yield from sorted(set.intersection(*per_member))
+    elif origin is dict and isinstance(value, dict):
+        item = get_args(annotation)[1]
+        for key, entry in value.items():
+            yield from _walk_unknown_value(item, entry, f"{path}.{key}")
+    elif origin is list and isinstance(value, list):
+        item = get_args(annotation)[0]
+        for index, entry in enumerate(value):
+            yield from _walk_unknown_value(item, entry, f"{path}[{index}]")
+    elif (
+        isinstance(annotation, type)
+        and issubclass(annotation, BaseModel)
+        and isinstance(value, dict)
+    ):
+        yield from _walk_unknown(annotation, value, f"{path}.")
+
+
+def unknown_config_keys(raw: dict[str, object], model: type[BaseModel]) -> list[str]:
+    """Dotted paths in a raw config dict that ``model`` does not declare. The models ignore
+    extras (D8), so this is how a typo or a key from a newer auditor is still reported."""
+    return sorted(_walk_unknown(model, raw, ""))
+
+
+class ConfigReport(BaseModel):
+    """A loaded config plus the keys no model declares.
+
+    The unknown keys are a value, never a ``warnings.warn``: only the CLI edge decides whether a
+    human sees them, and it prints to stderr so machine output on stdout stays parseable.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    settings: AuditorSettings
+    unknown_keys: tuple[str, ...] = ()
 
 
 def _load_profile(name_or_path: str, _seen: frozenset[str] = frozenset()) -> dict:
@@ -426,7 +545,7 @@ def _load_profile(name_or_path: str, _seen: frozenset[str] = frozenset()) -> dic
     parent = raw.pop("extends", None)
     if parent:
         base = _load_profile(parent, _seen | {name_or_path})
-        return _deep_merge(base, raw)
+        return deep_merge(base, raw)
     return raw
 
 
@@ -485,11 +604,49 @@ def merged_config_dict(
         or "base"
     )
     merged = _load_profile(extends)
-    merged = _deep_merge(merged, pyproject)
-    merged = _deep_merge(merged, standalone)
-    merged = _deep_merge(merged, overrides)
+    merged = deep_merge(merged, pyproject)
+    merged = deep_merge(merged, standalone)
+    merged = deep_merge(merged, overrides)
     merged["extends"] = extends
     return merged
+
+
+def unknown_repo_keys(
+    root: Path, *, profile: str | None = None, overrides: dict | None = None
+) -> list[str]:
+    """Unknown keys in the config ``root`` resolves to, from the raw merge alone. For commands
+    whose real load happens deeper in the stack, so they do not pay for a second plugin load."""
+    return unknown_config_keys(
+        merged_config_dict(root, profile=profile, overrides=overrides), AuditorSettings
+    )
+
+
+def load_config_report(
+    root: Path,
+    *,
+    profile: str | None = None,
+    allow_local_plugins: bool = False,
+    loader: "PluginLoader | None" = None,
+    overrides: dict | None = None,
+) -> ConfigReport:
+    """Two-phase load: read raw config, load the plugins it names (so a config can
+    reference plugin-contributed rules), then validate against the populated registry.
+
+    ``profile`` overrides the repo's ``extends`` for this run. Entry-point and config-named
+    plugins load unconditionally; local ``.auditor/plugins`` load only when trusted.
+    ``overrides`` deep-merges onto the loaded config as the highest layer. Unknown keys are
+    returned on the report, never warned about here.
+    """
+    raw = merged_config_dict(root, profile=profile, overrides=overrides)
+    loader = loader if loader is not None else PluginLoader()
+    loader.load_entry_points()
+    loader.load_config_modules(list(raw.get("plugins", [])))
+    trusted = allow_local_plugins or bool(raw.get("trust_local_plugins", False))
+    loader.load_local(root, trusted=trusted)
+    return ConfigReport(
+        settings=AuditorSettings.model_validate(raw),
+        unknown_keys=tuple(unknown_config_keys(raw, AuditorSettings)),
+    )
 
 
 def load_config(
@@ -500,20 +657,15 @@ def load_config(
     loader: "PluginLoader | None" = None,
     overrides: dict | None = None,
 ) -> AuditorSettings:
-    """Two-phase load: read raw config, load the plugins it names (so a config can
-    reference plugin-contributed rules), then validate against the populated registry.
-
-    ``profile`` overrides the repo's ``extends`` for this run. Entry-point and config-named
-    plugins load unconditionally; local ``.auditor/plugins`` load only when trusted.
-    ``overrides`` deep-merges onto the loaded config as the highest layer.
-    """
-    raw = merged_config_dict(root, profile=profile, overrides=overrides)
-    loader = loader if loader is not None else PluginLoader()
-    loader.load_entry_points()
-    loader.load_config_modules(list(raw.get("plugins", [])))
-    trusted = allow_local_plugins or bool(raw.get("trust_local_plugins", False))
-    loader.load_local(root, trusted=trusted)
-    return AuditorSettings.model_validate(raw)
+    """The merged, validated repo configuration. Use :func:`load_config_report` when the caller
+    also has to surface the keys no model declares."""
+    return load_config_report(
+        root,
+        profile=profile,
+        allow_local_plugins=allow_local_plugins,
+        loader=loader,
+        overrides=overrides,
+    ).settings
 
 
 # --------------------------------------------------------------- per-file resolution

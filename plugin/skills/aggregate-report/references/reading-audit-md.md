@@ -102,9 +102,10 @@ never-scanned repo, empty. `auditr aggregate --help` states this directly: "Roll
 into AUDIT.md (run `scan --incremental` first)."
 
 A directory-level `-i` scan has one more side effect worth knowing about: it writes
-`.auditor/.status.json` (gitignored) — the compact severity-count cache the plugin's status line
-reads. `AUDIT.md` and `.status.json` are two independent artifacts built from the same
-information; keeping `-i` scans current keeps both fresh together.
+`$AUDITOR_HOME/repos/<repo_dir_key>/status.json`, the compact severity-count cache the plugin's
+status line reads. Nothing is written into the repository. `AUDIT.md` and `status.json` are two
+independent artifacts built from the same information; keeping `-i` scans current keeps both
+fresh together.
 
 ## `aggregate` vs `/auditor:audit-changes`
 

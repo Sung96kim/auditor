@@ -38,8 +38,8 @@ jobs:
       - run: uv sync --extra dev --extra mcp --extra ts
 
       # Gate: never release red code.
-      - run: uv run ruff check auditor auditr_observer.py tests
-      - run: uv run ruff format --check auditor auditr_observer.py tests
+      - run: uv run ruff check auditor plugin auditr_observer.py tests
+      - run: uv run ruff format --check auditor plugin auditr_observer.py tests
       - run: uv run pytest -q
 
       - name: Configure git identity

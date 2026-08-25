@@ -19,6 +19,7 @@ from auditor.cli.helpers import (
     require_exists,
     run_live,
     suggest,
+    warn_unknown_config,
 )
 from auditor.cli.options import (
     AllowLocalPlugins,
@@ -50,7 +51,7 @@ from auditor.cli.options import (
     WriteBaseline,
 )
 from auditor.cli.summary import print_summary
-from auditor.config import is_configured, load_config
+from auditor.config import is_configured, load_config, unknown_repo_keys
 from auditor.discovery import default_base_ref, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity as _check_severity
@@ -205,6 +206,7 @@ def scan(
         merged = dict(overrides or {})
         merged["malware_scan"] = {**merged.get("malware_scan", {}), "enabled": malware}
         overrides = merged
+    warn_unknown_config(unknown_repo_keys(root, profile=profile, overrides=overrides))
     # "." renders as ".…" against the ellipsis — show the directory's name instead.
     target_label = target.resolve().name if str(target) == "." else target
     try:
@@ -239,7 +241,10 @@ def scan(
         )
         return
 
-    if target.is_dir():
+    # Only a full, unscoped run describes the repo's posture; a subtree or diff scan would file
+    # its partial roll-up as the whole repo's. Deliberately before baseline filtering: the
+    # baseline is a gate on what to report, not a statement about what is in the tree.
+    if report_only is None and target.is_dir() and target.resolve() == root.resolve():
         write_status(root, results, configured=is_configured(root))
 
     hidden = 0

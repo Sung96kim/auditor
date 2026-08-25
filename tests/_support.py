@@ -166,9 +166,13 @@ def invoke(*args: str):
 
 
 def cli_json(result):
-    """Assert the CLI call succeeded and parse its stdout as JSON."""
+    """Assert the CLI call succeeded and parse its stdout as JSON.
+
+    Reads ``result.stdout``, not ``result.output``: on click 8.4 ``.output`` interleaves stderr,
+    and the CLI prints unknown-key warnings there.
+    """
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)
+    return json.loads(result.stdout)
 
 
 def git(repo: Path, *args: str) -> None:

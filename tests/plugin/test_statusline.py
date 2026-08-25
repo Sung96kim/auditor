@@ -1,3 +1,5 @@
+import ast
+import importlib.util
 import json
 import subprocess
 import sys
@@ -5,10 +7,24 @@ import time
 from pathlib import Path
 
 import pytest
+from _support import result_with
+
+from auditor.discovery import find_root
+from auditor.models import Severity
+from auditor.paths import auditor_home, ensure_repo_dir, repo_dir_key
+from auditor.status import merge_status, write_status
 
 SCRIPT = (
     Path(__file__).resolve().parents[2] / "plugin" / "statusline" / "auditor_status.py"
 )
+
+
+def _module():
+    """Import the status line as a module, to compare its key with the package's."""
+    spec = importlib.util.spec_from_file_location("auditor_status", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run(cwd: Path) -> str:
@@ -22,17 +38,25 @@ def _run(cwd: Path) -> str:
 
 
 def _write_status(cwd: Path, severity: dict, configured=True, age=0):
-    d = cwd / ".auditor"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / ".status.json").write_text(
-        json.dumps(
-            {
-                "severity": severity,
-                "configured": configured,
-                "written_at": int(time.time()) - age,
-            }
-        )
+    """Write where a scan from ``cwd`` would, through production's own writer.
+
+    The status line walks up to the root first, so the helper has to as well or a nested-cwd test
+    writes to the wrong key. Hand-building the payload here made every test in this file agree
+    with a literal instead of with `auditor.status`.
+    """
+    merge_status(
+        find_root(cwd),
+        "scan",
+        {
+            "severity": severity,
+            "configured": configured,
+            "written_at": int(time.time()) - age,
+        },
     )
+
+
+def _write_raw(cwd: Path, raw: str) -> None:
+    (ensure_repo_dir(find_root(cwd)) / "status.json").write_text(raw)
 
 
 def test_no_config_when_cache_absent(tmp_path):
@@ -68,12 +92,11 @@ def test_stale_marker(tmp_path):
     [
         "not json at all",  # decode error
         "[]",  # valid JSON, non-dict payload
+        '{"graph": {"nodes": 3}}',  # only the other writer's block
     ],
 )
 def test_corrupt_cache_degrades_to_not_set_up(tmp_path, raw):
-    d = tmp_path / ".auditor"
-    d.mkdir(parents=True)
-    (d / ".status.json").write_text(raw)
+    _write_raw(tmp_path, raw)
     proc = subprocess.run(
         [sys.executable, str(SCRIPT)],
         input=json.dumps({"cwd": str(tmp_path)}),
@@ -88,14 +111,12 @@ def test_corrupt_cache_degrades_to_not_set_up(tmp_path, raw):
 @pytest.mark.parametrize(
     "raw",
     [
-        '{"severity": 5, "configured": true, "written_at": 0}',  # non-dict severity
-        '{"severity": {"blocking": "x"}, "written_at": "soon"}',  # non-numeric fields
+        '{"scan": {"severity": 5, "configured": true, "written_at": 0}}',
+        '{"scan": {"severity": {"blocking": "x"}, "written_at": "soon"}}',
     ],
 )
 def test_malformed_fields_degrade_without_crashing(tmp_path, raw):
-    d = tmp_path / ".auditor"
-    d.mkdir(parents=True)
-    (d / ".status.json").write_text(raw)
+    _write_raw(tmp_path, raw)
     proc = subprocess.run(
         [sys.executable, str(SCRIPT)],
         input=json.dumps({"cwd": str(tmp_path)}),
@@ -104,3 +125,84 @@ def test_malformed_fields_degrade_without_crashing(tmp_path, raw):
     )
     assert proc.returncode == 0
     assert "Traceback" not in proc.stderr
+
+
+def test_key_matches_the_package_helper(git_repo):
+    """The status line has to land on the same directory `auditr scan` wrote."""
+    assert _module()._repo_dir_key(git_repo) == repo_dir_key(git_repo)
+
+
+@pytest.mark.parametrize("marker", [".git", "pyproject.toml", ".auditor"])
+def test_find_root_matches_the_package_helper(tmp_path, marker):
+    """The other duplicated half: walk up the same way, or the key is computed for a different
+    root and the two land in different directories. Parametrized over every marker, since a
+    git-only fixture cannot tell whether the other two are still in the list."""
+    root = tmp_path / "proj"
+    nested = root / "src" / "deep"
+    nested.mkdir(parents=True)
+    if marker == "pyproject.toml":
+        (root / marker).write_text("")
+    else:
+        (root / marker).mkdir()
+    assert _module()._find_root(nested) == find_root(nested)
+
+
+@pytest.mark.parametrize("value", [None, "", "~/x", "/tmp/auditor-home-parity"])
+def test_home_matches_the_package_helper(monkeypatch, value):
+    """The third duplicated helper. An empty AUDITOR_HOME has to mean unset on both sides, or
+    the package writes state into the working directory and the status line reads elsewhere."""
+    if value is None:
+        monkeypatch.delenv("AUDITOR_HOME", raising=False)
+    else:
+        monkeypatch.setenv("AUDITOR_HOME", value)
+    assert _module()._home() == auditor_home()
+
+
+def test_statusline_parses_as_python_39():
+    """Syntax only: it catches what 3.9 cannot parse (a `match` statement, a parenthesized
+    `with`), not a stdlib API a 3.9 interpreter lacks. `X | None` parses everywhere, which is
+    why the module carries `from __future__ import annotations` instead."""
+    assert isinstance(ast.parse(SCRIPT.read_text(), feature_version=(3, 9)), ast.Module)
+
+
+def test_walks_up_to_the_repo_root(git_repo):
+    _write_status(
+        git_repo, {"blocking": 1, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    nested = git_repo / "src" / "deep"
+    nested.mkdir(parents=True)
+    assert "1 blocking" in _run(nested)
+
+
+def test_ignores_a_legacy_in_repo_status_file(tmp_path):
+    legacy = tmp_path / ".auditor"
+    legacy.mkdir()
+    (legacy / ".status.json").write_text(
+        json.dumps(
+            {
+                "severity": {"blocking": 9},
+                "configured": True,
+                "written_at": int(time.time()),
+            }
+        )
+    )
+    assert "not set up" in _run(tmp_path)
+
+
+def test_statusline_reads_what_write_status_wrote(tmp_path):
+    """The one test that closes the loop: production writes the file, the shipped status line
+    reads it. It touches all three keys, so renaming any of them in `auditor.status` fails here
+    instead of silently blanking or misreporting the segment in every session."""
+    write_status(
+        tmp_path,
+        [result_with("m.py", Severity.HIGH, Severity.LOW)],
+        configured=True,
+    )
+    out = _run(tmp_path)
+    assert "1 high" in out and "+1 lower" in out  # severity
+    assert "⟳" not in out  # written_at: a scan that just ran is not stale
+
+
+def test_statusline_reads_the_unconfigured_flag_write_status_wrote(tmp_path):
+    write_status(tmp_path, [], configured=False)
+    assert "not set up" in _run(tmp_path)

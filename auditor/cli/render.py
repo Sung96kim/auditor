@@ -333,6 +333,29 @@ def render_config_show(out: Console, payload: dict[str, Any]) -> None:
     out.print_json(data=payload)
 
 
+def render_config_check(out: Console, payload: dict[str, Any]) -> None:
+    unknown = [
+        (kind, key)
+        for kind, keys in (
+            ("repo policy", payload.get("policy_unknown", [])),
+            ("user settings", payload.get("user_unknown", [])),
+        )
+        for key in keys
+    ]
+    root = payload.get("root", "")
+    if not unknown:
+        out.print(f"[{_ACCENT}]config ok:[/] no unknown keys ({root})")
+        return
+    out.print(f"[dim]{root}[/dim]")
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    t.add_column("where")
+    t.add_column("unknown key")
+    for kind, key in unknown:
+        t.add_row(kind, key)
+    out.print(t)
+    out.print("[dim]unknown keys are ignored; remove them or upgrade auditr[/dim]")
+
+
 # ---------------------------------------------------------------------------
 # crossfile
 # ---------------------------------------------------------------------------
@@ -341,3 +364,46 @@ def render_config_show(out: Console, payload: dict[str, Any]) -> None:
 def render_crossfile(out: Console, payload: dict[str, Any]) -> None:
     n = payload.get("cross_file_findings", 0)
     out.print(f"[{_ACCENT}]cross-file findings:[/] {n}")
+
+
+# ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+
+def render_init(out: Console, payload: dict[str, Any]) -> None:
+    t = Table.grid(padding=(0, 3))
+    t.add_column(style="bold")
+    t.add_column(style=_ACCENT)
+    for label, key in (
+        ("home", "home"),
+        ("config", "config"),
+        ("schema", "schema"),
+        ("repo", "repo_dir"),
+    ):
+        if payload.get(key):
+            t.add_row(label, str(payload[key]))
+    written = payload.get("written") or []
+    if payload.get("checked"):
+        state = "not written (--check)"
+    else:
+        state = ", ".join(written) if written else "nothing (up to date)"
+    t.add_row("written", state)
+    out.print(Panel(t, title="auditor init", border_style=_BORDER))
+    for key in payload.get("unknown_keys") or []:
+        out.print(f"[yellow]unknown key[/yellow] {key}")
+    if payload.get("migrated"):
+        out.print(
+            f"[{_ACCENT}]moved repo:[/] settings were created for "
+            f"{payload['moved_from']}; the breadcrumb now points here"
+        )
+    elif payload.get("moved_from"):
+        out.print(
+            f"[yellow]moved repo:[/yellow] settings were created for {payload['moved_from']}; "
+            "re-run with --migrate to point them here"
+        )
+    if payload.get("legacy_status"):
+        out.print(
+            f"[yellow]leftover status file:[/yellow] {payload['legacy_status']}; "
+            "remove it with --clean-status"
+        )

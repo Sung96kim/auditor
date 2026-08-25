@@ -14,7 +14,7 @@ from typing import Annotated, Any
 import typer
 
 from auditor.cli.console import ACCENT, err_console
-from auditor.cli.helpers import present, run, run_staged
+from auditor.cli.helpers import present, run, run_staged, warn_unknown_config
 from auditor.cli.lazy import GRAPH_HELP
 from auditor.cli.render import (
     render_graph_build,
@@ -25,7 +25,7 @@ from auditor.cli.render import (
     render_graph_search,
     render_graph_usages,
 )
-from auditor.config import load_config
+from auditor.config import load_config, unknown_repo_keys
 from auditor.database import IndexStore
 from auditor.discovery import find_root
 from auditor.engine import audit_target
@@ -71,6 +71,7 @@ def graph_build(
 ) -> None:
     """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
     root = find_root(target)
+    warn_unknown_config(unknown_repo_keys(root))
 
     async def do_build(report: Callable[[str], None]) -> dict:
         if rebuild:

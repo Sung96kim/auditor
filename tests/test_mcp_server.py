@@ -282,7 +282,11 @@ async def test_scan_tool_config_override(sample_repo):
 async def test_scan_tool_bad_config_errors(sample_repo):
     with pytest.raises(ToolError, match="invalid config"):
         await mcp.call_tool(
-            "scan", {"path": str(sample_repo / "src"), "config": {"nope": 1}}
+            "scan",
+            {
+                "path": str(sample_repo / "src"),
+                "config": {"respect_gitignore": "nope"},
+            },
         )
 
 

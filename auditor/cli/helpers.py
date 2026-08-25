@@ -7,7 +7,7 @@ import asyncio
 import difflib
 import json
 import time
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
@@ -71,10 +71,31 @@ def parse_config_json(raw: str | None) -> dict | None:
     return value
 
 
+def warn_unknown_config(keys: Sequence[str]) -> None:
+    """Report config keys no model declares, on stderr so machine output on stdout still parses.
+
+    Unknown keys are ignored at load time (D8), so this is the only place a typo surfaces. Call it
+    once per invocation: the loader itself never warns, and `config check` prints its own list.
+    """
+    if not keys:
+        return
+    for key in keys:
+        err_console.print(f"[yellow]warning:[/yellow] unknown config key: {key}")
+    err_console.print("[dim]unknown keys are ignored — run `auditr config check`[/dim]")
+
+
+# pydantic appends these when the failure is a dict *key*; neither names a field.
+_NON_FIELD_LOC = ("", "[key]")
+
+
 def format_config_error(exc: ValidationError) -> str:
-    """First validation error as ``'<dotted loc>: <msg>'`` for a clean one-line failure."""
+    """First validation error as ``'<dotted loc>: <msg>'`` for a clean one-line failure.
+
+    Parts that name no field are dropped, so a bad role or category key reads ``roles.tets``
+    rather than ``roles.tets.``.
+    """
     err = exc.errors()[0]
-    loc = ".".join(str(p) for p in err["loc"])
+    loc = ".".join(str(p) for p in err["loc"] if str(p) not in _NON_FIELD_LOC)
     return f"{loc}: {err['msg']}" if loc else err["msg"]
 
 

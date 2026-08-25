@@ -153,9 +153,18 @@ auditr scan . -vvv
 
 ## Status file
 
-- A directory scan writes `.auditor/.status.json` under the project root: per-severity counts,
-  whether the repo has auditor configuration, and a write timestamp.
+- A directory scan writes `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`: per-severity counts,
+  whether the repo has auditor configuration, and a write timestamp, all under a `scan` key.
+- Only a full scan of the repo root writes it. `--since` / `--changed` / `--vs-base` and a
+  subdirectory target report part of the tree, so they leave the last full scan's counts in place
+  rather than filing a partial roll-up as the repo's posture.
+- The write happens before baseline filtering, so `--baseline` records what is in the tree, not
+  what the gate chose to show.
+- Nothing is written into the repository. `repo_dir_key` and the rest of the layout are in
+  [configuration.md](configuration.md).
+- The file holds one block per writer and each writer merges only its own, so a second writer's
+  block survives.
 - A single-file `scan` and `report` do not write it.
-- The write is best effort; a read-only filesystem does not fail the scan.
+- The write is best effort; a read-only or missing home does not fail the scan.
 - It is the only thing the Claude Code plugin's status line reads. See
   [claude-code-plugin.md](claude-code-plugin.md).

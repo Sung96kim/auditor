@@ -1,13 +1,16 @@
 # Configuration reference
 
 Committed config lives in `[tool.auditor]` in `pyproject.toml` or in `.auditor/config.toml`;
-env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus `AUDITOR_*` overrides of
-`AuditorSettings`). This page covers both.
+env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus the one `AUDITOR_*` override
+`AuditorSettings` accepts). This page covers both.
 
 - How a value is resolved across those sources is in [config.md](config.md), which is also the
   command that prints the merged result.
-- Every config model sets `extra="forbid"`, so an unknown key fails the load instead of being
-  silently ignored.
+- An unknown key is ignored instead of failing the load, so a key a newer auditor understands does
+  not break an older install on the same repo. Each command prints the ignored keys once, on
+  stderr, so machine output on stdout stays parseable; `auditr config check` lists them with their
+  dotted path.
+- A key with an invalid value still fails: the command prints one line and exits non-zero.
 
 ## `[tool.auditor]` in `pyproject.toml`
 
@@ -53,6 +56,10 @@ security = { min_severity = "high" }
   reference plugin-contributed rules. No trust gate ([plugins.md](plugins.md)).
 - `trust_local_plugins` (default `false`): load `.auditor/plugins/*.py`, which execute code.
 - `respect_skips` (default `true`): honor in-file `auditor: skip` directives.
+- `observer_allowed` (default `true`): the repo's hard opt-out for the graph observer. Set `false`
+  and no observer attaches to this checkout, whatever the user's own settings say. Today it is
+  only a field: the gate that ANDs it with the user's `observer.enabled` ships with the observer
+  daemon, so setting it now has no effect until then.
 - `settings_modules` (default `["config", "settings"]`): module stems or directory names that are a
   blessed home for `BaseSettings` subclasses (`PY-CONFIG-SCATTERED-SETTINGS`).
 - `settings_cohesion` (default `true`): also bless the de-facto home, the module where settings
@@ -260,11 +267,86 @@ resolved before any repo file is read; a cycle is an error.
   repo.
 - `baseline.json`: the conventional path for `scan --write-baseline` and `--baseline`. Nothing
   reads it unless the path is passed. Commit it to adopt the tool on a legacy repo.
-- `.status.json`: severity counts written on every directory scan and read by the plugin status
-  line. Generated and git-ignored; nothing else reads it.
+- Nothing else. The status cache moved to `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`; an
+  older `.auditor/.status.json` is ignored, and `auditr init --clean-status` deletes it.
 
 Generated state does not live here. The incremental index, persistent ignores and graph share one
 database under `$AUDITOR_HOME`.
+
+## User settings (`$AUDITOR_HOME`)
+
+Personal settings are never committed. They live under `$AUDITOR_HOME` (default `~/.auditor`),
+are created by [`auditr init`](init.md), and are modelled by `UserSettings` in
+`auditor/user_settings.py`.
+
+```
+$AUDITOR_HOME/
+  config.json              # global user settings
+  config.schema.json       # generated from the models, for editor completion
+  index.db                 # the shared index
+  models/                  # cache for the optional vector layer
+  repos/<repo_dir_key>/    # one dir per repo, keyed by sha1 of the resolved git common dir
+    root.json              # breadcrumb {root, identity, created_at}
+    config.json            # per-repo personal overrides
+    status.json            # the status line's cache
+    status.lock
+```
+
+- The layout grows with the tool. Later releases add `repos/<repo_dir_key>/spool.jsonl` and an
+  `observer/` directory for the background observer's lock, logs and state. Nothing above is
+  created before `auditr init` or a scan needs it.
+- `repo_dir_key` is the sha1 of `git rev-parse --path-format=absolute --git-common-dir`, resolved,
+  falling back to the resolved root outside git. Every worktree of one checkout shares the
+  directory, and a symlinked path does not mint a second one.
+- Layers for user keys, later wins: defaults in the models, then `$AUDITOR_HOME/config.json`, then
+  `$AUDITOR_HOME/repos/<key>/config.json`, then `AUDITOR_USER_*`. CLI flags stay above all of it.
+- The two models never share a key. Rule, threshold, exclude, role and `diff_base` keys exist only
+  on `AuditorSettings`; `observer` and `vectors` only on `UserSettings`.
+- An unknown key is ignored and reported on stderr; `auditr config check` lists them with their
+  dotted path.
+
+### `observer` (`ObserverConfig`)
+
+- `enabled` (default `true`): attach the observer to auditor-configured repos.
+- `runner` (default `"auto"`): `auto`, `claude` or `codex`.
+- `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses.
+- `codex_model` (default `""`): Codex model override; empty uses the user's Codex default.
+- `min_precision` (default `0.95`, 0 to 1): measured precision a kind needs before going active.
+- `max_cost_usd_per_day` (default `2.0`), `max_runs_per_day` (default `40`),
+  `max_budget_usd_per_run` (default `0.25`): the spend and run ceilings.
+- `max_turns` (default `20`), `max_nodes_per_run` (default `12`), `max_changes_per_run`
+  (default `25`): per-run size limits.
+- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
+- `min_new_unresolved` (default `1`): new unresolved callees an edit batch needs to earn a run.
+- `run_on_stale` (default `true`): re-run when an edit stales an existing refinement.
+- `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
+  high-value runs proceed.
+- `debounce_seconds` (default `20`), `session_expiry_minutes` (default `45`),
+  `idle_shutdown_minutes` (default `30`): the daemon's timing.
+- `skipped_retention_days` (default `7`): days of skipped-run history kept.
+- `worktrees` (default `"main"`): `main` or `all`.
+- `suspects` (default `true`): queue suspect nodes found during a build.
+- `tuning` (default `"propose"`): `propose` or `off`.
+- `stopwords_max` (default `20`): most repo-specific stopwords a tuning proposal may add.
+- `open_browser` (default `true`): open the live page when the daemon starts.
+- `codex_prices` (default `{}`): model to `{input, output}` in USD per million tokens. Empty uses
+  the shipped table.
+
+### `vectors` (`VectorsConfig`)
+
+- `enabled` (default `false`): enable the opt-in `sqlite-vec` plus static-embedding layer.
+- `model` (default `"minishlab/potion-base-8M@bf8b056"`): the pinned model and revision.
+
+### User environment variables
+
+| Form | Example | Notes |
+| --- | --- | --- |
+| Nested table | `AUDITOR_USER_OBSERVER='{"model":"sonnet"}'` | JSON value, merged over both files. |
+| Scalar field | `AUDITOR_USER_CONFIG_VERSION=1` | Field name uppercased. |
+
+- `AUDITOR_OBSERVER=0` is not a settings field. It is the kill switch the plugin hooks and the
+  daemon read straight from the environment, which is why user settings use their own
+  `AUDITOR_USER_` prefix.
 
 ## Environment variables
 
@@ -277,19 +359,24 @@ database under `$AUDITOR_HOME`.
 
 ### Repo settings (`AuditorSettings`)
 
-Every field above is also settable from the environment under the same `AUDITOR_` prefix.
+The environment reaches one field, not the whole model.
 
-| Form | Example | Notes |
+| Var | Default | Purpose |
 | --- | --- | --- |
-| Scalar field | `AUDITOR_RESPECT_GITIGNORE=false` | Field name uppercased. |
-| List or model field | `AUDITOR_THRESHOLD='{"size":{"max_params":1}}'` | JSON value, parsed and validated like a TOML table. |
+| `AUDITOR_RESPECT_GITIGNORE` | `true` | Set to `false` to scan git-ignored files. Same as `respect_gitignore` in TOML. |
 
+- Every other field is repo policy and is ignored when it appears in the environment: `AUDITOR_RULES`,
+  `AUDITOR_EXCLUDE`, `AUDITOR_TEST_MODE` and the rest read as if unset, with no error. Policy is
+  shared through git and drives CI, so a shell variable must not disable a rule the repo leaves
+  unmentioned. Put them in TOML, or pass `--config-json` for one run.
+- The list is an allow-list in `_NonPolicyEnvSource`, so a field added to `AuditorSettings` is
+  policy until someone puts it there on purpose.
 - The environment is the lowest layer. It is deep-merged under the TOML layers, so an `AUDITOR_*`
   value only reaches keys no profile or repo file sets.
 - `AUDITOR_EXTENDS` never applies: the loader always writes `extends` into the merged config. Use
   `extends` in TOML or `scan --profile`.
-- Because every profile sets `categories`, `rules` and `roles`, the matching env vars only add keys
-  those tables leave untouched.
+- Personal settings live under a different prefix entirely, `AUDITOR_USER_*`. See
+  [User settings](#user-settings-auditor_home).
 
 ### Claude Code plugin hooks
 

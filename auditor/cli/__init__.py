@@ -11,6 +11,7 @@ from auditor.cli import (  # noqa: F401 — imported for their @app.command() si
     aggregate,
     crossfile,
     discover,
+    init,
     manifest,
     report,
     scan,

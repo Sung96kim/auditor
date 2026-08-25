@@ -95,6 +95,8 @@ addopts = "--import-mode=importlib --ignore=tests/fixtures"
 
 [tool.auditor]
 extends = "strict"
+# a second, deliberate settings home: personal settings kept apart from config.py's repo policy
+settings_modules = ["config", "settings", "user_settings"]
 
 [tool.ruff]
 target-version = "py311"

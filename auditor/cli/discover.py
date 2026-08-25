@@ -12,10 +12,11 @@ from auditor.cli.helpers import (
     parse_config_json,
     present,
     require_exists,
+    warn_unknown_config,
 )
 from auditor.cli.options import ConfigJson, DirTarget
 from auditor.cli.render import render_discover
-from auditor.config import load_config
+from auditor.config import load_config_report
 from auditor.discovery import FileDiscovery, find_root
 from auditor.roles import RoleClassifier
 
@@ -30,9 +31,11 @@ def discover(
     require_exists(target)
     root = find_root(target)
     try:
-        settings = load_config(root, overrides=parse_config_json(config_json))
+        loaded = load_config_report(root, overrides=parse_config_json(config_json))
     except ValidationError as exc:
         fail(f"invalid config — {format_config_error(exc)}")
+    warn_unknown_config(loaded.unknown_keys)
+    settings = loaded.settings
     classifier = RoleClassifier(settings.role_globs)
     out = []
     discovery = FileDiscovery(

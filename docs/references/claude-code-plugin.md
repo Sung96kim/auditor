@@ -83,8 +83,14 @@ from PATH or the event payload is unusable. The environment variables that tune 
 ## Status line
 
 - Configured in `plugin/settings.json`, which also turns on `subagentStatusLine`.
-- It reads `.auditor/.status.json` and nothing else: no subprocess, no database open on the hot
-  path. Which runs write that file is in [scan.md](scan.md).
+- It walks up from the session's cwd for `.git`, `pyproject.toml` or `.auditor`, hashes that
+  repo's git common dir the same way `auditr` does, and reads
+  `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`. `git rev-parse` is the only subprocess it
+  runs, twice outside a git checkout for the pre-2.31 fallback, and the database is never opened.
+  Which runs write that file is in [scan.md](scan.md).
+- It reads the file's `scan` block. An older in-repo `.auditor/.status.json` is ignored.
+- The Stop hook's `scan --since HEAD` does not write that block, so the segment keeps showing the
+  last full scan of the repo rather than the uncommitted delta. See [scan.md](scan.md).
 
 ```
 ● auditor  2 blocking  5 high  +17 lower

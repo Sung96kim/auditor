@@ -6,10 +6,10 @@ import typer
 
 from auditor import crossfile as crossfile_pass
 from auditor.cli.apps import app
-from auditor.cli.helpers import open_index, present, run
+from auditor.cli.helpers import open_index, present, run, warn_unknown_config
 from auditor.cli.options import DirTarget
 from auditor.cli.render import render_crossfile
-from auditor.config import load_config
+from auditor.config import load_config, unknown_repo_keys
 from auditor.discovery import find_root
 
 
@@ -20,6 +20,7 @@ def crossfile(
 ) -> None:
     """Recompute cross-file duplicate findings from the index."""
     root = find_root(target)
+    warn_unknown_config(unknown_repo_keys(root))
     count = run(_crossfile(root), "cross-file pass…")
     present({"cross_file_findings": count}, render_crossfile, as_json=json_)
 

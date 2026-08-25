@@ -34,13 +34,19 @@ Paths are relative to the repo root.
 - `discovery.py`: `find_root` walks up for `.git` / `pyproject.toml` / `.auditor`. `FileDiscovery`
   lists auditable files through `git ls-files` (exact `.gitignore` handling) or an `rglob` walk
   outside a repo, minus hard-excluded dirs, default generated-file globs, and the configured
-  `exclude`. `default_base_ref` and `git_changed_files` back the diff flags.
+  `exclude`. `default_base_ref` and `git_changed_files` back the diff flags, and `git_output` is
+  the shared one-shot git call `paths.repo_identity` uses.
 - `config.py`: `AuditorSettings` (pydantic-settings) is the merged repo config. `load_config`
   layers profile, `pyproject [tool.auditor]`, `.auditor/config.toml`, then injected overrides,
   loading plugins between the raw read and validation so a config may name plugin-contributed
   rules. `ResolvedConfig.effective(rule_id)` resolves one rule for one file (rule, category, role
   policy, per-glob override). `GlobalPaths` reads the `AUDITOR_*` env vars. See
   [configuration.md](references/configuration.md).
+- `user_settings.py`: `UserSettings` (pydantic-settings, `AUDITOR_USER_` prefix) holds the
+  personal `observer` and `vectors` settings. `load_user_settings(root)` layers the model
+  defaults, `$AUDITOR_HOME/config.json`, `$AUDITOR_HOME/repos/<key>/config.json` and the env, in
+  that order. It is a second settings home on purpose, so repo policy and personal settings never
+  share a model or a file.
 - `registry.py`: the process-wide `REGISTRY` singleton. Detectors, `LanguageAuditor`s and
   `Reporter`s self-register via `__init_subclass__`; `builtins.py` is the single bootstrap import
   that pulls the built-ins in.
@@ -52,7 +58,12 @@ Paths are relative to the repo root.
 - `database/store.py`: `IndexStore.connect(db_path, repo_key)` opens the shared db and binds the
   handle to one repo's partition. `database/base.py`'s `SqliteWorker` owns the one thread-bound
   connection; every store awaits through it, so writes serialize safely.
-- `paths.py`: `auditor_home()`, `index_db_path()`, `repo_key()`.
+- `paths.py`: `auditor_home()`, `index_db_path()`, `repo_key()` (the index partition key),
+  `read_json_dict()` (the one tolerant JSON-object reader the home's files share), and the
+  user-home layout: `user_config_path()`, `user_schema_path()`, `models_dir()`, plus
+  `repo_identity()` / `repo_dir_key()` / `repo_dir()` / `ensure_repo_dir()`. The repo dir is keyed
+  by sha1 of the resolved git common dir, so worktrees of one checkout share it and a symlinked or
+  moved path does not mint a second one.
 - `skips.py`, `ignores.py`, `baseline.py`: the three suppression seams; `gate.py` is the gate they
   feed (see Cross-cutting behavior).
 - `reporters/base.py`: the `Reporter` ABC and `render(results, fmt)`. `serve.py` (`ReportServer`)
@@ -97,10 +108,11 @@ Paths are relative to the repo root.
   index, `_apply_crossfile_in_memory` recomputes shapes in memory so a stateless directory scan
   still reports them.
 - `engine._apply_ignores` filters persistent ignores before results leave `audit_target`.
-- Back in `cli/scan.py`: `--write-baseline` writes and exits; a directory scan writes
-  `.auditor/.status.json` through `status.write_status`; `--baseline` hides recorded findings;
-  `gate.gate_tripped` decides the exit code; `--severity`, `--min-severity` and `--rule` filter the
-  display only; then `cli/summary.print_summary`, `reporters.render`, or `ReportServer`.
+- Back in `cli/scan.py`: `--write-baseline` writes and exits; a directory scan writes the `scan`
+  block of `$AUDITOR_HOME/repos/<key>/status.json` through `status.write_status`; `--baseline`
+  hides recorded findings; `gate.gate_tripped` decides the exit code; `--severity`,
+  `--min-severity` and `--rule` filter the display only; then `cli/summary.print_summary`,
+  `reporters.render`, or `ReportServer`.
 
 ```mermaid
 flowchart TB
@@ -177,8 +189,20 @@ flowchart TB
 
 ## config
 
-- `cli/config.py` (`show`) runs `config.load_config` for the resolved root and dumps the merged
-  `AuditorSettings`. It is how you see which layer won. See [config.md](references/config.md).
+- `cli/config.py` (`show`, `check`) runs `config.load_config_report` for the resolved root and
+  dumps the merged `AuditorSettings`. It is how you see which layer won. `--user` dumps the
+  resolved `UserSettings` instead, and `check` reports the keys no model declares in either. See
+  [config.md](references/config.md).
+
+## init
+
+- `cli/init.py` creates `$AUDITOR_HOME`, writes `config.json` with only `$schema` and
+  `config_version`, regenerates `config.schema.json` from `UserSettings.model_json_schema()`, and
+  with `--repo` creates `paths.ensure_repo_dir(root)` plus its overlay. See
+  [init.md](references/init.md).
+- `--check` writes nothing and reports unknown keys, a breadcrumb whose root has vanished, and a
+  leftover `<repo>/.auditor/.status.json`; `--migrate` rewrites that breadcrumb and
+  `--clean-status` deletes that file.
 
 ## rules
 
@@ -276,9 +300,9 @@ flowchart TB
   `uvx`-launched `auditr-mcp`). `plugin/settings.json` wires the status line.
 - `plugin/hooks/hooks.json` registers three stdlib hooks: `session_start.py` on `SessionStart`,
   `audit_edit.py` on `PostToolUse` matching `Edit|Write`, and `verify_stop.py` on `Stop`.
-- `plugin/statusline/auditor_status.py` reads `<repo>/.auditor/.status.json`, which
-  `status.write_status` refreshes on every directory scan, so the status line never shells out or
-  opens the index on its hot path.
+- `plugin/statusline/auditor_status.py` replicates `discovery.find_root` and `paths.repo_dir_key`
+  in stdlib only, then reads the `scan` block of `$AUDITOR_HOME/repos/<key>/status.json`, which
+  `status.write_status` refreshes on every directory scan.
 
 ## Cross-cutting behavior
 
@@ -291,9 +315,10 @@ flowchart TB
   rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`; on a version
   change the derived cache tables are dropped and rebuilt on the next scan, while the `repos` and
   `ignores` tables (user state) survive.
-- Repo-local state: `<repo>/.auditor/` holds authored input (`config.toml`, `plugins/`, a baseline
-  file if you point `--baseline` there) plus the generated `.status.json`. Nothing else is written
-  into the repo.
+- Repo-local state: `<repo>/.auditor/` holds authored input only (`config.toml`, `plugins/`, a
+  baseline file if you point `--baseline` there). Nothing is written into the repo: generated
+  state is the shared index plus `$AUDITOR_HOME/repos/<repo_dir_key>/`, which holds `status.json`,
+  its lock, and the user's per-repo settings.
 - Verdict kinds: a detector emits `auto` (the tool decided deterministically) or `candidate`
   (evidence only, an agent must judge). `gate.gate_tripped` counts `auto` findings at or above
   `--fail-on`, so a candidate never breaks CI on its own.
