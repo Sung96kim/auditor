@@ -7,6 +7,7 @@ import pytest
 from fastmcp import Client
 
 import auditor.mcp.malware_tools as malware_tools
+import auditor.mcp.server as server
 from auditor.config_notice import NOTICE, ConfigNotice
 from auditor.mcp import mcp
 from auditor.mcp.server import REPO_PARAMETERS
@@ -97,6 +98,22 @@ async def test_a_tool_that_names_no_repo_does_not_note(capsys):
         await client.call_tool("malware_status", {})
     assert "unknown config key" not in capsys.readouterr().err
     assert NOTICE.root is None
+
+
+async def test_a_repo_the_notice_cannot_resolve_does_not_fail_the_call(
+    bad_config, monkeypatch, capsys
+):
+    """The notice is a courtesy on the way to the tool. Anything it trips over has to stay on its
+    own side of `call_next`, which the documented "never fails a tool call" depends on."""
+
+    def _boom(*args, **kwargs):
+        raise OSError("no such thing")
+
+    monkeypatch.setattr(server, "find_root", _boom)
+    async with Client(mcp) as client:
+        result = await client.call_tool("discover", {"path": str(bad_config)})
+    assert result.data["total"] >= 1
+    assert "unknown config key" not in capsys.readouterr().err
 
 
 async def test_every_tool_declares_its_repo_or_declares_none():

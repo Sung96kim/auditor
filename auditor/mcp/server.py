@@ -4,6 +4,7 @@ registered here: see ``auditor.mcp`` (the composition root) and the ``*_tools`` 
 
 import asyncio
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 import mcp.types as mt
@@ -43,10 +44,13 @@ def notice_lines(named: str) -> list[str]:
     """This process's notice for the repo a tool call named, empty when it has nothing to add.
 
     Blocking by nature: a git call and up to two config merges, so the caller runs it in a worker
-    thread rather than on the event loop.
+    thread rather than on the event loop. A path the filesystem rejects says nothing rather than
+    failing the tool call that carried it.
     """
-    NOTICE.record(find_root(Path(named)))
-    return NOTICE.report()
+    with suppress(OSError, ValueError):
+        NOTICE.record(find_root(Path(named)))
+        return NOTICE.report()
+    return []
 
 
 class ConfigNoticeMiddleware(Middleware):
