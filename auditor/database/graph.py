@@ -64,6 +64,8 @@ class GraphDB(BaseDB):
             ),
             indexes=(
                 Index(name="graph_nodes_cluster", columns=("repo", "cluster_id")),
+                # `definers` filters on the name, once per proposal in a commit
+                Index(name="graph_nodes_name", columns=("repo", "name")),
             ),
         ),
         "graph_edges": Table(

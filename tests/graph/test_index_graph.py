@@ -3,6 +3,7 @@ import re
 
 import pytest
 
+from auditor.database import IndexStore
 from auditor.database.graph import GraphDB
 from auditor.graph.hashes import FileHashes
 from auditor.graph.model import (
@@ -384,3 +385,37 @@ async def test_node_and_cluster_provenance_round_trip(graph_store):
     assert cluster["label_provenance"] == "refined"
     (member,) = await graph_store.graph.cluster_members(1)
     assert (member["refined"], member["annotation"]) == (1, "the retry path")
+
+
+async def test_definers_answers_from_the_name_index(graph_store):
+    """`definers` runs once per proposal in a commit, so it may not scan the partition."""
+    await graph_store.graph.replace([_n("handle"), _n("other")], [], [])
+    assert await graph_store.graph.definers("handle") == ["handle"]
+    plan = await graph_store._worker.run(
+        lambda c: [
+            dict(r)
+            for r in c.execute(
+                "EXPLAIN QUERY PLAN SELECT node_id FROM graph_nodes "
+                "WHERE repo = ? AND name = ?",
+                ("r", "handle"),
+            )
+        ]
+    )
+    assert "graph_nodes_name" in " ".join(str(row["detail"]) for row in plan)
+
+
+async def test_a_database_made_before_the_name_index_gains_it_on_connect(tmp_path):
+    """Every declared statement runs on every connect, so a new index needs no version bump."""
+    db = tmp_path / "i.db"
+    async with await IndexStore.connect(db, repo="r") as store:
+        await store._worker.run(lambda c: c.execute("DROP INDEX graph_nodes_name"))
+        names = await store._worker.run(_index_names)
+        assert "graph_nodes_name" not in names
+    async with await IndexStore.connect(db, repo="r") as store:
+        assert "graph_nodes_name" in await store._worker.run(_index_names)
+
+
+def _index_names(conn) -> set[str]:
+    return {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
