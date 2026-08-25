@@ -403,10 +403,14 @@ def _recording_a_rejection(model: BaseModel, info: ValidationInfo) -> bool:
     )
 
 
-def _without(raw: Mapping[str, Any], exc: ValidationError) -> dict[str, Any]:
+def _without(raw: Mapping[str, Any], exc: ValidationError) -> Mapping[str, Any]:
     """``raw`` with every value the validator could not read dropped, so the rest still reaches
-    the stored rejection: an unreadable ``edge_kind`` costs its own field, not the whole target."""
-    data = dict(raw)
+    the stored rejection: an unreadable ``edge_kind`` costs its own field, not the whole target.
+
+    A `Mapping`, like every other pre-validation payload here: the caller validates it, and the
+    values inside are only as typed as what a tool was called with.
+    """
+    data: Mapping[str, Any] = dict(raw)
     for error in exc.errors():
         data = _dropped(data, tuple(error["loc"]))
     return data
