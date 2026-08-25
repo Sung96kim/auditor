@@ -4,6 +4,7 @@ Stdlib only — pure counting/grouping/distance. Run during `graph build`."""
 import math
 import statistics
 from collections import Counter, defaultdict
+from enum import StrEnum
 from typing import ClassVar
 
 from auditor.config import AuditorSettings
@@ -33,6 +34,15 @@ _DEGREE_KINDS = (
     EdgeKind.CONTAINS,
     EdgeKind.REGISTERED_IN,
 )
+
+
+class GodConceptKind(StrEnum):
+    """Which centrality made a node a god concept, for readers of the index and the MCP surface.
+    The ``-f json`` scan stream does not carry it, so the message prose is still load-bearing there.
+    """
+
+    FAN_OUT = "fan_out"
+    BOTTLENECK = "bottleneck"
 
 
 class GraphContext:
@@ -83,7 +93,13 @@ class GraphDetector:
         raise NotImplementedError
 
     def _finding(
-        self, *, line: int, message: str, evidence: str, suggestion: str
+        self,
+        *,
+        line: int,
+        message: str,
+        evidence: str,
+        suggestion: str,
+        subkind: StrEnum | None = None,
     ) -> Finding:
         return Finding(
             rule_id=self.rule_id,
@@ -95,13 +111,24 @@ class GraphDetector:
             evidence=evidence,
             suggestion=suggestion,
             detector="graph",
+            subkind=subkind.value if subkind is not None else None,
         )
 
     def _located(
-        self, n: GraphNode, *, message: str, evidence: str, suggestion: str
+        self,
+        n: GraphNode,
+        *,
+        message: str,
+        evidence: str,
+        suggestion: str,
+        subkind: StrEnum | None = None,
     ) -> tuple[str, Finding]:
         return n.module, self._finding(
-            line=n.line, message=message, evidence=evidence, suggestion=suggestion
+            line=n.line,
+            message=message,
+            evidence=evidence,
+            suggestion=suggestion,
+            subkind=subkind,
         )
 
 
@@ -141,6 +168,7 @@ class GodConcept(GraphDetector):
             od = self.ctx.out_degree.get(n.id, 0)
             idg = self.ctx.in_degree.get(n.id, 0)
             if math.log1p(od) >= self.out_floor:
+                kind = GodConceptKind.FAN_OUT
                 message = (
                     f"{n.qualname} has high fan-out ({od}) — too many responsibilities; "
                     "consider decomposing it."
@@ -149,6 +177,7 @@ class GodConcept(GraphDetector):
                     "split responsibilities; reduce what this coordinates/owns."
                 )
             elif math.log1p(idg) >= self.in_floor:
+                kind = GodConceptKind.BOTTLENECK
                 message = (
                     f"{n.qualname} is a bottleneck ({idg} dependents) — changes here "
                     "have wide blast-radius."
@@ -159,7 +188,13 @@ class GodConcept(GraphDetector):
             else:
                 continue
             out.append(
-                self._located(n, message=message, evidence=n.id, suggestion=suggestion)
+                self._located(
+                    n,
+                    message=message,
+                    evidence=n.id,
+                    suggestion=suggestion,
+                    subkind=kind,
+                )
             )
         return out
 

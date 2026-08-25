@@ -2,10 +2,12 @@
 live in ``_support`` so they can be imported from any subdirectory test."""
 
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO, git
+from loguru import logger
 from typer import rich_utils
 
 
@@ -24,6 +26,19 @@ def _isolated_auditor_home(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("auditor_home")
     monkeypatch.setenv("AUDITOR_HOME", str(home))
     return home
+
+
+@pytest.fixture
+def warning_log() -> Iterator[list[str]]:
+    """Collect every WARNING the ``auditor`` logger emits during the test, message text only."""
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, level="WARNING", format="{message}")
+    logger.enable("auditor")
+    try:
+        yield messages
+    finally:
+        logger.disable("auditor")
+        logger.remove(sink_id)
 
 
 @pytest.fixture

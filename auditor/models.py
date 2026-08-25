@@ -166,7 +166,11 @@ class ManifestEntry(BaseModel):
 
 class Finding(BaseModel):
     """A single audit finding. ``rule_id`` is the primary key referenced by config,
-    the index ``findings`` table, and cross-file dedup."""
+    the index ``findings`` table, and cross-file dedup.
+
+    ``subkind`` is a detector's own discriminator for a rule that reports two shapes under one id.
+    It is not part of the id, so a baseline entry and an ``auditor: skip`` directive keep resolving.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -179,6 +183,7 @@ class Finding(BaseModel):
     evidence: str = ""
     suggestion: str | None = None
     detector: str | None = None
+    subkind: str | None = None
     checklist_item: int | None = None
     standard_refs: tuple[str, ...] = ()
 

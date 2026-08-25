@@ -36,7 +36,7 @@ async def _findings_by_node(index: "IndexStore") -> dict[str, list[str]]:
     """Map node_id -> [graph rule_ids]. Graph findings store the symbol id in ``evidence``."""
     out: dict[str, list[str]] = {}
     for f in await index.findings.by_rule_prefix("GRAPH-"):
-        out.setdefault(f["evidence"], []).append(f["rule_id"])
+        out.setdefault(f.evidence, []).append(f.rule_id)
     return out
 
 

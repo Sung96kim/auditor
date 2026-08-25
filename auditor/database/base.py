@@ -157,7 +157,7 @@ def retry_on_locked(fn: Any) -> Any:
     return wrapper
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 DEFAULT_REPO = (
     "."  # single-partition fallback when no repo is given (unit tests, ad-hoc dbs)
 )

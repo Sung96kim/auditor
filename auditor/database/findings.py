@@ -7,6 +7,8 @@
 import sqlite3
 from typing import Any, ClassVar
 
+from pydantic import BaseModel, ConfigDict
+
 from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.models import Finding
 
@@ -25,6 +27,7 @@ def _finding_values(repo: str, path: str, f: Finding) -> dict[str, Any]:
         "evidence": f.evidence,
         "suggestion": f.suggestion,
         "detector": f.detector,
+        "subkind": f.subkind,
         "checklist_item": f.checklist_item,
         "standard_refs": ",".join(f.standard_refs),
     }
@@ -41,11 +44,23 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
         evidence=row["evidence"],
         suggestion=row["suggestion"],
         detector=row["detector"],
+        subkind=row["subkind"],
         checklist_item=row["checklist_item"],
         standard_refs=(
             tuple(row["standard_refs"].split(",")) if row["standard_refs"] else ()
         ),
     )
+
+
+class FindingRow(BaseModel):
+    """One finding as the rule-prefix reader sees it: the fields a cross-cutting consumer needs
+    without materialising the whole record."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_id: str
+    subkind: str | None = None
+    evidence: str = ""
 
 
 class FindingsDB(BaseDB):
@@ -74,6 +89,7 @@ class FindingsDB(BaseDB):
                 Column(name="evidence", type="TEXT", not_null=True, default="''"),
                 Column(name="suggestion", type="TEXT"),
                 Column(name="detector", type="TEXT"),
+                Column(name="subkind", type="TEXT"),
                 Column(name="checklist_item", type="INTEGER"),
                 Column(name="standard_refs", type="TEXT", not_null=True, default="''"),
             ),
@@ -230,11 +246,13 @@ class FindingsDB(BaseDB):
 
         await self._worker.run(op)
 
-    async def by_rule_prefix(self, prefix: str) -> list[dict]:
+    async def by_rule_prefix(self, prefix: str) -> list[FindingRow]:
+        """Every finding whose rule id starts with ``prefix``, narrowed to the columns a
+        cross-cutting reader needs."""
         return [
-            dict(r)
+            FindingRow.model_validate(dict(r))
             for r in await self._fetch(
-                "SELECT rule_id, message, evidence FROM findings "
+                "SELECT rule_id, subkind, evidence FROM findings "
                 "WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
                 (f"{prefix}%",),
             )

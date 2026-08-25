@@ -3,8 +3,6 @@
 import asyncio
 from pathlib import Path
 
-from loguru import logger
-
 from auditor import engine as engine_mod
 from auditor.config import AuditorSettings, load_config
 from auditor.database import IndexStore
@@ -389,30 +387,20 @@ def test_engine_passes_resolve_packages_and_env(tmp_path: Path) -> None:
     assert engine.resolver._site_packages == sp
 
 
-def test_engine_warns_when_reach_set_but_no_env(tmp_path: Path) -> None:
+def test_engine_warns_when_reach_set_but_no_env(
+    tmp_path: Path, warning_log: list[str]
+) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    msgs: list[str] = []
-    sink_id = logger.add(msgs.append, level="WARNING", format="{message}")
-    logger.enable("auditor")
-    try:
-        ScanEngine(tmp_path, AuditorSettings(resolve_packages=["atmo"]))
-    finally:
-        logger.disable("auditor")
-        logger.remove(sink_id)
-    assert any("resolve_packages" in m for m in msgs)
+    ScanEngine(tmp_path, AuditorSettings(resolve_packages=["atmo"]))
+    assert any("resolve_packages" in m for m in warning_log)
 
 
-def test_engine_no_warning_when_reach_empty(tmp_path: Path) -> None:
+def test_engine_no_warning_when_reach_empty(
+    tmp_path: Path, warning_log: list[str]
+) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    msgs: list[str] = []
-    sink_id = logger.add(msgs.append, level="WARNING", format="{message}")
-    logger.enable("auditor")
-    try:
-        ScanEngine(tmp_path, AuditorSettings())
-    finally:
-        logger.disable("auditor")
-        logger.remove(sink_id)
-    assert not any("resolve_packages" in m for m in msgs)
+    ScanEngine(tmp_path, AuditorSettings())
+    assert not any("resolve_packages" in m for m in warning_log)
 
 
 def test_dependency_refresh_orms_clears_greenlet(tmp_path):
