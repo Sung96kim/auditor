@@ -33,8 +33,9 @@ from auditor.graph.resolve_edges import NameBindings, call_forms, form_for
 from auditor.roles import RoleClassifier
 
 #: the node kinds the resolver's own endpoints have, src first (spec 9.2 "src/dst kinds obey the
-#: resolver's rules"): `overrides` runs method to method, `resolve_edges.py:552`.
-_ENDPOINT_KINDS: dict[EdgeKind, tuple[frozenset[NodeKind], frozenset[NodeKind]]] = {
+#: resolver's rules"): `overrides` runs method to method, `resolve_edges.py:552`. Public because
+#: it is a claim about the resolver, and a test holds it to the edges the resolver really emits.
+ENDPOINT_KINDS: dict[EdgeKind, tuple[frozenset[NodeKind], frozenset[NodeKind]]] = {
     EdgeKind.CALLS: (frozenset(FUNCTION_KINDS), frozenset(FUNCTION_KINDS)),
     EdgeKind.REFERENCES_TYPE: (
         frozenset(FUNCTION_KINDS),
@@ -325,7 +326,7 @@ class FactVerifier(BaseModel):
 
     def _endpoint_kinds(self, src: str, dst: str, kind: EdgeKind) -> str | None:
         """The reason the endpoints do not obey the resolver's kind rules, or ``None``."""
-        for node_id, allowed in zip((src, dst), _ENDPOINT_KINDS[kind], strict=True):
+        for node_id, allowed in zip((src, dst), ENDPOINT_KINDS[kind], strict=True):
             facts = self.files.get(file_of(node_id))
             node = facts.node(node_id) if facts else None
             if node is None:

@@ -15,7 +15,7 @@ from auditor.graph.refine.models import (
     RefinementTarget,
 )
 from auditor.graph.refine.verify import (
-    _ENDPOINT_KINDS,
+    ENDPOINT_KINDS,
     FactVerifier,
     FileFacts,
     VerifyStatus,
@@ -364,9 +364,9 @@ KINDS_REPO = {
 
 
 def test_the_endpoint_table_covers_exactly_the_kinds_a_proposal_may_name():
-    """`_ENDPOINT_KINDS[kind]` is a bare lookup, so a sixth refinable kind upstream would raise
+    """`ENDPOINT_KINDS[kind]` is a bare lookup, so a sixth refinable kind upstream would raise
     here rather than answer."""
-    assert set(_ENDPOINT_KINDS) == REFINABLE_EDGE_KINDS
+    assert set(ENDPOINT_KINDS) == REFINABLE_EDGE_KINDS
 
 
 def test_the_endpoint_table_says_what_the_resolver_emits(tmp_path: Path):
@@ -383,13 +383,13 @@ def test_the_endpoint_table_says_what_the_resolver_emits(tmp_path: Path):
     ]
     by_id = {n.id: n for n in nodes}
     emitted = {
-        e.kind for e in resolve_structural(nodes).edges if e.kind in _ENDPOINT_KINDS
+        e.kind for e in resolve_structural(nodes).edges if e.kind in ENDPOINT_KINDS
     }
     assert EdgeKind.OVERRIDES in emitted  # the row the comment used to get wrong
     for edge in resolve_structural(nodes).edges:
-        if edge.kind not in _ENDPOINT_KINDS:
+        if edge.kind not in ENDPOINT_KINDS:
             continue
-        src_kinds, dst_kinds = _ENDPOINT_KINDS[edge.kind]
+        src_kinds, dst_kinds = ENDPOINT_KINDS[edge.kind]
         assert by_id[edge.src].kind in src_kinds, edge
         assert by_id[edge.dst].kind in dst_kinds, edge
 
