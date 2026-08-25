@@ -266,6 +266,8 @@ class UnresolvedRow(BaseModel):
 # Queue display policy, shared by every surface so the CLI and the MCP tool cannot drift apart.
 QUEUE_ROW_LIMIT = 50
 QUEUE_ID_CAP = 10
+#: default row cap for `graph log` and `graph refinements`, so the two surfaces cannot drift
+LOG_ROW_LIMIT = 50
 # Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
 DEFAULT_FLOW_LIMIT = 200
 DEFAULT_FLOW_DEPTH = 4

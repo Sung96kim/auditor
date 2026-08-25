@@ -1,6 +1,7 @@
 """Read-side query API over the persisted graph (spec §10). Stdlib only."""
 
 from collections import Counter
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from auditor.graph.cache import GraphCache, QueueRow, resolve_ids
@@ -10,20 +11,27 @@ from auditor.graph.flow import (
     FlowPayload,
     build_flow,
 )
-from auditor.graph.model import GraphCluster
+from auditor.graph.model import LOG_ROW_LIMIT, GraphCluster
 from auditor.graph.payloads import (
     ClusterMember,
     ClustersReport,
     ConceptPayload,
+    LogFilter,
+    LogReport,
+    LogView,
     NeighborRow,
     NeighborsReport,
+    RefinementRowPayload,
+    RefinementsReport,
     RelatedReport,
     RelatedRow,
+    RunRowPayload,
     SearchReport,
     SearchRow,
     UsageGroup,
     UsagesPayload,
 )
+from auditor.graph.refine.models import RefinementStatus
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -264,4 +272,63 @@ class GraphQuery:
             cluster_id=best["cluster_id"],
             label=best["label"],
             members=tuple(ClusterMember.model_validate(m) for m in members),
+        )
+
+
+class LogQuery:
+    """The provenance reads for one checkout: the refinements page and the log's two views."""
+
+    def __init__(self, index: "IndexStore") -> None:
+        self.index = index
+
+    async def refinements(
+        self,
+        statuses: Sequence[RefinementStatus] | None = None,
+        limit: int = LOG_ROW_LIMIT,
+    ) -> RefinementsReport:
+        """The recorded corrections oldest first, which is the order a build applies them in."""
+        rows = await self.index.refinements.refinements(
+            statuses=statuses, limit=max(1, limit)
+        )
+        anchors = await self.index.refinements.anchors([r.refinement_id for r in rows])
+        return RefinementsReport(
+            rows=tuple(
+                RefinementRowPayload.of(r, anchors.get(r.refinement_id, ()))
+                for r in rows
+            ),
+            filtered=bool(statuses),
+        )
+
+    async def page(self, spec: LogFilter) -> LogReport:
+        """One page in whichever view the filter chose, newest first in both."""
+        if spec.view is LogView.RUNS:
+            runs = await self.index.runs.runs(
+                statuses=spec.run_statuses,
+                exclude=spec.excluded_run_statuses,
+                since=spec.since,
+                limit=spec.limit,
+            )
+            counts = await self.index.refinements.counts_by_run(
+                [r.run_id for r in runs]
+            )
+            return LogReport.of(
+                spec,
+                runs=[
+                    RunRowPayload.of(r, refinements=counts.get(r.run_id, 0))
+                    for r in runs
+                ],
+            )
+        rows = await self.index.refinements.refinements(
+            statuses=spec.refinement_statuses,
+            since=spec.since,
+            newest_first=True,
+            limit=spec.limit,
+        )
+        anchors = await self.index.refinements.anchors([r.refinement_id for r in rows])
+        return LogReport.of(
+            spec,
+            refinements=[
+                RefinementRowPayload.of(r, anchors.get(r.refinement_id, ()))
+                for r in rows
+            ],
         )
