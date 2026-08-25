@@ -386,10 +386,15 @@ async def test_every_kind_obeys_the_run_scope(
 
 
 async def test_a_scope_matches_on_a_path_boundary(refine_service: RefinementService):
-    """A bare prefix match puts `svc_other.py` under the scope `svc`, which is a file the run was
-    never given."""
+    """A bare prefix match puts `svc.py` under the scope `svc`, a directory this repo does not
+    have, and everything in `auditor/graphql/` under `auditor/graph`. The id has to fall on a path
+    or symbol boundary, so this stages under a prefix match and is refused under the real rule."""
     run = await refine_service.begin(scope="svc")
-    verdict = await refine_service.propose(run.run_id, CALL_EDGE)
+    inside_the_prefix = NOTE.model_copy(
+        update={"target": RefinementTarget(node_id="svc.py::load_user")}
+    )
+    verdict = await refine_service.propose(run.run_id, inside_the_prefix)
+    assert verdict.outcome is ProposalOutcome.REJECTED
     assert verdict.refusal is RefusalKind.OUT_OF_SCOPE
 
 

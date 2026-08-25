@@ -1,6 +1,7 @@
 """Every MCP tool resolves its root and opens the index through one seam (the S1 audit item)."""
 
 import ast
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,28 @@ async def test_a_migrated_tool_binds_the_checkout_identity(
         assert seen == [want.partition.identity]
     finally:
         await want.aclose()
+
+
+async def test_two_index_handles_on_one_identity_do_not_deadlock(graph_repo: Path):
+    """`audit_target` opens its own connection to the same database file, so a tool that scans is
+    a second writer whatever the ordering. The preamble no longer spans one, and two live handles
+    still have to make progress rather than wedge each other on the write lock."""
+    first, second = await asyncio.gather(
+        open_repo_index(graph_repo), open_repo_index(graph_repo)
+    )
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(
+                first.ignores.add("A-RULE", None, None, None, None, 1.0),
+                second.ignores.add("B-RULE", None, None, None, None, 1.0),
+            ),
+            timeout=30,
+        )
+        rows = sorted(row["rule_id"] for row in await first.ignores.list())
+        assert rows == ["A-RULE", "B-RULE"]
+    finally:
+        await first.aclose()
+        await second.aclose()
 
 
 #: the three ways a repo policy fails to load, each already one line from the CLI (S4c-1)
