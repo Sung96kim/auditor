@@ -1,25 +1,62 @@
-"""``auditr graph unresolved`` — the deterministic refinement queue.
+"""``auditr graph unresolved`` and ``auditr graph refinements`` — the queue, and the recorded
+corrections a human steers.
 
 ``cli/graph.py`` calls :func:`register` at the bottom of its module; this module never imports it
 back, so the ``graph`` sub-app stays a one-way dependency.
 """
 
+from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import cli_root, open_index, present, run
+from auditor.cli.helpers import (
+    cli_root,
+    fail,
+    load_settings,
+    open_index,
+    present,
+    run,
+)
 from auditor.cli.options import (
     GraphTarget,
     QueueCallForm,
     QueueExternal,
     QueueLimit,
     QueueReason,
+    RefinementId,
+    RefinementStatusFilter,
+    RowLimit,
 )
-from auditor.cli.render import render_graph_unresolved
-from auditor.graph.model import QUEUE_ROW_LIMIT, CallForm, UnresolvedReason
-from auditor.graph.payloads import QueueReport, QueueRowPayload
+from auditor.cli.render import (
+    render_graph_prune,
+    render_graph_refinement,
+    render_graph_refinements,
+    render_graph_unresolved,
+)
+from auditor.config import AuditorSettings
+from auditor.graph.model import (
+    LOG_ROW_LIMIT,
+    QUEUE_ROW_LIMIT,
+    CallForm,
+    UnresolvedReason,
+)
+from auditor.graph.payloads import (
+    PruneReport,
+    QueueReport,
+    QueueRowPayload,
+    RefinementRowPayload,
+    RefinementsReport,
+)
+from auditor.graph.query import LogQuery
+from auditor.graph.refine.models import Refinement, RefinementStatus
+from auditor.graph.refine.service import (
+    RefinementLedger,
+    RefinementRefused,
+    RefinementService,
+)
+from auditor.user_settings import load_user_settings
 
 
 async def _unresolved_rows(
@@ -71,6 +108,118 @@ def graph_unresolved(
     )
 
 
+refinements_app = typer.Typer(
+    no_args_is_help=True, help="Inspect and steer the recorded graph corrections."
+)
+
+
+async def _refinements(
+    root: Path, statuses: list[RefinementStatus] | None, limit: int
+) -> RefinementsReport:
+    """One page of the recorded corrections, through the reader the MCP tool also calls."""
+    async with await open_index(root) as index:
+        return await LogQuery(index).refinements(statuses, limit)
+
+
+async def _move(
+    root: Path, act: Callable[[RefinementLedger], Awaitable[Refinement]]
+) -> RefinementRowPayload:
+    """One hand transition through the ledger, so the CLI and the daemon share the rules.
+
+    The ledger, not the service: a status change needs neither a checkout root nor a run registry
+    nor a git guard, and `RefinementService` has no `accept`, `revert` or `pin` at all.
+    """
+    async with await open_index(root) as index:
+        return RefinementRowPayload.of(await act(RefinementLedger(index=index)))
+
+
+def _transition(
+    target: Path,
+    json_: bool,
+    act: Callable[[RefinementLedger], Awaitable[Refinement]],
+) -> None:
+    """Run one transition and print the row it produced, or the reason it was refused."""
+    root = cli_root(target)
+    try:
+        payload = run(_move(root, act), "updating…")
+    except RefinementRefused as exc:
+        fail(str(exc))
+    present(payload, render_graph_refinement, as_json=json_)
+
+
+async def _prune(root: Path, settings: AuditorSettings) -> PruneReport:
+    """The retention sweep at this user's configured window.
+
+    The one command here that does build a `RefinementService`: `prune()` reads
+    `user.observer.skipped_retention_days`, and that read belongs in one place.
+    """
+    async with await open_index(root) as index:
+        service = RefinementService(index, root, settings, load_user_settings(root))
+        return PruneReport(removed=await service.prune())
+
+
+@refinements_app.command("list")
+def refinements_list(
+    target: GraphTarget = Path("."),
+    status: RefinementStatusFilter = None,
+    limit: RowLimit = LOG_ROW_LIMIT,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """The graph corrections recorded for this checkout, oldest first: the order a build applies
+    them in. Use `auditr graph log --refinements` for the newest first."""
+    root = cli_root(target)
+    present(
+        run(_refinements(root, status, limit), "reading refinements…"),
+        render_graph_refinements,
+        as_json=json_,
+    )
+
+
+@refinements_app.command("accept")
+def refinements_accept(
+    refinement_id: RefinementId,
+    target: GraphTarget = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Activate a pending correction. The next `graph build` applies it."""
+    _transition(target, json_, lambda ledger: ledger.accept(refinement_id))
+
+
+@refinements_app.command("revert")
+def refinements_revert(
+    refinement_id: RefinementId,
+    target: GraphTarget = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Take a correction back out of the graph. The row stays, with its reason."""
+    _transition(target, json_, lambda ledger: ledger.revert(refinement_id))
+
+
+@refinements_app.command("pin")
+def refinements_pin(
+    refinement_id: RefinementId,
+    target: GraphTarget = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Keep a correction through anchor drift and dead builds; it is never auto-staled."""
+    _transition(target, json_, lambda ledger: ledger.pin(refinement_id))
+
+
+@refinements_app.command("prune")
+def refinements_prune(
+    target: GraphTarget = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Drop assessment-only runs older than the retention window. Refinements are never pruned."""
+    root = cli_root(target)
+    present(
+        run(_prune(root, load_settings(root)), "pruning…"),
+        render_graph_prune,
+        as_json=json_,
+    )
+
+
 def register(app: typer.Typer) -> None:
     """Mount this module's commands onto the ``graph`` sub-app."""
     app.command("unresolved")(graph_unresolved)
+    app.add_typer(refinements_app, name="refinements")

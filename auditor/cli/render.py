@@ -36,11 +36,15 @@ from auditor.graph.payloads import (
     ConceptPayload,
     GraphBuildReport,
     NeighborsReport,
+    PruneReport,
     QueueReport,
+    RefinementRowPayload,
+    RefinementsReport,
     RelatedReport,
     SearchReport,
     UsagesPayload,
 )
+from auditor.graph.refine.models import RefinementStatus
 from auditor.user_settings import UserSettings
 
 _ACCENT = "#7C7CFF"
@@ -240,6 +244,53 @@ def render_graph_unresolved(
             "yes" if row.externally_bound else "",
         )
     out.print(t)
+
+
+def render_graph_refinements(out: Console, payload: RefinementsReport) -> None:
+    if not payload.rows:
+        empty = (
+            "(no refinements matched the filter)"
+            if payload.filtered
+            else "(none recorded; propose one with the graph_refine_* MCP tools)"
+        )
+        out.print(f"[dim]{empty}[/]")
+        return
+    t = Table(border_style=_BORDER, show_header=True, header_style="bold")
+    for col in ("id", "kind", "tier", "status", "target"):
+        t.add_column(col)
+    for row in payload.rows:
+        t.add_row(
+            str(row.refinement_id),
+            row.kind.value,
+            row.tier.value,
+            row.status.value,
+            row.summary,
+        )
+        drift = "[yellow]drifted[/] " if row.drifted else ""
+        t.add_row("", "", "", "", f"{drift}[dim]{row.reason}[/]")
+    out.print(t)
+
+
+def render_graph_refinement(out: Console, payload: RefinementRowPayload) -> None:
+    t = Table.grid(padding=(0, 3))
+    t.add_column(style="bold")
+    t.add_column(style=_ACCENT)
+    for label, value in (
+        ("id", str(payload.refinement_id)),
+        ("kind", payload.kind.value),
+        ("tier", payload.tier.value),
+        ("status", payload.status.value),
+        ("target", payload.summary),
+        ("reason", payload.reason),
+    ):
+        t.add_row(label, value)
+    out.print(Panel(t, title="refinement", border_style=_BORDER))
+    if payload.status is RefinementStatus.ACTIVE:
+        out.print("[dim]run `auditr graph build` to apply it[/dim]")
+
+
+def render_graph_prune(out: Console, payload: PruneReport) -> None:
+    out.print(f"[{_ACCENT}]{payload.removed}[/] assessment-only runs removed")
 
 
 # ---------------------------------------------------------------------------

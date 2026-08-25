@@ -228,12 +228,45 @@ auditr graph unresolved . --json --limit 500
   cached facts are dropped on first use and the next `graph build` re-extracts every file. No
   `--rebuild` is needed.
 
+## Refinements
+
+```bash
+# every correction recorded for this checkout, oldest first
+auditr graph refinements list
+# only the ones a build is applying
+auditr graph refinements list --status active --status pinned
+# activate a pending correction; the next build applies it
+auditr graph refinements accept 12
+# take one back out; the row stays, with its reason
+auditr graph refinements revert 12
+# keep one through anchor drift and dead builds
+auditr graph refinements pin 12
+# drop assessment-only runs older than the retention window
+auditr graph refinements prune
+```
+
+- A correction is proposed through the `graph_refine_*` MCP tools, never by hand: every one is
+  checked against the source file's own AST facts before it is stored. See
+  [auditr-mcp](auditr-mcp.md).
+- `status` is one of `pending`, `active`, `stale`, `redundant`, `reverted`, `pinned`, `superseded`,
+  `rejected`. An unknown value is an error naming the set.
+- Until `auditr graph eval` has produced numbers for this repo, every `add_edge`, `retarget_edge`,
+  `resolve_ambiguous` and `move_node` lands `pending` and needs an explicit `accept`.
+  `confirm_edge`, `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately.
+- `accept`, `revert` and `pin` are deliberately CLI-only. An agent may propose and commit; deciding
+  that a pending correction is right is a human step, and no MCP tool can take it.
+- They change a status and nothing else. The build is the only place a refinement reaches the graph,
+  so run `auditr graph build` afterwards.
+- `prune` only ever touches assessment-only runs (`skipped`), and never one that owns a refinement
+  or a tuning row. Refinements themselves are never deleted.
+
 ## Refinement overlay
 
 - The graph the query commands read is the deterministic build plus an overlay of active
-  refinements. There is no CLI for refinements yet; this section describes what a build does with
-  the rows once something puts them there, and what the three judgement layers decide before a row
-  is written at all.
+  refinements. `auditr graph refinements` lists and steers them and the `graph_refine_*` MCP tools
+  are how an agent proposes one; this section describes what a build does with the rows once
+  something puts them there, and what the three judgement layers decide before a row is written at
+  all.
 - A refinement is recorded against a repo *identity* (the git common dir), not a scan partition, so
   every worktree of one checkout shares them.
 - Every edge carries a provenance: `deterministic` when the resolver produced it, `refined` when an

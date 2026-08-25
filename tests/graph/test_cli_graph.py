@@ -146,6 +146,18 @@ def test_cli_graph_flow_rejects_an_unknown_kind(graph_repo_flow: Path, bad: str)
     assert "unknown --kinds" in result.output
 
 
+def test_an_unknown_kind_names_the_valid_set(graph_repo_flow: Path):
+    """The message has to carry the set, not just the word 'unknown': a typo with no list is a
+    second round trip."""
+    _built(graph_repo_flow)
+    result = runner.invoke(
+        app, ["graph", "flow", "entry", str(graph_repo_flow), "--kinds", "inherit"]
+    )
+    assert result.exit_code != 0
+    for kind in ("calls", "inherits", "references_type"):
+        assert kind in result.output
+
+
 @pytest.mark.parametrize(
     "flag, value", [("--depth", "5000"), ("--limit", "100000"), ("--depth", "-1")]
 )

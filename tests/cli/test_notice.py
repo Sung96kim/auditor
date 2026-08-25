@@ -31,6 +31,11 @@ WARNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("graph", "flow"),
         ("graph", "neighbors"),
         ("graph", "related"),
+        ("graph", "refinements", "accept"),
+        ("graph", "refinements", "list"),
+        ("graph", "refinements", "pin"),
+        ("graph", "refinements", "prune"),
+        ("graph", "refinements", "revert"),
         ("graph", "search"),
         ("graph", "serve"),
         ("graph", "unresolved"),
@@ -65,20 +70,25 @@ SILENT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
 def _command_paths() -> set[tuple[str, ...]]:
     """Every dispatchable path in the CLI, walking the sub-apps the composition root mounts.
 
+    The walk recurses, because a sub-app may mount a sub-app: a group is not dispatchable itself,
+    so stopping at one would classify a name no one can run and leave its commands undecided.
     The group check is `TyperGroup`, not `click.Group`: typer 0.26 vendors its own click core, so
     a mounted sub-app is not an instance of the stdlib class.
     """
-    group = get_group(app)
-    ctx = click.Context(group)
-    out: set[tuple[str, ...]] = set()
-    for name in group.list_commands(ctx):
-        command = group.get_command(ctx, name)
-        if isinstance(command, TyperGroup):
-            sub = click.Context(command, parent=ctx)
-            out |= {(name, child) for child in command.list_commands(sub)}
-        else:
-            out.add((name,))
-    return out
+
+    def walk(group: TyperGroup, ctx: click.Context) -> set[tuple[str, ...]]:
+        out: set[tuple[str, ...]] = set()
+        for name in group.list_commands(ctx):
+            command = group.get_command(ctx, name)
+            if isinstance(command, TyperGroup):
+                sub = click.Context(command, parent=ctx)
+                out |= {(name, *rest) for rest in walk(command, sub)}
+            else:
+                out.add((name,))
+        return out
+
+    root = get_group(app)
+    return walk(root, click.Context(root))
 
 
 def test_the_command_registry_is_fully_classified():

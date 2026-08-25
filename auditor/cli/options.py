@@ -7,12 +7,14 @@ import typer
 
 from auditor.graph.model import (
     DEFAULT_FLOW_DEPTH,
+    LOG_ROW_LIMIT,
     MAX_FLOW_DEPTH,
     MAX_FLOW_LIMIT,
     QUEUE_ROW_LIMIT,
     CallForm,
     UnresolvedReason,
 )
+from auditor.graph.refine.models import RefinementStatus
 from auditor.models import RuleId
 
 ScanTarget = Annotated[Path, typer.Argument(help="File or directory to audit.")]
@@ -271,6 +273,20 @@ QueueExternal = Annotated[
     ),
 ]
 
+
+RefinementId = Annotated[
+    int, typer.Argument(help="Refinement id, from `auditr graph refinements list`.")
+]
+RefinementStatusFilter = Annotated[
+    list[RefinementStatus] | None,
+    typer.Option("--status", help="Only these refinement statuses (repeatable)."),
+]
+RowLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit", min=1, help=f"Cap the rows shown (default {LOG_ROW_LIMIT})."
+    ),
+]
 
 # --- `graph flow` options ---
 FlowIn = Annotated[

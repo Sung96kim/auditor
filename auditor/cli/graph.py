@@ -53,7 +53,12 @@ from auditor.engine import audit_target
 from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.flow import FlowDirection, FlowOptions
-from auditor.graph.model import DEFAULT_FLOW_DEPTH, DEFAULT_FLOW_LIMIT, EdgeKind
+from auditor.graph.model import (
+    DEFAULT_FLOW_DEPTH,
+    DEFAULT_FLOW_LIMIT,
+    EdgeKind,
+    enum_values,
+)
 from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine.lock import rebuild_lock
@@ -239,15 +244,23 @@ def graph_usages(
 
 
 def _split_kinds(raw: str | None) -> list[str]:
-    """Parse --kinds, rejecting a typo rather than returning a tree that silently omits it."""
-    kinds = [k.strip() for k in (raw or "").split(",") if k.strip()]
-    allowed = sorted(e.value for e in EdgeKind)
-    unknown = [k for k in kinds if k not in allowed]
-    if unknown:
-        raise typer.BadParameter(
-            f"unknown --kinds: {', '.join(unknown)}. Valid: {', '.join(allowed)}"
+    """Parse --kinds through the one kinds validator every surface shares, so a typo is an error
+    rather than a tree that silently omits the kind.
+
+    The field name is the flag, because this caller is the CLI; `graph_flow` passes ``"kinds"``,
+    which is what its own parameter is called.
+    """
+    try:
+        return (
+            enum_values(
+                [k.strip() for k in (raw or "").split(",") if k.strip()],
+                EdgeKind,
+                "--kinds",
+            )
+            or []
         )
-    return kinds
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _flow_options(

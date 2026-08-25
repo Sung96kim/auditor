@@ -89,6 +89,8 @@ auditr plugins list
 auditr malware status
 # build the semantic graph
 auditr graph build .
+# the corrections recorded for this checkout
+auditr graph refinements list
 # check PyPI for a newer release and install it
 auditr self update
 # print the installed version
