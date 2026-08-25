@@ -310,8 +310,8 @@ flowchart TB
   it rejects every row the commit inserted, so a run that dies leaves nothing a later `accept`
   could activate and a retry cannot land the same change twice.
 - `RefinementLedger` is the by-hand half over the index handle alone: `accept`, `revert` and `pin`
-  are status transitions, because the build is the one merge point, and `prune` is the retention
-  sweep. It needs no run registry, no checkout root and no git guard, which is what a
+  are status transitions, because the build is the one merge point, and `prune` finishes the runs a
+  dead process left open and then sweeps the retention window. It needs no run registry, no checkout root and no git guard, which is what a
   `graph refinements accept <id>` surface has to work without. `RefinementService` composes it.
 - `FactReader` does the three reads a proposal is judged against (its queue row, the role-filtered
   definers of the name, a verifier over the files it names). `verify.FactVerifier` is pure by
@@ -320,15 +320,25 @@ flowchart TB
   validators own that rule), when the run is at `max_changes_per_run`, when it names ids outside
   the run's scope or outside this partition, when the run already staged it, or when the run
   already answers that queue name with another destination. Every one of those is stored, so an
-  aborted run still explains itself.
-- Staged proposals never reach the database. `RunRegistry.process()` is the one registry a process
-  stages into, so a service built per tool call finds the run the call before it opened; it is
-  bounded by `observer.limits.max_open_runs`, so a run whose process dies loses exactly the work
-  that was never promised, and `graph_refine_status` reports `staged_here: false` in any other
-  process rather than an empty list. Evicting a run to make room finishes its `graph_runs` row
-  `skipped` and stores its staging as rejections, so no row is left `queued`; `prune_skipped_runs`
-  reaps such a run together with those rejections, and keeps any skipped run that owns a refinement
-  which is still live.
+  aborted run still explains itself. That includes a payload no kind could fill: `Proposal.read`
+  re-reads it with the values the validator could not read dropped, and the target rule is relaxed
+  for a row that is being stored as a rejection, since such a row exists to carry the complaint.
+  Only an unreadable `kind` still raises, because the kind chooses the shape.
+- Staged proposals never reach the database. `RunRegistry.process(identity)` is the registry a
+  process stages into for one repo identity, so a service built per tool call finds the run the
+  call before it opened; it is bounded by that identity's `observer.limits.max_open_runs`, so a run
+  whose process dies loses exactly the work that was never promised, and `graph_refine_status`
+  reports `staged_here: false` in any other process rather than an empty list. Keyed by identity
+  because an MCP server takes the repo path per call and therefore holds runs from several
+  checkouts: on one shared registry, one repo's cap decided which of another's runs was evicted,
+  and the eviction was written under the caller's identity, so the evicted row stayed `queued` for
+  ever. Evicting a run to make room finishes its `graph_runs` row `skipped` and stores its staging
+  as rejections, so no row is left `queued`; `prune_skipped_runs` reaps such a run together with
+  those rejections, and keeps any skipped run that owns a refinement which is still live.
+- A run left `queued` by a process that died is reachable from nowhere else, so
+  `RefinementLedger.prune` finishes those too: any `queued` row older than
+  `observer.limits.stranded_run_seconds` becomes `skipped` with `error="stranded: …"`, which is
+  what makes it visible in the log and eligible for the sweep.
 - One run is one critical section. Each `StagedRun` owns an `asyncio.Lock` held for the whole body
   of `propose`, `commit` and `abort`, and both terminal methods close the run before their first
   real await, so a second `commit` is refused rather than inserting the same rows twice. The
@@ -402,10 +412,12 @@ flowchart TB
   it. Reordering two same-typed columns can no longer transpose a row.
 - Ids inside those tables are toplevel-relative: `partition_prefix` plus the partition-relative id,
   so a repo scanned both at its root and at a subdirectory keeps one namespace.
-- `graph_runs` rows with `status='skipped'` are the assessment-only records; the observer sweeps
-  them with `RunsDB.prune_skipped_runs` after `observer.skipped_retention_days`. Real runs
-  are never swept, and neither is a skipped run that owns a `graph_refinements` or `graph_tuning`
-  row: both reference `graph_runs.run_id` with no `ON DELETE`.
+- `graph_runs` rows with `status='skipped'` are the assessment-only records, plus the evicted and
+  stranded runs; the observer sweeps them with `RunsDB.prune_skipped_runs` after
+  `observer.skipped_retention_days`, which returns both counts because deleting such a run deletes
+  the `rejected` refinements it owns. Real runs are never swept, and neither is a skipped run that
+  owns a `graph_tuning` row or a refinement that is not `rejected`: both reference
+  `graph_runs.run_id` with no `ON DELETE`.
 - `graph/hashes.py` derives two hashes per node from the extracted facts: `truth_sha` over the fact
   tuples structural edges read, and `facts_sha` over those plus `doc_tokens`.
   - `truth_sha` decides run gating and anchor drift; `facts_sha` decides whether similarity edges
