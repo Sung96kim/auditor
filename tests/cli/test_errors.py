@@ -4,16 +4,17 @@ one-line message, never a raw traceback."""
 from pathlib import Path
 
 import pytest
-from _support import BROKEN_CONFIGS, assert_no_escape, invoke, write_broken_config
+from _support import (
+    BROKEN_CONFIGS,
+    assert_no_escape,
+    invoke,
+    one_line,
+    write_broken_config,
+)
 
 import auditor.cli
 from auditor.database.base import Column
 from auditor.database.ignores import IgnoresDB
-
-
-def one_line(text: str) -> str:
-    """``text`` with its wrapping undone: rich breaks a long line at 80 columns off a TTY."""
-    return " ".join(text.split())
 
 
 def test_bare_invocation_shows_help_and_exits_zero():

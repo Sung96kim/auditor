@@ -7,7 +7,7 @@ import pytest
 from fastmcp import Client
 
 import auditor.mcp.malware_tools as malware_tools
-from auditor.config_notice import NOTICE
+from auditor.config_notice import NOTICE, ConfigNotice
 from auditor.mcp import mcp
 from auditor.mcp.server import REPO_PARAMETERS
 
@@ -75,6 +75,19 @@ async def test_each_repo_in_a_session_is_noted(tmp_path, capsys):
         await client.call_tool("discover", {"path": str(first)})
     captured = capsys.readouterr()
     assert captured.err.count("unknown config key") == 2
+
+
+async def test_a_pre_2_settings_file_reaches_the_client_note(
+    bad_config, legacy_user_config, capsys
+):
+    """The MCP edge says the same thing the CLI does, on one line: the settings a version bump
+    moved, and where each of them went."""
+    async with Client(mcp) as client:
+        await client.call_tool("discover", {"path": str(bad_config)})
+    captured = capsys.readouterr()
+    assert all(move in captured.err for move in legacy_user_config)
+    assert "auditr init --force" in captured.err
+    assert ConfigNotice.MOVED not in captured.out
 
 
 async def test_a_tool_that_names_no_repo_does_not_note(capsys):

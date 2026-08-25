@@ -19,7 +19,7 @@ from rich.text import Text
 
 from auditor.cli.console import ACCENT, console, err_console
 from auditor.config import AuditorSettings, ConfigError, load_config
-from auditor.config_notice import NOTICE
+from auditor.config_notice import NOTICE, ConfigNotice
 from auditor.database import IndexStore, open_repo_index
 from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
 from auditor.discovery import find_root
@@ -103,11 +103,11 @@ def flush_config_notice() -> None:
     The notice writes the lines; this only chooses the sink and the styling, with its closing
     advice dimmed.
     """
-    lines = NOTICE.report()
-    for line in lines[:-1]:
-        err_console.print(f"[yellow]warning:[/yellow] {line}")
-    for line in lines[-1:]:
-        err_console.print(f"[dim]{line}[/dim]")
+    for line in NOTICE.report():
+        if line == ConfigNotice.HINT:
+            err_console.print(f"[dim]{line}[/dim]")
+        else:
+            err_console.print(f"[yellow]warning:[/yellow] {line}")
 
 
 # pydantic appends these when the failure is a dict *key*; neither names a field.

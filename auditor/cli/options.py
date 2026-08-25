@@ -238,6 +238,12 @@ CleanStatus = Annotated[
         "--clean-status", help="Delete a leftover <repo>/.auditor/.status.json."
     ),
 ]
+InitForce = Annotated[
+    bool,
+    typer.Option(
+        "--force", help="Stamp the current version on a settings file that predates it."
+    ),
+]
 
 
 # --- `graph` sub-app options ---

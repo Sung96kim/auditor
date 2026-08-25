@@ -14,7 +14,7 @@ from auditor.user_settings import UserSettings
 def test_init_writes_only_the_marker_keys(_isolated_auditor_home):
     payload = cli_json(invoke("init", "--json"))
     config = json.loads((_isolated_auditor_home / "config.json").read_text())
-    assert config == {"$schema": "./config.schema.json", "config_version": 1}
+    assert config == {"$schema": "./config.schema.json", "config_version": 2}
     schema = json.loads((_isolated_auditor_home / "config.schema.json").read_text())
     assert "observer" in schema["properties"]
     assert "limits" in schema["$defs"]["ObserverConfig"]["properties"]
@@ -33,7 +33,7 @@ def test_init_is_idempotent_and_keeps_user_keys(_isolated_auditor_home):
     config = json.loads(path.read_text())
     assert config["observer"] == {"runner": {"model": "sonnet"}}
     assert config["$schema"] == "./config.schema.json"
-    assert config["config_version"] == 1
+    assert config["config_version"] == 2
 
 
 def test_init_repo_writes_the_overlay_and_breadcrumb(tmp_path, _isolated_auditor_home):
@@ -44,7 +44,7 @@ def test_init_repo_writes_the_overlay_and_breadcrumb(tmp_path, _isolated_auditor
     assert payload["repo_dir"] == str(target)
     assert json.loads((target / "config.json").read_text()) == {
         "$schema": "../../config.schema.json",
-        "config_version": 1,
+        "config_version": 2,
     }
     crumb = json.loads((target / "root.json").read_text())
     assert crumb["root"] == str(project.resolve())

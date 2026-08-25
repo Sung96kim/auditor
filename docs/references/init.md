@@ -29,7 +29,7 @@ auditr init --json
 
 ## What it writes
 
-- `$AUDITOR_HOME/config.json`: `"$schema": "./config.schema.json"` and `"config_version": 1`, plus
+- `$AUDITOR_HOME/config.json`: `"$schema": "./config.schema.json"` and `"config_version": 2`, plus
   whatever keys were already there. Defaults are never written out, so a later default change is
   not pinned and a value the user chose stays distinguishable from one init wrote.
 - `$AUDITOR_HOME/config.schema.json`: generated from `UserSettings`, descriptions included. The
@@ -67,6 +67,9 @@ auditr init --json
   the moved-checkout check, never an identity.
 - `--clean-status` deletes `<repo>/.auditor/.status.json`, which older releases wrote and nothing
   reads any more. Without the flag its presence is only reported.
+- A settings file that predates `config_version` 2 stops the write: the marker would claim a shape
+  the file does not have. The message names every moved key and its new path. `--force` stamps the
+  version anyway and leaves every key in place, as `init` always does.
 - `auditr config check` runs the unknown-key half against both the repo policy and the user
   settings. See [config.md](config.md).
 - An unwritable or file-occupied `$AUDITOR_HOME` exits 1 with a one-line message, no traceback.

@@ -1,6 +1,7 @@
 """Shared fixtures (propagate to the whole mirrored tests/ tree). Module-level helpers
 live in ``_support`` so they can be imported from any subdirectory test."""
 
+import json
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -10,6 +11,7 @@ from _support import DEAD_SYMBOL_REGISTRY, SAMPLE_REPO, git
 from loguru import logger
 from typer import rich_utils
 
+from auditor.paths import user_config_path
 from auditor.registry import REGISTRY
 
 
@@ -41,6 +43,23 @@ def warning_log() -> Iterator[list[str]]:
     finally:
         logger.disable("auditor")
         logger.remove(sink_id)
+
+
+@pytest.fixture
+def legacy_user_config() -> list[str]:
+    """A pre-2 user settings file, in the flat observer shape a released auditr wrote. Returns the
+    moves it should be reported with."""
+    path = user_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"config_version": 1, "observer": {"runner": "claude", "max_turns": 50}}
+        )
+    )
+    return [
+        "observer.max_turns -> observer.limits.max_turns",
+        "observer.runner -> observer.runner.agent",
+    ]
 
 
 @pytest.fixture

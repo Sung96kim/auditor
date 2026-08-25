@@ -11,7 +11,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from auditor.config import ConfigError, unknown_repo_keys
-from auditor.user_settings import unknown_user_keys
+from auditor.user_settings import UserKeyReport, user_key_report
 
 # A layer that cannot be read reports nothing from that layer: it is either already failing the
 # run with its own one-line message, or it is a file this command never loads.
@@ -25,11 +25,13 @@ class ConfigNotice(BaseModel):
     model_config = ConfigDict(frozen=False, validate_assignment=True)
 
     HINT: ClassVar[str] = "unknown keys are ignored; run `auditr config check`"
+    MOVED: ClassVar[str] = "config version 2 moved these settings"
 
     root: Path | None = None
     profile: str | None = None
     overrides: dict[str, object] | None = None
     policy: tuple[str, ...] | None = None
+    user: UserKeyReport | None = None
     owned_by_command: bool = False
     reported: set[Path] = Field(default_factory=set)
 
@@ -39,6 +41,7 @@ class ConfigNotice(BaseModel):
         self.profile = None
         self.overrides = None
         self.policy = None
+        self.user = None
         self.owned_by_command = False
         self.reported = set()
 
@@ -54,6 +57,7 @@ class ConfigNotice(BaseModel):
         self.profile = profile
         self.overrides = overrides
         self.policy = None
+        self.user = None
         return root
 
     def record_policy(self, keys: tuple[str, ...]) -> None:
@@ -82,22 +86,40 @@ class ConfigNotice(BaseModel):
                     self.root, profile=self.profile, overrides=self.overrides
                 )
             )
-        with suppress(*_UNREADABLE):
-            found += unknown_user_keys(self.root, directory=directory)
+        found += list(self.user_keys(directory=directory).unknown)
         return found
 
-    def report(self) -> list[str]:
-        """The lines this run should print, hint last, and a note that this root has spoken.
+    def user_keys(self, *, directory: Path | None = None) -> UserKeyReport:
+        """What the user's two JSON layers hold that the model does not, read once per run."""
+        if self.user is None and self.root is not None:
+            with suppress(*_UNREADABLE):
+                self.user = user_key_report(self.root, directory=directory)
+        return self.user if self.user is not None else UserKeyReport()
 
-        Empty when the command lists the keys in its own output, when there is nothing to say, or
-        when this process already reported this root: the CLI resets between invocations, so every
-        run speaks, while a long-lived MCP server says it once per repo it is asked about.
+    def report(self) -> list[str]:
+        """The lines this run should print, and a note that this root has spoken.
+
+        A root is reported once per process: the CLI resets between invocations, so every run
+        speaks, while a long-lived MCP server says it once per repo it is asked about. A command
+        that lists the unknown keys in its own output still gets the migration line, which no
+        payload carries.
         """
-        if self.root is None or self.owned_by_command or self.root in self.reported:
+        if self.root is None or self.root in self.reported:
             return []
         self.reported.add(self.root)
+        moves = self.user_keys().moves()
+        lines = (
+            [
+                f"{self.MOVED}: {', '.join(moves)}; "
+                "move them, then run `auditr init --force`"
+            ]
+            if moves
+            else []
+        )
+        if self.owned_by_command:
+            return lines
         keys = self.keys()
-        return (
+        return lines + (
             [f"unknown config key: {key}" for key in keys] + [self.HINT] if keys else []
         )
 

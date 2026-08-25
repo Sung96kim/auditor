@@ -16,7 +16,7 @@ from auditor.cli.helpers import (
 from auditor.cli.options import ConfigJson, RootArg, UserConfig
 from auditor.cli.render import render_config_check, render_config_show
 from auditor.config_notice import NOTICE
-from auditor.user_settings import load_user_settings, unknown_user_keys
+from auditor.user_settings import load_user_settings, user_key_report
 
 config_app = typer.Typer(no_args_is_help=True, help="Inspect resolved configuration.")
 
@@ -65,7 +65,7 @@ def config_check(
         {
             "root": str(root),
             "policy_unknown": list(settings.unknown_keys),
-            "user_unknown": unknown_user_keys(root),
+            "user_unknown": list(user_key_report(root).unknown),
         },
         render_config_check,
         as_json=json_,

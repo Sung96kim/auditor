@@ -226,6 +226,11 @@ def invoke(*args: str):
     return _RUNNER.invoke(app, list(args))
 
 
+def one_line(text: str) -> str:
+    """``text`` with its wrapping undone: rich breaks a long line at 80 columns off a TTY."""
+    return " ".join(text.split())
+
+
 def assert_no_escape(result) -> None:
     """Fail when an exception escaped the command instead of a clean ``typer.Exit``.
 

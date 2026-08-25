@@ -11,9 +11,16 @@ import typer
 
 from auditor.cli.apps import app
 from auditor.cli.helpers import cli_root, fail, present
-from auditor.cli.options import CleanStatus, InitCheck, InitMigrate, InitRepo, RootArg
+from auditor.cli.options import (
+    CleanStatus,
+    InitCheck,
+    InitForce,
+    InitMigrate,
+    InitRepo,
+    RootArg,
+)
 from auditor.cli.render import render_init
-from auditor.config_notice import NOTICE
+from auditor.config_notice import NOTICE, ConfigNotice
 from auditor.paths import (
     auditor_home,
     ensure_repo_dir,
@@ -70,6 +77,7 @@ def init(
     check: InitCheck = False,
     migrate: InitMigrate = False,
     clean_status: CleanStatus = False,
+    force: InitForce = False,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Create or refresh the user config home ($AUDITOR_HOME)."""
@@ -83,6 +91,14 @@ def init(
     home = auditor_home()
     identity = repo_identity(root)
     directory = repo_dir_for_identity(identity)
+    moves = NOTICE.user_keys(directory=directory).moves()
+    if moves and not (check or force):
+        # Stamping the new version on a file that still holds the old keys would claim a shape
+        # the file does not have, and the values behind those keys are already not being read.
+        fail(
+            f"{ConfigNotice.MOVED}: {', '.join(moves)}; move them, "
+            "then re-run with --force"
+        )
     written: list[str] = []
     moved = _moved_from(root, directory)
     migrated = False

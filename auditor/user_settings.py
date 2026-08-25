@@ -21,6 +21,35 @@ Worktrees = Literal["main", "all"]
 TuningMode = Literal["propose", "off"]
 
 
+CONFIG_VERSION = 2
+
+# Where each pre-2 observer key lives now. `runner` and `tuning` are the two names version 2
+# reused for tables, so a file holding the old scalar fails the load rather than passing through
+# as an unknown key; the other eighteen are silently dropped without this map.
+MOVED_OBSERVER_KEYS: dict[str, str] = {
+    "codex_model": "runner.codex_model",
+    "codex_prices": "runner.codex_prices",
+    "debounce_seconds": "scheduling.debounce_seconds",
+    "idle_shutdown_minutes": "scheduling.idle_shutdown_minutes",
+    "low_budget_fraction": "budget.low_budget_fraction",
+    "max_budget_usd_per_run": "budget.max_budget_usd_per_run",
+    "max_changes_per_run": "limits.max_changes_per_run",
+    "max_cost_usd_per_day": "budget.max_cost_usd_per_day",
+    "max_nodes_per_run": "limits.max_nodes_per_run",
+    "max_runs_per_day": "budget.max_runs_per_day",
+    "max_turns": "limits.max_turns",
+    "max_utilization": "budget.max_utilization",
+    "min_new_unresolved": "scheduling.min_new_unresolved",
+    "min_precision": "tuning.min_precision",
+    "model": "runner.model",
+    "run_on_stale": "scheduling.run_on_stale",
+    "runner": "runner.agent",
+    "session_expiry_minutes": "scheduling.session_expiry_minutes",
+    "stopwords_max": "tuning.stopwords_max",
+    "tuning": "tuning.mode",
+}
+
+
 class CodexPrice(BaseModel):
     """One Codex model's token prices, in USD per million tokens."""
 
@@ -201,7 +230,9 @@ class UserSettings(BaseSettings):
     )
 
     config_version: int = Field(
-        1, ge=1, description="Schema version of the settings file."
+        CONFIG_VERSION,
+        ge=1,
+        description="Schema version of the settings file; 2 grouped the observer knobs.",
     )
     observer: ObserverConfig = Field(
         default_factory=ObserverConfig, description="Graph observer settings."
@@ -238,8 +269,52 @@ def load_user_settings(root: Path) -> UserSettings:
     return UserSettings.model_validate(merged)
 
 
-def unknown_user_keys(root: Path, *, directory: Path | None = None) -> list[str]:
-    """Dotted paths in the two JSON layers that ``UserSettings`` does not declare."""
-    return unknown_config_keys(
-        user_json_layers(root, directory=directory), UserSettings
+class UserKeyReport(BaseModel):
+    """What the two JSON layers hold that the model does not: typos, and settings that moved."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    unknown: tuple[str, ...] = ()
+    moved: tuple[tuple[str, str], ...] = ()
+
+    def moves(self) -> list[str]:
+        """Each moved key as ``old -> new``, for a message or a payload."""
+        return [f"{old} -> {new}" for old, new in self.moved]
+
+
+def user_key_report(root: Path, *, directory: Path | None = None) -> UserKeyReport:
+    """Read the two JSON layers once and say what a version-2 model makes of them.
+
+    A key the version bump moved is reported as a move rather than a typo: naming it unknown
+    tells the user they mistyped something they got right in an older release.
+    """
+    layers = user_json_layers(root, directory=directory)
+    moved = _moved_observer_keys(layers)
+    renamed = {old for old, _ in moved}
+    return UserKeyReport(
+        unknown=tuple(
+            key
+            for key in unknown_config_keys(layers, UserSettings)
+            if key not in renamed
+        ),
+        moved=moved,
+    )
+
+
+def _moved_observer_keys(
+    layers: dict[str, object],
+) -> tuple[tuple[str, str], ...]:
+    """The pre-2 observer keys ``layers`` still holds, each with its new dotted path.
+
+    A name version 2 reused for a table (``runner``, ``tuning``) counts as moved only while it
+    still holds the old scalar.
+    """
+    observer = layers.get("observer")
+    if not isinstance(observer, dict):
+        return ()
+    return tuple(
+        (f"observer.{old}", f"observer.{new}")
+        for old, new in MOVED_OBSERVER_KEYS.items()
+        if old in observer
+        and not (old in ObserverConfig.model_fields and isinstance(observer[old], dict))
     )

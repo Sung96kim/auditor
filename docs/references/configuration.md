@@ -319,6 +319,12 @@ $AUDITOR_HOME/
   on `AuditorSettings`; `observer` and `vectors` only on `UserSettings`.
 - An unknown key is ignored and reported on stderr; `auditr config check` lists them with their
   dotted path.
+- `config_version` is `2`. Version 2 grouped twenty flat `observer` keys into five sub-tables, so a
+  file written by an older release is reported on one stderr line naming every key it holds and
+  where each one moved to. Those keys are reported as moves, never as typos, and nothing is
+  migrated for you: the values behind them are not read until you move them.
+- `auditr init` refuses to stamp version 2 on a file that still holds the old keys. Move them, or
+  pass `--force` to stamp the version and leave the keys where they are.
 
 ### `observer` (`ObserverConfig`)
 
