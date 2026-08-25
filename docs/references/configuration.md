@@ -353,8 +353,12 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `max_turns` (default `20`): agent turns before a run is cut off.
 - `max_nodes_per_run` (default `12`): graph nodes one run may look at.
 - `max_changes_per_run` (default `25`): proposals one run may commit.
-- `max_open_runs` (default `8`): runs one process may hold staged at once. The oldest is evicted to
-  make room, its `graph_runs` row finished `skipped` and its staging stored as rejections.
+- `max_open_runs` (default `8`): runs one process may hold staged at once, per repo identity. The
+  oldest is evicted to make room, its `graph_runs` row finished `skipped` and its staging stored as
+  rejections.
+- `stranded_run_seconds` (default `3600`): seconds before a run still `queued` is presumed dead.
+  `auditr graph refinements prune` finishes those as `skipped` with a reason, because a run whose
+  process died can be closed by nothing else.
 
 `observer.scheduling` (`SchedulingConfig`):
 

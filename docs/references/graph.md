@@ -241,7 +241,7 @@ auditr graph refinements accept 12
 auditr graph refinements revert 12
 # keep one through anchor drift and dead builds
 auditr graph refinements pin 12
-# drop assessment-only runs older than the retention window
+# finish runs a dead process left open, and drop assessment-only runs past the retention window
 auditr graph refinements prune
 ```
 
@@ -257,8 +257,11 @@ auditr graph refinements prune
   that a pending correction is right is a human step, and no MCP tool can take it.
 - They change a status and nothing else. The build is the only place a refinement reaches the graph,
   so run `auditr graph build` afterwards.
-- `prune` only ever touches assessment-only runs (`skipped`), and never one that owns a refinement
-  or a tuning row. Refinements themselves are never deleted.
+- `prune` does two things, and reports both. It finishes runs left `queued` by a process that died
+  (`observer.limits.stranded_run_seconds`, default an hour) as `skipped`, because nothing else can
+  reach them. It then deletes assessment-only runs (`skipped`) past `observer.skipped_retention_days`
+  together with the `rejected` refinements they own, and never a run that owns a live refinement or
+  a tuning row. Nothing live is ever deleted.
 
 ## Refinement overlay
 

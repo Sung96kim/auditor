@@ -290,7 +290,13 @@ def render_graph_refinement(out: Console, payload: RefinementRowPayload) -> None
 
 
 def render_graph_prune(out: Console, payload: PruneReport) -> None:
-    out.print(f"[{_ACCENT}]{payload.removed}[/] assessment-only runs removed")
+    out.print(
+        f"[{_ACCENT}]{payload.removed_runs}[/] assessment-only runs removed, with "
+        f"[{_ACCENT}]{payload.removed_refinements}[/] rejected refinements they owned"
+    )
+    out.print(
+        f"[{_ACCENT}]{payload.stranded_runs}[/] runs left open by a dead process finished"
+    )
 
 
 # ---------------------------------------------------------------------------

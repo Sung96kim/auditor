@@ -100,6 +100,11 @@ class LimitsConfig(BaseModel):
     max_open_runs: int = Field(
         8, ge=1, description="Runs one process may hold staged at once."
     )
+    stranded_run_seconds: int = Field(
+        3600,
+        ge=1,
+        description="Seconds before a run still open is presumed dead and finished as skipped.",
+    )
 
 
 class SchedulingConfig(BaseModel):

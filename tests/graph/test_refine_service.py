@@ -17,6 +17,7 @@ from auditor.graph.refine.models import (
     RefinementPayload,
     RefinementStatus,
     RefinementTarget,
+    Run,
     RunOutcome,
     RunStatus,
     Tier,
@@ -280,7 +281,7 @@ async def test_pruning_reaps_an_evicted_run_and_its_rejections(
     first = await refine_service.begin()
     await refine_service.propose(first.run_id, CALL_EDGE)
     await refine_service.begin()
-    assert await refine_service.index.runs.prune_skipped_runs(0) == 1
+    assert (await refine_service.index.runs.prune_skipped_runs(0)).runs == 1
     assert await refine_service.index.runs.run(first.run_id) is None
     assert await refine_service.index.refinements.of_run(first.run_id) == []
 
@@ -296,7 +297,7 @@ async def test_pruning_keeps_a_skipped_run_that_owns_a_live_refinement(
     await refine_service.index.runs.finish_run(
         run.run_id, RunOutcome(status=RunStatus.SKIPPED, error="assessment only")
     )
-    assert await refine_service.index.runs.prune_skipped_runs(0) == 0
+    assert (await refine_service.index.runs.prune_skipped_runs(0)).runs == 0
     kept = await refine_service.index.refinements.refinement(
         committed.committed[0].refinement_id
     )
@@ -608,10 +609,37 @@ async def test_prune_drops_only_the_skipped_runs_past_the_window(
     kept = await refine_service.begin()
     refine_service.registry.max_open = 1
     await refine_service.begin()
-    assert await refine_service.prune() == 1
+    swept = await refine_service.prune()
+    assert (swept.runs, swept.stranded) == (1, 0)
     assert await refine_service.index.runs.run(kept.run_id) is None
     remaining = await refine_service.index.runs.runs()
     assert [r.status for r in remaining] == [RunStatus.QUEUED]
+
+
+async def test_prune_finishes_a_run_a_dead_process_left_open(
+    refine_service: RefinementService,
+):
+    """`abort` is refused from every other process and the registry dies with the one that opened
+    the run, so this row is reachable from nowhere else and no surface would ever show it done.
+
+    The row is written with an old `started_at` rather than opened through `begin`: aging it by
+    hand is the only way to have one, since no test can wait out the window.
+    """
+    stranded = await refine_service.index.runs.add_run(
+        Run(
+            repo_identity=refine_service.identity,
+            status=RunStatus.QUEUED,
+            started_at=time.time() - 7200,
+        )
+    )
+    fresh = await refine_service.begin()
+    swept = await refine_service.prune()
+    assert swept.stranded == 1
+    dead = await refine_service.index.runs.run(stranded)
+    assert dead is not None and dead.status is RunStatus.SKIPPED
+    assert dead.error == "stranded: no commit within 3600 s"
+    still_open = await refine_service.index.runs.run(fresh.run_id)
+    assert still_open is not None and still_open.status is RunStatus.QUEUED
 
 
 async def test_a_partition_prefix_reaches_every_stored_id(

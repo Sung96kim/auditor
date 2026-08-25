@@ -602,11 +602,54 @@ async def test_prune_skipped_runs_spares_real_runs_and_recent_ones(refine_store)
         _run(status=RunStatus.SKIPPED, started_at=1_000_000.0)
     )
     await refine_store.runs.add_run(_run(status=RunStatus.SUCCEEDED, started_at=0.0))
-    removed = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
-    assert removed == 1
+    swept = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
+    assert (swept.runs, swept.refinements) == (1, 0)
     kept = {r.run_id for r in await refine_store.runs.runs()}
     assert old_skipped not in kept
     assert len(kept) == 2
+
+
+async def test_prune_counts_the_rejections_it_deletes_with_the_run(refine_store):
+    """The command's own help promised nothing live is deleted, and reported runs only: a caller
+    told "1 run removed" could not see the two rows that went with it."""
+    run_id = await refine_store.runs.add_run(
+        _run(status=RunStatus.SKIPPED, started_at=0.0)
+    )
+    for _ in range(2):
+        await refine_store.refinements.add_refinement(
+            _refinement(run_id, status=RefinementStatus.REJECTED)
+        )
+    swept = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
+    assert (swept.runs, swept.refinements, swept.stranded) == (1, 2, 0)
+    assert await refine_store.refinements.of_run(run_id) == []
+
+
+async def test_a_run_left_queued_by_a_dead_process_is_finished(refine_store):
+    """A registry is process-local, so nothing else can ever close such a run. The row is aged by
+    hand because that is the only way to have one: no test can outlive the window.
+    """
+    stranded = await refine_store.runs.add_run(_run(started_at=0.0))
+    fresh = await refine_store.runs.add_run(_run(started_at=999_000.0))
+    finished = await refine_store.runs.finish_stranded_runs(
+        older_than=3600, now=1_000_000.0
+    )
+    assert finished == 1
+    dead = await refine_store.runs.run(stranded)
+    assert dead is not None and dead.status is RunStatus.SKIPPED
+    assert dead.error == "stranded: no commit within 3600 s"
+    assert dead.finished_at == 1_000_000.0
+    alive = await refine_store.runs.run(fresh)
+    assert alive is not None and alive.status is RunStatus.QUEUED
+
+
+async def test_a_stranded_sweep_leaves_a_finished_run_alone(refine_store):
+    """Only `queued` is reachable from nowhere: a run that ended keeps the ending it recorded."""
+    done = await refine_store.runs.add_run(
+        _run(status=RunStatus.SUCCEEDED, started_at=0.0)
+    )
+    assert await refine_store.runs.finish_stranded_runs(older_than=1, now=1_000.0) == 0
+    kept = await refine_store.runs.run(done)
+    assert kept is not None and kept.status is RunStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize("child", ["refinement", "tuning"])
@@ -620,7 +663,7 @@ async def test_prune_never_orphans_a_child_row(refine_store, child):
         await refine_store.refinements.add_refinement(_refinement(run_id))
     else:
         await refine_store.tuning.add_tuning(_tuning(run_id))
-    assert await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0) == 0
+    assert (await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)).runs == 0
     assert await refine_store.runs.run(run_id) is not None
 
 

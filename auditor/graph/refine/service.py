@@ -32,6 +32,7 @@ from auditor.graph.refine.models import (
     ClientKind,
     ProducerKind,
     Proposal,
+    PruneOutcome,
     Refinement,
     RefinementKind,
     RefinementStatus,
@@ -490,9 +491,19 @@ class RefinementLedger(BaseModel):
     async def pin(self, refinement_id: int) -> Refinement:
         return await self._moved(refinement_id, RefinementStatus.PINNED, _PIN_FROM)
 
-    async def prune(self, retention_days: int) -> int:
-        """Drop the assessment-only runs older than the retention window (spec 5.1)."""
-        return await self.index.runs.prune_skipped_runs(retention_days)
+    async def prune(
+        self, retention_days: int, *, stranded_seconds: int
+    ) -> PruneOutcome:
+        """Finish the runs a dead process left open, then drop the assessment-only rows older than
+        the retention window, with the rejections they own (spec 5.1, 5.7).
+
+        Stranded first: a run left `queued` is not yet a row the retention sweep can see.
+        """
+        stranded = await self.index.runs.finish_stranded_runs(
+            older_than=stranded_seconds
+        )
+        swept = await self.index.runs.prune_skipped_runs(retention_days)
+        return swept.model_copy(update={"stranded": stranded})
 
     async def refinement(self, refinement_id: int) -> Refinement:
         """One refinement by id, refused by name rather than answered with ``None``."""
@@ -787,9 +798,12 @@ class RefinementService:
             raise RefinementRefused(f"no run {run_id} on this checkout")
         return run
 
-    async def prune(self) -> int:
-        """The ledger's retention sweep at this user's configured window (spec 5.1)."""
-        return await self.ledger.prune(self.user.observer.skipped_retention_days)
+    async def prune(self) -> PruneOutcome:
+        """The ledger's retention sweep at this user's configured windows (spec 5.1, 5.7)."""
+        return await self.ledger.prune(
+            self.user.observer.skipped_retention_days,
+            stranded_seconds=self.user.observer.limits.stranded_run_seconds,
+        )
 
     async def rebuild(self) -> GraphBuildReport:
         """A build under the same lock a commit takes, and under the same timeout.

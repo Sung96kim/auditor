@@ -300,6 +300,20 @@ class Run(BaseModel):
         )
 
 
+class PruneOutcome(BaseModel):
+    """What one retention sweep did (spec 5.1, 5.7): rows deleted, and stranded runs finished.
+
+    Three numbers rather than one, because a sweep that deletes a run deletes the rejections it
+    owns with it, and a caller told only "1 run removed" cannot see that.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    runs: int = 0
+    refinements: int = 0
+    stranded: int = 0
+
+
 class RunOutcome(BaseModel):
     """A run's terminal state: what it produced, what it cost, and when it stopped (spec 5.3).
 

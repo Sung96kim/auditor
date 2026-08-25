@@ -3,13 +3,12 @@
 from pathlib import Path
 
 import typer
-from pydantic import ValidationError
 
 from auditor.cli.helpers import (
     cli_root,
     fail,
-    format_config_error,
     load_settings,
+    load_user,
     parse_config_json,
     present,
 )
@@ -20,7 +19,6 @@ from auditor.config import AuditorSettings
 from auditor.config_notice import NOTICE
 from auditor.user_settings import (
     UserSettings,
-    load_user_settings,
     user_key_report,
 )
 
@@ -43,10 +41,7 @@ def config_show(
             fail(
                 "--config-json applies to repo policy; it cannot be combined with --user"
             )
-        try:
-            settings = load_user_settings(root)
-        except ValidationError as exc:
-            fail(f"invalid user config: {format_config_error(exc)}")
+        settings = load_user(root)
     else:
         settings = load_settings(root, overrides=overrides)
     present(settings, render_config_show, as_json=json_)
@@ -63,10 +58,7 @@ def config_check(
     root = cli_root(target, overrides=overrides)
     NOTICE.owned()  # the unknown keys are this command's payload; a stderr block would repeat it
     settings = load_settings(root, overrides=overrides)
-    try:
-        load_user_settings(root)
-    except ValidationError as exc:
-        fail(f"invalid user config: {format_config_error(exc)}")
+    load_user(root)
     present(
         ConfigCheckReport(
             root=str(root),

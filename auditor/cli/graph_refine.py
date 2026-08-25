@@ -15,6 +15,7 @@ from auditor.cli.helpers import (
     cli_root,
     fail,
     load_settings,
+    load_user,
     open_index,
     present,
     run,
@@ -56,7 +57,6 @@ from auditor.graph.refine.service import (
     RefinementRefused,
     RefinementService,
 )
-from auditor.user_settings import load_user_settings
 
 
 async def _unresolved_rows(
@@ -148,14 +148,15 @@ def _transition(
 
 
 async def _prune(root: Path, settings: AuditorSettings) -> PruneReport:
-    """The retention sweep at this user's configured window.
+    """The retention sweep at this user's configured windows.
 
     The one command here that does build a `RefinementService`: `prune()` reads
-    `user.observer.skipped_retention_days`, and that read belongs in one place.
+    `user.observer.skipped_retention_days` and `limits.stranded_run_seconds`, and those reads
+    belong in one place.
     """
     async with await open_index(root) as index:
-        service = RefinementService(index, root, settings, load_user_settings(root))
-        return PruneReport(removed=await service.prune())
+        service = RefinementService(index, root, settings, load_user(root))
+        return PruneReport.of(await service.prune())
 
 
 @refinements_app.command("list")
@@ -166,7 +167,7 @@ def refinements_list(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """The graph corrections recorded for this checkout, oldest first: the order a build applies
-    them in. Use `auditr graph log --refinements` for the newest first."""
+    them in. The `graph_log` MCP tool with view="refinements" is the newest-first half."""
     root = cli_root(target)
     present(
         run(_refinements(root, status, limit), "reading refinements…"),
@@ -210,7 +211,8 @@ def refinements_prune(
     target: GraphTarget = Path("."),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Drop assessment-only runs older than the retention window. Refinements are never pruned."""
+    """Finish runs a dead process left open, and drop assessment-only runs older than the
+    retention window together with the rejected refinements they own. Nothing live is deleted."""
     root = cli_root(target)
     present(
         run(_prune(root, load_settings(root)), "pruning…"),

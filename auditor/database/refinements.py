@@ -18,6 +18,7 @@ from auditor.graph.refine.models import (
     Anchor,
     EvalMetrics,
     EvalRow,
+    PruneOutcome,
     Refinement,
     RefinementKind,
     RefinementOutcome,
@@ -255,15 +256,46 @@ class RunsDB(BaseDB):
             _run_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
         ]
 
+    async def finish_stranded_runs(
+        self, *, older_than: float, now: float | None = None
+    ) -> int:
+        """Finish this identity's runs still `queued` ``older_than`` seconds after they began.
+
+        A registry is process-local, so a run whose process died can be closed by nothing else and
+        would sit `queued` for ever, out of reach of every surface and of the retention sweep. The
+        window is what says how long an unfinished run is presumed alive.
+        """
+        stamp = time.time() if now is None else now
+        binds = (
+            RunStatus.SKIPPED.value,
+            f"stranded: no commit within {int(older_than)} s",
+            stamp,
+            self.partition.identity,
+            RunStatus.QUEUED.value,
+            stamp - older_than,
+        )
+        sql = (
+            "UPDATE graph_runs SET status = ?, error = ?, finished_at = ? "
+            "WHERE repo_identity = ? AND status = ? AND started_at < ?"
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            changed = conn.execute(sql, binds).rowcount
+            conn.commit()
+            return max(changed, 0)
+
+        return await self._worker.run(op)
+
     async def prune_skipped_runs(
         self, retention_days: int, *, now: float | None = None
-    ) -> int:
+    ) -> PruneOutcome:
         """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
 
         ``retention_days`` is the daemon's ``ObserverConfig.skipped_retention_days``. Real runs are
         kept forever, and so is a skipped run owning a tuning row or a refinement that is not
         `rejected`. A run evicted from the registry owns nothing else, so its rejections go with
-        it in the same transaction and Invariant 2 never sees an orphan.
+        it in the same transaction and Invariant 2 never sees an orphan; both counts come back,
+        because a caller told only about the runs cannot see the rows that went with them.
         """
         cutoff = (time.time() if now is None else now) - retention_days * _DAY_SECONDS
         identity = self.partition.identity
@@ -283,19 +315,19 @@ class RunsDB(BaseDB):
             RefinementStatus.REJECTED.value,
         )
 
-        def op(conn: sqlite3.Connection) -> int:
+        def op(conn: sqlite3.Connection) -> PruneOutcome:
             doomed = [(identity, r[0]) for r in conn.execute(eligible, binds)]
             if not doomed:
-                return 0
-            conn.executemany(
+                return PruneOutcome()
+            dropped = conn.executemany(
                 "DELETE FROM graph_refinements WHERE repo_identity = ? AND run_id = ?",
                 doomed,
-            )
+            ).rowcount
             conn.executemany(
                 "DELETE FROM graph_runs WHERE repo_identity = ? AND run_id = ?", doomed
             )
             conn.commit()
-            return len(doomed)
+            return PruneOutcome(runs=len(doomed), refinements=max(dropped, 0))
 
         return await self._worker.run(op)
 

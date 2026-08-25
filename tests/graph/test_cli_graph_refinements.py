@@ -100,27 +100,29 @@ def _runs(repo: Path, *, skipped: bool) -> list[dict]:
     return asyncio.run(go())
 
 
-def _add_skipped_run(repo: Path, *, age_days: int) -> None:
-    """One assessment-only run, written directly: nothing produces a `skipped` run before S8."""
+def _add_run(repo: Path, *, status: RunStatus, age_seconds: float) -> str:
+    """One run row written directly and aged by hand, which is the only way a test can have a run
+    older than a retention window. The assessment writes `skipped` rows in S8; eviction already
+    does today."""
 
-    async def go() -> None:
+    async def go() -> str:
         index = await open_repo_index(repo)
         try:
-            await index.runs.add_run(
+            return await index.runs.add_run(
                 Run(
                     repo_identity=index.partition.identity,
                     producer=ProducerKind.OBSERVER,
                     runner=RunnerKind.NONE,
                     trigger_kind=TriggerKind.EDIT,
-                    status=RunStatus.SKIPPED,
+                    status=status,
                     summary="no structural change",
-                    started_at=time.time() - age_days * 86400,
+                    started_at=time.time() - age_seconds,
                 )
             )
         finally:
             await index.aclose()
 
-    asyncio.run(go())
+    return asyncio.run(go())
 
 
 def test_an_empty_list_says_it_is_empty_not_filtered(refined_repo: Path):
@@ -281,19 +283,38 @@ def test_an_unknown_id_is_named(refined_repo: Path):
 
 
 def test_prune_drops_only_the_assessment_runs_past_the_window(refined_repo: Path):
-    _add_skipped_run(refined_repo, age_days=30)
-    _add_skipped_run(refined_repo, age_days=0)
+    _add_run(refined_repo, status=RunStatus.SKIPPED, age_seconds=30 * 86400)
+    _add_run(refined_repo, status=RunStatus.SKIPPED, age_seconds=0)
     _propose(refined_repo)  # a real run, which prune must never touch
     payload = cli_json(
         runner.invoke(
             app, ["graph", "refinements", "prune", str(refined_repo), "--json"]
         )
     )
-    assert payload == {"removed": 1}
+    assert payload == {
+        "removed_runs": 1,
+        "removed_refinements": 0,
+        "stranded_runs": 0,
+    }
     assert sorted(r["status"] for r in _runs(refined_repo, skipped=True)) == [
         "skipped",
         "succeeded",
     ]
+
+
+def test_prune_finishes_a_run_a_dead_process_left_queued(refined_repo: Path):
+    """Nothing else can close it: `abort` is refused from any other process and the registry died
+    with the one that opened it, so before this the row sat `queued` and out of every view."""
+    stranded = _add_run(refined_repo, status=RunStatus.QUEUED, age_seconds=7200)
+    payload = cli_json(
+        runner.invoke(
+            app, ["graph", "refinements", "prune", str(refined_repo), "--json"]
+        )
+    )
+    assert payload["stranded_runs"] == 1
+    rows = {r["run_id"]: r for r in _runs(refined_repo, skipped=True)}
+    assert rows[stranded]["status"] == "skipped"
+    assert "stranded" in rows[stranded]["error"]
 
 
 def _render(payload) -> str:

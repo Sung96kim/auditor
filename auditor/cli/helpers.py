@@ -26,6 +26,7 @@ from auditor.discovery import find_root
 from auditor.paths import index_db_path
 from auditor.plugins import PluginLoader
 from auditor.registry import REGISTRY
+from auditor.user_settings import UserSettings, load_user_settings
 
 _T = TypeVar("_T")
 _P = TypeVar("_P", bound=BaseModel)
@@ -130,6 +131,15 @@ def config_errors_as_one_line() -> Iterator[None]:
         yield
     except (ConfigError, ValidationError) as exc:
         fail(f"invalid config: {format_config_error(exc)}")
+
+
+def load_user(root: Path) -> UserSettings:
+    """:func:`auditor.user_settings.load_user_settings` with a bad settings file turned into one
+    clean line, the way :func:`load_settings` does it for repo policy."""
+    try:
+        return load_user_settings(root)
+    except ValidationError as exc:
+        fail(f"invalid user config: {format_config_error(exc)}")
 
 
 def load_settings(
