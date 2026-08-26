@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from _support import cli_json, one_line
+from _support import assert_no_escape, cli_json, one_line
 from graph._support import (
     GOOD_PROPOSAL,
     add_observer_run,
@@ -28,6 +28,7 @@ from auditor.graph.refine.models import (
     RunStatus,
     Tier,
 )
+from auditor.graph.refine.service import RefinementLedger, RefinementRefused
 from auditor.paths import auditor_home, user_config_path
 
 runner = CliRunner()
@@ -430,3 +431,21 @@ def test_the_row_renderer_shows_the_edge_the_tier_and_the_reason():
     )
     assert "pending" in out
     assert "sibling _common" in out
+
+
+def test_a_refused_prune_is_one_line_and_not_a_traceback(
+    refine_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Its three siblings all guard this and `prune` did not: the ledger cannot raise it today,
+    so nothing would notice the day it can."""
+
+    async def refuse(*args: object, **kwargs: object) -> None:
+        raise RefinementRefused("the ledger said no")
+
+    monkeypatch.setattr(RefinementLedger, "prune", refuse)
+    result = CliRunner().invoke(
+        app, ["graph", "refinements", "prune", str(refine_repo), "--json"]
+    )
+    assert result.exit_code == 1
+    assert "the ledger said no" in one_line(result.output)
+    assert_no_escape(result)

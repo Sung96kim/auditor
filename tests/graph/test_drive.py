@@ -1,5 +1,10 @@
 """Which runner a request resolves to, and what it says when none can drive it."""
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from graph._support import Init, Result, fake_factory, init_data
 
@@ -148,3 +153,66 @@ async def test_drive_forwards_an_injected_client_factory_to_the_real_runner(
     assert payload.run.status is RunStatus.SUCCEEDED
     assert payload.run.summary == "one edge"
     assert payload.choice is CODE.CLAUDE
+
+
+#: everything `sdk_client.py` imports from the SDK, so a stub can drop exactly one of them
+_SDK_EXPORTS = (
+    "ClaudeAgentOptions",
+    "ClaudeSDKClient",
+    "CLIConnectionError",
+    "CLIJSONDecodeError",
+    "CLINotFoundError",
+    "HookMatcher",
+    "ProcessError",
+    "ResultError",
+    "create_sdk_mcp_server",
+    "tool",
+)
+_IMPORT_DRIVE = (
+    "import auditor.graph.refine.drive as d\nprint('SDK_AVAILABLE', d.SDK_AVAILABLE)\n"
+)
+
+
+def _stub_sdk(root: Path, *, missing: str | None) -> Path:
+    """A `claude_agent_sdk` package on the path exporting everything but ``missing``."""
+    package = root / "claude_agent_sdk"
+    package.mkdir()
+    names = [n for n in _SDK_EXPORTS if n != missing]
+    body = "\n".join(f"{name} = object()" for name in names)
+    (package / "__init__.py").write_text(f"{body}\n", encoding="utf-8")
+    return root
+
+
+def _import_drive(path: Path | None) -> subprocess.CompletedProcess[str]:
+    """Import `drive` in a fresh interpreter, optionally with a stub SDK ahead of it."""
+    root = Path(__file__).resolve().parents[2]
+    env = dict(os.environ, PYTHONPATH=f"{path}:{root}" if path else str(root))
+    return subprocess.run(
+        [sys.executable, "-c", _IMPORT_DRIVE],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def test_an_sdk_whose_api_moved_is_not_reported_as_a_missing_extra(tmp_path):
+    """CPython names the package for a failed `from pkg import Name`, so this failure and an
+    absent extra arrive identically; telling the user to install what they have loses the real
+    error, and the extra pins a range this can drift inside."""
+    result = _import_drive(_stub_sdk(tmp_path, missing="create_sdk_mcp_server"))
+    assert result.returncode != 0
+    assert "cannot import name 'create_sdk_mcp_server'" in result.stderr
+
+
+def test_an_sdk_that_is_really_absent_is_reported_as_a_missing_extra(tmp_path):
+    """The branch this guard exists for: nothing on the path, no error, the runner unavailable."""
+    result = _import_drive(None)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "SDK_AVAILABLE False"
+
+
+def test_a_complete_sdk_on_the_path_is_imported(tmp_path):
+    result = _import_drive(_stub_sdk(tmp_path, missing=None))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "SDK_AVAILABLE True"

@@ -240,11 +240,11 @@ def refinements_prune(
     """Finish runs a dead process left open, and drop assessment-only runs older than the
     retention window together with the rejected refinements they own. Nothing live is deleted."""
     root = cli_root(target)
-    present(
-        run(_prune(root, load_settings(root), load_user(root)), "pruning…"),
-        render_graph_prune,
-        as_json=json_,
-    )
+    try:
+        payload = run(_prune(root, load_settings(root), load_user(root)), "pruning…")
+    except RefinementRefused as exc:
+        fail(str(exc))
+    present(payload, render_graph_prune, as_json=json_)
 
 
 async def _log(root: Path, spec: LogFilter) -> LogReport:

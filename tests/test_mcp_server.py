@@ -772,9 +772,12 @@ async def test_every_graph_tool_registers_unconditionally():
 #: mutating and not destructive on purpose (it drops staging that was never written), and the two
 #: that open or stage work of their own are not idempotent, so a retried timeout is visible.
 _REFINE_ANNOTATIONS = {
-    "graph_refine": (False, True),
+    # `graph_refine` opens a run, stages proposals and commits them: a silent client retry after
+    # a timeout costs money twice and lands a second set of corrections
+    "graph_refine": (False, False),
     "graph_refine_begin": (False, False),
-    "graph_refine_brief": (True, True),
+    # writes the run's prompt the first time it is read, and nothing on a re-read
+    "graph_refine_brief": (False, True),
     "graph_refine_propose": (False, False),
     "graph_refine_commit": (False, True),
     "graph_refine_abort": (False, True),
@@ -800,7 +803,8 @@ async def test_tool_annotations_read_only_vs_mutating():
 async def test_the_refinement_tools_advertise_what_they_do(name: str):
     """A client decides whether to prompt from these, and `graph_refine_abort` being destructive
     would contradict the reference page: destructive means a row is deleted, and abort drops
-    staging that was never written. Nothing pinned any of the seven."""
+    staging that was never written. A tool that writes may not advertise `readOnlyHint`, whatever
+    else it does."""
     read_only, idempotent = _REFINE_ANNOTATIONS[name]
     annotations = {t.name: t.annotations for t in await mcp.list_tools()}[name]
     assert annotations.readOnlyHint is read_only

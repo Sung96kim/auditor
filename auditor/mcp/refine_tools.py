@@ -231,7 +231,7 @@ async def graph_refine_status(path: str = ".", run_id: str | None = None) -> dic
     return RunReportPayload.of(report).model_dump(mode="json")
 
 
-@mcp.tool(annotations=READ_ONLY)
+@mcp.tool(annotations=MUTATING)
 async def graph_refine_brief(path: str = ".", run_id: str | None = None) -> dict:
     """The brief a runner would send for this run: the queue rows under its scope, each with the
     facts the verifier will check a proposal against, plus the corrections here the graph no longer
@@ -251,7 +251,7 @@ async def graph_refine_brief(path: str = ".", run_id: str | None = None) -> dict
     return BriefPayload.of(brief, run_id=resolved).model_dump(mode="json")
 
 
-@mcp.tool(annotations=MUTATING)
+@mcp.tool(annotations=MUTATING_ONCE)
 async def graph_refine(
     path: str = ".",
     scope: str = "",

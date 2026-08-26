@@ -7,6 +7,7 @@ drift on the choice logic or on the payload. This is also the only place that re
 
 import os
 from collections.abc import Mapping
+from importlib.util import find_spec
 from pathlib import Path
 
 from auditor.config import AuditorSettings
@@ -24,13 +25,16 @@ from auditor.graph.refine.sdk_runner import SdkRunner
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.user_settings import Runner, RunnerConfig, UserSettings
 
-# the [observer-claude] extra; a genuine ImportError inside `sdk_client` is not swallowed
+# the [observer-claude] extra. CPython names the *package* in `exc.name` for a failed
+# `from pkg import Name`, so "absent" and "present but moved" arrive identically: a package the
+# interpreter can still find is an API drift, and swallowing it would tell the user to install
+# what they already have.
 try:
     from auditor.graph.refine.sdk_client import claude_client
 
     SDK_AVAILABLE = True
 except ImportError as exc:
-    if exc.name != "claude_agent_sdk":
+    if exc.name != "claude_agent_sdk" or find_spec("claude_agent_sdk") is not None:
         raise
     SDK_AVAILABLE = False
 

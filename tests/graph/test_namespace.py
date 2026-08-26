@@ -34,8 +34,25 @@ def test_a_root_scan_sees_every_id():
     assert in_scope("anything", "") is True
 
 
+@pytest.mark.parametrize(
+    ("given", "wanted"),
+    [
+        (".", ""),
+        ("./", ""),
+        ("", ""),
+        ("  ", ""),
+        ("auditor", "auditor"),
+        ("auditor/", "auditor"),
+        ("./auditor", "auditor"),
+        ("./auditor/cli/", "auditor/cli"),
+    ],
+)
+def test_a_scope_is_normalised_to_a_prefix_a_node_id_can_start_with(given, wanted):
+    """No node id starts with `./`, so a scope that keeps one briefs nothing, refuses every
+    proposal and still exits 0. Shell completion produces exactly that."""
+    assert scope_path(given) == wanted
+
+
 def test_a_dot_scope_means_the_whole_repo():
-    """No node id starts with `./`, so a literal `.` would brief nothing and refuse everything."""
-    assert scope_path(".") == ""
-    assert scope_path("./") == ""
     assert under_scope("helper.py::f", scope_path(".")) is True
+    assert under_scope("auditor/cli/x.py::f", scope_path("./auditor")) is True

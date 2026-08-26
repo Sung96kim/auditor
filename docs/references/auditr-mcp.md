@@ -120,7 +120,7 @@ args = ["run", "-i", "--rm",
   `graph_refinements`, `graph_log`. The flow is: read `graph_unresolved`, `graph_refine_begin` to
   open a run, one `graph_refine_propose` per correction, then `graph_refine_commit` (which rebuilds)
   or `graph_refine_abort`. `graph_refine_brief` renders what a model-driven run would be asked for
-  the same queue rows, and records that prompt on the run.
+  the same queue rows, and records that prompt on the run the first time it is read.
 - `graph_refine` runs a model over the queue itself, in this server's own process and under the same
   limits as `auditr graph refine`: `max_nodes_per_run` targets, `max_turns` turns and
   `max_budget_usd_per_run`. It needs the `observer-claude` extra and Claude credentials; without
@@ -153,12 +153,17 @@ args = ["run", "-i", "--rm",
   no MCP tool for `accept`, `revert`, `pin` or `prune`: activating a correction is a human step.
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs`,
-  `malware_install` and the five tools that write (`graph_refine_begin`, `graph_refine_propose`,
-  `graph_refine_commit`, `graph_refine_abort`, `graph_refine`), destructive for `ignore_remove`. Destructive means a row is deleted, which is why
-  `graph_refine_abort` is only mutating: it drops staging that was never written.
-  `graph_refine_begin` and `graph_refine_propose` are additionally marked non-idempotent, because
-  each call opens a run or stages another proposal: a client must not silently retry them. No tool
-  touches an open world; all of them work on the local repo.
+  `malware_install` and every refinement tool that writes (`graph_refine_begin`,
+  `graph_refine_propose`, `graph_refine_commit`, `graph_refine_abort`, `graph_refine_brief`,
+  `graph_refine`), destructive for `ignore_remove`.
+- `graph_refine_brief` is in that list because it records the run's prompt: it reads a brief and
+  writes it to the row, so it is not read-only, though a re-read writes nothing and it is
+  idempotent.
+- Destructive means a row is deleted, which is why `graph_refine_abort` is only mutating: it drops
+  staging that was never written. `graph_refine_begin`, `graph_refine_propose` and `graph_refine`
+  are additionally marked non-idempotent, because each call opens a run, stages another proposal or
+  runs a whole model over the queue: a client must not silently retry them. No tool touches an open
+  world; all of them work on the local repo.
 - Every tool resolves its project root, loads the repo policy and opens the shared index through
   one seam, so a tool always addresses the same checkout identity the CLI does. A repo whose
   configuration does not load comes back as a one-line tool error naming the offending key, never a

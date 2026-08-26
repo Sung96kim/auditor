@@ -185,3 +185,11 @@ def test_a_scope_refuses_a_correction_that_reaches_outside_it(
     assert payload["committed"] == []
     assert payload["run"]["refinements"] == {"committed": 0, "rejected": 1}
     assert payload["run"]["status"] == "succeeded"
+
+
+def test_a_dot_slash_scope_is_the_directory_under_it(refine_repo, claude_runner):
+    """`./caller.py` is what shell completion produces; it used to brief nothing, refuse every
+    proposal and still exit 0."""
+    payload = cli_json(_refine(refine_repo, "./caller.py"))
+    assert payload["scope"] == "caller.py"
+    assert payload["targets"] >= 1
