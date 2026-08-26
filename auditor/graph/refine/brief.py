@@ -1,13 +1,13 @@
-"""The brief one refinement run is given (spec 9.1, 9.4).
+"""The brief one refinement run is given, as pure models (spec 9.1, 9.4).
 
-The queue rows under a scope, each with the facts the verifier will check them against, rendered as
-the plain text a runner sends verbatim. Reads through `facts.FactReader`, so a brief and a proposal
-see one checkout.
+The queue rows under a scope, each with the facts the verifier will check them against, rendered
+as the plain text a runner sends verbatim. Nothing here reads a checkout or a database: the wire
+payload imports this module, and every fast CLI command imports the wire payload, so a reader
+pulled in here is one every `auditr` invocation pays for. `facts.py` builds these.
 """
 
-import logging
 import textwrap
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from typing import get_args
 
 from pydantic import BaseModel, ConfigDict, computed_field
@@ -18,25 +18,17 @@ from auditor.graph.model import (
     UnresolvedReason,
     UnresolvedRow,
 )
-from auditor.graph.refine.facts import FactReader
 from auditor.graph.refine.models import (
     Refinement,
     RefinementKind,
     RefinementStatus,
     Verdict,
 )
-from auditor.graph.refine.namespace import file_of, scope_path, short_name, under_scope
+from auditor.graph.refine.namespace import short_name
 from auditor.graph.refine.prompts import RunAnswer
-from auditor.graph.refine.verify import FactVerifier, FileFacts
-from auditor.graph.resolve_edges import EDGE_KIND_BY_FACT
-from auditor.user_settings import LimitsConfig
-
-logger = logging.getLogger(__name__)
 
 #: the widest line the rendered brief may contain, so a terminal and a model both read it whole
 LINE_WIDTH = 98
-#: the statuses a drifted or staled correction can be found under (spec 5.7)
-_STALE_STATUSES = (RefinementStatus.STALE, RefinementStatus.PINNED)
 #: the reasons a run may give for stopping, read off the answer so the two cannot drift
 _STOPPED_BECAUSE: tuple[str, ...] = get_args(
     RunAnswer.model_fields["stopped_because"].annotation
@@ -101,23 +93,18 @@ class BriefTarget(UnresolvedRow):
     facts: tuple[str, ...] = ()
 
     @classmethod
-    def of(cls, row: UnresolvedRow, facts: FileFacts) -> "BriefTarget":
-        """One row against the file it names, already re-read from disk."""
-        node = facts.node(row.node_id)
-        edge_kind = EDGE_KIND_BY_FACT.get(row.fact_kind)
-        named = (
-            FactVerifier.facts_named(node, edge_kind, row.call_form)
-            if node is not None and edge_kind is not None
-            else frozenset()
-        )
+    def of(
+        cls, row: UnresolvedRow, *, path: str, line: int, facts: Iterable[str]
+    ) -> "BriefTarget":
+        """One queue row narrowed to what a brief shows, with its two id lists capped."""
         return cls.model_validate(
             {
                 **row.model_dump(),
                 "definers": row.definers[:QUEUE_ID_CAP],
                 "candidates": row.candidates[:QUEUE_ID_CAP],
-                "path": facts.path,
-                "line": node.line if node is not None else 0,
-                "facts": tuple(sorted(named)),
+                "path": path,
+                "line": line,
+                "facts": tuple(facts),
             }
         )
 
@@ -243,70 +230,3 @@ class Brief(BaseModel):
     def _actions(self) -> set[str]:
         """Every action some target here admits, so the closing section names no dead one."""
         return {kind.value for target in self.targets for kind in target.allowed}
-
-
-class BriefBuilder(BaseModel):
-    """Builds one brief from the queue, under this user's per-run limits."""
-
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
-
-    facts: FactReader
-    limits: LimitsConfig
-
-    async def build(self, scope: str, *, commit_sha: str | None = None) -> Brief:
-        """The brief for one scope. Only the rows the run may work on are decoded."""
-        scope = scope_path(scope)
-        prefix = scope or None
-        graph = self.facts.index.graph
-        queue_total = await graph.count_unresolved(prefix, external=False)
-        rows = [
-            UnresolvedRow.model_validate(row)
-            for row in await graph.unresolved(
-                prefix=prefix, external=False, limit=self.limits.max_nodes_per_run
-            )
-        ]
-        loaded, _missing = await self.facts.files(
-            tuple(dict.fromkeys(file_of(row.node_id) for row in rows))
-        )
-        return Brief(
-            scope=scope,
-            commit_sha=commit_sha,
-            targets=self._targets(rows, loaded),
-            queue_total=queue_total,
-            stale=await self._stale(scope),
-            limits=BriefLimits(
-                max_changes=self.limits.max_changes_per_run,
-                max_targets=self.limits.max_nodes_per_run,
-            ),
-        )
-
-    @staticmethod
-    def _targets(
-        rows: Sequence[UnresolvedRow], loaded: dict[str, FileFacts]
-    ) -> tuple[BriefTarget, ...]:
-        """One target per row this checkout can answer for; the verifier would refuse the rest."""
-        out: list[BriefTarget] = []
-        for row in rows:
-            facts = loaded.get(file_of(row.node_id))
-            if facts is None:
-                logger.warning(
-                    "skipping queue row %s: this checkout cannot read %s",
-                    row.node_id,
-                    file_of(row.node_id),
-                )
-                continue
-            out.append(BriefTarget.of(row, facts))
-        return tuple(out)
-
-    async def _stale(self, scope: str) -> tuple[StaleNote, ...]:
-        """Corrections under this scope the graph stopped trusting: staled, or a pinned one that
-        drifted (spec 5.7)."""
-        rows = await self.facts.index.refinements.refinements(statuses=_STALE_STATUSES)
-        return tuple(
-            StaleNote.of(row)
-            for row in rows
-            if (row.status is RefinementStatus.STALE or row.drifted)
-            # every id, the rule `StagedRun.covers` applies: a correction this run could not have
-            # made is not one it needs warning off
-            and all(under_scope(node_id, scope) for node_id in row.anchored_ids())
-        )

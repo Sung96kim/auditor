@@ -18,11 +18,11 @@ from auditor.graph.model import (
 from auditor.graph.refine.brief import (
     LINE_WIDTH,
     Brief,
-    BriefBuilder,
     BriefLimits,
     BriefTarget,
     StaleNote,
 )
+from auditor.graph.refine.facts import BriefBuilder
 from auditor.graph.refine.models import (
     Proposal,
     ProposalOutcome,
@@ -35,7 +35,6 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_SHA, RunAnswer
 from auditor.graph.refine.service import RefinementRefused, RefinementService
-from auditor.graph.refine.verify import FileFacts
 
 GOLDEN = Path(__file__).parent / "fixtures" / "brief_golden.txt"
 #: escaped, so this file is itself free of the character it forbids
@@ -341,8 +340,7 @@ def test_a_definer_list_is_capped_the_way_the_queue_payload_caps_it():
         definers=tuple(f"d{i}.py::g" for i in range(QUEUE_ID_CAP + 5)),
         candidates=tuple(f"c{i}.py::g" for i in range(QUEUE_ID_CAP + 5)),
     )
-    facts = FileFacts(path="a.py", cached_truth="t", fresh_truth="t")
-    target = BriefTarget.of(row, facts)
+    target = BriefTarget.of(row, path="a.py", line=1, facts=())
     assert len(target.definers) == QUEUE_ID_CAP
     assert len(target.candidates) == QUEUE_ID_CAP
 

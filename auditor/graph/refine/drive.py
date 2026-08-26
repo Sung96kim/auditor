@@ -11,7 +11,6 @@ from pathlib import Path
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
-from auditor.graph.refine.brief import BriefBuilder
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import RunnerChoice, RunnerChoiceCode, RunnerKind
 from auditor.graph.refine.payloads import BriefPayload, RefinePayload
@@ -167,7 +166,4 @@ async def brief(
         ValueError: the scope could never name a node in this checkout.
     """
     service = RefinementService(index, root, settings, user)
-    built = await BriefBuilder(facts=service.facts, limits=user.observer.limits).build(
-        scope, commit_sha=(await service.head())[1]
-    )
-    return BriefPayload.of(built)
+    return BriefPayload.of(await service.preview(scope))

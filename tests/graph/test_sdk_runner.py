@@ -447,7 +447,10 @@ async def test_the_client_receives_the_rendered_brief_as_its_prompt(
         refine_service, factory, managed_settings=refine_service.root / "none.json"
     )
     product = await runner.run(RefinementJob())
+    (row,) = await refine_service.index.runs.runs()
     assert clients[0].prompt == product.brief.render()
+    # the row and the client got the same text: two renders of one object prove neither
+    assert row.prompt == clients[0].prompt
 
 
 class _Cancelling:

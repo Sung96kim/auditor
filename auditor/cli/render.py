@@ -386,7 +386,8 @@ def render_graph_refine(out: Console, payload: RefinePayload) -> None:
 
 def render_graph_brief(out: Console, payload: BriefPayload) -> None:
     where = f"run {payload.run_id}" if payload.run_id else "no run opened"
-    out.print(f"[dim]brief for {payload.scope or 'the whole repo'} ({where})[/dim]")
+    scope = payload.brief.scope or "the whole repo"
+    out.print(f"[dim]brief for {scope} ({where})[/dim]")
     out.print(payload.prompt, highlight=False, markup=False)
 
 

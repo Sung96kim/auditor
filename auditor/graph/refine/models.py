@@ -274,6 +274,19 @@ class EvalMetrics(BaseModel):
     lower_bound_95: float = 0.0
 
 
+class Checkout(BaseModel):
+    """The branch and commit a run is pinned to (spec 5.5).
+
+    Two fields rather than a bare pair, because the only thing most callers want is the commit,
+    and ``head()[1]`` at a call site is one transposition away from silently pinning the branch.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    branch: str | None = None
+    commit_sha: str | None = None
+
+
 class Run(BaseModel):
     """One decision the observer or an agent made, model call or not (spec 5.3)."""
 
@@ -312,7 +325,7 @@ class Run(BaseModel):
         partition: tuple[str, str],
         origin: str,
         scope: str,
-        checkout: tuple[str | None, str | None],
+        checkout: Checkout,
         client: ClientKind,
         producer: ProducerKind,
         runner: RunnerKind,
@@ -327,14 +340,13 @@ class Run(BaseModel):
         stored column, which is what made this a thirteen-argument construction at the caller.
         """
         identity, prefix = partition
-        branch, commit_sha = checkout
         return cls(
             repo_identity=identity,
             origin_partition=origin,
             partition_prefix=prefix,
             trigger_detail=TriggerDetail(files=(scope,) if scope else ()),
-            branch=branch,
-            commit_sha=commit_sha,
+            branch=checkout.branch,
+            commit_sha=checkout.commit_sha,
             client=client,
             producer=producer,
             runner=runner,

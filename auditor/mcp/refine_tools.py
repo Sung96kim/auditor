@@ -237,8 +237,10 @@ async def graph_refine_brief(path: str = ".", run_id: str | None = None) -> dict
     facts the verifier will check a proposal against, plus the corrections here the graph no longer
     trusts. Reading it records the prompt and the hash of the rules on the run row, so a run that
     dies later still shows what it was asked. ``staged`` lists the verdicts this run has earned so
-    far, and ``prompt`` is the rendered text itself. Returns {run_id, scope, commit_sha, targets,
-    queue_total, stale, limits, staged, prompt, system_prompt_sha}."""
+    far, and ``prompt`` is the rendered text itself. The prompt is recorded once, the first time this
+    is read: a re-read shows the verdicts earned since without overwriting what the run was asked.
+    Returns {run_id, brief: {scope, commit_sha, targets, queue_total, stale, limits, staged},
+    prompt, system_prompt_sha}."""
     async with tool_repo(path) as repo:
         service = await _service(repo)
         resolved = _run_id(run_id)

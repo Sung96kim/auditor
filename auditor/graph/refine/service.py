@@ -25,12 +25,13 @@ from auditor.discovery import git_output
 from auditor.graph.build import GraphBuilder
 from auditor.graph.model import EdgeKind, GraphEdge, UnresolvedRow
 from auditor.graph.payloads import CommitResult, GraphBuildReport
-from auditor.graph.refine.brief import Brief, BriefBuilder
+from auditor.graph.refine.brief import Brief
 from auditor.graph.refine.conflicts import ConflictRules
-from auditor.graph.refine.facts import FactReader
+from auditor.graph.refine.facts import BriefBuilder, FactReader
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
 from auditor.graph.refine.models import (
     Anchor,
+    Checkout,
     ClientKind,
     ProducerKind,
     Proposal,
@@ -461,7 +462,7 @@ class RefinementService:
             partition=self.partition,
             origin=self.index.repo,
             scope=scope,
-            checkout=await self.head(),
+            checkout=await self._head(),
             client=client,
             producer=producer,
             runner=runner,
@@ -551,28 +552,50 @@ class RefinementService:
             ),
         )
 
+    async def build_brief(self, scope: str, *, commit_sha: str | None = None) -> Brief:
+        """The brief for one scope, off this checkout's queue under this user's limits.
+
+        The one construction: `brief`, `preview` and the bound `brief` tool all come through here
+        rather than each assembling a builder of their own.
+        """
+        return await BriefBuilder(
+            facts=self.facts, limits=self.user.observer.limits
+        ).build(scope, commit_sha=commit_sha)
+
+    async def preview(self, scope: str) -> Brief:
+        """The brief a run over ``scope`` would be given, opening no run and recording nothing.
+
+        Raises:
+            ValueError: the scope could never name a node in this checkout.
+        """
+        return await self.build_brief(scope, commit_sha=(await self._head()).commit_sha)
+
     async def brief(self, run_id: str) -> Brief:
-        """The brief this run works from, recorded on its row as it is handed over.
+        """The brief this run works from, recorded on its row the first time it is handed over.
 
         The prompt and the sha of the rules it was written under are stored here rather than at
-        `begin`, which runs before there is a brief to store (Invariant 2). A re-read returns the
-        same brief with the verdicts earned so far.
+        `begin`, which runs before there is a brief to store (Invariant 2). What is stored is what
+        this call returns, verdicts included; a re-read gets the verdicts earned since and writes
+        nothing, so the row keeps what the run was first asked rather than the last thing it read.
         """
         staged = self.registry.require(run_id)
-        brief = await BriefBuilder(
-            facts=self.facts, limits=self.user.observer.limits
-        ).build(staged.scope, commit_sha=staged.run.commit_sha)
-        try:
-            await self.index.runs.record_prompt(
-                run_id,
-                prompt=brief.render(),
-                system_prompt_sha=SYSTEM_PROMPT_SHA,
-            )
-        except NoSuchRun as exc:
-            raise RefinementRefused.no_such_run(run_id) from exc
-        return brief.model_copy(
+        built = await self.build_brief(staged.scope, commit_sha=staged.run.commit_sha)
+        brief = built.model_copy(
             update={"staged": tuple(item.verdict() for item in staged.staged)}
         )
+        stored = await self.index.runs.run(run_id)
+        if stored is None:
+            raise RefinementRefused.no_such_run(run_id)
+        if stored.prompt is None:
+            try:
+                await self.index.runs.record_prompt(
+                    run_id,
+                    prompt=brief.render(),
+                    system_prompt_sha=SYSTEM_PROMPT_SHA,
+                )
+            except NoSuchRun as exc:
+                raise RefinementRefused.no_such_run(run_id) from exc
+        return brief
 
     async def commit(
         self, run_id: str, *, attribution: RunAttribution | None = None
@@ -978,7 +1001,7 @@ class RefinementService:
                 await self._reject(gone.run.run_id, item.proposal, item.verify, detail)
             await self._finish(gone.run.run_id, RunStatus.SKIPPED, error=detail)
 
-    async def head(self) -> tuple[str | None, str | None]:
+    async def _head(self) -> Checkout:
         """This checkout's branch and HEAD, read off the event loop.
 
         `git_output` shells out with a 30 s timeout, and every other coroutine on the loop, which
@@ -990,7 +1013,7 @@ class RefinementService:
             ),
             asyncio.to_thread(git_output, self.root, "rev-parse", "HEAD"),
         )
-        return branch, commit
+        return Checkout(branch=branch, commit_sha=commit)
 
     async def _checkout_moved(self, run: Run) -> str | None:
         """Whether HEAD or the branch changed since `begin`, which invalidates every anchor.
@@ -1000,12 +1023,12 @@ class RefinementService:
         """
         if run.commit_sha is None:
             return None
-        branch, commit = await self.head()
-        if branch == run.branch and commit == run.commit_sha:
+        now = await self._head()
+        if now.branch == run.branch and now.commit_sha == run.commit_sha:
             return None
         return (
             f"the checkout moved during the run ({run.branch}@{run.commit_sha} to "
-            f"{branch}@{commit}); start a new run"
+            f"{now.branch}@{now.commit_sha}); start a new run"
         )
 
     async def _finish(

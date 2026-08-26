@@ -100,30 +100,33 @@ async with await IndexStore.connect(db_path, repo) as index:
 ## Graph refinement
 
 - `auditor.graph.refine.service.RefinementService(index, root, settings, user, registry=None)`:
-  `begin`, `propose`, `brief`, `status`, `commit`, `abort`, `fail`, `prune`, `rebuild`. `brief`
-  renders the run's brief and records it on the row; `commit`, `abort` and `fail` all take an
-  optional `RunAttribution` (the cost, the tool trace and the SDK session). The only supported way to
-  record a graph correction; it is what the `graph_refine_*` MCP tools call. `registry` defaults to
-  the registry this process shares for that repo identity, and passing a fresh one splits the
-  staging.
+  `begin`, `propose`, `brief`, `preview`, `build_brief`, `status`, `commit`, `abort`, `terminate`,
+  `prune`, `rebuild`. `brief` renders an open run's brief and records it on the row the first time
+  it is read; `preview` renders the same brief for a scope without opening a run. `commit`, `abort`
+  and `terminate` all take an optional `RunAttribution` (the cost, the tool trace, the SDK session
+  and the producer's own one-line summary). The only supported way to record a graph correction; it
+  is what the `graph_refine_*` MCP tools call. `registry` defaults to the registry this process
+  shares for that repo identity, and passing a fresh one splits the staging.
 - `auditor.graph.refine.service.RefinementLedger(index=...)`: `accept`, `revert`, `pin`, `prune`,
   `refinement`. The by-hand half of the lifecycle, over an index handle alone. It needs no checkout
   root and no run, which is what `auditr graph refinements accept <id>` has to work without.
 - `auditor.graph.refine.verify.FactVerifier`: the AST-fact check one proposal has to pass. Pure, so
   a caller reads the files and hands the facts in. `auditor.graph.refine.facts.FactReader` is the
   reader that does that reading, and the brief builder shares it.
-- `auditor.graph.refine.brief.BriefBuilder(facts=..., limits=...)`: `build(scope, commit_sha=...)`
+- `auditor.graph.refine.facts.BriefBuilder(facts=..., limits=...)`: `build(scope, commit_sha=...)`
   returns the `Brief` a run works from, and `Brief.render()` is the prompt text itself, pinned by a
-  golden file.
+  golden file. The models it builds live in `auditor.graph.refine.brief`, which reads nothing.
 - `auditor.graph.refine.runner.RefinementRunner`: the producer ABC. `run(job)` opens a run, records
-  its brief, works, and closes it, answering with a `RunProduct` (the run, the brief, the outcome
-  and what the commit landed). `FakeRunner` replays a scripted set of proposals, which is how the
-  whole path is tested with no SDK installed.
+  its brief, works, and closes it, answering with a `RunProduct` (the run row it opened, the brief
+  and what the commit landed). How the run ended is on the stored row, not on the product, so the
+  two cannot disagree. `FakeRunner` replays a scripted set of proposals, which is how the whole
+  path is tested with no SDK installed.
 - `auditor.graph.refine.sdk_runner.SdkRunner`: the Claude producer. SDK-free by design: it talks to
   the client through an injected factory answering to `ClientSession`, so its message loop, init
   check and outcome mapping are all testable without the extra.
-- `auditor.graph.refine.sdk_client.SdkClientFactory`: the only importer of `claude_agent_sdk`.
-  Builds the real client and the in-process `graph` MCP server from an `SdkOptions`.
+- `auditor.graph.refine.sdk_client.claude_client(options, tools)`: the only importer of
+  `claude_agent_sdk`. Builds the real client and the in-process `graph` MCP server from an
+  `SdkOptions` and the run's own `BoundTools.tools()` table.
 - `auditor.graph.refine.drive`: `select_runner`, `build_runner`, `refine` and `brief`. The one
   module the CLI and the MCP tools import from the runner half, so neither can drift on the runner
   choice or on the payload. It owns the single `observer-claude` import guard.

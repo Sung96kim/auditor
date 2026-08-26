@@ -290,16 +290,21 @@ flowchart TB
   - `verify.py` is the AST-fact check over the files a proposal names.
   - `tiers.py` turns a verified proposal into a tier and the status that tier starts in.
   - `conflicts.py` is the commit-time collision check against prior work.
-  - `facts.py` is the reader a proposal and a brief are both judged against: the queue row, the
-    role-filtered definers, and the files re-read from disk.
+  - `facts.py` is the reader a proposal and a brief are both judged against (the queue row, the
+    role-filtered definers, and the files re-read from disk), plus `BriefBuilder`, which turns
+    those reads into a brief.
   - `prompts.py` is what a model-driven run is told: the system prompt and its sha, the
     structured-answer schema, and the tool allow-list. It imports nothing from this package.
-  - `brief.py` builds and renders that run's brief from the queue rows under a scope.
+  - `brief.py` is the brief as pure models and the text they render to. It reads nothing, because
+    the wire payload imports it and every fast CLI command imports the wire payload.
+  - `client.py` names the client a runner talks through (`ClientSession`, `ClientFactory`). A leaf
+    below both sides of the SDK boundary, so neither has to import the other for the name.
   - `runner.py` is the producer ABC (`RefinementJob`, `RefinementRunner`, `RunProduct`) plus
     `FakeRunner`.
-  - `sdk_runner.py` is the Claude producer, deliberately SDK-free: the message loop, the init check
-    and the outcome mapping, over an injected client factory.
-  - `sdk_client.py` is the only module that imports `claude_agent_sdk`.
+  - `sdk_runner.py` is the Claude producer, deliberately SDK-free: `Conversation`'s message loop,
+    `SdkOptions.refusal`'s init check and the outcome mapping, over an injected client factory.
+  - `sdk_client.py` is the only module that imports `claude_agent_sdk`. Pure translation: it turns
+    the runner's own `BoundTools.tools()` table into SDK tools and decides nothing itself.
   - `drive.py` is the runner choice and the one `refine` call both surfaces make, and it owns the
     single `observer-claude` import guard.
   - The import order among the last four is one-directional and mandatory:
@@ -330,10 +335,12 @@ flowchart TB
   could activate and a retry cannot land the same change twice.
 - `graph/refine/payloads.py` holds the wire models that narrow a service result:
   `RunReportPayload`, because a `RunReport` carries a whole `Run`, plus `BriefPayload` and
-  `RefinePayload`. It is separate from
-  `graph/payloads.py` because it imports the service, and therefore the graph build and numpy,
-  which no fast CLI command may load. `Verdict` and `refine/service.py`'s `CommitResult` are
-  emitted as themselves rather than copied into a second model.
+  `RefinePayload`. It is separate from `graph/payloads.py` because it reaches the refinement
+  models and the brief, which the shared payload module does not. Everything it imports is pure:
+  `render.py` imports it for two renderers, so anything it reached would be loaded by every fast
+  CLI command, and `tests/cli/test_lazy.py` pins that. `Verdict`, `Brief` and
+  `graph/payloads.py`'s `CommitResult` are emitted as themselves rather than copied into a second
+  model.
 - `graph/query.py`'s `LogQuery` is the provenance reader: `page(spec)` for `graph log`'s two views
   and `refinements(statuses, limit)` for the corrections page. It exists so a frozen wire model
   never does database I/O and so the CLI and the MCP tools read one page one way. Every filter and

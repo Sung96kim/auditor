@@ -11,7 +11,6 @@ from graph._support import FailingClaude, render_text
 from auditor.cli.helpers import load_settings, load_user, open_index
 from auditor.cli.render import render_graph_refine
 from auditor.graph.refine import drive
-from auditor.graph.refine.brief import BriefBuilder
 from auditor.graph.refine.models import (
     RunnerKind,
 )
@@ -80,14 +79,11 @@ def test_brief_opens_no_run(refine_repo):
 
 
 async def _built(repo: Path, scope: str) -> str:
-    """The brief the builder builds for one scope, outside the CLI."""
+    """The brief a preview builds for one scope, outside the CLI."""
     settings, user = load_settings(repo), load_user(repo)
     async with await open_index(repo) as index:
         service = RefinementService(index, repo, settings, user)
-        brief = await BriefBuilder(
-            facts=service.facts, limits=user.observer.limits
-        ).build(scope, commit_sha=(await service.head())[1])
-    return brief.render()
+        return (await service.preview(scope)).render()
 
 
 def test_the_brief_the_cli_prints_is_the_one_the_builder_builds(refine_repo):

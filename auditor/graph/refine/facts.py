@@ -1,10 +1,11 @@
-"""The reads a proposal or a brief is judged against (spec 9.2).
+"""The reads a proposal or a brief is judged against, and the brief built from them (spec 9.2).
 
 `verify.FactVerifier` is pure by contract, so the reading lives here rather than in the service.
 Its own module because the brief reads the same files under the same role rules, and a builder
 that reached into `service.py` for them would close an import cycle.
 """
 
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -12,10 +13,23 @@ from pydantic import BaseModel, ConfigDict
 
 from auditor.database import IndexStore
 from auditor.graph.model import NodeKind, UnresolvedRow
-from auditor.graph.refine.models import Proposal
+from auditor.graph.refine.brief import (
+    Brief,
+    BriefLimits,
+    BriefTarget,
+    StaleNote,
+)
+from auditor.graph.refine.models import Proposal, RefinementStatus
+from auditor.graph.refine.namespace import file_of, scope_path, under_scope
 from auditor.graph.refine.verify import FactVerifier, FileFacts
-from auditor.graph.resolve_edges import NameBindings
+from auditor.graph.resolve_edges import EDGE_KIND_BY_FACT, NameBindings
 from auditor.roles import RoleClassifier
+from auditor.user_settings import LimitsConfig
+
+logger = logging.getLogger(__name__)
+
+#: the statuses a drifted or staled correction can be found under (spec 5.7)
+_STALE_STATUSES = (RefinementStatus.STALE, RefinementStatus.PINNED)
 
 
 class FactReader(BaseModel):
@@ -90,3 +104,96 @@ class FactReader(BaseModel):
             ),
             missing=missing,
         )
+
+
+class BriefBuilder(BaseModel):
+    """Builds one brief from the queue, under this user's per-run limits.
+
+    Here rather than beside the models it builds: it reads the queue, the stored corrections and
+    the files on disk, and `brief.py` is imported by every fast CLI command through the wire
+    payload.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    facts: FactReader
+    limits: LimitsConfig
+
+    async def build(self, scope: str, *, commit_sha: str | None = None) -> Brief:
+        """The brief for one scope. Only the rows the run may work on are decoded."""
+        scope = scope_path(scope)
+        prefix = scope or None
+        graph = self.facts.index.graph
+        queue_total = await graph.count_unresolved(prefix, external=False)
+        rows = [
+            UnresolvedRow.model_validate(row)
+            for row in await graph.unresolved(
+                prefix=prefix, external=False, limit=self.limits.max_nodes_per_run
+            )
+        ]
+        loaded, _missing = await self.facts.files(
+            tuple(dict.fromkeys(file_of(row.node_id) for row in rows))
+        )
+        return Brief(
+            scope=scope,
+            commit_sha=commit_sha,
+            targets=self._targets(rows, loaded),
+            queue_total=queue_total,
+            stale=await self._stale(scope),
+            limits=BriefLimits(
+                max_changes=self.limits.max_changes_per_run,
+                max_targets=self.limits.max_nodes_per_run,
+            ),
+        )
+
+    @staticmethod
+    def _targets(
+        rows: Sequence[UnresolvedRow], loaded: dict[str, FileFacts]
+    ) -> tuple[BriefTarget, ...]:
+        """One target per row this checkout can answer for; the verifier would refuse the rest."""
+        out: list[BriefTarget] = []
+        for row in rows:
+            facts = loaded.get(file_of(row.node_id))
+            if facts is None:
+                logger.warning(
+                    "skipping queue row %s: this checkout cannot read %s",
+                    row.node_id,
+                    file_of(row.node_id),
+                )
+                continue
+            out.append(_target(row, facts))
+        return tuple(out)
+
+    async def _stale(self, scope: str) -> tuple[StaleNote, ...]:
+        """Corrections under this scope the graph stopped trusting: staled, or a pinned one that
+        drifted (spec 5.7)."""
+        rows = await self.facts.index.refinements.refinements(statuses=_STALE_STATUSES)
+        return tuple(
+            StaleNote.of(row)
+            for row in rows
+            if (row.status is RefinementStatus.STALE or row.drifted)
+            # every id, the rule `StagedRun.covers` applies: a correction this run could not have
+            # made is not one it needs warning off
+            and all(under_scope(node_id, scope) for node_id in row.anchored_ids())
+        )
+
+
+def _target(row: UnresolvedRow, facts: FileFacts) -> BriefTarget:
+    """One queue row against the file it names, already re-read from disk.
+
+    A function rather than a method: it composes a stored row with a freshly extracted file, and
+    neither of those two models owns the other.
+    """
+    node = facts.node(row.node_id)
+    edge_kind = EDGE_KIND_BY_FACT.get(row.fact_kind)
+    named = (
+        FactVerifier.facts_named(node, edge_kind, row.call_form)
+        if node is not None and edge_kind is not None
+        else frozenset()
+    )
+    return BriefTarget.of(
+        row,
+        path=facts.path,
+        line=node.line if node is not None else 0,
+        facts=sorted(named),
+    )

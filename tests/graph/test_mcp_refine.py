@@ -449,7 +449,23 @@ async def test_the_brief_tool_returns_the_prompt_and_records_it(refine_repo: Pat
         log = tool_data(await client.call_tool("graph_log", {"path": str(refine_repo)}))
     (row,) = [r for r in log["runs"] if r["run_id"] == run_id]
     assert row["system_prompt_sha"] == brief["system_prompt_sha"]
-    assert row["prompt_chars"] > 0
+    assert row["prompt_chars"] == len(brief["prompt"])
+
+
+async def test_a_brief_re_read_does_not_rewrite_the_recorded_prompt(refine_repo: Path):
+    """Invariant 2 wants the verbatim prompt the run was handed, so a re-read mid-run must not
+    overwrite it with whatever the queue looks like later."""
+    async with Client(mcp) as client:
+        run_id = await _begin(client, refine_repo)
+        args = {"path": str(refine_repo), "run_id": run_id}
+        first = tool_data(await client.call_tool("graph_refine_brief", args))
+        await client.call_tool("graph_refine_propose", _add_edge(refine_repo, run_id))
+        again = tool_data(await client.call_tool("graph_refine_brief", args))
+        log = tool_data(await client.call_tool("graph_log", {"path": str(refine_repo)}))
+    (row,) = [r for r in log["runs"] if r["run_id"] == run_id]
+    assert "Verdicts so far" in again["prompt"]
+    assert "Verdicts so far" not in first["prompt"]
+    assert row["prompt_chars"] == len(first["prompt"])
 
 
 async def test_the_brief_tool_lists_the_verdicts_so_far(refine_repo: Path):
@@ -461,7 +477,7 @@ async def test_the_brief_tool_lists_the_verdicts_so_far(refine_repo: Path):
                 "graph_refine_brief", {"path": str(refine_repo), "run_id": run_id}
             )
         )
-    assert [v["outcome"] for v in brief["staged"]] == ["staged"]
+    assert [v["outcome"] for v in brief["brief"]["staged"]] == ["staged"]
 
 
 async def test_the_brief_tool_refuses_a_run_it_does_not_know(refine_repo: Path):
