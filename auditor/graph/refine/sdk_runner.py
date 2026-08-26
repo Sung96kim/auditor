@@ -496,14 +496,15 @@ class SdkRunner(RefinementRunner):
             return await self._close(
                 run, brief, RunOutcome.of(RunStatus.ABORTED, error=refused)
             )
-        tools = BoundTools(service=self.service, run_id=run.run_id)
+        talk = Conversation(
+            options=options, tools=BoundTools(service=self.service, run_id=run.run_id)
+        )
         try:
-            outcome = await self._converse(options, tools, brief)
+            outcome = await self._converse(talk, brief)
         except asyncio.CancelledError:
-            # the caller going away must not leave the row queued and its registry slot held
-            await self._close(
-                run, brief, RunOutcome.of(RunStatus.ABORTED, error="cancelled")
-            )
+            # the caller going away must not leave the row queued and its registry slot held,
+            # and whatever the turns before it spent was never reported
+            await self._close(run, brief, talk.stopped(RunStatus.ABORTED, "cancelled"))
             raise
         return await self._close(run, brief, outcome)
 
@@ -523,9 +524,7 @@ class SdkRunner(RefinementRunner):
             return f"refused: {self.managed_settings} declares hooks"
         return None
 
-    async def _converse(
-        self, options: SdkOptions, tools: BoundTools, brief: Brief
-    ) -> RunOutcome:
+    async def _converse(self, talk: Conversation, brief: Brief) -> RunOutcome:
         """One conversation, from the first message to the result, mapped to a terminal state.
 
         Everything a run does once its row exists happens under this handler, rendering the
@@ -533,10 +532,9 @@ class SdkRunner(RefinementRunner):
         is caught, including the SDK's own classes, which this module cannot name. A cancellation
         is not one it owns: it goes back up to `run`, which closes the row before letting it on.
         """
-        talk = Conversation(options=options, tools=tools)
         try:
             factory = self._factory()
-            async with factory(options, tools) as client:
+            async with factory(talk.options, talk.tools) as client:
                 await client.query(brief.render())
                 async for message in client.receive_response():
                     ended = talk.handle(message)

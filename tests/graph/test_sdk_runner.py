@@ -490,6 +490,8 @@ async def test_a_cancelled_run_is_aborted_before_the_cancellation_goes_on(
     (row,) = await refine_service.index.runs.runs()
     assert (row.status, row.error) == (RunStatus.ABORTED, "cancelled")
     assert row.finished_at is not None
+    assert row.sdk_session_id == "sdk-session"
+    assert row.usage.cost_estimated is True
     assert refine_service.registry.open_runs == {}
 
 
