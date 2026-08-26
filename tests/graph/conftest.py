@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
+from graph._support import ClaudeShaped
 from pydantic import BaseModel, ConfigDict
 from typer.testing import CliRunner
 
@@ -17,12 +18,14 @@ from auditor.graph.build import GraphBuilder
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.hashes import file_hashes
 from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
+from auditor.graph.refine import drive
 from auditor.graph.refine.models import (
     Refinement,
     RefinementKind,
     RefinementStatus,
     RefinementTarget,
     Run,
+    RunnerKind,
 )
 from auditor.graph.refine.service import RefinementService, RunRegistry
 from auditor.user_settings import UserSettings
@@ -406,3 +409,16 @@ def process_runs() -> Iterator[dict[str, RunRegistry]]:
     RunRegistry.PROCESS.clear()
     yield RunRegistry.PROCESS
     RunRegistry.PROCESS.clear()
+
+
+@pytest.fixture
+def claude_runner(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """A logged-in machine with the extra installed, driving the scripted Claude-shaped runner.
+
+    One fixture for both surfaces: the CLI and the MCP tests each carried a copy of these same
+    three patches, and a fourth would have been written for the next surface.
+    """
+    monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
+    monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: True)
+    monkeypatch.setitem(drive.RUNNERS, RunnerKind.CLAUDE, ClaudeShaped)
+    return monkeypatch

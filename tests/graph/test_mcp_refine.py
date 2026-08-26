@@ -9,21 +9,42 @@ import pytest
 from _support import cli_json, invoke, tool_data
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
-from graph.test_cli_graph_refine import ClaudeShaped
 
 from auditor.graph.refine import drive
-from auditor.graph.refine.models import RunnerKind
 from auditor.mcp import mcp
 from auditor.paths import user_config_path
 from auditor.user_settings import load_user_settings
 
+#: what one surface legitimately reports differently from the other, plus the volatile ids and
+#: timestamps no two runs share
+_BY_SURFACE = frozenset({"producer", "client", "summary", "refinements"})
+_VOLATILE = frozenset(
+    {
+        "run_id",
+        "started_at",
+        "finished_at",
+        "branch",
+        "commit_sha",
+        "refinement_id",
+        "build",
+    }
+)
 
-@pytest.fixture
-def claude_runner(monkeypatch):
-    """A logged-in machine with the extra installed, driving the CLI test's fake runner."""
-    monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
-    monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: True)
-    monkeypatch.setitem(drive.RUNNERS, RunnerKind.CLAUDE, ClaudeShaped)
+
+def _comparable(value: object) -> object:
+    """One payload with the fields two surfaces may legitimately differ on taken out.
+
+    ``build`` is reduced to whether there was one: two runs rebuild two different graphs.
+    """
+    if isinstance(value, dict):
+        return {
+            key: (inner is not None) if key == "build" else _comparable(inner)
+            for key, inner in sorted(value.items())
+            if key not in _BY_SURFACE and (key not in _VOLATILE or key == "build")
+        }
+    if isinstance(value, list):
+        return [_comparable(item) for item in value]
+    return value
 
 
 async def _begin(client, repo: Path, **kw) -> str:
@@ -490,5 +511,24 @@ def test_the_cli_and_the_tool_report_the_same_run(refine_repo: Path, claude_runn
     from_tool = asyncio.run(via_tool())
     from_cli = cli_json(invoke("graph", "refine", "", str(refine_repo), "--json"))
     assert sorted(from_tool) == sorted(from_cli)
-    assert from_tool["run"]["status"] == from_cli["run"]["status"]
-    assert from_tool["choice"] == from_cli["choice"]
+    assert _comparable(from_tool) == _comparable(from_cli)
+    assert from_tool["run"]["status"] == from_cli["run"]["status"] == "succeeded"
+    assert from_tool["run"]["producer"] != from_cli["run"]["producer"]
+
+
+@pytest.mark.parametrize(("option", "value"), [("runner", "other"), ("model", "opus")])
+def test_the_tool_refuses_the_values_the_cli_refuses(
+    refine_repo: Path, claude_runner, option, value
+):
+    """The guard used to be written once, on the CLI, and this surface shipped without it: an
+    unknown runner silently became Claude and an unknown model orphaned an open run."""
+
+    async def go() -> None:
+        async with Client(mcp) as client:
+            with pytest.raises(ToolError):
+                await client.call_tool(
+                    "graph_refine", {"path": str(refine_repo), option: value}
+                )
+
+    asyncio.run(go())
+    assert cli_json(invoke("graph", "log", str(refine_repo), "--json"))["runs"] == []

@@ -20,7 +20,7 @@ from auditor.graph.refine.models import (
     TriggerKind,
 )
 from auditor.graph.refine.payloads import BriefPayload, RunReportPayload
-from auditor.graph.refine.runner import RefinementJob, RunnerUnavailable
+from auditor.graph.refine.runner import RefinementJob
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.mcp.helpers import (
     MUTATING,
@@ -261,31 +261,28 @@ async def graph_refine(
     """Run a model over the unresolved queue under ``scope`` and commit what it proposes, in this
     server's own process. Bounded by the configured ``max_turns`` and ``max_budget_usd_per_run``,
     and by ``max_nodes_per_run`` targets. Corrections land ``pending`` until a human accepts them.
-    ``scope`` is a repo-relative path prefix; empty means the whole repo. Not the tool to call from
-    inside a refinement run: the bound ``propose`` is that surface. Returns {run, runner, choice,
-    scope, targets, queue_total, committed, rejected, build}."""
+    ``scope`` is a repo-relative path prefix; empty means the whole repo. ``runner`` takes auto,
+    claude or codex and ``model`` takes haiku or sonnet; anything else is refused before a run
+    opens. Not the tool to call from inside a refinement run: the bound ``propose`` is that
+    surface. Returns {run, choice, scope, targets, queue_total, committed, rejected, build}."""
     async with tool_repo(path) as repo:
         user = await tool_user(repo)
         try:
-            return (
-                await drive.refine(
-                    repo.index,
-                    repo.root,
-                    repo.settings,
-                    user,
-                    job=RefinementJob(
-                        scope=scope,
-                        model=model,
-                        producer=ProducerKind.AGENT,
-                        client=ClientKind.CLAUDE_CODE,
-                        session_id=session_id,
-                        agent_name=agent_name,
-                    ),
-                    requested=runner,
-                )
-            ).model_dump(mode="json")
-        except (RefinementRefused, RunnerUnavailable, ValueError) as exc:
+            job = RefinementJob(
+                scope=scope,
+                model=model,
+                runner=runner,
+                producer=ProducerKind.AGENT,
+                client=ClientKind.CLAUDE_CODE,
+                session_id=session_id,
+                agent_name=agent_name,
+            )
+            payload = await drive.refine(
+                repo.index, repo.root, repo.settings, user, job=job
+            )
+        except drive.REFINE_ERRORS as exc:
             raise ToolError(str(exc)) from exc
+    return payload.model_dump(mode="json")
 
 
 @mcp.tool(annotations=READ_ONLY)

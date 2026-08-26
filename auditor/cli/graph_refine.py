@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import get_args
 
 import typer
+from pydantic import ValidationError
 
 from auditor.cli.helpers import (
     cli_root,
@@ -71,13 +72,13 @@ from auditor.graph.refine.models import (
     RunStatus,
 )
 from auditor.graph.refine.payloads import BriefPayload, RefinePayload
-from auditor.graph.refine.runner import RefinementJob, RunnerUnavailable
+from auditor.graph.refine.runner import RefinementJob
 from auditor.graph.refine.service import (
     RefinementLedger,
     RefinementRefused,
     RefinementService,
 )
-from auditor.user_settings import ClaudeModel, Runner, UserSettings
+from auditor.user_settings import UserSettings
 
 
 async def _unresolved_rows(
@@ -277,21 +278,12 @@ def graph_log(
     present(run(_log(root, spec), "reading log…"), render_graph_log, as_json=json_)
 
 
-async def _refine(
-    root: Path, scope: str, runner: str | None, model: str | None
-) -> RefinePayload:
+async def _refine(root: Path, job: RefinementJob) -> RefinePayload:
     """One model-driven run, through the same call the `graph_refine` tool makes."""
     settings = load_settings(root)
     user = load_user(root)
     async with await open_index(root) as index:
-        return await drive.refine(
-            index,
-            root,
-            settings,
-            user,
-            job=RefinementJob(scope=scope, model=model),
-            requested=runner,
-        )
+        return await drive.refine(index, root, settings, user, job=job)
 
 
 async def _brief(root: Path, scope: str) -> BriefPayload:
@@ -302,16 +294,35 @@ async def _brief(root: Path, scope: str) -> BriefPayload:
         return await drive.brief(index, root, settings, user, scope)
 
 
-def _one_of(value: str | None, allowed: tuple[str, ...], option: str) -> str | None:
-    """One option value checked against its `Literal`, refused at exit 2 like any bad flag.
+def _job(scope: str, runner: str | None, model: str | None) -> RefinementJob:
+    """The job these flags ask for, with a value its `Literal` refuses raised as a bad flag.
 
-    `enum_value` cannot be reused: it takes a `StrEnum`, and both of these are `Literal`s.
+    The check lives on `RefinementJob`, which the MCP tool builds too; this only turns pydantic's
+    refusal into the exit 2 and the wording a CLI flag earns.
     """
-    if value is not None and value not in allowed:
-        raise typer.BadParameter(
-            f"unknown {option}: {value}. Valid: {', '.join(allowed)}"
-        )
-    return value
+    try:
+        return RefinementJob(scope=scope, runner=runner, model=model)
+    except ValidationError as exc:
+        raise _bad_option(exc) from exc
+
+
+def _bad_option(exc: ValidationError) -> typer.BadParameter:
+    """One refused job field as the flag that carried it, naming the values it accepts."""
+    error = exc.errors()[0]
+    field = str(error["loc"][0])
+    allowed = ", ".join(str(v) for v in _accepts(field))
+    return typer.BadParameter(f"unknown --{field}: {error['input']}. Valid: {allowed}")
+
+
+def _accepts(field: str) -> tuple[str, ...]:
+    """What one job field admits, read off its own annotation so no second list can drift."""
+    optional = get_args(RefinementJob.model_fields[field].annotation)
+    return tuple(
+        value
+        for member in optional
+        if member is not type(None)
+        for value in get_args(member)
+    )
 
 
 def graph_refine(
@@ -326,12 +337,15 @@ def graph_refine(
     ),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Let a model work the unresolved queue under a path. Corrections land pending until
-    accepted. Exits 1 when no runner can run or the run did not succeed, 2 on a bad option."""
+    """Let a model work the unresolved queue under a path. Exits 1 when no runner can run or the
+    run did not succeed, 2 on a bad option."""
     root = cli_root(target)
-    runner = _one_of(runner, get_args(Runner), "--runner")
-    model = _one_of(model, get_args(ClaudeModel), "--model")
+    job = _job(scope, runner, model)
     if brief:
+        if runner is not None or model is not None:
+            raise typer.BadParameter(
+                "--brief opens no run, so --runner and --model would do nothing"
+            )
         try:
             payload = run(_brief(root, scope), "reading queue…")
         except (RefinementRefused, ValueError) as exc:
@@ -339,8 +353,8 @@ def graph_refine(
         present(payload, render_graph_brief, as_json=json_)
         return
     try:
-        report = run(_refine(root, scope, runner, model), "refining…")
-    except (RefinementRefused, RunnerUnavailable, ValueError) as exc:
+        report = run(_refine(root, job), "refining…")
+    except drive.REFINE_ERRORS as exc:
         fail(str(exc))
     present(report, render_graph_refine, as_json=json_)
     if report.run.status is not RunStatus.SUCCEEDED:

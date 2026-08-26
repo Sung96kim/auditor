@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from graph._support import (
@@ -22,6 +24,7 @@ from auditor.graph.refine.models import (
     Proposal,
     RefinementKind,
     RefinementTarget,
+    Run,
     RunStatus,
     RunUsage,
 )
@@ -32,7 +35,7 @@ from auditor.graph.refine.prompts import (
     RUN_ANSWER_SCHEMA,
     SYSTEM_PROMPT,
 )
-from auditor.graph.refine.runner import RefinementJob
+from auditor.graph.refine.runner import RefinementJob, RunProduct
 from auditor.graph.refine.sdk_runner import (
     ASSISTANT_ERRORS,
     EFFORT,
@@ -82,13 +85,20 @@ SUCCESS = Result(
 )
 
 
-def _runner(service: RefinementService, messages, seen=None, **kwargs) -> SdkRunner:
+def _runner(
+    service: RefinementService,
+    messages: Sequence[Any],
+    seen: list[SdkOptions] | None = None,
+    **kwargs: Any,
+) -> SdkRunner:
     """A runner over a scripted client, with no managed-settings file in the way."""
     kwargs.setdefault("managed_settings", service.root / "no-such-settings.json")
     return SdkRunner(service, fake_factory(messages, seen), **kwargs)
 
 
-async def _drive(service: RefinementService, messages, **kwargs):
+async def _drive(
+    service: RefinementService, messages: Sequence[Any], **kwargs: Any
+) -> tuple[RunProduct, Run]:
     """One scripted run, and the row it left behind."""
     product = await _runner(service, messages, **kwargs).run(RefinementJob())
     (row,) = await service.index.runs.runs()
@@ -124,7 +134,7 @@ async def test_the_options_handed_to_the_factory_are_the_pinned_ones(
     refine_service: RefinementService,
 ):
     """Invariant 4: what varies is a field, what cannot is a module constant beside it."""
-    seen: list = []
+    seen: list[SdkOptions] = []
     await _drive(refine_service, [Init(data=init_data()), SUCCESS], seen=seen)
     (options,) = seen
     assert options.tools == ("Read", "Grep", "Glob")
@@ -155,7 +165,7 @@ def test_the_options_that_cannot_vary_are_constants():
 async def test_a_job_model_overrides_the_configured_one(
     refine_service: RefinementService,
 ):
-    seen: list = []
+    seen: list[SdkOptions] = []
     runner = _runner(refine_service, [Init(data=init_data()), SUCCESS], seen=seen)
     await runner.run(RefinementJob(model="sonnet"))
     assert seen[0].model == "sonnet"
@@ -312,7 +322,7 @@ async def test_a_stream_that_never_answers_is_a_failed_run(
 async def test_a_client_that_cannot_start_leaves_a_run_row_behind(
     refine_service: RefinementService,
 ):
-    def explode(options, tools):
+    def explode(options: SdkOptions, tools: BoundTools) -> FakeClient:
         raise SdkClientError("Claude Code not found", kind=SdkErrorKind.NOT_FOUND)
 
     runner = SdkRunner(
@@ -424,10 +434,10 @@ async def test_the_hook_records_one_call_per_tool_use(
 async def test_the_client_receives_the_rendered_brief_as_its_prompt(
     refine_service: RefinementService,
 ):
-    seen: list = []
+    seen: list[SdkOptions] = []
     clients: list[FakeClient] = []
 
-    def factory(options, tools):
+    def factory(options: SdkOptions, tools: BoundTools) -> FakeClient:
         seen.append(options)
         client = FakeClient([Init(data=init_data()), SUCCESS], tools)
         clients.append(client)

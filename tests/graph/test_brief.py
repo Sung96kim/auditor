@@ -2,6 +2,7 @@
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -33,7 +34,7 @@ from auditor.graph.refine.models import (
     Verdict,
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_SHA, RunAnswer
-from auditor.graph.refine.service import RefinementRefused
+from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.graph.refine.verify import FileFacts
 
 GOLDEN = Path(__file__).parent / "fixtures" / "brief_golden.txt"
@@ -119,7 +120,7 @@ CALL_EDGE = Proposal(
 )
 
 
-def _builder(service, **limits) -> BriefBuilder:
+def _builder(service: RefinementService, **limits: Any) -> BriefBuilder:
     """A builder over the service's own reader, optionally under tightened limits."""
     return BriefBuilder(
         facts=service.facts,
@@ -127,7 +128,14 @@ def _builder(service, **limits) -> BriefBuilder:
     )
 
 
-async def _stale_row(service, *, src: str, dst: str, status: RefinementStatus, **kw):
+async def _stale_row(
+    service: RefinementService,
+    *,
+    src: str,
+    dst: str,
+    status: RefinementStatus,
+    **kw: Any,
+) -> int:
     """One stored correction, so a brief has something to warn about."""
     run = await service.begin()
     return await service.index.refinements.add_refinement(

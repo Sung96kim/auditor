@@ -22,7 +22,7 @@ from auditor.graph.refine.runner import (
     RunnerUnavailable,
 )
 from auditor.graph.refine.sdk_runner import SdkRunner
-from auditor.graph.refine.service import RefinementService
+from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.user_settings import Runner, RunnerConfig, UserSettings
 
 # the [observer-claude] extra; a genuine ImportError inside `sdk_client` is not swallowed
@@ -34,6 +34,10 @@ except ImportError as exc:
     if exc.name != "claude_agent_sdk":
         raise
     SDK_AVAILABLE = False
+
+#: what either surface answers a caller with rather than a traceback: no runner, a service that
+#: refused, or a scope that could never name a node here
+REFINE_ERRORS = (RefinementRefused, RunnerUnavailable, ValueError)
 
 #: the one refusal both the chooser and the builder give, so the fix is worded once
 NEEDS_EXTRA = (
@@ -74,25 +78,21 @@ def select_runner(
     logged_in = auth_hinted() if auth_hint is None else auth_hint
     if (requested or config.agent) == "codex":
         return RunnerChoice(
-            kind=None,
             code=RunnerChoiceCode.UNAVAILABLE_CODEX,
             detail="the Codex runner lands in S12; use --runner claude",
         )
     if not has_sdk:
         return RunnerChoice(
-            kind=None,
             code=RunnerChoiceCode.UNAVAILABLE_SDK,
             detail=NEEDS_EXTRA,
         )
     if not logged_in:
         return RunnerChoice(
-            kind=None,
             code=RunnerChoiceCode.PAUSED_AUTH,
             detail="no Claude credentials found: run `claude` once to log in, "
             "or set ANTHROPIC_API_KEY",
         )
     return RunnerChoice(
-        kind=RunnerKind.CLAUDE,
         code=RunnerChoiceCode.CLAUDE,
         detail="the Claude SDK runner",
     )
@@ -129,21 +129,23 @@ async def refine(
     user: UserSettings,
     *,
     job: RefinementJob,
-    requested: Runner | None = None,
+    client_factory: ClientFactory | None = None,
 ) -> RefinePayload:
     """Run one model-driven refinement and report what it did.
 
     The one call both surfaces make, so the CLI and the MCP tool cannot drift on the choice logic
-    or on the payload.
+    or on the payload. The runner asked for travels on the job, which is where pydantic already
+    refused a value neither surface should have accepted.
 
     Raises:
         RunnerUnavailable: no runner can drive this request, with the reason in the message.
     """
-    choice = select_runner(user.observer.runner, requested=requested)
+    choice = select_runner(user.observer.runner, requested=job.runner)
     if choice.kind is None:
         raise RunnerUnavailable(choice.detail)
     service = RefinementService(index, root, settings, user)
-    product = await build_runner(choice.kind, service).run(job)
+    runner = build_runner(choice.kind, service, client_factory=client_factory)
+    product = await runner.run(job)
     return RefinePayload.of(
         await service.status(product.run.run_id),
         product.brief,

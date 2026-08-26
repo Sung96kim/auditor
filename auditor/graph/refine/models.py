@@ -345,18 +345,29 @@ class Run(BaseModel):
         )
 
 
+#: the runner each code that resolved to one names; every other code is a refusal with no runner
+_KIND_BY_CODE: dict[RunnerChoiceCode, RunnerKind] = {
+    RunnerChoiceCode.CLAUDE: RunnerKind.CLAUDE
+}
+
+
 class RunnerChoice(BaseModel):
-    """The runner a request resolved to, the machine code for it, and the sentence a human reads.
+    """The machine code a request resolved to, and the sentence a human reads.
 
     The code is what the wire carries and the detail is what a person acts on, so a refusal never
-    has to be parsed out of prose.
+    has to be parsed out of prose. The runner is read off the code rather than stored beside it:
+    a pair that can disagree is a pair that eventually does.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    kind: RunnerKind | None
     code: RunnerChoiceCode
     detail: str = ""
+
+    @property
+    def kind(self) -> RunnerKind | None:
+        """The runner this resolved to, or ``None`` when it resolved to a refusal."""
+        return _KIND_BY_CODE.get(self.code)
 
 
 class Verdict(BaseModel):

@@ -1,12 +1,16 @@
 """Which runner a request resolves to, and what it says when none can drive it."""
 
 import pytest
+from graph._support import Init, Result, fake_factory, init_data
 
+from auditor.cli.helpers import load_settings, load_user, open_index
 from auditor.graph.refine import drive
-from auditor.graph.refine.models import RunnerKind
-from auditor.graph.refine.runner import FakeRunner, RunnerUnavailable
+from auditor.graph.refine.models import RunnerKind, RunStatus
+from auditor.graph.refine.runner import FakeRunner, RefinementJob, RunnerUnavailable
 from auditor.graph.refine.sdk_runner import SdkRunner
 from auditor.user_settings import RunnerConfig
+
+ANSWER = {"summary": "one edge", "proposed": 1, "stopped_because": "done"}
 
 CODE = drive.RunnerChoiceCode
 
@@ -121,3 +125,26 @@ def test_an_injected_factory_is_used_as_it_stands(refine_service, monkeypatch):
     )
     assert isinstance(runner, SdkRunner)
     assert runner.client_factory is factory
+
+
+async def test_drive_forwards_an_injected_client_factory_to_the_real_runner(
+    refine_repo, monkeypatch
+):
+    """Without this seam a test cannot reach `SdkRunner` at all, and has to swap a whole runner
+    class into the registry to get a scripted run through either surface."""
+    monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
+    monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: True)
+    settings, user = load_settings(refine_repo), load_user(refine_repo)
+    messages = [Init(data=init_data()), Result(structured_output=ANSWER)]
+    async with await open_index(refine_repo) as index:
+        payload = await drive.refine(
+            index,
+            refine_repo,
+            settings,
+            user,
+            job=RefinementJob(),
+            client_factory=fake_factory(messages),
+        )
+    assert payload.run.status is RunStatus.SUCCEEDED
+    assert payload.run.summary == "one edge"
+    assert payload.choice is CODE.CLAUDE

@@ -10,7 +10,6 @@ from auditor.graph.refine.brief import Brief, BriefLimits, BriefTarget, StaleNot
 from auditor.graph.refine.models import (
     RefinementCounts,
     RunnerChoiceCode,
-    RunnerKind,
     RunReport,
     Verdict,
 )
@@ -81,12 +80,12 @@ class BriefPayload(WirePayload):
 class RefinePayload(WirePayload):
     """One `auditr graph refine` answer: the run row, what it was briefed on, and what it landed.
 
-    ``choice`` is the machine code the runner was selected under; a refusal never reaches here,
+    ``choice`` is the machine code the runner was selected under, which the run row cannot carry:
+    the row says which runner drove it, this says why that one. A refusal never reaches here,
     because `drive.refine` raises rather than returning a payload with no run behind it.
     """
 
     run: RunRowPayload
-    runner: RunnerKind
     choice: RunnerChoiceCode
     scope: str = ""
     targets: int = 0
@@ -110,7 +109,6 @@ class RefinePayload(WirePayload):
                     committed=len(report.committed), rejected=len(report.rejected)
                 ),
             ),
-            runner=report.run.runner,
             choice=choice,
             scope=brief.scope,
             targets=len(brief.targets),

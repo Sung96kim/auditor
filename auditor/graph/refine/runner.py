@@ -31,6 +31,7 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.prompts import GRAPH_SERVER, RunAnswer
 from auditor.graph.refine.service import RefinementRefused, RefinementService
+from auditor.user_settings import ClaudeModel, Runner
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,12 @@ class RunnerUnavailable(Exception):
 
 
 class RefinementJob(BaseModel):
-    """One request to refine: what to work on, and who asked."""
+    """One request to refine: what to work on, who asked, and what to drive it with.
+
+    The runner and the model are typed rather than passed through: this is the one boundary both
+    surfaces cross, so a value neither `Runner` nor `ClaudeModel` admits is refused here, before
+    a run row exists to orphan.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -54,7 +60,9 @@ class RefinementJob(BaseModel):
     session_id: str | None = None
     agent_name: str | None = None
     #: ``None`` means the configured model
-    model: str | None = None
+    model: ClaudeModel | None = None
+    #: ``None`` means the configured runner
+    runner: Runner | None = None
 
 
 class RunProduct(BaseModel):

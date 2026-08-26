@@ -18,6 +18,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from auditor.graph.refine.brief import Brief
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     Proposal,
@@ -484,18 +485,20 @@ class SdkRunner(RefinementRunner):
         self.managed_settings = managed_settings
 
     async def run(self, job: RefinementJob) -> RunProduct:
+        # the options are built before the row exists: a run must never be opened for a request
+        # that cannot be turned into one, because there would be nothing left to close it
+        options = SdkOptions.of(
+            job, self.service.user, self.service.root, cli_path=self.cli_path
+        )
         refused = self._managed_hooks()
         run, brief = await self._open(job)
         if refused is not None:
             return await self._close(
                 run, brief, RunOutcome.of(RunStatus.ABORTED, error=refused)
             )
-        options = SdkOptions.of(
-            job, self.service.user, self.service.root, cli_path=self.cli_path
-        )
         tools = BoundTools(service=self.service, run_id=run.run_id)
         try:
-            outcome = await self._converse(options, tools, brief.render())
+            outcome = await self._converse(options, tools, brief)
         except asyncio.CancelledError:
             # the caller going away must not leave the row queued and its registry slot held
             await self._close(
@@ -521,19 +524,20 @@ class SdkRunner(RefinementRunner):
         return None
 
     async def _converse(
-        self, options: SdkOptions, tools: BoundTools, prompt: str
+        self, options: SdkOptions, tools: BoundTools, brief: Brief
     ) -> RunOutcome:
         """One conversation, from the first message to the result, mapped to a terminal state.
 
-        Every exception is caught, including the SDK's own classes, which this module cannot
-        name. A cancellation is not an exception this owns: it goes back up to `run`, which
-        closes the row before letting it through.
+        Everything a run does once its row exists happens under this handler, rendering the
+        brief included, so nothing between `begin` and a closed run can escape. Every exception
+        is caught, including the SDK's own classes, which this module cannot name. A cancellation
+        is not one it owns: it goes back up to `run`, which closes the row before letting it on.
         """
         talk = Conversation(options=options, tools=tools)
         try:
             factory = self._factory()
             async with factory(options, tools) as client:
-                await client.query(prompt)
+                await client.query(brief.render())
                 async for message in client.receive_response():
                     ended = talk.handle(message)
                     if ended is not None:

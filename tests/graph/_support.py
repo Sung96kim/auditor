@@ -11,7 +11,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from _support import tool_data
 from fastmcp import Client
@@ -28,6 +28,7 @@ from auditor.graph.refine.models import (
     TriggerKind,
 )
 from auditor.graph.refine.prompts import STRUCTURED_OUTPUT_TOOL
+from auditor.graph.refine.runner import FakeRunner
 from auditor.graph.refine.sdk_runner import BoundTools, SdkOptions
 from auditor.graph.refine.service import RefinementService
 from auditor.mcp import mcp
@@ -238,6 +239,45 @@ def init_data(**overrides: Any) -> dict[str, Any]:
         "claude_code_version": "2.1.239",
         **overrides,
     }
+
+
+#: the same correction in the nested shape `service.propose` takes, so the two cannot drift
+SCRIPTED_PROPOSAL: Mapping[str, Any] = MappingProxyType(
+    {
+        "kind": GOOD_PROPOSAL["kind"],
+        "target": {k: GOOD_PROPOSAL[k] for k in ("src", "dst", "edge_kind", "name")},
+        "reason": GOOD_PROPOSAL["reason"],
+    }
+)
+
+
+class ClaudeShaped(FakeRunner):
+    """A fake that reports itself as the Claude runner, so the choice logic runs unchanged.
+
+    Both surfaces need one, and `drive.refine` picks its runner off the registry, so a test that
+    wants a scripted run swaps this in for `RunnerKind.CLAUDE`.
+    """
+
+    kind: ClassVar[RunnerKind] = RunnerKind.CLAUDE
+    script: ClassVar[tuple[Mapping[str, Any], ...]] = (SCRIPTED_PROPOSAL,)
+    stops: ClassVar[str | None] = None
+
+    def __init__(
+        self,
+        service: RefinementService,
+        client_factory: ClientFactory | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            service, client_factory, script=self.script, stop=self.stops, **kwargs
+        )
+
+
+class FailingClaude(ClaudeShaped):
+    """The same runner, giving up rather than committing."""
+
+    script: ClassVar[tuple[Mapping[str, Any], ...]] = ()
+    stops: ClassVar[str | None] = "the model gave up"
 
 
 def hook_payload(
