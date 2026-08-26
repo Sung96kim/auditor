@@ -307,22 +307,21 @@ def _job(scope: str, runner: str | None, model: str | None) -> RefinementJob:
 
 
 def _bad_option(exc: ValidationError) -> typer.BadParameter:
-    """One refused job field as the flag that carried it, naming the values it accepts."""
+    """One refused job field as the flag that carried it, naming the values it accepts.
+
+    The valid set is read off the field's own annotation, so this message and the check that
+    produced it cannot drift apart.
+    """
     error = exc.errors()[0]
     field = str(error["loc"][0])
-    allowed = ", ".join(str(v) for v in _accepts(field))
-    return typer.BadParameter(f"unknown --{field}: {error['input']}. Valid: {allowed}")
-
-
-def _accepts(field: str) -> tuple[str, ...]:
-    """What one job field admits, read off its own annotation so no second list can drift."""
     optional = get_args(RefinementJob.model_fields[field].annotation)
-    return tuple(
-        value
+    allowed = ", ".join(
+        str(value)
         for member in optional
         if member is not type(None)
         for value in get_args(member)
     )
+    return typer.BadParameter(f"unknown --{field}: {error['input']}. Valid: {allowed}")
 
 
 def graph_refine(

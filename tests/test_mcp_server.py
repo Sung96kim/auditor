@@ -772,8 +772,7 @@ async def test_every_graph_tool_registers_unconditionally():
 #: mutating and not destructive on purpose (it drops staging that was never written), and the two
 #: that open or stage work of their own are not idempotent, so a retried timeout is visible.
 _REFINE_ANNOTATIONS = {
-    # `graph_refine` opens a run, stages proposals and commits them: a silent client retry after
-    # a timeout costs money twice and lands a second set of corrections
+    # opens a run and commits it, so a silent retry costs money twice and lands a second set
     "graph_refine": (False, False),
     "graph_refine_begin": (False, False),
     # writes the run's prompt the first time it is read, and nothing on a re-read

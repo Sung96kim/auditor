@@ -21,8 +21,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _HEAVY = (
     "auditor.cli.graph",
     "auditor.graph.build",
-    # the refinement readers: `render.py` imports the refine wire payload, so anything the payload
-    # chain reaches is imported by every fast command, and these three read a checkout
+    # `render.py` imports the refine wire payload, so its chain is on every fast command's path
     "auditor.graph.refine.facts",
     "auditor.graph.refine.verify",
     "auditor.graph.resolve_edges",

@@ -25,10 +25,7 @@ from auditor.graph.refine.sdk_runner import SdkRunner
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.user_settings import Runner, RunnerConfig, UserSettings
 
-# the [observer-claude] extra. CPython names the *package* in `exc.name` for a failed
-# `from pkg import Name`, so "absent" and "present but moved" arrive identically: a package the
-# interpreter can still find is an API drift, and swallowing it would tell the user to install
-# what they already have.
+# the [observer-claude] extra; `exc.name` is the package either way, so a findable one means drift
 try:
     from auditor.graph.refine.sdk_client import claude_client
 

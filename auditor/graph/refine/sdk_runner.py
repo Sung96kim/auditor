@@ -224,8 +224,7 @@ class BoundTools(BaseModel):
             BoundTool(
                 name="propose",
                 description=PROPOSE_DESCRIPTION,
-                # registered verbatim: `Proposal` already generates this, and the flat MCP shape
-                # would be a fourth hand-maintained copy of one schema
+                # verbatim: a flat MCP shape would be a fourth hand-maintained copy of one schema
                 input_schema=Proposal.model_json_schema(),
                 handler=self.propose,
             ),
@@ -485,8 +484,7 @@ class SdkRunner(RefinementRunner):
         self.managed_settings = managed_settings
 
     async def run(self, job: RefinementJob) -> RunProduct:
-        # the options are built before the row exists: a run must never be opened for a request
-        # that cannot be turned into one, because there would be nothing left to close it
+        # before the row exists: a request that cannot become options must not open one to orphan
         options = SdkOptions.of(
             job, self.service.user, self.service.root, cli_path=self.cli_path
         )
@@ -502,8 +500,7 @@ class SdkRunner(RefinementRunner):
         try:
             outcome = await self._converse(talk, brief)
         except asyncio.CancelledError:
-            # the caller going away must not leave the row queued and its registry slot held,
-            # and whatever the turns before it spent was never reported
+            # the caller going away must not leave the row queued and its slot held
             await self._close(run, brief, talk.stopped(RunStatus.ABORTED, "cancelled"))
             raise
         return await self._close(run, brief, outcome)
@@ -527,10 +524,10 @@ class SdkRunner(RefinementRunner):
     async def _converse(self, talk: Conversation, brief: Brief) -> RunOutcome:
         """One conversation, from the first message to the result, mapped to a terminal state.
 
-        Everything a run does once its row exists happens under this handler, rendering the
-        brief included, so nothing between `begin` and a closed run can escape. Every exception
-        is caught, including the SDK's own classes, which this module cannot name. A cancellation
-        is not one it owns: it goes back up to `run`, which closes the row before letting it on.
+        Rendering the brief is inside the handler too, so every step that can fail once the row
+        exists lands as a closed run. Every exception is caught, the SDK's own classes included,
+        which this module cannot name; a cancellation is not one it owns and goes back up to
+        `run`, which closes the row before letting it on.
         """
         try:
             factory = self._factory()

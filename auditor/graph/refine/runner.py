@@ -182,14 +182,9 @@ class FakeRunner(RefinementRunner):
             # only a scripted answer is a producer's own line; without one the row counts its rows
             summary=self.answer.summary if self.answer is not None else None,
         )
-        if self.stop is not None:
-            return await self._close(
-                run,
-                brief,
-                RunOutcome.of(
-                    self.stop_status, error=self.stop, attribution=attribution
-                ),
-            )
-        return await self._close(
-            run, brief, RunOutcome.of(RunStatus.SUCCEEDED, attribution=attribution)
+        outcome = (
+            RunOutcome.of(self.stop_status, error=self.stop, attribution=attribution)
+            if self.stop is not None
+            else RunOutcome.of(RunStatus.SUCCEEDED, attribution=attribution)
         )
+        return await self._close(run, brief, outcome)

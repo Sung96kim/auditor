@@ -172,8 +172,7 @@ class BriefBuilder(BaseModel):
             StaleNote.of(row)
             for row in rows
             if (row.status is RefinementStatus.STALE or row.drifted)
-            # every id, the rule `StagedRun.covers` applies: a correction this run could not have
-            # made is not one it needs warning off
+            # `StagedRun.covers` again: a correction this run could not have made needs no warning
             and all(under_scope(node_id, scope) for node_id in row.anchored_ids())
         )
 
