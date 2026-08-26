@@ -65,7 +65,7 @@ pnpm build            # rebuild the committed dist/index.html that `graph serve`
   directive; do not add a second deferred import anywhere.
 - Everything is typed. Records are pydantic v2 models: `ConfigDict(frozen=True)` on `Finding`,
   `ManifestEntry`, `SkippedRule`; `ScanResult`, `IndexEntry`, `ConfigNotice`, `StagedRun`,
-  `RunRegistry` and `BoundTools` are mutable aggregates. Configuration is `pydantic-settings`.
+  `RunRegistry`, `BoundTools` and `Conversation` are mutable aggregates. Configuration is `pydantic-settings`.
 - Detectors, language auditors, and reporters register by subclassing their ABC, so a package
   `__init__.py` imports its modules purely for that side effect (F401 is waived there).
 - Suppress a finding you have judged in source: `# auditor: skip: RULE-ID` on the offending line,

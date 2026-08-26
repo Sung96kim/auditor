@@ -49,7 +49,12 @@ from auditor.graph.payloads import (
     SearchReport,
     UsagesPayload,
 )
-from auditor.graph.refine.models import PruneOutcome, RefinementStatus, RunStatus
+from auditor.graph.refine.models import (
+    PruneOutcome,
+    RefinementStatus,
+    RunStatus,
+    Verdict,
+)
 from auditor.graph.refine.payloads import BriefPayload, RefinePayload
 from auditor.user_settings import UserSettings
 
@@ -377,9 +382,22 @@ def render_graph_refine(out: Console, payload: RefinePayload) -> None:
     out.print(Panel(t, title="graph refined", border_style=_BORDER))
     if payload.build is not None:
         render_graph_build(out, payload.build)
-    if payload.committed:
+    _landed_note(out, payload.committed)
+
+
+def _landed_note(out: Console, landed: tuple[Verdict, ...]) -> None:
+    """What a human still has to do about what this run landed, and what it cannot undo by not
+    acting: the two go to different kinds, so a run that landed both says both."""
+    active = tuple(v for v in landed if v.status is RefinementStatus.ACTIVE)
+    pending = tuple(v for v in landed if v.status is RefinementStatus.PENDING)
+    if active:
+        kinds = ", ".join(sorted({v.kind.value for v in active}))
         out.print(
-            "[dim]corrections are pending until "
+            f"[dim]{len(active)} active already, applied by the next build: {kinds}[/dim]"
+        )
+    if pending:
+        out.print(
+            f"[dim]{len(pending)} pending until "
             "`auditr graph refinements accept <id>`[/dim]"
         )
 

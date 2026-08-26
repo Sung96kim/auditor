@@ -262,7 +262,9 @@ async def graph_refine(
 ) -> dict:
     """Run a model over the unresolved queue under ``scope`` and commit what it proposes, in this
     server's own process. Bounded by the configured ``max_turns`` and ``max_budget_usd_per_run``,
-    and by ``max_nodes_per_run`` targets. Corrections land ``pending`` until a human accepts them.
+    and by ``max_nodes_per_run`` targets. Edge corrections land ``pending`` until a human runs
+    `auditr graph refinements accept <id>`; ``annotate_node`` and ``unresolvable``, which the brief
+    offers on every target, go active at once and the next build applies them.
     ``scope`` is a repo-relative path prefix; empty means the whole repo. ``runner`` takes auto,
     claude or codex and ``model`` takes haiku or sonnet; anything else is refused before a run
     opens. Not the tool to call from inside a refinement run: the bound ``propose`` is that

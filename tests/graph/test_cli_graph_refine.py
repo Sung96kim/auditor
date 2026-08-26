@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 from _support import assert_no_escape, cli_json, invoke, one_line
-from graph._support import FailingClaude, render_text
+from graph._support import (
+    SCRIPTED_PROPOSAL,
+    ClaudeShaped,
+    FailingClaude,
+    render_text,
+)
 
 from auditor.cli.helpers import load_settings, load_user, open_index
 from auditor.cli.render import render_graph_refine
@@ -193,3 +198,52 @@ def test_a_dot_slash_scope_is_the_directory_under_it(refine_repo, claude_runner)
     payload = cli_json(_refine(refine_repo, "./caller.py"))
     assert payload["scope"] == "caller.py"
     assert payload["targets"] >= 1
+
+
+class ThreeKinds(ClaudeShaped):
+    """A run that lands one of each: an edge that waits for a human, and two that do not."""
+
+    script = (
+        SCRIPTED_PROPOSAL,
+        {
+            "kind": "annotate_node",
+            "target": {"node_id": "caller.py::main"},
+            "payload": {"annotation": "the entry point"},
+            "reason": "main is the only caller in this module",
+        },
+        {
+            "kind": "unresolvable",
+            "target": {"node_id": "helper.py::read_event", "name": "loads"},
+            "payload": {"reason_code": "dynamic_dispatch"},
+            "reason": "the name is looked up at run time",
+        },
+    )
+
+
+def test_the_run_says_which_corrections_a_human_still_owns(refine_repo, claude_runner):
+    """Two of the three kinds the brief offers on every target go active with no human step, and
+    an active `unresolvable` retires its queue row: saying "pending" over all three is false."""
+    claude_runner.setitem(drive.RUNNERS, RunnerKind.CLAUDE, ThreeKinds)
+    payload = cli_json(_refine(refine_repo, ""))
+    by_kind = {v["kind"]: v["status"] for v in payload["committed"]}
+    assert by_kind == {
+        "add_edge": "pending",
+        "annotate_node": "active",
+        "unresolvable": "active",
+    }
+    text = one_line(
+        render_text(render_graph_refine, RefinePayload.model_validate(payload))
+    )
+    assert "2 active already" in text
+    assert "annotate_node, unresolvable" in text
+    assert "1 pending until" in text
+    assert "graph refinements accept" in text
+
+
+def test_a_run_that_landed_only_pending_rows_says_only_that(refine_repo, claude_runner):
+    payload = cli_json(_refine(refine_repo, ""))
+    text = one_line(
+        render_text(render_graph_refine, RefinePayload.model_validate(payload))
+    )
+    assert "active already" not in text
+    assert "1 pending until" in text

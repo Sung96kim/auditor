@@ -290,9 +290,12 @@ auditr graph refine auditor/cli --brief
   that reads the checkout with `Read`/`Grep`/`Glob` and proposes through an in-process `propose`
   tool, then commit under the rebuild lock. Every proposal goes through the same verifier an agent's
   does, so the runner has no way to write a correction the tools would refuse.
-- `SCOPE` is the first positional and `TARGET` the second, like every other graph command. The scope
-  is a repo-relative path prefix; `.` and `""` both mean the whole repo. A run may only propose
-  corrections whose every endpoint is under its scope, so a cross-directory edge needs a wider run.
+- `TARGET` is the last positional, as in every other graph command, and `SCOPE` comes before it.
+  Unlike the others the first positional is optional here, so a lone path binds to `SCOPE`: point at
+  another checkout with `auditr graph refine . /other/repo`. The scope is a repo-relative path
+  prefix; `.`, `./` and `""` all mean the whole repo, and a leading `./` is dropped. A run may only
+  propose corrections whose every endpoint is under its scope, so a cross-directory edge needs a
+  wider run.
 - `--runner` takes `auto`, `claude` or `codex`. `auto` and `claude` both resolve to the Claude
   runner today; `codex` is refused, naming the slice it lands in. `--model` takes `haiku` or
   `sonnet`. An unknown value for either exits 2 naming the valid set.
@@ -306,20 +309,34 @@ auditr graph refine auditor/cli --brief
   - `limits.max_changes_per_run` caps how many corrections one run may stage.
   - `limits.max_turns` caps the conversation.
   - `budget.max_budget_usd_per_run` stops the run after a turn that crosses it.
-- Rule of thumb: `max_turns >= 2 * max_nodes_per_run + 2`. A target costs about two turns and the
-  structured answer costs one more.
+- Rule of thumb: a target costs about two turns and the structured answer costs one more, so a run
+  that works every target it is given wants `max_turns >= 2 * max_nodes_per_run + 1`. Nothing
+  enforces it, and the shipped defaults (20 turns, 12 targets) are deliberately below it: a run
+  that runs out of turns is `aborted` with its cost kept, not an error.
 - The budget is an advisory post-turn stop, not a hard cap: the turn in flight runs to completion,
-  so a small budget can overshoot. The 180 s timeout and `max_turns` are the real bounds, and the
+  so a small budget can overshoot. `max_turns` is the only hard bound on the conversation, and the
   cost recorded on the run is the one actually spent.
 - A run that stops at its turn or budget cap is `aborted`, and an aborted run keeps its cost but
   loses its staging: nothing it proposed is stored. Only the proposals the verifier refused survive,
   because those are written the moment they are made.
-- Corrections land `pending`. Nothing here activates one; that stays
+- What a correction needs from a human depends on its kind, not on who proposed it. `add_edge`,
+  `retarget_edge`, `resolve_ambiguous` and `move_node` land `pending` and wait for
   `auditr graph refinements accept <id>` until the eval suite lands.
-- The run row records the verbatim brief, the sha of the rules it was written under, the tool trace,
-  the usage, the SDK session id, the model, the runner, the branch and the commit. `graph log --json`
-  carries `system_prompt_sha`, `prompt_chars` and `tool_calls`; the brief itself stays on the row,
-  where it cannot fight the log's row cap.
+- `annotate_node` and `unresolvable` go active immediately (spec 10.3: neither can add an edge),
+  and the brief offers both on every target, so a run can land corrections no human accepted. An
+  active `unresolvable` also retires that queue row at the next build, which takes it out of
+  `graph unresolved` and out of every later brief.
+- The run row records the verbatim brief it was first handed, the sha of the rules it was written
+  under, the tool trace, the usage, the SDK session id, the model, the runner, the branch and the
+  commit. `graph log --json` carries `system_prompt_sha`, `prompt_chars` and `tool_calls`; the brief
+  itself stays on the row, where it cannot fight the log's row cap.
+- `input_tokens` counts the cached tokens too (`cacheCreationInputTokens` and
+  `cacheReadInputTokens`): a run that read its context from cache was charged for it.
+- `cost_estimated` travels with `cost_usd`. A run that stopped before its result reports
+  `$0.0000` with `cost_estimated` true, which means the client never reported a cost, not that the
+  run was free.
+- `summary` is the model's own one-line answer when it gave one, and this run's rows counted
+  ("3 committed, 0 rejected") when it did not.
 - The log shows `queued` until the run finishes. Nothing writes `running` yet.
 - Exit codes: 0 when the run succeeded, 1 when no runner could run or the run did not succeed
   (the payload is still printed, `--json` included), 2 for a bad `--runner` or `--model` value.

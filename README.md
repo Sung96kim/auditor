@@ -55,8 +55,9 @@ docker compose run --rm auditor scan .
 - `observer-claude` is what `auditr graph refine` needs: it pulls `claude-agent-sdk`, which bundles
   its own 342 MB `claude` binary. Install it with `pip install "auditr[observer-claude]"` only if
   you want model-driven refinement; every other command works without it.
-- `observer-codex`, `observer` and `vectors` are declared but nothing uses them yet. Each pulls a
-  large SDK, so leave them out until a release says otherwise.
+- `observer` is the superset and enables `auditr graph refine` the same way `observer-claude`
+  does, since it pulls `claude-agent-sdk` too. `observer-codex` and `vectors` are declared and
+  nothing uses them yet. Each pulls a large SDK, so leave them out until a release says otherwise.
 - Claude Code plugin: `claude plugin marketplace add Sung96kim/auditor`, then
   `/plugin install auditor` in a session. See
   [claude-code-plugin](docs/references/claude-code-plugin.md).

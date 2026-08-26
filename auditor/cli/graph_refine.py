@@ -1,5 +1,5 @@
-"""``auditr graph unresolved`` and ``auditr graph refinements`` — the queue, and the recorded
-corrections a human steers.
+"""The queue and the corrections against it: ``auditr graph unresolved``, ``graph refinements``,
+``graph refine`` and ``graph log``.
 
 ``cli/graph.py`` calls :func:`register` at the bottom of its module; this module never imports it
 back, so the ``graph`` sub-app stays a one-way dependency.
@@ -337,8 +337,9 @@ def graph_refine(
     ),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Let a model work the unresolved queue under a path. Exits 1 when no runner can run or the
-    run did not succeed, 2 on a bad option."""
+    """Let a model work the unresolved queue under a path. Edge corrections land pending for a
+    human to accept; `annotate_node` and `unresolvable` go active at once. Exits 1 when no runner
+    can run or the run did not succeed, 2 on a bad option."""
     root = cli_root(target)
     job = _job(scope, runner, model)
     if brief:

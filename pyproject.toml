@@ -39,7 +39,8 @@ ts = [
 # `pip install "auditr[graph]"` and existing uv-tool receipts keep resolving.
 graph = []
 # Each agent SDK bundles a ~300MB x86_64-only CLI binary, so they stay opt-in and CI never
-# installs them. Nothing imports these until the observer slices land.
+# installs them. `observer-claude` (and `observer`, which contains it) is what `graph refine`
+# needs; nothing imports `openai-codex` until S12.
 observer-claude = ["claude-agent-sdk>=0.2,<0.3"]
 observer-codex = ["openai-codex==0.147.*"]
 observer = ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*"]
