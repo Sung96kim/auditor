@@ -83,11 +83,11 @@ async def _drive(service: RefinementService, messages, **kwargs):
 async def test_a_scripted_run_proposes_through_the_service_and_records_it(
     refine_service: RefinementService,
 ):
-    product, row = await _drive(
+    _product, row = await _drive(
         refine_service, [Init(data=init_data()), PROPOSES, ANSWERS, SUCCESS]
     )
-    assert product.outcome.status is RunStatus.SUCCEEDED
-    assert product.outcome.summary == "one edge"
+    assert row.status is RunStatus.SUCCEEDED
+    assert row.summary == "one edge"
     assert row.usage == RunUsage(
         cost_usd=0.004,
         cost_estimated=False,
@@ -151,11 +151,11 @@ async def test_the_init_check_accepts_the_dated_model_the_cli_reports(
 ):
     """The spike measured `claude-haiku-4-5-20251001` for the option `haiku`, so a prefix test
     would refuse every real run."""
-    product, _row = await _drive(
+    _product, row = await _drive(
         refine_service,
         [Init(data=init_data(model="claude-haiku-4-5-20251001")), SUCCESS],
     )
-    assert product.outcome.status is RunStatus.SUCCEEDED
+    assert row.status is RunStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize(
@@ -174,12 +174,11 @@ async def test_a_session_that_is_not_the_one_asked_for_is_refused(
 ):
     """Invariant 4: the refusal names what it refused, because a surprise here is a fact about the
     CLI, not about this repo."""
-    product, row = await _drive(
+    _product, row = await _drive(
         refine_service, [Init(data=init_data(**spoiled)), PROPOSES, SUCCESS]
     )
-    assert product.outcome.status is RunStatus.ABORTED
-    assert (product.outcome.error or "").startswith("refused:")
-    assert named in (product.outcome.error or "")
+    assert (row.error or "").startswith("refused:")
+    assert named in (row.error or "")
     assert row.status is RunStatus.ABORTED
     assert await refine_service.index.refinements.of_run(row.run_id) == []
 
@@ -187,16 +186,16 @@ async def test_a_session_that_is_not_the_one_asked_for_is_refused(
 async def test_a_result_before_any_init_is_a_failed_run(
     refine_service: RefinementService,
 ):
-    product, row = await _drive(refine_service, [SUCCESS])
-    assert product.outcome.status is RunStatus.FAILED
+    _product, row = await _drive(refine_service, [SUCCESS])
     assert row.status is RunStatus.FAILED
+    assert "before it started" in (row.error or "")
 
 
 async def test_ticks_and_a_rate_limit_warning_before_init_are_skipped(
     refine_service: RefinementService,
 ):
     """The spike measured two SystemMessages and a RateLimitEvent before the init in one run."""
-    product, _row = await _drive(
+    _product, row = await _drive(
         refine_service,
         [
             Tick(),
@@ -206,37 +205,30 @@ async def test_ticks_and_a_rate_limit_warning_before_init_are_skipped(
             SUCCESS,
         ],
     )
-    assert product.outcome.status is RunStatus.SUCCEEDED
+    assert row.status is RunStatus.SUCCEEDED
 
 
 async def test_an_authentication_failure_is_named_the_way_the_daemon_reads_it(
     refine_service: RefinementService,
 ):
-    product, row = await _drive(
+    _product, row = await _drive(
         refine_service,
         [Init(data=init_data()), Assistant(error="authentication_failed"), SUCCESS],
     )
-    assert (product.outcome.status, product.outcome.error) == (
-        RunStatus.FAILED,
-        "paused:auth",
-    )
-    assert row.status is RunStatus.FAILED
+    assert (row.status, row.error) == (RunStatus.FAILED, "paused:auth")
 
 
 async def test_another_assistant_error_is_reported_as_it_came(
     refine_service: RefinementService,
 ):
-    product, _row = await _drive(
+    _product, row = await _drive(
         refine_service, [Init(data=init_data()), Assistant(error="server_error")]
     )
-    assert (product.outcome.status, product.outcome.error) == (
-        RunStatus.FAILED,
-        "server_error",
-    )
+    assert (row.status, row.error) == (RunStatus.FAILED, "server_error")
 
 
 async def test_a_rejected_rate_limit_pauses_the_run(refine_service: RefinementService):
-    product, row = await _drive(
+    _product, row = await _drive(
         refine_service,
         [
             Init(data=init_data()),
@@ -244,9 +236,8 @@ async def test_a_rejected_rate_limit_pauses_the_run(refine_service: RefinementSe
             SUCCESS,
         ],
     )
-    assert product.outcome.status is RunStatus.ABORTED
-    assert product.outcome.error == "paused:ratelimit until 1788159600"
     assert row.status is RunStatus.ABORTED
+    assert row.error == "paused:ratelimit until 1788159600"
 
 
 async def test_a_budget_stop_keeps_its_cost_and_loses_its_staging(
@@ -260,24 +251,24 @@ async def test_a_budget_stop_keeps_its_cost_and_loses_its_staging(
         model_usage=MODEL_USAGE,
         errors=("Reached maximum budget ($0.0001)",),
     )
-    product, row = await _drive(
+    _product, row = await _drive(
         refine_service, [Init(data=init_data()), PROPOSES, capped]
     )
-    assert product.outcome.status is RunStatus.ABORTED
-    assert "Reached maximum budget" in (product.outcome.error or "")
+    assert row.status is RunStatus.ABORTED
+    assert "Reached maximum budget" in (row.error or "")
     assert row.usage.cost_usd == pytest.approx(0.000964)
     assert await refine_service.index.refinements.of_run(row.run_id) == []
 
 
 async def test_a_turn_cap_is_an_abort_too(refine_service: RefinementService):
-    product, _row = await _drive(
+    _product, row = await _drive(
         refine_service,
         [
             Init(data=init_data()),
             Result(subtype="error_max_turns", structured_output=None),
         ],
     )
-    assert product.outcome.status is RunStatus.ABORTED
+    assert row.status is RunStatus.ABORTED
 
 
 @pytest.mark.parametrize(
@@ -288,19 +279,19 @@ async def test_a_success_with_no_usable_answer_is_a_failed_run(
 ):
     """A malformed output_format drops the flag silently and the run still "succeeds" (spike A.6),
     so the answer is what says it really finished."""
-    product, _row = await _drive(
+    _product, row = await _drive(
         refine_service, [Init(data=init_data()), Result(structured_output=answer)]
     )
-    assert product.outcome.status is RunStatus.FAILED
-    assert product.outcome.error == "no structured answer"
+    assert row.status is RunStatus.FAILED
+    assert row.error == "no structured answer"
 
 
 async def test_a_stream_that_never_answers_is_a_failed_run(
     refine_service: RefinementService,
 ):
-    product, _row = await _drive(refine_service, [Init(data=init_data())])
-    assert product.outcome.status is RunStatus.FAILED
-    assert "without a result" in (product.outcome.error or "")
+    _product, row = await _drive(refine_service, [Init(data=init_data())])
+    assert row.status is RunStatus.FAILED
+    assert "without a result" in (row.error or "")
 
 
 async def test_a_client_that_cannot_start_leaves_a_run_row_behind(
@@ -314,11 +305,10 @@ async def test_a_client_that_cannot_start_leaves_a_run_row_behind(
         explode,
         managed_settings=refine_service.root / "none.json",
     )
-    product = await runner.run(RefinementJob())
+    await runner.run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
-    assert product.outcome.status is RunStatus.FAILED
-    assert "Claude Code not found" in (product.outcome.error or "")
     assert row.status is RunStatus.FAILED
+    assert "Claude Code not found" in (row.error or "")
 
 
 async def test_managed_settings_that_declare_hooks_refuse_the_run(
@@ -330,11 +320,10 @@ async def test_managed_settings_that_declare_hooks_refuse_the_run(
     runner = _runner(
         refine_service, [Init(data=init_data()), SUCCESS], managed_settings=settings
     )
-    product = await runner.run(RefinementJob())
+    await runner.run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
-    assert product.outcome.status is RunStatus.ABORTED
-    assert "declares hooks" in (product.outcome.error or "")
     assert row.status is RunStatus.ABORTED
+    assert "declares hooks" in (row.error or "")
 
 
 async def test_managed_settings_without_hooks_let_the_run_proceed(
@@ -345,8 +334,9 @@ async def test_managed_settings_without_hooks_let_the_run_proceed(
     runner = _runner(
         refine_service, [Init(data=init_data()), SUCCESS], managed_settings=settings
     )
-    product = await runner.run(RefinementJob())
-    assert product.outcome.status is RunStatus.SUCCEEDED
+    await runner.run(RefinementJob())
+    (row,) = await refine_service.index.runs.runs()
+    assert row.status is RunStatus.SUCCEEDED
 
 
 async def test_tokens_come_from_the_usage_block_when_there_is_no_breakdown(

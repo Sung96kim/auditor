@@ -439,8 +439,8 @@ class PruneOutcome(WirePayload):
 
 
 class RunAttribution(BaseModel):
-    """What a producer records about how a run was driven: what it cost, what it called, and the
-    session it ran under (Invariant 2).
+    """What a producer records about how a run was driven: what it cost, what it called, the
+    session it ran under, and the one line it has to say about it (Invariant 2).
 
     Separate from the outcome because a runner carries it through a run that may end any of four
     ways, and a run that failed still cost money.
@@ -451,6 +451,8 @@ class RunAttribution(BaseModel):
     usage: RunUsage = RunUsage()
     tool_trace: tuple[ToolCall, ...] = ()
     sdk_session_id: str | None = None
+    #: ``None`` from a producer that has nothing of its own to say, which is every hand-driven run
+    summary: str | None = None
 
 
 class RunOutcome(RunAttribution):
@@ -478,14 +480,18 @@ class RunOutcome(RunAttribution):
         """A terminal state with a producer's attribution folded in, defaulted when there is none.
 
         The service finishes runs from three places and only one of them has an attribution, so the
-        merge lives here rather than at each caller.
+        merge lives here rather than at each caller. A caller that names no ``summary`` keeps the
+        producer's own.
         """
+        base = attribution or RunAttribution()
         return cls(
             status=status,
-            summary=summary,
+            summary=summary if summary is not None else base.summary,
             error=error,
             finished_at=finished_at,
-            **(attribution or RunAttribution()).model_dump(),
+            usage=base.usage,
+            tool_trace=base.tool_trace,
+            sdk_session_id=base.sdk_session_id,
         )
 
 

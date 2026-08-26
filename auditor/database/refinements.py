@@ -214,7 +214,12 @@ class RunsDB(BaseDB):
         return await self._worker.run(op)
 
     async def finish_run(self, run_id: str, outcome: RunOutcome) -> None:
-        """Stamp a run's terminal state. Cost is recorded even for `aborted` (spec 5.3)."""
+        """Stamp a run's terminal state. Cost is recorded even for `aborted` (spec 5.3).
+
+        Raises:
+            NoSuchRun: no run with this id belongs to this checkout's identity, so the row that
+                would have been stamped terminal is still open somewhere and nothing said so.
+        """
         values = _outcome_values(outcome, now=time.time())
         assignments = ", ".join(f"{column}=?" for column in values)
         sql = (
@@ -223,11 +228,13 @@ class RunsDB(BaseDB):
         )
         binds = (*values.values(), run_id, self.partition.identity)
 
-        def op(conn: sqlite3.Connection) -> None:
-            conn.execute(sql, binds)
+        def op(conn: sqlite3.Connection) -> int:
+            changed = conn.execute(sql, binds).rowcount
             conn.commit()
+            return changed
 
-        await self._worker.run(op)
+        if await self._worker.run(op) == 0:
+            raise NoSuchRun(f"no run {run_id} on this checkout")
 
     async def record_prompt(
         self, run_id: str, *, prompt: str, system_prompt_sha: str

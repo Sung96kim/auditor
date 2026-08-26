@@ -6,15 +6,17 @@ Deliberately free of any registry and any selection logic: `sdk_runner.py` impor
 nothing here may import it back.
 """
 
+import logging
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
 from auditor.graph.payloads import CommitResult
 from auditor.graph.refine.brief import Brief
+from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     ClientKind,
     ProducerKind,
@@ -29,6 +31,8 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.prompts import GRAPH_SERVER, RunAnswer
 from auditor.graph.refine.service import RefinementRefused, RefinementService
+
+logger = logging.getLogger(__name__)
 
 #: the in-process tool a proposal arrives through, as the trace names it
 PROPOSE_TOOL = f"mcp__{GRAPH_SERVER}__propose"
@@ -54,19 +58,19 @@ class RefinementJob(BaseModel):
 
 
 class RunProduct(BaseModel):
-    """Everything one run produced: the row it opened, the brief it worked from, how it ended, and
-    what its commit landed.
+    """Everything one run produced: the row it opened, the brief it worked from, and what its
+    commit landed.
 
     One frozen answer rather than state left on the runner, because both surfaces need the run row
-    and the brief as well as the outcome, and a runner that remembered its last call could only
-    ever drive one.
+    and the brief, and a runner that remembered its last call could only ever drive one. How the
+    run ended is not here: the stored row is the state of record, and a second copy of it on the
+    product is a second copy to disagree.
     """
 
     model_config = ConfigDict(frozen=True)
 
     run: Run
     brief: Brief
-    outcome: RunOutcome
     #: ``None`` unless the run committed: an aborted or failed run lands nothing
     landed: CommitResult | None = None
 
@@ -81,7 +85,7 @@ class RefinementRunner(ABC):
     kind: ClassVar[RunnerKind]
 
     def __init__(
-        self, service: RefinementService, client_factory: Callable[..., Any] | None
+        self, service: RefinementService, client_factory: ClientFactory | None
     ) -> None:
         self.service = service
         self.client_factory = client_factory
@@ -104,96 +108,80 @@ class RefinementRunner(ABC):
         )
         return run, await self.service.brief(run.run_id)
 
-    async def _close(
-        self,
-        run: Run,
-        brief: Brief,
-        *,
-        status: RunStatus,
-        reason: str,
-        attribution: RunAttribution,
-    ) -> RunProduct:
-        """Land or abandon the run, and answer with what the producer made of it.
+    async def _close(self, run: Run, brief: Brief, outcome: RunOutcome) -> RunProduct:
+        """Land or abandon the run the way ``outcome`` says, and answer with what it produced.
 
-        ``reason`` is the run's own summary when it succeeded and why it stopped otherwise. The
-        stored row keeps the service's counted summary, which is the one every other surface
-        reads; this outcome carries the producer's.
-
-        A `commit` that refuses has already stamped the row through `_retire` and closed the run,
-        so it is never followed by an `abort`: that would raise "not open in this process" out of
-        this handler.
+        One guard over both terminal writes: a run the registry evicted refuses either of them,
+        and a `commit` that refuses has already stamped the row through `_retire` and closed the
+        run, so a second write would raise "not open in this process" out of this handler. Either
+        way the row already says what happened, which is why nothing is re-stamped here.
         """
-        if status is not RunStatus.SUCCEEDED:
-            terminate = (
-                self.service.fail if status is RunStatus.FAILED else self.service.abort
-            )
-            await terminate(run.run_id, reason, attribution=attribution)
-            return RunProduct(
-                run=run,
-                brief=brief,
-                outcome=RunOutcome.of(status, error=reason, attribution=attribution),
-            )
         try:
-            landed = await self.service.commit(run.run_id, attribution=attribution)
-        except RefinementRefused as exc:
-            return RunProduct(
-                run=run,
-                brief=brief,
-                outcome=RunOutcome.of(
-                    RunStatus.FAILED, error=str(exc), attribution=attribution
-                ),
+            if outcome.status is RunStatus.SUCCEEDED:
+                landed = await self.service.commit(run.run_id, attribution=outcome)
+                return RunProduct(run=run, brief=brief, landed=landed)
+            await self.service.terminate(
+                run.run_id, outcome.status, outcome.error or "", attribution=outcome
             )
-        return RunProduct(
-            run=run,
-            brief=brief,
-            outcome=RunOutcome.of(
-                RunStatus.SUCCEEDED, summary=reason, attribution=attribution
-            ),
-            landed=landed,
-        )
+        except RefinementRefused as exc:
+            logger.warning("run %s closed itself: %s", run.run_id, exc)
+        return RunProduct(run=run, brief=brief)
+
+    async def _propose_one(self, run_id: str, proposal: Mapping[str, Any]) -> ToolCall:
+        """Stage one proposal and answer with the trace entry it earned, refusal included.
+
+        A payload no `Proposal` can be read out of is refused outright rather than stored, and a
+        producer that let that escape would orphan its own open run.
+        """
+        try:
+            detail = (await self.service.propose(run_id, proposal)).outcome.value
+        except RefinementRefused as exc:
+            detail = str(exc)
+        return ToolCall(tool=PROPOSE_TOOL, ts=time.time(), detail=detail)
 
 
 class FakeRunner(RefinementRunner):
-    """A runner that replays a scripted set of proposals, so the whole path runs with no SDK."""
+    """A runner that replays a scripted set of proposals, so the whole path runs with no SDK.
+
+    ``stop`` drives the non-succeeded half: the status is the caller's, so `failed` is reachable
+    here rather than only through a real client.
+    """
 
     kind: ClassVar[RunnerKind] = RunnerKind.FAKE
 
     def __init__(
         self,
         service: RefinementService,
-        client_factory: Callable[..., Any] | None = None,
+        client_factory: ClientFactory | None = None,
         *,
         script: Sequence[Mapping[str, Any]] = (),
         answer: RunAnswer | None = None,
-        fail_with: str | None = None,
+        stop: str | None = None,
+        stop_status: RunStatus = RunStatus.ABORTED,
     ) -> None:
         super().__init__(service, client_factory)
         self.script = script
         self.answer = answer
-        self.fail_with = fail_with
+        self.stop = stop
+        self.stop_status = stop_status
 
     async def run(self, job: RefinementJob) -> RunProduct:
         run, brief = await self._open(job)
-        trace: list[ToolCall] = []
-        for proposal in self.script:
-            verdict = await self.service.propose(run.run_id, proposal)
-            trace.append(
-                ToolCall(
-                    tool=PROPOSE_TOOL, ts=time.time(), detail=verdict.outcome.value
-                )
-            )
+        trace = [await self._propose_one(run.run_id, p) for p in self.script]
         attribution = RunAttribution(
-            usage=RunUsage(num_turns=len(self.script) + 1), tool_trace=tuple(trace)
+            usage=RunUsage(num_turns=len(self.script) + 1),
+            tool_trace=tuple(trace),
+            # only a scripted answer is a producer's own line; without one the row counts its rows
+            summary=self.answer.summary if self.answer is not None else None,
         )
-        summary = (
-            self.answer.summary
-            if self.answer is not None
-            else f"{len(self.script)} proposed"
-        )
+        if self.stop is not None:
+            return await self._close(
+                run,
+                brief,
+                RunOutcome.of(
+                    self.stop_status, error=self.stop, attribution=attribution
+                ),
+            )
         return await self._close(
-            run,
-            brief,
-            status=RunStatus.SUCCEEDED if self.fail_with is None else RunStatus.ABORTED,
-            reason=self.fail_with or summary,
-            attribution=attribution,
+            run, brief, RunOutcome.of(RunStatus.SUCCEEDED, attribution=attribution)
         )

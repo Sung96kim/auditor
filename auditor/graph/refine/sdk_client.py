@@ -21,6 +21,7 @@ from claude_agent_sdk import (
     tool,
 )
 
+from auditor.graph.refine.client import ClientSession
 from auditor.graph.refine.prompts import (
     ALLOWED_TOOLS,
     BRIEF_DESCRIPTION,
@@ -34,7 +35,6 @@ from auditor.graph.refine.sdk_runner import (
     SETTING_SOURCES,
     STRICT_MCP_CONFIG,
     BoundTools,
-    ClientSession,
     SdkClientError,
     SdkErrorKind,
     SdkOptions,

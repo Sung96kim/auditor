@@ -10,17 +10,19 @@ import json
 import logging
 import shutil
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     Proposal,
     RunAttribution,
     RunnerKind,
+    RunOutcome,
     RunStatus,
     RunUsage,
     ToolCall,
@@ -180,36 +182,6 @@ class BoundTools(BaseModel):
         return {}
 
 
-class ClientSession(Protocol):
-    """The four members of the SDK client this runner uses.
-
-    A protocol rather than an ABC: the object is a third party's, and a test double must not have
-    to inherit ours to stand in for it.
-    """
-
-    async def __aenter__(self) -> "ClientSession": ...
-
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any: ...
-
-    async def query(self, prompt: str) -> None: ...
-
-    #: a plain `def`: the SDK's own is an async-generator method, awaited by `async for`
-    def receive_response(self) -> AsyncIterator[Any]: ...
-
-
-ClientFactory = Callable[[SdkOptions, BoundTools], ClientSession]
-
-
-class StreamResult(BaseModel):
-    """What one conversation with the client came to, before the run is closed on it."""
-
-    model_config = ConfigDict(frozen=True)
-
-    status: RunStatus
-    reason: str = ""
-    attribution: RunAttribution = RunAttribution()
-
-
 def _is_init(message: Any) -> bool:
     return getattr(message, "subtype", None) == "init" and hasattr(message, "data")
 
@@ -252,23 +224,14 @@ class SdkRunner(RefinementRunner):
         run, brief = await self._open(job)
         if refused is not None:
             return await self._close(
-                run,
-                brief,
-                status=RunStatus.ABORTED,
-                reason=refused,
-                attribution=RunAttribution(),
+                run, brief, RunOutcome.of(RunStatus.ABORTED, error=refused)
             )
         options = SdkOptions.of(
             job, self.service.user, self.service.root, cli_path=self.cli_path
         )
         tools = BoundTools(service=self.service, run_id=run.run_id)
-        result = await self._converse(options, tools, brief.render())
         return await self._close(
-            run,
-            brief,
-            status=result.status,
-            reason=result.reason,
-            attribution=result.attribution,
+            run, brief, await self._converse(options, tools, brief.render())
         )
 
     def _managed_hooks(self) -> str | None:
@@ -289,7 +252,7 @@ class SdkRunner(RefinementRunner):
 
     async def _converse(
         self, options: SdkOptions, tools: BoundTools, prompt: str
-    ) -> StreamResult:
+    ) -> RunOutcome:
         """One conversation, from the first message to the result, mapped to a terminal state.
 
         Every exception is caught, including the SDK's own classes, which this module cannot name.
@@ -394,7 +357,7 @@ class SdkRunner(RefinementRunner):
         options: SdkOptions,
         tools: BoundTools,
         session_id: str | None,
-    ) -> StreamResult:
+    ) -> RunOutcome:
         """The result message as a terminal state, per spec 5.3's mapping table."""
         attribution = RunAttribution(
             usage=_usage(message),
@@ -406,32 +369,32 @@ class SdkRunner(RefinementRunner):
         if subtype == "success":
             answer = _answer(getattr(message, "structured_output", None))
             if answer is None:
-                return StreamResult(
-                    status=RunStatus.FAILED,
-                    reason="no structured answer",
+                return RunOutcome.of(
+                    RunStatus.FAILED,
+                    error="no structured answer",
                     attribution=attribution,
                 )
-            return StreamResult(
-                status=RunStatus.SUCCEEDED,
-                reason=answer.summary,
+            return RunOutcome.of(
+                RunStatus.SUCCEEDED,
+                summary=answer.summary,
                 attribution=attribution,
             )
         status = RunStatus.ABORTED if subtype in CAPPED_SUBTYPES else RunStatus.FAILED
-        return StreamResult(
-            status=status,
-            reason=f"{subtype}: {errors}" if errors else subtype,
+        return RunOutcome.of(
+            status,
+            error=f"{subtype}: {errors}" if errors else subtype,
             attribution=attribution,
         )
 
     @staticmethod
     def _stopped(
         status: RunStatus, reason: str, tools: BoundTools, session_id: str | None
-    ) -> StreamResult:
+    ) -> RunOutcome:
         """A run that ended before its result: the trace and the session survive, the cost is
         whatever the client never reported."""
-        return StreamResult(
-            status=status,
-            reason=reason,
+        return RunOutcome.of(
+            status,
+            error=reason,
             attribution=RunAttribution(
                 tool_trace=tuple(tools.trace), sdk_session_id=session_id
             ),

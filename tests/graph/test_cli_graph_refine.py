@@ -41,17 +41,17 @@ class ClaudeShaped(FakeRunner):
 
     kind = RunnerKind.CLAUDE
     script: tuple = (GOOD,)
-    fails: str | None = None
+    stops: str | None = None
 
     def __init__(self, service, client_factory=None, **kwargs):
         super().__init__(
-            service, client_factory, script=self.script, fail_with=self.fails, **kwargs
+            service, client_factory, script=self.script, stop=self.stops, **kwargs
         )
 
 
 class Failing(ClaudeShaped):
     script = ()
-    fails = "the model gave up"
+    stops = "the model gave up"
 
 
 @pytest.fixture

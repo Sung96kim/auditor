@@ -394,7 +394,7 @@ async def test_record_prompt_overwrites_an_earlier_brief(refine_store):
 
 
 async def test_record_prompt_refuses_an_unknown_run(refine_store):
-    """`finish_run` no-ops on an unknown id; a lost prompt would be invisible, so this raises."""
+    """A lost prompt would be invisible, so a write that matched no row refuses by name."""
     with pytest.raises(NoSuchRun, match="no run nope on this checkout"):
         await refine_store.runs.record_prompt(
             "nope", prompt="brief", system_prompt_sha="c" * 64
@@ -560,7 +560,8 @@ async def test_another_identity_cannot_move_these_rows(refine_store, other_store
     )
     tid = await refine_store.tuning.add_tuning(_tuning(run_id))
 
-    await other_store.runs.finish_run(run_id, RunOutcome(status=RunStatus.FAILED))
+    with pytest.raises(NoSuchRun):
+        await other_store.runs.finish_run(run_id, RunOutcome(status=RunStatus.FAILED))
     await other_store.refinements.set_status(rid, RefinementStatus.REJECTED)
     await other_store.refinements.apply_outcomes(
         [RefinementOutcome(refinement_id=rid, status=RefinementStatus.STALE)]
@@ -806,3 +807,10 @@ async def test_a_row_written_outside_the_text_rules_still_reads_back(refine_stor
     (stored,) = await refine_store.refinements.refinements()
     assert len(stored.payload.annotation or "") == 400
     assert stored.reason == ""
+
+
+async def test_finish_run_refuses_an_unknown_run(refine_store):
+    """The sibling of `record_prompt`: a terminal stamp that matched no row leaves a run open
+    somewhere and nothing at all said so."""
+    with pytest.raises(NoSuchRun, match="no run nope on this checkout"):
+        await refine_store.runs.finish_run("nope", RunOutcome(status=RunStatus.FAILED))

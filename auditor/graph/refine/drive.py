@@ -12,6 +12,7 @@ from pathlib import Path
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.graph.refine.brief import BriefBuilder
+from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import RunnerChoice, RunnerChoiceCode, RunnerKind
 from auditor.graph.refine.payloads import BriefPayload, RefinePayload
 from auditor.graph.refine.runner import (
@@ -20,7 +21,7 @@ from auditor.graph.refine.runner import (
     RefinementRunner,
     RunnerUnavailable,
 )
-from auditor.graph.refine.sdk_runner import ClientFactory, SdkRunner
+from auditor.graph.refine.sdk_runner import SdkRunner
 from auditor.graph.refine.service import RefinementService
 from auditor.user_settings import Runner, RunnerConfig, UserSettings
 

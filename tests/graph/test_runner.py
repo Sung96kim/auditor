@@ -4,6 +4,7 @@ import pytest
 from graph._support import with_lock_timeout
 
 from auditor.graph.model import EdgeKind
+from auditor.graph.refine.brief import Brief, BriefLimits
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.refine.models import (
     ClientKind,
@@ -13,6 +14,7 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     RefinementTarget,
     RunnerKind,
+    RunOutcome,
     RunStatus,
     TriggerKind,
 )
@@ -38,9 +40,8 @@ async def test_a_scripted_run_lands_its_proposal_and_records_how(
     refine_service: RefinementService,
 ):
     runner = FakeRunner(refine_service, script=[GOOD])
-    outcome = (await runner.run(RefinementJob())).outcome
+    await runner.run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
-    assert outcome.status is RunStatus.SUCCEEDED
     assert (row.status, row.runner) == (RunStatus.SUCCEEDED, RunnerKind.FAKE)
     assert row.system_prompt_sha == SYSTEM_PROMPT_SHA
     assert row.prompt and "Refinement brief" in row.prompt
@@ -69,21 +70,29 @@ async def test_an_empty_script_commits_without_locking_or_rebuilding(
         raise AssertionError("an empty run took the rebuild lock")
 
     monkeypatch.setattr("auditor.graph.refine.service.rebuild_lock", refuse)
-    outcome = (await FakeRunner(refine_service).run(RefinementJob())).outcome
-    assert outcome.status is RunStatus.SUCCEEDED
-    assert outcome.summary == "0 proposed"
-    assert outcome.usage.num_turns == 1
+    await FakeRunner(refine_service).run(RefinementJob())
+    (row,) = await refine_service.index.runs.runs()
+    assert row.status is RunStatus.SUCCEEDED
+    assert row.summary == "nothing staged"
+    assert row.usage.num_turns == 1
 
 
-async def test_the_models_own_summary_is_what_the_outcome_carries(
+async def test_the_producers_own_summary_is_what_the_row_records(
     refine_service: RefinementService,
 ):
+    """The system prompt asks for that line, so it has to reach the human who reads the run."""
     answer = RunAnswer(summary="one edge", proposed=1, stopped_because="done")
-    product = await FakeRunner(refine_service, script=[GOOD], answer=answer).run(
-        RefinementJob()
-    )
-    outcome = product.outcome
-    assert outcome.summary == "one edge"
+    await FakeRunner(refine_service, script=[GOOD], answer=answer).run(RefinementJob())
+    (row,) = await refine_service.index.runs.runs()
+    assert row.summary == "one edge"
+
+
+async def test_a_producer_with_nothing_to_say_leaves_the_counted_line(
+    refine_service: RefinementService,
+):
+    await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
+    (row,) = await refine_service.index.runs.runs()
+    assert row.summary == "1 committed, 0 rejected"
 
 
 async def test_a_runner_that_gives_up_aborts_the_run_and_stores_nothing(
@@ -91,12 +100,8 @@ async def test_a_runner_that_gives_up_aborts_the_run_and_stores_nothing(
 ):
     """Invariant 2: the row exists with its cost, but `abort` promises nothing, so it keeps
     nothing."""
-    product = await FakeRunner(refine_service, script=[GOOD], fail_with="boom").run(
-        RefinementJob()
-    )
-    outcome = product.outcome
+    await FakeRunner(refine_service, script=[GOOD], stop="boom").run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
-    assert (outcome.status, outcome.error) == (RunStatus.ABORTED, "boom")
     assert (row.status, row.error) == (RunStatus.ABORTED, "boom")
     assert row.usage.num_turns == 2
     assert await refine_service.index.refinements.of_run(row.run_id) == []
@@ -106,10 +111,9 @@ async def test_a_refused_proposal_is_stored_and_the_run_still_succeeds(
     refine_service: RefinementService,
 ):
     """Spec 9.2 stores every rejection, and one bad proposal is not a failed run."""
-    product = await FakeRunner(refine_service, script=[INVALID]).run(RefinementJob())
-    outcome = product.outcome
+    await FakeRunner(refine_service, script=[INVALID]).run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
-    assert outcome.status is RunStatus.SUCCEEDED
+    assert row.status is RunStatus.SUCCEEDED
     stored = await refine_service.index.refinements.of_run(row.run_id)
     assert [r.status for r in stored] == [RefinementStatus.REJECTED]
     assert [call.detail for call in row.tool_trace] == ["rejected"]
@@ -121,20 +125,19 @@ async def test_a_commit_the_service_refuses_is_not_followed_by_an_abort(
     """`commit` closes the run before it can refuse, so an `abort` after it would raise "not open
     in this process" out of the runner's own error handler."""
     with_lock_timeout(refine_service, 0.05)
-    aborted: list[str] = []
+    terminated: list[str] = []
 
-    async def spy(run_id, reason, **kwargs):
-        aborted.append(run_id)
-        raise AssertionError("the runner aborted a run the commit had already finished")
+    async def spy(run_id, *args, **kwargs):
+        terminated.append(run_id)
+        raise AssertionError("the runner closed a run the commit had already finished")
 
-    monkeypatch.setattr(refine_service, "abort", spy)
+    monkeypatch.setattr(refine_service, "terminate", spy)
     async with rebuild_lock(refine_service.identity):
-        product = await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
+        await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
-    assert product.outcome.status is RunStatus.FAILED
-    assert "rebuild lock" in (product.outcome.error or "")
     assert row.status is RunStatus.FAILED
-    assert aborted == []
+    assert "rebuild lock" in (row.error or "")
+    assert terminated == []
 
 
 def test_a_job_defaults_to_a_manual_cli_run_over_the_whole_repo():
@@ -189,7 +192,54 @@ async def test_the_product_carries_what_the_commit_landed(
 async def test_a_run_that_did_not_commit_landed_nothing(
     refine_service: RefinementService,
 ):
-    product = await FakeRunner(refine_service, script=[GOOD], fail_with="boom").run(
+    product = await FakeRunner(refine_service, script=[GOOD], stop="boom").run(
         RefinementJob()
     )
     assert product.landed is None
+
+
+async def test_an_unshapeable_proposal_is_traced_and_the_run_still_closes(
+    refine_service: RefinementService,
+):
+    """`_judge` refuses a payload no `Proposal` can be read out of, and an unguarded producer
+    would leave its own run open on the way out."""
+    await FakeRunner(refine_service, script=[{"kind": "not_a_kind"}]).run(
+        RefinementJob()
+    )
+    (row,) = await refine_service.index.runs.runs()
+    assert row.status is RunStatus.SUCCEEDED
+    assert row.finished_at is not None
+    assert "not a proposal" in row.tool_trace[0].detail
+    assert refine_service.registry.open_runs == {}
+
+
+async def test_a_runner_can_stop_a_run_failed_as_well_as_aborted(
+    refine_service: RefinementService,
+):
+    """spec 5.3 keeps `aborted` for a cap and `failed` for a producer that broke, so a producer
+    has to be able to say which."""
+    await FakeRunner(
+        refine_service, stop="the client died", stop_status=RunStatus.FAILED
+    ).run(RefinementJob())
+    (row,) = await refine_service.index.runs.runs()
+    assert (row.status, row.error) == (RunStatus.FAILED, "the client died")
+
+
+async def test_closing_a_run_the_registry_evicted_does_not_raise(
+    refine_service: RefinementService,
+):
+    """An evicted run is already stamped `skipped`; raising out of `run()` would discard the
+    payload of a run that really happened and name the wrong problem."""
+    refine_service.registry.max_open = 1
+    run = await refine_service.begin()
+    outcome = RunOutcome.of(RunStatus.ABORTED, error="cancelled")
+    runner = FakeRunner(refine_service)
+    await refine_service.begin()  # evicts the first run
+    product = await runner._close(
+        run, Brief(limits=BriefLimits(max_changes=1, max_targets=1)), outcome
+    )
+    (evicted,) = [
+        r for r in await refine_service.index.runs.runs() if r.run_id == run.run_id
+    ]
+    assert product.landed is None
+    assert evicted.status is RunStatus.SKIPPED

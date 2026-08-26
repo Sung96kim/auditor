@@ -615,7 +615,7 @@ class RefinementService:
             await self._finish(
                 run_id,
                 RunStatus.SUCCEEDED,
-                summary=await self._summary(run_id),
+                summary=await self._summary(run_id, attribution),
                 attribution=attribution,
             )
             return CommitResult(run_id=run_id, rebuilt=False)
@@ -645,19 +645,23 @@ class RefinementService:
         await self._finish(
             run_id,
             RunStatus.SUCCEEDED,
-            summary=await self._summary(run_id),
+            summary=await self._summary(run_id, attribution),
             attribution=attribution,
         )
         return CommitResult(
             run_id=run_id, committed=committed, rejected=rejected, build=build
         )
 
-    async def _summary(self, run_id: str) -> str:
-        """What this run produced, counted off its own rows so every surface agrees.
+    async def _summary(
+        self, run_id: str, attribution: RunAttribution | None = None
+    ) -> str:
+        """What this run produced: the producer's own line when it gave one, else its rows counted.
 
         Counted rather than taken from the batch: a rejection stored at propose time is a row this
         run owns too, and a summary built from the landing alone reported "0 rejected" over four.
         """
+        if attribution is not None and attribution.summary:
+            return attribution.summary
         counts = (await self.index.refinements.counts_by_run([run_id])).get(run_id)
         return counts.summary if counts else "nothing staged"
 
@@ -714,19 +718,23 @@ class RefinementService:
         The cost survives: a run that stopped at its turn or budget cap still spent what it spent,
         and only the proposals it never promised are lost.
         """
-        return await self._terminate(
+        return await self.terminate(
             run_id, RunStatus.ABORTED, reason, attribution=attribution
         )
 
-    async def _terminate(
+    async def terminate(
         self,
         run_id: str,
         status: RunStatus,
         reason: str,
         *,
-        attribution: RunAttribution | None,
+        attribution: RunAttribution | None = None,
     ) -> Run:
-        """Close an open run under its own lock and stamp it, dropping whatever it staged."""
+        """Close an open run under its own lock and stamp it, dropping whatever it staged.
+
+        The status is the caller's: a producer that knows how its run ended must not have that
+        mapped back out of a method name, and a future one is stamped as itself.
+        """
         staged = self.registry.require(run_id)
         async with staged.lock:
             staged.require_open()
@@ -737,18 +745,6 @@ class RefinementService:
         if run is None:  # the row was written by `begin`, so this cannot happen
             raise RefinementRefused.no_such_run(run_id)
         return run
-
-    async def fail(
-        self, run_id: str, reason: str, *, attribution: RunAttribution | None = None
-    ) -> Run:
-        """Stamp an open run `failed`: the producer broke, rather than deciding to stop.
-
-        The twin of `abort`, which spec 5.3 reserves for a run that hit its turn or budget cap. A
-        producer that lost its client, or answered nothing, is not a run that chose to stop.
-        """
-        return await self._terminate(
-            run_id, RunStatus.FAILED, reason, attribution=attribution
-        )
 
     async def prune(self) -> PruneOutcome:
         """The ledger's retention sweep at this user's configured windows (spec 5.1, 5.7)."""
