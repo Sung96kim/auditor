@@ -1,53 +1,45 @@
 Refinement brief
 
-scope: (the whole repo)
-commit: (not a git checkout)
-targets: 8 of 8 queue rows under this scope
+scope: auditor/graph
+commit: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c
+targets: 4 of 9 queue rows under this scope
 limits: 12 targets per run, 25 corrections per run
 
 Targets
 
-1. impl.py::Impl.run
-   at impl.py:3, unimportable_name: the callee 'load_user', called bare
-   definers: svc.py::load_user
-   facts on run: _local, load_user
+1. auditor/graph/refine/service.py::RefinementService.commit
+   at auditor/graph/refine/service.py:42, unimportable_name: the callee 'load_user', called bare
+   definers: auditor/graph/svc.py::load_user
+   facts on commit: commit, load_user
    actions: add_edge, annotate_node, unresolvable
 
-2. base.py::Base
-   at base.py:1, text_sparse: the node 'Base'
+2. auditor/graph/refine/overlay.py::Overlay.apply
+   at auditor/graph/refine/overlay.py:88, ambiguous_name: the attr_callee 'apply', called attr on
+      overlay
+   candidates: auditor/graph/a.py::apply, auditor/graph/b.py::apply
+   definers: auditor/graph/a.py::apply, auditor/graph/b.py::apply
+   resolution path: auditor/graph/refine/overlay.py
+   actions: add_edge, resolve_ambiguous, annotate_node, unresolvable
+
+3. auditor/graph/svc.py::Base
+   at auditor/graph/svc.py:1, text_sparse: the node 'Base'
    actions: annotate_node, unresolvable
 
-3. base.py::Base
-   at base.py:1, singleton_cluster: the node 'base'
-   actions: annotate_node, unresolvable
-
-4. base.py::Base.run
-   at base.py:2, text_sparse: the node 'Base.run'
-   actions: annotate_node, unresolvable
-
-5. impl.py::Impl
-   at impl.py:2, text_sparse: the node 'Impl'
-   actions: annotate_node, unresolvable
-
-6. impl.py::Impl
-   at impl.py:2, singleton_cluster: the node 'impl'
-   actions: annotate_node, unresolvable
-
-7. impl.py::_local
-   at impl.py:6, text_sparse: the node '_local'
-   actions: annotate_node, unresolvable
-
-8. svc.py::load_user
-   at svc.py:1, singleton_cluster: the node 'get'
+4. auditor/graph/svc.py::load_user
+   at auditor/graph/svc.py:7, singleton_cluster: the cluster 'get' anchored here
    actions: annotate_node, unresolvable
 
 Stale corrections
 
-   none.
+   7 add_edge stale: auditor/graph/a.py::main -> auditor/graph/b.py::read_event
+
+Verdicts so far
+
+   staged add_edge tier B: the call site and the definition both read
 
 What to do
 
-   actions available here: add_edge, annotate_node, unresolvable
+   actions available here: add_edge, annotate_node, resolve_ambiguous, unresolvable
    Read the source before every proposal, then call mcp__graph__propose once per target at most.
       Call mcp__graph__brief to re-read this with your verdicts.
 

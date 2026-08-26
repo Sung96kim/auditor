@@ -8,18 +8,25 @@ see one checkout.
 import logging
 import textwrap
 from collections.abc import Iterable, Sequence
+from typing import get_args
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
-from auditor.graph.model import CallForm, FactKind, UnresolvedReason, UnresolvedRow
+from auditor.graph.model import (
+    QUEUE_ID_CAP,
+    FactKind,
+    UnresolvedReason,
+    UnresolvedRow,
+)
 from auditor.graph.refine.facts import FactReader
 from auditor.graph.refine.models import (
+    Refinement,
     RefinementKind,
     RefinementStatus,
     Verdict,
 )
 from auditor.graph.refine.namespace import file_of, scope_path, short_name, under_scope
-from auditor.graph.refine.prompts import RUN_ANSWER_SCHEMA
+from auditor.graph.refine.prompts import RunAnswer
 from auditor.graph.refine.verify import FactVerifier, FileFacts
 from auditor.graph.resolve_edges import EDGE_KIND_BY_FACT
 from auditor.user_settings import LimitsConfig
@@ -30,20 +37,28 @@ logger = logging.getLogger(__name__)
 LINE_WIDTH = 98
 #: the statuses a drifted or staled correction can be found under (spec 5.7)
 _STALE_STATUSES = (RefinementStatus.STALE, RefinementStatus.PINNED)
-#: the reasons a run may give for stopping, read off the schema so the two cannot drift
-_STOPPED_BECAUSE: tuple[str, ...] = tuple(
-    RUN_ANSWER_SCHEMA["properties"]["stopped_because"]["enum"]
+#: the reasons a run may give for stopping, read off the answer so the two cannot drift
+_STOPPED_BECAUSE: tuple[str, ...] = get_args(
+    RunAnswer.model_fields["stopped_because"].annotation
+)
+#: the queue reasons whose ``name`` is a cluster's label rather than the anchor node's own name
+_CLUSTER_REASONS = frozenset(
+    {UnresolvedReason.GENERIC_LABEL, UnresolvedReason.SINGLETON_CLUSTER}
 )
 
 
-def _fold(text: str) -> list[str]:
-    """One sentence as indented lines no wider than the brief allows."""
+def _fold(text: str, *, indent: str = "   ") -> list[str]:
+    """One line of the brief as lines no wider than it allows, continuations indented further.
+
+    A token wider than the budget is broken rather than shortened: a node id a proposal cannot
+    name back is worse than one that wrapped.
+    """
     return textwrap.wrap(
         text,
         width=LINE_WIDTH,
-        initial_indent="   ",
-        subsequent_indent="      ",
-        break_long_words=False,
+        initial_indent=indent,
+        subsequent_indent=f"{indent}   ",
+        break_long_words=True,
         break_on_hyphens=False,
     )
 
@@ -52,6 +67,14 @@ def _wrapped(label: str, values: Iterable[str]) -> list[str]:
     """One ``label: a, b, c`` field, or nothing at all when the field is empty."""
     joined = ", ".join(values)
     return _fold(f"{label}: {joined}") if joined else []
+
+
+def _verdict_line(verdict: Verdict) -> list[str]:
+    """One earned verdict as the brief re-reads it back to the run that earned it."""
+    return _fold(
+        f"{verdict.outcome.value} {verdict.kind.value} tier {verdict.tier.value}: "
+        f"{verdict.detail or verdict.status.value}"
+    )
 
 
 class BriefLimits(BaseModel):
@@ -63,25 +86,19 @@ class BriefLimits(BaseModel):
     max_targets: int
 
 
-class BriefTarget(BaseModel):
-    """One queue row as the model sees it: the row, and the facts its proposal will be checked
-    against."""
+class BriefTarget(UnresolvedRow):
+    """One queue row as the model sees it: the row itself, where it lives, and the facts its
+    proposal will be checked against.
+
+    The two id lists are capped the way `QueueRowPayload` caps them, for the same reason: a node
+    can have dozens of definers, and every one of them is prompt the run pays for.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    node_id: str
-    name: str
-    path: str
+    path: str = ""
     line: int = 0
-    reason: UnresolvedReason
-    fact_kind: FactKind
-    call_form: CallForm = CallForm.BARE
-    receiver_root: str | None = None
-    candidates: tuple[str, ...] = ()
-    definers: tuple[str, ...] = ()
-    resolution_path: tuple[str, ...] = ()
     facts: tuple[str, ...] = ()
-    allowed: tuple[RefinementKind, ...] = ()
 
     @classmethod
     def of(cls, row: UnresolvedRow, facts: FileFacts) -> "BriefTarget":
@@ -93,34 +110,32 @@ class BriefTarget(BaseModel):
             if node is not None and edge_kind is not None
             else frozenset()
         )
-        return cls(
-            node_id=row.node_id,
-            name=row.name,
-            path=facts.path,
-            line=node.line if node is not None else 0,
-            reason=row.reason,
-            fact_kind=row.fact_kind,
-            call_form=row.call_form,
-            receiver_root=row.receiver_root,
-            candidates=row.candidates,
-            definers=row.definers,
-            resolution_path=row.resolution_path,
-            facts=tuple(sorted(named)),
-            allowed=cls._allowed(row),
+        return cls.model_validate(
+            {
+                **row.model_dump(),
+                "definers": row.definers[:QUEUE_ID_CAP],
+                "candidates": row.candidates[:QUEUE_ID_CAP],
+                "path": facts.path,
+                "line": node.line if node is not None else 0,
+                "facts": tuple(sorted(named)),
+            }
         )
 
-    @staticmethod
-    def _allowed(row: UnresolvedRow) -> tuple[RefinementKind, ...]:
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def allowed(self) -> tuple[RefinementKind, ...]:
         """The actions this row admits: an edge needs somewhere to point, the other two never do."""
         kinds: list[RefinementKind] = []
-        if row.definers:
+        if self.definers:
             kinds.append(RefinementKind.ADD_EDGE)
-        if row.candidates:
+        if self.candidates:
             kinds.append(RefinementKind.RESOLVE_AMBIGUOUS)
         return (*kinds, RefinementKind.ANNOTATE_NODE, RefinementKind.UNRESOLVABLE)
 
     def _subject(self) -> str:
-        """What this row is about: a name at a call site, or the node itself for a build row."""
+        """What this row is about: a name at a call site, a cluster's label, or the node itself."""
+        if self.reason in _CLUSTER_REASONS:
+            return f"the cluster {self.name!r} anchored here"
         if self.fact_kind is FactKind.NODE:
             return f"the node {self.name!r}"
         called = f"called {self.call_form.value}"
@@ -130,7 +145,7 @@ class BriefTarget(BaseModel):
 
     def render(self, position: int) -> list[str]:
         """This target as the numbered block the brief prints."""
-        lines = [f"{position}. {self.node_id}"]
+        lines = _fold(f"{position}. {self.node_id}", indent="")
         lines += _fold(
             f"at {self.path}:{self.line}, {self.reason.value}: {self._subject()}"
         )
@@ -152,6 +167,22 @@ class StaleNote(BaseModel):
     status: RefinementStatus
     target: str
 
+    @classmethod
+    def of(cls, row: Refinement) -> "StaleNote":
+        """One stored correction as the warning a brief carries."""
+        return cls(
+            refinement_id=row.refinement_id,
+            kind=row.kind,
+            status=row.status,
+            target=row.points_at(),
+        )
+
+    def render(self) -> list[str]:
+        """This note as the one line the brief prints."""
+        return _fold(
+            f"{self.refinement_id} {self.kind.value} {self.status.value}: {self.target}"
+        )
+
 
 class Brief(BaseModel):
     """Everything one run is told, and the text it is told it in."""
@@ -169,35 +200,33 @@ class Brief(BaseModel):
 
     def render(self) -> str:
         """The prompt a runner sends, pinned by a golden file: regenerating it is a real edit."""
-        lines = [
-            "Refinement brief",
-            "",
-            f"scope: {self.scope or '(the whole repo)'}",
-            f"commit: {self.commit_sha or '(not a git checkout)'}",
+        lines = ["Refinement brief", ""]
+        lines += _fold(f"scope: {self.scope or '(the whole repo)'}", indent="")
+        lines += _fold(
+            f"commit: {self.commit_sha or '(not a git checkout)'}", indent=""
+        )
+        lines += _fold(
             f"targets: {len(self.targets)} of {self.queue_total} queue rows under this scope",
+            indent="",
+        )
+        lines += _fold(
             f"limits: {self.limits.max_targets} targets per run, "
             f"{self.limits.max_changes} corrections per run",
-            "",
-            "Targets",
-            "",
-        ]
+            indent="",
+        )
+        lines += ["", "Targets", ""]
         if not self.targets:
-            lines.append("   none: nothing under this scope is unresolved.")
+            lines += [*_fold("none: nothing under this scope is unresolved."), ""]
         for position, target in enumerate(self.targets, start=1):
             lines += target.render(position)
             lines.append("")
         lines += ["Stale corrections", ""]
-        lines += [
-            f"   {note.refinement_id} {note.kind.value} {note.status.value}: {note.target}"
-            for note in self.stale
-        ] or ["   none."]
+        lines += [line for note in self.stale for line in note.render()] or _fold(
+            "none."
+        )
         if self.staged:
             lines += ["", "Verdicts so far", ""]
-            lines += [
-                f"   {v.outcome.value} {v.kind.value} tier {v.tier.value}: "
-                f"{v.detail or v.status.value}"
-                for v in self.staged
-            ]
+            lines += [line for v in self.staged for line in _verdict_line(v)]
         lines += ["", "What to do", ""]
         lines += _wrapped("actions available here", sorted(self._actions()))
         lines += _fold(
@@ -274,27 +303,10 @@ class BriefBuilder(BaseModel):
         drifted (spec 5.7)."""
         rows = await self.facts.index.refinements.refinements(statuses=_STALE_STATUSES)
         return tuple(
-            StaleNote(
-                refinement_id=row.refinement_id,
-                kind=row.kind,
-                status=row.status,
-                target=_target_line(
-                    row.edge_pair(), row.target.node_id, row.target.name
-                ),
-            )
+            StaleNote.of(row)
             for row in rows
             if (row.status is RefinementStatus.STALE or row.drifted)
             # every id, the rule `StagedRun.covers` applies: a correction this run could not have
             # made is not one it needs warning off
             and all(under_scope(node_id, scope) for node_id in row.anchored_ids())
         )
-
-
-def _target_line(
-    edge: tuple[str | None, str | None], node_id: str | None, name: str | None
-) -> str:
-    """What one stored correction points at, in one line."""
-    src, dst = edge
-    if src and dst:
-        return f"{src} -> {dst}"
-    return node_id or name or "(no target)"

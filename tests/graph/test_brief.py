@@ -6,22 +6,105 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from auditor.graph.model import EdgeKind
-from auditor.graph.refine.brief import BriefBuilder
+from auditor.graph.model import (
+    QUEUE_ID_CAP,
+    CallForm,
+    EdgeKind,
+    FactKind,
+    UnresolvedReason,
+    UnresolvedRow,
+)
+from auditor.graph.refine.brief import (
+    LINE_WIDTH,
+    Brief,
+    BriefBuilder,
+    BriefLimits,
+    BriefTarget,
+    StaleNote,
+)
 from auditor.graph.refine.models import (
     Proposal,
+    ProposalOutcome,
     Refinement,
     RefinementKind,
     RefinementStatus,
     RefinementTarget,
     Tier,
+    Verdict,
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_SHA, RunAnswer
 from auditor.graph.refine.service import RefinementRefused
+from auditor.graph.refine.verify import FileFacts
 
 GOLDEN = Path(__file__).parent / "fixtures" / "brief_golden.txt"
 #: escaped, so this file is itself free of the character it forbids
 EM_DASH = "\u2014"
+#: a node id past the line budget on its own, which no fixture repo produces and this repo has
+LONG_ID = f"auditor/graph/refine/{'very_long_module_name_' * 4}service.py::Klass.method"
+STAGED = Verdict(
+    outcome=ProposalOutcome.STAGED,
+    kind=RefinementKind.ADD_EDGE,
+    tier=Tier.B,
+    status=RefinementStatus.PENDING,
+    detail="the call site and the definition both read",
+)
+#: the brief the golden file pins: its own targets, so a queue row elsewhere cannot move it
+GOLDEN_BRIEF = Brief(
+    scope="auditor/graph",
+    commit_sha="0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+    queue_total=9,
+    limits=BriefLimits(max_changes=25, max_targets=12),
+    targets=(
+        BriefTarget(
+            node_id="auditor/graph/refine/service.py::RefinementService.commit",
+            name="load_user",
+            path="auditor/graph/refine/service.py",
+            line=42,
+            reason=UnresolvedReason.UNIMPORTABLE_NAME,
+            fact_kind=FactKind.CALLEE,
+            definers=("auditor/graph/svc.py::load_user",),
+            facts=("commit", "load_user"),
+        ),
+        BriefTarget(
+            node_id="auditor/graph/refine/overlay.py::Overlay.apply",
+            name="apply",
+            path="auditor/graph/refine/overlay.py",
+            line=88,
+            reason=UnresolvedReason.AMBIGUOUS_NAME,
+            fact_kind=FactKind.ATTR_CALLEE,
+            call_form=CallForm.ATTR,
+            receiver_root="overlay",
+            candidates=("auditor/graph/a.py::apply", "auditor/graph/b.py::apply"),
+            definers=("auditor/graph/a.py::apply", "auditor/graph/b.py::apply"),
+            resolution_path=("auditor/graph/refine/overlay.py",),
+        ),
+        BriefTarget(
+            node_id="auditor/graph/svc.py::Base",
+            name="Base",
+            path="auditor/graph/svc.py",
+            line=1,
+            reason=UnresolvedReason.TEXT_SPARSE,
+            fact_kind=FactKind.NODE,
+        ),
+        BriefTarget(
+            node_id="auditor/graph/svc.py::load_user",
+            name="get",
+            path="auditor/graph/svc.py",
+            line=7,
+            reason=UnresolvedReason.SINGLETON_CLUSTER,
+            fact_kind=FactKind.NODE,
+        ),
+    ),
+    stale=(
+        StaleNote(
+            refinement_id=7,
+            kind=RefinementKind.ADD_EDGE,
+            status=RefinementStatus.STALE,
+            target="auditor/graph/a.py::main -> auditor/graph/b.py::read_event",
+        ),
+    ),
+    staged=(STAGED,),
+)
 #: the one queue row in `refine_service` a proposal can actually answer
 QUEUED_CALL = "impl.py::Impl.run"
 CALL_EDGE = Proposal(
@@ -190,16 +273,70 @@ async def test_a_pinned_correction_that_did_not_drift_is_left_alone(refine_servi
     assert (await _builder(refine_service).build("")).stale == ()
 
 
-async def test_the_rendered_brief_matches_the_golden_file(refine_service):
-    """The template is a pin (spec 21): regenerating this file is a deliberate edit."""
-    brief = await _builder(refine_service).build("")
-    assert brief.render() == GOLDEN.read_text(encoding="utf-8")
+def test_the_rendered_brief_matches_the_golden_file():
+    """The template is a pin (spec 21): regenerating this file is a deliberate edit.
+
+    Regenerate with: ``PYTHONPATH=tests uv run python -c "from graph.test_brief import GOLDEN,
+    GOLDEN_BRIEF; GOLDEN.write_text(GOLDEN_BRIEF.render(), encoding='utf-8')"``
+    """
+    assert GOLDEN_BRIEF.render() == GOLDEN.read_text(encoding="utf-8")
 
 
-async def test_the_rendered_brief_stays_inside_its_own_line_budget(refine_service):
-    rendered = (await _builder(refine_service).build("")).render()
+def _budget_brief() -> Brief:
+    """The golden brief with every id stretched past the budget, which is what a real repo has."""
+    long_note = GOLDEN_BRIEF.stale[0].model_copy(
+        update={"target": f"{LONG_ID} -> {LONG_ID}"}
+    )
+    return GOLDEN_BRIEF.model_copy(
+        update={
+            "scope": LONG_ID,
+            "targets": tuple(
+                t.model_copy(
+                    update={"node_id": f"{LONG_ID}{i}", "definers": (LONG_ID,)}
+                )
+                for i, t in enumerate(GOLDEN_BRIEF.targets)
+            ),
+            "stale": (long_note,),
+            "staged": (STAGED.model_copy(update={"detail": f"{LONG_ID} is not here"}),),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "brief", [GOLDEN_BRIEF, _budget_brief()], ids=["golden", "long"]
+)
+def test_the_rendered_brief_stays_inside_its_own_line_budget(brief: Brief):
+    """Every producer folds, including the numbered header, a stale note and a staged verdict."""
+    rendered = brief.render()
     assert EM_DASH not in rendered
-    assert max(len(line) for line in rendered.splitlines()) <= 100
+    assert max(len(line) for line in rendered.splitlines()) <= LINE_WIDTH
+
+
+async def test_a_built_brief_stays_inside_the_budget_too(refine_service):
+    rendered = (await _builder(refine_service).build("")).render()
+    assert max(len(line) for line in rendered.splitlines()) <= LINE_WIDTH
+
+
+def test_an_empty_targets_section_keeps_its_blank_line():
+    """`Stale corrections` must not run straight on from the "nothing here" line."""
+    rendered = GOLDEN_BRIEF.model_copy(update={"targets": ()}).render()
+    assert "unresolved.\n\nStale corrections" in rendered
+
+
+def test_a_definer_list_is_capped_the_way_the_queue_payload_caps_it():
+    """A node can have dozens of definers, and each one is prompt the run pays for."""
+    row = UnresolvedRow(
+        node_id="a.py::f",
+        name="g",
+        reason=UnresolvedReason.AMBIGUOUS_NAME,
+        fact_kind=FactKind.CALLEE,
+        definers=tuple(f"d{i}.py::g" for i in range(QUEUE_ID_CAP + 5)),
+        candidates=tuple(f"c{i}.py::g" for i in range(QUEUE_ID_CAP + 5)),
+    )
+    facts = FileFacts(path="a.py", cached_truth="t", fresh_truth="t")
+    target = BriefTarget.of(row, facts)
+    assert len(target.definers) == QUEUE_ID_CAP
+    assert len(target.candidates) == QUEUE_ID_CAP
 
 
 async def test_a_scope_with_no_queue_rows_says_so(refine_service):

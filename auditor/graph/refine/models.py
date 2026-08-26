@@ -671,6 +671,13 @@ class Proposal(BaseModel):
         edge = self.edge()
         return (edge.src, edge.dst) if edge is not None else (None, None)
 
+    def points_at(self) -> str:
+        """What this correction is about, in one line: its edge, else the node or name it names."""
+        src, dst = self.edge_pair()
+        if src and dst:
+            return f"{src} -> {dst}"
+        return self.target.node_id or self.target.name or "(no target)"
+
     @classmethod
     def read(cls, raw: "Proposal | Mapping[str, Any]") -> tuple["Proposal", str]:
         """One proposal, and the validator's complaint about it when it is not a legal one.

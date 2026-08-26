@@ -24,7 +24,7 @@ from auditor.graph.refine.namespace import short_name
 
 #: the edge kind a queue row's fact kind implies. Public: a brief reads it to show the caller which
 #: fact tuple its proposal will be checked against.
-EDGE_KIND_BY_FACT = {
+EDGE_KIND_BY_FACT: dict[FactKind, EdgeKind] = {
     FactKind.CALLEE: EdgeKind.CALLS,
     FactKind.ATTR_CALLEE: EdgeKind.CALLS,
     FactKind.TYPED_CALL: EdgeKind.CALLS,
