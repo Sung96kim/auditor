@@ -27,7 +27,7 @@ from auditor.user_settings import Runner, RunnerConfig, UserSettings
 
 # the [observer-claude] extra; a genuine ImportError inside `sdk_client` is not swallowed
 try:
-    from auditor.graph.refine.sdk_client import SdkClientFactory
+    from auditor.graph.refine.sdk_client import claude_client
 
     SDK_AVAILABLE = True
 except ImportError as exc:
@@ -119,7 +119,7 @@ def _default_factory(runner: type[RefinementRunner]) -> ClientFactory | None:
         return None
     if not SDK_AVAILABLE:
         raise RunnerUnavailable(NEEDS_EXTRA)
-    return SdkClientFactory()
+    return claude_client
 
 
 async def refine(

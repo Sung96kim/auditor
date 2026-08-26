@@ -1,8 +1,8 @@
 """The one module that imports `claude_agent_sdk` (spec 9.3, spec 14).
 
-Turns an `SdkOptions` into a real `ClaudeSDKClient` with the in-process `graph` server bound to one
-run, and turns the SDK's five error classes into the one this repo can name. Nothing imports it
-unguarded: `drive.py` owns the `observer-claude` guard.
+Pure translation: an `SdkOptions` and the run's own `BoundTools` become a real `ClaudeSDKClient`,
+and the SDK's five error classes become the one this repo can name. It decides nothing about what
+a run may be called with, and nothing imports it unguarded: `drive.py` owns the extra's guard.
 """
 
 from collections.abc import AsyncIterator
@@ -22,18 +22,13 @@ from claude_agent_sdk import (
 )
 
 from auditor.graph.refine.client import ClientSession
-from auditor.graph.refine.prompts import (
-    ALLOWED_TOOLS,
-    BRIEF_DESCRIPTION,
-    GRAPH_SERVER,
-    OUTPUT_FORMAT,
-    PROPOSE_DESCRIPTION,
-)
+from auditor.graph.refine.prompts import ALLOWED_TOOLS, GRAPH_SERVER, OUTPUT_FORMAT
 from auditor.graph.refine.sdk_runner import (
     EFFORT,
     PERMISSION_MODE,
     SETTING_SOURCES,
     STRICT_MCP_CONFIG,
+    BoundTool,
     BoundTools,
     SdkClientError,
     SdkErrorKind,
@@ -88,58 +83,54 @@ def _translated(exc: Exception) -> Exception:
     return SdkClientError(str(exc), kind=kind) if kind is not None else exc
 
 
-class SdkClientFactory:
-    """Builds the client one run talks through, bound to that run's own tools."""
+def _registered(bound: BoundTool) -> Any:
+    """One bound tool as the SDK's `@tool` decorator wants it, handler and all."""
 
-    def __call__(self, options: SdkOptions, tools: BoundTools) -> ClientSession:
-        return _Client(ClaudeSDKClient(self.options(options, tools)))
+    @tool(bound.name, bound.description, bound.input_schema)
+    async def registered(args: dict[str, Any]) -> dict[str, Any]:
+        return await bound.handler(args)
 
-    @staticmethod
-    def options(options: SdkOptions, tools: BoundTools) -> ClaudeAgentOptions:
-        """The SDK options one run runs under, pinned by a test where the extra is installed.
-
-        `skills` is never set: setting it at all rewrites `setting_sources` back to the user's own
-        files (spike A.8), which is the isolation this whole option set exists for.
-        """
-
-        async def trace(
-            input_data: dict[str, Any], tool_use_id: str | None, context: Any
-        ) -> dict[str, Any]:
-            return await tools.record(input_data)
-
-        server = create_sdk_mcp_server(
-            name=GRAPH_SERVER, tools=[_propose(tools), _brief(tools)]
-        )
-        return ClaudeAgentOptions(
-            model=options.model,
-            cwd=options.cwd,
-            cli_path=options.cli_path,
-            system_prompt=options.system_prompt,
-            tools=list(options.tools),
-            allowed_tools=list(ALLOWED_TOOLS),
-            permission_mode=PERMISSION_MODE,
-            setting_sources=list(SETTING_SOURCES),
-            strict_mcp_config=STRICT_MCP_CONFIG,
-            mcp_servers={GRAPH_SERVER: server},
-            max_turns=options.max_turns,
-            max_budget_usd=options.max_budget_usd,
-            effort=EFFORT,
-            output_format=dict(OUTPUT_FORMAT),
-            hooks={"PostToolUse": [HookMatcher(matcher=None, hooks=[trace])]},
-        )
+    return registered
 
 
-def _propose(tools: BoundTools) -> Any:
-    @tool("propose", PROPOSE_DESCRIPTION, BoundTools.INPUT_SCHEMAS["propose"])
-    async def propose(args: dict[str, Any]) -> dict[str, Any]:
-        return await tools.propose(args)
+def sdk_options(options: SdkOptions, tools: BoundTools) -> ClaudeAgentOptions:
+    """The SDK options one run runs under, pinned by a test where the extra is installed.
 
-    return propose
+    `skills` is never set: setting it at all rewrites `setting_sources` back to the user's own
+    files (spike A.8), which is the isolation this whole option set exists for.
+    """
+
+    async def trace(
+        input_data: dict[str, Any], tool_use_id: str | None, context: Any
+    ) -> dict[str, Any]:
+        return await tools.record(input_data)
+
+    server = create_sdk_mcp_server(
+        name=GRAPH_SERVER, tools=[_registered(t) for t in tools.tools()]
+    )
+    return ClaudeAgentOptions(
+        model=options.model,
+        cwd=options.cwd,
+        cli_path=options.cli_path,
+        system_prompt=options.system_prompt,
+        tools=list(options.tools),
+        allowed_tools=list(ALLOWED_TOOLS),
+        permission_mode=PERMISSION_MODE,
+        setting_sources=list(SETTING_SOURCES),
+        strict_mcp_config=STRICT_MCP_CONFIG,
+        mcp_servers={GRAPH_SERVER: server},
+        max_turns=options.max_turns,
+        max_budget_usd=options.max_budget_usd,
+        effort=EFFORT,
+        output_format=dict(OUTPUT_FORMAT),
+        hooks={"PostToolUse": [HookMatcher(matcher=None, hooks=[trace])]},
+    )
 
 
-def _brief(tools: BoundTools) -> Any:
-    @tool("brief", BRIEF_DESCRIPTION, BoundTools.INPUT_SCHEMAS["brief"])
-    async def brief(args: dict[str, Any]) -> dict[str, Any]:
-        return await tools.brief(args)
+def claude_client(options: SdkOptions, tools: BoundTools) -> ClientSession:
+    """The client one run talks through, bound to that run's own tools.
 
-    return brief
+    A `ClientFactory` needs no instance state, so it is this function rather than a class holding
+    one `__call__`.
+    """
+    return _Client(ClaudeSDKClient(sdk_options(options, tools)))

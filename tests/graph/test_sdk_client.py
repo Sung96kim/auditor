@@ -4,6 +4,7 @@ CI never installs `observer-claude`, so this file is the only place the real `Cl
 shape and the real error classes are pinned.
 """
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -17,15 +18,18 @@ from claude_agent_sdk import (  # noqa: E402  (only importable past the skip abo
     ProcessError,
     ResultError,
 )
+from mcp.types import ListToolsRequest  # noqa: E402
 
 from auditor.graph.refine.prompts import (  # noqa: E402
     ALLOWED_TOOLS,
+    GRAPH_SERVER,
+    GRAPH_TOOLS,
     OUTPUT_FORMAT,
     SYSTEM_PROMPT,
 )
 from auditor.graph.refine.sdk_client import (  # noqa: E402
-    SdkClientFactory,
     error_kind,
+    sdk_options,
 )
 from auditor.graph.refine.sdk_runner import (  # noqa: E402
     BoundTools,
@@ -47,7 +51,7 @@ PINNED = SdkOptions(
 @pytest.fixture
 def built(refine_service):
     tools = BoundTools(service=refine_service, run_id="run-1")
-    return SdkClientFactory.options(PINNED, tools)
+    return sdk_options(PINNED, tools)
 
 
 def test_the_options_are_the_isolated_ones_the_spike_measured(built):
@@ -69,10 +73,21 @@ def test_the_run_specific_options_come_from_the_sdk_options(built):
     assert built.system_prompt == SYSTEM_PROMPT
 
 
+def _registered_tools(built) -> tuple:
+    """What the built in-process server really answers `tools/list` with."""
+    server = built.mcp_servers[GRAPH_SERVER]["instance"]
+    handler = server.request_handlers[ListToolsRequest]
+    listed = asyncio.run(handler(ListToolsRequest(method="tools/list")))
+    return tuple(listed.root.tools)
+
+
 def test_the_in_process_server_carries_exactly_the_two_bound_tools(built):
-    server = built.mcp_servers["graph"]
-    assert server["type"] == "sdk"
-    assert server["name"] == "graph"
+    """The SDK-free half pins the table; this pins that the SDK registered that same table."""
+    server = built.mcp_servers[GRAPH_SERVER]
+    assert (server["type"], server["name"]) == ("sdk", GRAPH_SERVER)
+    listed = _registered_tools(built)
+    assert tuple(t.name for t in listed) == GRAPH_TOOLS
+    assert all(t.description for t in listed)
 
 
 def test_the_trace_hook_is_registered_for_every_tool(built):

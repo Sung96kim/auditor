@@ -6,11 +6,12 @@ an injected factory that answers to `ClientSession`; `sdk_client.py` is the one 
 one.
 """
 
+import asyncio
 import json
 import logging
 import shutil
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar
@@ -29,8 +30,10 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.prompts import (
     ALLOWED_TOOLS,
+    BRIEF_DESCRIPTION,
     GRAPH_SERVER,
     MODEL_TOOLS,
+    PROPOSE_DESCRIPTION,
     SYSTEM_PROMPT,
     RunAnswer,
 )
@@ -59,6 +62,22 @@ CAPPED_SUBTYPES = frozenset(
 )
 #: how much of a tool's input the trace keeps
 DETAIL_CHARS = 80
+#: every `AssistantMessageError` literal, as a status and the words S8's loop reads. A pause is
+#: `aborted`: the run stopped for a reason outside itself, which is not the producer breaking.
+ASSISTANT_ERRORS: dict[str, tuple[RunStatus, str]] = {
+    "authentication_failed": (RunStatus.FAILED, "paused:auth"),
+    "rate_limit": (RunStatus.ABORTED, "paused:ratelimit"),
+    "billing_error": (RunStatus.ABORTED, "paused:billing"),
+    "invalid_request": (RunStatus.FAILED, "invalid_request"),
+    "server_error": (RunStatus.FAILED, "server_error"),
+    "unknown": (RunStatus.FAILED, "unknown"),
+}
+#: the JSON Schema for a tool that takes nothing at all
+NO_ARGS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
 
 
 class SdkErrorKind(StrEnum):
@@ -121,6 +140,36 @@ class SdkOptions(BaseModel):
             max_budget_usd=user.observer.budget.max_budget_usd_per_run,
         )
 
+    def refusal(self, data: Mapping[str, Any]) -> str | None:
+        """Why the session the CLI opened is not the one that was asked for (Invariant 4).
+
+        Every clause names what it refused: a surprise here is a fact about the CLI, and a bare
+        "refused" would send the reader to the source instead of the message.
+        """
+        servers = data.get("mcp_servers") or []
+        names = {str(server.get("name")) for server in servers}
+        if not names:
+            return "refused: no mcp servers, so there is no graph server to propose through"
+        if names != {GRAPH_SERVER}:
+            return f"refused: unexpected mcp servers {sorted(names)}"
+        adrift = sorted(
+            str(s.get("name")) for s in servers if s.get("status") != "connected"
+        )
+        if adrift:
+            return f"refused: mcp servers not connected {adrift}"
+        if data.get("plugins"):
+            return f"refused: plugins are loaded {sorted(data['plugins'], key=str)}"
+        extra = sorted(set(data.get("tools") or ()) - set(ALLOWED_TOOLS))
+        if extra:
+            return f"refused: unexpected tools {extra}"
+        mode = data.get("permissionMode")
+        if mode != PERMISSION_MODE:
+            return f"refused: permission mode {mode!r}, not {PERMISSION_MODE!r}"
+        served = str(data.get("model") or "")
+        if self.model not in served:
+            return f"refused: model {served!r} is not {self.model}"
+        return None
+
 
 def _content(text: str, *, is_error: bool = False) -> dict[str, Any]:
     """One in-process tool's answer in the shape the SDK's `@tool` contract asks for."""
@@ -128,6 +177,26 @@ def _content(text: str, *, is_error: bool = False) -> dict[str, Any]:
     if is_error:
         answer["is_error"] = True
     return answer
+
+
+class BoundTool(BaseModel):
+    """One in-process tool a run exposes: what the model is shown, and what runs when it calls.
+
+    All four parts in one place: the name, the description and the schema used to live in three
+    modules that had to agree, and a typo in any of them was a runtime failure nothing caught.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    handler: Callable[[Mapping[str, Any]], Awaitable[dict[str, Any]]]
+
+    @property
+    def qualified(self) -> str:
+        """This tool as the allow-list and the trace name it, server prefix included."""
+        return f"mcp__{GRAPH_SERVER}__{self.name}"
 
 
 class BoundTools(BaseModel):
@@ -140,16 +209,32 @@ class BoundTools(BaseModel):
 
     model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
 
-    #: registered verbatim: `Proposal` already generates this, and the flat MCP shape would be a
-    #: fourth hand-maintained copy of one schema
-    INPUT_SCHEMAS: ClassVar[dict[str, dict[str, Any]]] = {
-        "propose": Proposal.model_json_schema(),
-        "brief": {"type": "object", "properties": {}, "additionalProperties": False},
-    }
-
     service: RefinementService
     run_id: str
     trace: list[ToolCall] = Field(default_factory=list)
+
+    def tools(self) -> tuple[BoundTool, ...]:
+        """Every tool this run exposes, in the order `prompts.GRAPH_TOOLS` names them.
+
+        The one table: `sdk_client.py` translates it for the SDK and nothing else decides what a
+        run may be called with.
+        """
+        return (
+            BoundTool(
+                name="propose",
+                description=PROPOSE_DESCRIPTION,
+                # registered verbatim: `Proposal` already generates this, and the flat MCP shape
+                # would be a fourth hand-maintained copy of one schema
+                input_schema=Proposal.model_json_schema(),
+                handler=self.propose,
+            ),
+            BoundTool(
+                name="brief",
+                description=BRIEF_DESCRIPTION,
+                input_schema=NO_ARGS_SCHEMA,
+                handler=self.brief,
+            ),
+        )
 
     async def propose(self, args: Mapping[str, Any]) -> dict[str, Any]:
         """Stage one proposal against this run and answer with the verdict."""
@@ -198,6 +283,185 @@ def _is_rate_limit(message: Any) -> bool:
     return hasattr(message, "rate_limit_info")
 
 
+def rate_limited(message: Any) -> str | None:
+    """Why a rate limit stopped this run, or ``None`` when it did not."""
+    if not _is_rate_limit(message):
+        return None
+    info = message.rate_limit_info
+    if getattr(info, "status", None) != "rejected":
+        return None
+    return f"paused:ratelimit until {getattr(info, 'resets_at', None)}"
+
+
+def run_answer(raw: Any) -> RunAnswer | None:
+    """The structured answer, or ``None`` when the run produced none the schema accepts.
+
+    A malformed `output_format` drops the flag silently and the run still "succeeds" (spike A.6),
+    so the answer is what says the run really finished.
+    """
+    if raw is None:
+        return None
+    try:
+        return RunAnswer.model_validate(raw)
+    except ValidationError:
+        return None
+
+
+def _added(entry: Mapping[str, Any], *keys: str) -> int:
+    """The named counts added up, reading a key the CLI did not report as zero."""
+    return sum(int(entry.get(key, 0) or 0) for key in keys)
+
+
+def run_usage(message: Any) -> RunUsage:
+    """What the result says the run cost. ``model_usage`` is the coherent pair: its ``costUSD``
+    sums to ``total_cost_usd`` exactly, while ``usage`` disagrees with both (spike 2).
+
+    Cached tokens count as input: a run that read its context from cache was charged for it, and
+    a count that drops them under-reports every cached run.
+    """
+    per_model = getattr(message, "model_usage", None) or {}
+    if per_model:
+        entries = list(per_model.values())
+        tokens = (
+            sum(
+                _added(
+                    e, "inputTokens", "cacheCreationInputTokens", "cacheReadInputTokens"
+                )
+                for e in entries
+            ),
+            sum(_added(e, "outputTokens") for e in entries),
+        )
+    else:  # only when the CLI reported no per-model breakdown at all
+        raw = getattr(message, "usage", None) or {}
+        tokens = (
+            _added(
+                raw,
+                "input_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+            ),
+            _added(raw, "output_tokens"),
+        )
+    return RunUsage(
+        cost_usd=float(getattr(message, "total_cost_usd", None) or 0.0),
+        cost_estimated=False,
+        input_tokens=tokens[0],
+        output_tokens=tokens[1],
+        num_turns=int(getattr(message, "num_turns", 0) or 0),
+    )
+
+
+def from_result(
+    message: Any, *, session_id: str | None, trace: Sequence[ToolCall] = ()
+) -> RunOutcome:
+    """The result message as a terminal state, per spec 5.3's mapping table.
+
+    A ``success`` carrying ``is_error`` is a failure the subtype does not admit to, so the HTTP
+    status the SDK puts beside it is what the row records.
+    """
+    attribution = RunAttribution(
+        usage=run_usage(message),
+        tool_trace=tuple(trace),
+        sdk_session_id=session_id or getattr(message, "session_id", None),
+    )
+    subtype = str(getattr(message, "subtype", ""))
+    errors = "; ".join(getattr(message, "errors", None) or ())
+    if subtype == "success":
+        if getattr(message, "is_error", False):
+            status = getattr(message, "api_error_status", None)
+            return RunOutcome.of(
+                RunStatus.FAILED,
+                error=f"the api failed with api_error_status {status}",
+                attribution=attribution,
+            )
+        answer = run_answer(getattr(message, "structured_output", None))
+        if answer is None:
+            return RunOutcome.of(
+                RunStatus.FAILED, error="no structured answer", attribution=attribution
+            )
+        return RunOutcome.of(
+            RunStatus.SUCCEEDED, summary=answer.summary, attribution=attribution
+        )
+    status = RunStatus.ABORTED if subtype in CAPPED_SUBTYPES else RunStatus.FAILED
+    return RunOutcome.of(
+        status,
+        error=f"{subtype}: {errors}" if errors else subtype,
+        attribution=attribution,
+    )
+
+
+class Conversation(BaseModel):
+    """One conversation with a client, and what the runner has learned from it so far.
+
+    A mutable aggregate like `BoundTools`: the init message fills in ``started`` and the session
+    id, and every stop after it reads them. Handing those through the loop as parameters is what
+    this replaces.
+    """
+
+    model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
+
+    options: SdkOptions
+    tools: BoundTools
+    session_id: str | None = None
+    started: bool = False
+
+    def handle(self, message: Any) -> RunOutcome | None:
+        """The terminal state this message ends the run in, or ``None`` to keep reading."""
+        if _is_result(message):
+            if not self.started:
+                return self.stopped(
+                    RunStatus.FAILED, "the run answered before it started"
+                )
+            return from_result(
+                message, session_id=self.session_id, trace=self.tools.trace
+            )
+        paused = rate_limited(message)
+        if paused is not None:
+            return self.stopped(RunStatus.ABORTED, paused)
+        if _is_assistant(message):
+            return self._assistant(message)
+        if not self.started and _is_init(message):
+            return self._init(message)
+        return None
+
+    def stopped(self, status: RunStatus, reason: str) -> RunOutcome:
+        """A run that ended before its result: the trace and the session survive, and the cost is
+        marked estimated because the client never reported one."""
+        return RunOutcome.of(
+            status,
+            error=reason,
+            attribution=RunAttribution(
+                usage=RunUsage(cost_estimated=True),
+                tool_trace=tuple(self.tools.trace),
+                sdk_session_id=self.session_id,
+            ),
+        )
+
+    def _assistant(self, message: Any) -> RunOutcome | None:
+        """A run that broke mid-turn, or spoke before its session was checked."""
+        broke = getattr(message, "error", None)
+        if broke is not None:
+            status, reason = ASSISTANT_ERRORS.get(broke, (RunStatus.FAILED, str(broke)))
+            return self.stopped(status, reason)
+        if not self.started:
+            return self.stopped(RunStatus.FAILED, "the run spoke before it started")
+        return None
+
+    def _init(self, message: Any) -> RunOutcome | None:
+        """The session the CLI opened, accepted or refused by name (Invariant 4)."""
+        refused = self.options.refusal(message.data)
+        if refused is not None:
+            return self.stopped(RunStatus.ABORTED, refused)
+        self.started = True
+        self.session_id = message.data.get("session_id")
+        logger.info(
+            "claude %s, session %s",
+            message.data.get("claude_code_version"),
+            self.session_id,
+        )
+        return None
+
+
 class SdkRunner(RefinementRunner):
     """Drives one run through a Claude client (spec 9.3).
 
@@ -230,9 +494,15 @@ class SdkRunner(RefinementRunner):
             job, self.service.user, self.service.root, cli_path=self.cli_path
         )
         tools = BoundTools(service=self.service, run_id=run.run_id)
-        return await self._close(
-            run, brief, await self._converse(options, tools, brief.render())
-        )
+        try:
+            outcome = await self._converse(options, tools, brief.render())
+        except asyncio.CancelledError:
+            # the caller going away must not leave the row queued and its registry slot held
+            await self._close(
+                run, brief, RunOutcome.of(RunStatus.ABORTED, error="cancelled")
+            )
+            raise
+        return await self._close(run, brief, outcome)
 
     def _managed_hooks(self) -> str | None:
         """Why a managed-settings file forbids this run, or ``None``.
@@ -255,63 +525,24 @@ class SdkRunner(RefinementRunner):
     ) -> RunOutcome:
         """One conversation, from the first message to the result, mapped to a terminal state.
 
-        Every exception is caught, including the SDK's own classes, which this module cannot name.
+        Every exception is caught, including the SDK's own classes, which this module cannot
+        name. A cancellation is not an exception this owns: it goes back up to `run`, which
+        closes the row before letting it through.
         """
-        session_id: str | None = None
-        started = False
+        talk = Conversation(options=options, tools=tools)
         try:
             factory = self._factory()
             async with factory(options, tools) as client:
                 await client.query(prompt)
                 async for message in client.receive_response():
-                    if _is_result(message):
-                        if not started:
-                            return self._stopped(
-                                RunStatus.FAILED,
-                                "the run answered before it started",
-                                tools,
-                                session_id,
-                            )
-                        return self._from_result(message, options, tools, session_id)
-                    paused = _rate_limited(message)
-                    if paused is not None:
-                        return self._stopped(
-                            RunStatus.ABORTED, paused, tools, session_id
-                        )
-                    if _is_assistant(message):
-                        broke = getattr(message, "error", None)
-                        if broke is not None:
-                            return self._stopped(
-                                RunStatus.FAILED,
-                                _ERRORS.get(broke, broke),
-                                tools,
-                                session_id,
-                            )
-                        if not started:
-                            return self._stopped(
-                                RunStatus.FAILED,
-                                "the run spoke before it started",
-                                tools,
-                                session_id,
-                            )
-                    elif not started and _is_init(message):
-                        refused = self._init_refusal(message.data, options)
-                        if refused is not None:
-                            return self._stopped(
-                                RunStatus.ABORTED, refused, tools, session_id
-                            )
-                        started = True
-                        session_id = message.data.get("session_id")
-                        logger.info(
-                            "claude %s, session %s",
-                            message.data.get("claude_code_version"),
-                            session_id,
-                        )
-        except Exception as exc:  # noqa: BLE001  (the SDK's classes cannot be named here)
-            return self._stopped(RunStatus.FAILED, str(exc), tools, session_id)
-        return self._stopped(
-            RunStatus.FAILED, "the run ended without a result", tools, session_id
-        )
+                    ended = talk.handle(message)
+                    if ended is not None:
+                        return ended
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # the SDK's classes cannot be named here
+            return talk.stopped(RunStatus.FAILED, str(exc))
+        return talk.stopped(RunStatus.FAILED, "the run ended without a result")
 
     def _factory(self) -> ClientFactory:
         """The injected factory, refusing a runner built without one before any run happens."""
@@ -321,131 +552,3 @@ class SdkRunner(RefinementRunner):
                 kind=SdkErrorKind.NOT_FOUND,
             )
         return self.client_factory
-
-    @staticmethod
-    def _init_refusal(data: Mapping[str, Any], options: SdkOptions) -> str | None:
-        """Why the session the CLI opened is not the one that was asked for (Invariant 4).
-
-        Every clause names what it refused: a surprise here is a fact about the CLI, and a bare
-        "refused" would send the reader to the source instead of the message.
-        """
-        servers = data.get("mcp_servers") or []
-        names = {str(server.get("name")) for server in servers}
-        if names != {GRAPH_SERVER}:
-            return f"refused: unexpected mcp servers {sorted(names)}"
-        adrift = sorted(
-            str(s.get("name")) for s in servers if s.get("status") != "connected"
-        )
-        if adrift:
-            return f"refused: mcp servers not connected {adrift}"
-        if data.get("plugins"):
-            return f"refused: plugins are loaded {sorted(data['plugins'], key=str)}"
-        extra = sorted(set(data.get("tools") or ()) - set(ALLOWED_TOOLS))
-        if extra:
-            return f"refused: unexpected tools {extra}"
-        mode = data.get("permissionMode")
-        if mode != PERMISSION_MODE:
-            return f"refused: permission mode {mode!r}, not {PERMISSION_MODE!r}"
-        served = str(data.get("model") or "")
-        if options.model not in served:
-            return f"refused: model {served!r} is not {options.model}"
-        return None
-
-    def _from_result(
-        self,
-        message: Any,
-        options: SdkOptions,
-        tools: BoundTools,
-        session_id: str | None,
-    ) -> RunOutcome:
-        """The result message as a terminal state, per spec 5.3's mapping table."""
-        attribution = RunAttribution(
-            usage=_usage(message),
-            tool_trace=tuple(tools.trace),
-            sdk_session_id=session_id or getattr(message, "session_id", None),
-        )
-        subtype = str(getattr(message, "subtype", ""))
-        errors = "; ".join(getattr(message, "errors", None) or ())
-        if subtype == "success":
-            answer = _answer(getattr(message, "structured_output", None))
-            if answer is None:
-                return RunOutcome.of(
-                    RunStatus.FAILED,
-                    error="no structured answer",
-                    attribution=attribution,
-                )
-            return RunOutcome.of(
-                RunStatus.SUCCEEDED,
-                summary=answer.summary,
-                attribution=attribution,
-            )
-        status = RunStatus.ABORTED if subtype in CAPPED_SUBTYPES else RunStatus.FAILED
-        return RunOutcome.of(
-            status,
-            error=f"{subtype}: {errors}" if errors else subtype,
-            attribution=attribution,
-        )
-
-    @staticmethod
-    def _stopped(
-        status: RunStatus, reason: str, tools: BoundTools, session_id: str | None
-    ) -> RunOutcome:
-        """A run that ended before its result: the trace and the session survive, the cost is
-        whatever the client never reported."""
-        return RunOutcome.of(
-            status,
-            error=reason,
-            attribution=RunAttribution(
-                tool_trace=tuple(tools.trace), sdk_session_id=session_id
-            ),
-        )
-
-
-#: what an assistant-level error means to the daemon, in the words S8's loop reads
-_ERRORS = {"authentication_failed": "paused:auth"}
-
-
-def _rate_limited(message: Any) -> str | None:
-    """Why a rate limit stopped this run, or ``None`` when it did not."""
-    if not _is_rate_limit(message):
-        return None
-    info = message.rate_limit_info
-    if getattr(info, "status", None) != "rejected":
-        return None
-    return f"paused:ratelimit until {getattr(info, 'resets_at', None)}"
-
-
-def _answer(raw: Any) -> RunAnswer | None:
-    """The structured answer, or ``None`` when the run produced none the schema accepts.
-
-    A malformed `output_format` drops the flag silently and the run still "succeeds" (spike A.6),
-    so the answer is what says the run really finished.
-    """
-    if raw is None:
-        return None
-    try:
-        return RunAnswer.model_validate(raw)
-    except ValidationError:
-        return None
-
-
-def _usage(message: Any) -> RunUsage:
-    """What the result says the run cost. ``model_usage`` is the coherent pair: its ``costUSD``
-    sums to ``total_cost_usd`` exactly, while ``usage`` disagrees with both (spike 2)."""
-    per_model = getattr(message, "model_usage", None) or {}
-    if per_model:
-        entries = list(per_model.values())
-        tokens = (
-            sum(int(entry.get("inputTokens", 0)) for entry in entries),
-            sum(int(entry.get("outputTokens", 0)) for entry in entries),
-        )
-    else:  # only when the CLI reported no per-model breakdown at all
-        raw = getattr(message, "usage", None) or {}
-        tokens = (int(raw.get("input_tokens", 0)), int(raw.get("output_tokens", 0)))
-    return RunUsage(
-        cost_usd=float(getattr(message, "total_cost_usd", None) or 0.0),
-        cost_estimated=False,
-        input_tokens=tokens[0],
-        output_tokens=tokens[1],
-        num_turns=int(getattr(message, "num_turns", 0) or 0),
-    )

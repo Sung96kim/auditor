@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from auditor.database import open_repo_index
+from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     ProducerKind,
     Run,
@@ -26,6 +27,8 @@ from auditor.graph.refine.models import (
     RunStatus,
     TriggerKind,
 )
+from auditor.graph.refine.prompts import STRUCTURED_OUTPUT_TOOL
+from auditor.graph.refine.sdk_runner import BoundTools, SdkOptions
 from auditor.graph.refine.service import RefinementService
 from auditor.mcp import mcp
 
@@ -191,19 +194,19 @@ class Assistant(BaseModel):
     tool_calls: tuple[tuple[str, Mapping[str, Any]], ...] = ()
 
 
-class Limit(BaseModel):
-    """A `RateLimitEvent`, whose `rate_limit_info` the runner reads by attribute."""
-
-    model_config = ConfigDict(frozen=True)
-
-    rate_limit_info: "LimitInfo"
-
-
 class LimitInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: str = "allowed_warning"
     resets_at: int | None = None
+
+
+class Limit(BaseModel):
+    """A `RateLimitEvent`, whose `rate_limit_info` the runner reads by attribute."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rate_limit_info: LimitInfo
 
 
 class Result(BaseModel):
@@ -219,6 +222,8 @@ class Result(BaseModel):
     usage: dict[str, Any] | None = None
     structured_output: Any = None
     errors: tuple[str, ...] | None = None
+    is_error: bool = False
+    api_error_status: int | None = None
 
 
 def init_data(**overrides: Any) -> dict[str, Any]:
@@ -235,14 +240,38 @@ def init_data(**overrides: Any) -> dict[str, Any]:
     }
 
 
+def hook_payload(
+    name: str, args: Mapping[str, Any], response: Any, *, duration_ms: int = 5
+) -> dict[str, Any]:
+    """One `PostToolUse` input in the shape the CLI really sends (spike B.1, measured).
+
+    ``duration_ms`` and ``prompt_id`` are the two undocumented extras beyond
+    `PostToolUseHookInput`; the trace reads the first of them.
+    """
+    return {
+        "cwd": "/tmp/repo",
+        "duration_ms": duration_ms,
+        "hook_event_name": "PostToolUse",
+        "permission_mode": "dontAsk",
+        "prompt_id": "prompt-1",
+        "session_id": "sdk-session",
+        "tool_input": dict(args),
+        "tool_name": name,
+        "tool_response": response,
+        "tool_use_id": f"toolu_{name}",
+        "transcript_path": "/tmp/transcript.jsonl",
+    }
+
+
 class FakeClient:
     """A `ClientSession` that replays scripted messages and really calls the bound tools.
 
-    An assistant message's `tool_calls` are awaited against `BoundTools` and fed to its hook, so a
-    scripted run proposes through the service exactly as a real one does.
+    An assistant message's `tool_calls` are resolved through the same `BoundTools.tools()` table
+    production registers, so a mis-wired handler or a renamed tool fails here too. A name the run
+    does not expose is an error, not a silent empty answer.
     """
 
-    def __init__(self, messages: Sequence[Any], tools: Any) -> None:
+    def __init__(self, messages: Sequence[Any], tools: BoundTools) -> None:
         self.messages = messages
         self.tools = tools
         self.prompt: str | None = None
@@ -256,18 +285,22 @@ class FakeClient:
     async def query(self, prompt: str) -> None:
         self.prompt = prompt
 
+    async def _call(self, name: str, args: Mapping[str, Any]) -> Any:
+        """One scripted tool call, through the run's own table."""
+        bound = {tool.qualified: tool for tool in self.tools.tools()}.get(name)
+        if bound is not None:
+            return await bound.handler(args)
+        if name == STRUCTURED_OUTPUT_TOOL:
+            # the CLI injects this one and answers for it; it never reaches our handlers
+            return "Structured output provided successfully"
+        raise AssertionError(
+            f"the script called {name!r}, which this run does not expose"
+        )
+
     async def _replay(self, message: Any) -> None:
         for name, args in message.tool_calls:
-            bound = getattr(self.tools, name.rsplit("__", 1)[-1], None)
-            response = await bound(args) if bound is not None else {}
-            await self.tools.record(
-                {
-                    "tool_name": name,
-                    "tool_input": args,
-                    "duration_ms": 5,
-                    "tool_response": response,
-                }
-            )
+            response = await self._call(name, args)
+            await self.tools.record(hook_payload(name, args, response))
 
     async def receive_response(self) -> AsyncIterator[Any]:
         for message in self.messages:
@@ -277,11 +310,11 @@ class FakeClient:
 
 
 def fake_factory(
-    messages: Sequence[Any], seen: list[Any] | None = None
-) -> Callable[..., Any]:
+    messages: Sequence[Any], seen: list[SdkOptions] | None = None
+) -> ClientFactory:
     """A client factory over one scripted message list, recording the options it was handed."""
 
-    def factory(options: Any, tools: Any) -> FakeClient:
+    def factory(options: SdkOptions, tools: BoundTools) -> FakeClient:
         if seen is not None:
             seen.append(options)
         return FakeClient(messages, tools)
