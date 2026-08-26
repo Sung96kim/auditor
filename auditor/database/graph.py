@@ -428,12 +428,25 @@ class GraphDB(BaseDB):
             [prefix, f"{escaped}/%", f"{escaped}::%"],
         )
 
+    def _queue_where(
+        self, *, external: bool, prefix: str | None
+    ) -> tuple[str, list[Any]]:
+        """The WHERE tail both queue readers share, so a scope means one thing to the count and
+        to the rows it counts."""
+        sql = ""
+        params: list[Any] = []
+        if not external:
+            sql += " AND externally_bound = 0"
+        scope_sql, scope_params = self._scope_clause(prefix)
+        return sql + scope_sql, params + scope_params
+
     async def unresolved(
         self,
         node_ids: list[str] | None = None,
         reasons: list[str] | None = None,
         call_forms: list[str] | None = None,
         limit: int | None = None,
+        *,
         external: bool = True,
         prefix: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -449,11 +462,9 @@ class GraphDB(BaseDB):
             if values:
                 sql += f" AND {col} IN ({','.join('?' for _ in values)})"
                 params += values
-        if not external:
-            sql += " AND externally_bound = 0"
-        scope_sql, scope_params = self._scope_clause(prefix)
-        sql += scope_sql
-        params += scope_params
+        tail, tail_params = self._queue_where(external=external, prefix=prefix)
+        sql += tail
+        params += tail_params
         sql += " ORDER BY priority, externally_bound, node_id, name"
         if limit is not None:
             sql += " LIMIT ?"
@@ -469,11 +480,6 @@ class GraphDB(BaseDB):
         returns, which on a real repo is the whole queue for one number.
         """
         sql = "SELECT COUNT(*) AS n FROM graph_unresolved WHERE repo = ?"
-        params: list[Any] = []
-        if not external:
-            sql += " AND externally_bound = 0"
-        scope_sql, scope_params = self._scope_clause(prefix)
-        sql += scope_sql
-        params += scope_params
-        row = await self._fetch_one(sql, tuple(params))
+        tail, params = self._queue_where(external=external, prefix=prefix)
+        row = await self._fetch_one(sql + tail, tuple(params))
         return int(row["n"]) if row else 0
