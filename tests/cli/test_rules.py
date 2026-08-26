@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from _support import cli_json, invoke, write_plugin_repo
+from _support import cli_json, invoke, unwrapped, write_plugin_repo
 
 #: (argv, source-of-HOUSE-NO-PRINT-or-None) per command that lists a repo's plugin rules
 _LISTINGS = [
@@ -127,7 +127,7 @@ def test_rules_list_reports_a_broken_plugin_on_stderr(tmp_path, restore_registry
     assert result.exit_code == 0, result.output
     assert {r["rule_id"] for r in json.loads(result.stdout)} >= {"HOUSE-NO-PRINT"}
     assert "failed to load local plugin" in result.stderr
-    assert "zz_broken.py" in result.stderr
+    assert "zz_broken.py" in unwrapped(result.stderr)
 
 
 def test_rules_list_invalid_config_fails_cleanly(tmp_path):

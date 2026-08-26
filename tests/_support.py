@@ -232,6 +232,15 @@ def one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def unwrapped(text: str) -> str:
+    """``text`` with rich's hard breaks undone, for a token it split rather than wrapped.
+
+    `one_line` rejoins on whitespace, which puts a space inside a path rich broke mid-token; a
+    substring test for that path needs the break removed instead.
+    """
+    return text.replace("\n", "")
+
+
 def assert_no_escape(result) -> None:
     """Fail when an exception escaped the command instead of a clean ``typer.Exit``.
 
