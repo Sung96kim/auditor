@@ -44,6 +44,37 @@ class FactReader(BaseModel):
     index: IndexStore
     root: Path
     roles: RoleClassifier
+    #: rows an eval masked into the queue; while they are here the stored queue is not read at all
+    synthetic: tuple[UnresolvedRow, ...] = ()
+
+    async def queue(
+        self, prefix: str | None, *, limit: int | None, external: bool
+    ) -> list[UnresolvedRow]:
+        """The queue rows one scope offers, synthetic rows first and alone.
+
+        A reader holding synthetic rows answers from them and nothing else, so an eval brief can
+        never be filled out with this checkout's own unresolved rows (spec 10.2).
+        """
+        if self.synthetic:
+            rows = [
+                row
+                for row in self.synthetic
+                if under_scope(row.node_id, prefix or "")
+                and (external or not row.externally_bound)
+            ]
+            return rows if limit is None else rows[:limit]
+        return [
+            UnresolvedRow.model_validate(row)
+            for row in await self.index.graph.unresolved(
+                prefix=prefix, external=external, limit=limit
+            )
+        ]
+
+    async def count_queue(self, prefix: str | None, *, external: bool) -> int:
+        """How many rows that scope holds, under the same synthetic-rows-only rule as `queue`."""
+        if self.synthetic:
+            return len(await self.queue(prefix, limit=None, external=external))
+        return await self.index.graph.count_unresolved(prefix, external=external)
 
     async def queue_row(self, proposal: Proposal) -> UnresolvedRow | None:
         """The `graph_unresolved` row this proposal answers, if there is one."""
@@ -51,6 +82,15 @@ class FactReader(BaseModel):
         name = proposal.target.name
         if not node_id or not name:
             return None
+        if self.synthetic:
+            return next(
+                (
+                    row
+                    for row in self.synthetic
+                    if row.node_id == node_id and row.name == name
+                ),
+                None,
+            )
         rows = await self.index.graph.unresolved(node_ids=[node_id])
         return next(
             (UnresolvedRow.model_validate(r) for r in rows if r["name"] == name), None
@@ -123,14 +163,10 @@ class BriefBuilder(BaseModel):
         """The brief for one scope. Only the rows the run may work on are decoded."""
         scope = scope_path(scope)
         prefix = scope or None
-        graph = self.facts.index.graph
-        queue_total = await graph.count_unresolved(prefix, external=False)
-        rows = [
-            UnresolvedRow.model_validate(row)
-            for row in await graph.unresolved(
-                prefix=prefix, external=False, limit=self.limits.max_nodes_per_run
-            )
-        ]
+        queue_total = await self.facts.count_queue(prefix, external=False)
+        rows = await self.facts.queue(
+            prefix, limit=self.limits.max_nodes_per_run, external=False
+        )
         loaded, _missing = await self.facts.files(
             tuple(dict.fromkeys(file_of(row.node_id) for row in rows))
         )

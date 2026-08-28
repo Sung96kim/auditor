@@ -20,6 +20,7 @@ from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     ClientKind,
     ProducerKind,
+    Proposer,
     Run,
     RunAttribution,
     RunnerKind,
@@ -93,10 +94,16 @@ class RefinementRunner(ABC):
     kind: ClassVar[RunnerKind]
 
     def __init__(
-        self, service: RefinementService, client_factory: ClientFactory | None
+        self,
+        service: RefinementService,
+        client_factory: ClientFactory | None,
+        *,
+        proposer: Proposer | None = None,
     ) -> None:
         self.service = service
         self.client_factory = client_factory
+        # an eval judges proposals instead of storing them, so nothing it proposes reaches a row
+        self.proposer = proposer or service.propose
 
     @abstractmethod
     async def run(self, job: RefinementJob) -> RunProduct:
@@ -142,7 +149,7 @@ class RefinementRunner(ABC):
         producer that let that escape would orphan its own open run.
         """
         try:
-            detail = (await self.service.propose(run_id, proposal)).outcome.value
+            detail = (await self.proposer(run_id, proposal)).outcome.value
         except RefinementRefused as exc:
             detail = str(exc)
         return ToolCall(tool=PROPOSE_TOOL, ts=time.time(), detail=detail)
@@ -162,12 +169,13 @@ class FakeRunner(RefinementRunner):
         service: RefinementService,
         client_factory: ClientFactory | None = None,
         *,
+        proposer: Proposer | None = None,
         script: Sequence[Mapping[str, Any]] = (),
         answer: RunAnswer | None = None,
         stop: str | None = None,
         stop_status: RunStatus = RunStatus.ABORTED,
     ) -> None:
-        super().__init__(service, client_factory)
+        super().__init__(service, client_factory, proposer=proposer)
         self.script = script
         self.answer = answer
         self.stop = stop

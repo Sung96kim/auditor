@@ -6,7 +6,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -259,6 +259,13 @@ class Stratum(StrEnum):
         return cls.DIRECT_IMPORT if dst_module in imports else cls.NEITHER
 
 
+#: the one stratum every control suite is stored under (spec 10.2)
+CONTROL_STRATUM = "all"
+
+#: what a stored eval row's stratum column may say: an add stratum, or the controls' one bucket
+EvalStratum = Stratum | Literal["all"]
+
+
 class EvalMetrics(BaseModel):
     """One suite stratum's measured accuracy (spec 10.2). ``lower_bound_95`` is what a tier gate
     reads, not the point estimate."""
@@ -400,6 +407,10 @@ class Verdict(BaseModel):
     refusal: RefusalKind | None = None
     detail: str = ""
     refinement_id: int = 0
+
+
+#: What a runner hands every raw proposal to, by run id: the service, or an eval's judge (spec 10.2)
+Proposer = Callable[[str, Mapping[str, Any]], Awaitable[Verdict]]
 
 
 class RunReport(BaseModel):
@@ -937,7 +948,7 @@ class EvalRow(BaseModel):
     runner: RunnerKind
     model: str
     suite: str
-    stratum: str
+    stratum: EvalStratum
     metrics: EvalMetrics = EvalMetrics()
     cost_usd: float = 0.0
     num_turns: int = 0

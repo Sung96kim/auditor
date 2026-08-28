@@ -408,6 +408,7 @@ class RefinementService:
         settings: AuditorSettings,
         user: UserSettings,
         registry: RunRegistry | None = None,
+        facts: FactReader | None = None,
     ) -> None:
         self.index = index
         self.root = root
@@ -420,7 +421,8 @@ class RefinementService:
         # from, so the cap this service was built with is the cap that identity runs under
         self.registry.max_open = user.observer.limits.max_open_runs
         self.ledger = RefinementLedger(index=index)
-        self.facts = FactReader(
+        # an injected reader is how an eval gives the brief and the verifier one masked queue
+        self.facts = facts or FactReader(
             index=index, root=root, roles=RoleClassifier(settings.role_globs)
         )
 
@@ -842,7 +844,7 @@ class RefinementService:
     async def _policy(self, run: Run) -> TierPolicy:
         """This repo's activation policy for the run's runner and model (spec 10.3)."""
         return TierPolicy.of(
-            await self.index.evals.evals(runner=run.runner, model=run.model),
+            await self.index.evals.latest(run.runner, run.model or ""),
             min_precision=self.user.observer.tuning.min_precision,
             runner=run.runner,
             model=run.model or "",

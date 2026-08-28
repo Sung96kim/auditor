@@ -34,7 +34,12 @@ from auditor.graph.refine.models import (
     Verdict,
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_SHA, RunAnswer
-from auditor.graph.refine.service import RefinementRefused, RefinementService
+from auditor.graph.refine.service import (
+    RefinementRefused,
+    RefinementService,
+    RunRegistry,
+)
+from auditor.graph.refine.verify import VerifyStatus
 
 GOLDEN = Path(__file__).parent / "fixtures" / "brief_golden.txt"
 #: escaped, so this file is itself free of the character it forbids
@@ -399,3 +404,82 @@ async def test_a_service_brief_is_scoped_to_the_run(refine_service):
     brief = await refine_service.brief(run.run_id)
     assert brief.scope == "impl.py"
     assert all(t.node_id.startswith("impl.py") for t in brief.targets)
+
+
+#: the same-module bare call `Impl.run` -> `_local` the resolver places, so an eval can mask it
+MASKED_LOCAL = UnresolvedRow(
+    node_id=QUEUED_CALL,
+    fact_kind=FactKind.CALLEE,
+    name="_local",
+    reason=UnresolvedReason.UNIMPORTABLE_NAME,
+    call_form=CallForm.BARE,
+    definers=("impl.py::_local",),
+)
+MASKED_EDGE = Proposal(
+    kind=RefinementKind.ADD_EDGE,
+    target=RefinementTarget(
+        src=QUEUED_CALL,
+        dst="impl.py::_local",
+        edge_kind=EdgeKind.CALLS,
+        name="_local",
+    ),
+    reason="Impl.run calls _local, which impl.py defines just below it",
+)
+
+
+def _synthetic(service: RefinementService, *rows: UnresolvedRow) -> RefinementService:
+    """A second service over the same index whose reader answers the queue from ``rows`` alone."""
+    return RefinementService(
+        service.index,
+        service.root,
+        service.settings,
+        service.user,
+        registry=RunRegistry(),
+        facts=service.facts.model_copy(update={"synthetic": rows}),
+    )
+
+
+async def test_a_synthetic_row_is_the_whole_queue_the_brief_sees(refine_service):
+    """A masked row must look unresolved, and this repo's own rows must not join it."""
+    service = _synthetic(refine_service, MASKED_LOCAL)
+    brief = await _builder(service).build("")
+    assert [t.node_id for t in brief.targets] == [QUEUED_CALL]
+    assert [t.name for t in brief.targets] == ["_local"]
+    assert brief.queue_total == 1
+
+
+async def test_a_synthetic_row_is_what_queue_row_answers_with(refine_service):
+    row = await _synthetic(refine_service, MASKED_LOCAL).facts.queue_row(MASKED_EDGE)
+    assert row == MASKED_LOCAL
+
+
+async def test_three_synthetic_rows_brief_exactly_three_targets(refine_service):
+    """The cap is twelve, so a short batch filled from the index would spend turns on rows no
+    trial can score."""
+    rows = tuple(
+        MASKED_LOCAL.model_copy(update={"name": f"_local{i}"}) for i in range(3)
+    )
+    brief = await _builder(_synthetic(refine_service, *rows)).build("")
+    assert len(brief.targets) == 3
+    assert brief.queue_total == 3
+
+
+async def test_a_scope_still_narrows_the_synthetic_rows(refine_service):
+    service = _synthetic(refine_service, MASKED_LOCAL)
+    assert (await _builder(service).build("svc.py")).targets == ()
+    assert len((await _builder(service).build("impl.py")).targets) == 1
+
+
+async def test_a_masked_row_makes_its_proposal_tier_b(refine_service):
+    """Invariant 5: the eval measures the verifier-bounded path, not a tier C fallback."""
+    service = _synthetic(refine_service, MASKED_LOCAL)
+    run = await service.begin()
+    verdict = await service.propose(run.run_id, MASKED_EDGE)
+    assert verdict.tier is Tier.B
+    assert verdict.verify is VerifyStatus.OK
+
+
+async def test_without_the_masked_row_the_same_proposal_is_tier_c(refine_service):
+    run = await refine_service.begin()
+    verdict = await refine_service.propose(run.run_id, MASKED_EDGE)
+    assert verdict.tier is Tier.C

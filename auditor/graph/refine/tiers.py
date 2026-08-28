@@ -57,12 +57,16 @@ class TierPolicy(BaseModel):
         runner: RunnerKind,
         model: str,
     ) -> "TierPolicy":
-        """What this runner and model measured here, and which strata cleared their own gate."""
+        """What this runner and model measured here, and which strata cleared their own gate.
+
+        ``evals`` is expected to hold one row per ``(suite, stratum)``, the newest, which is what
+        `EvalsDB.latest` answers with; a later failing row un-proves a stratum (spec 10.3).
+        """
         rows = [row for row in evals if row.runner is runner and row.model == model]
         return cls(
-            measured=frozenset((row.suite, row.stratum) for row in rows),
+            measured=frozenset((row.suite, str(row.stratum)) for row in rows),
             proven=frozenset(
-                (row.suite, row.stratum)
+                (row.suite, str(row.stratum))
                 for row in rows
                 if cls._clears(row, min_precision)
             ),
@@ -119,7 +123,11 @@ class TierPolicy(BaseModel):
 
     def _cleared(self, suite: str, stratum: Stratum | None = None) -> bool:
         """Whether a suite's gate is met here: the stratum matching the proposal, or every
-        stratum the suite measured when there is none to match."""
+        stratum the suite measured when there is none to match.
+
+        A control suite is stored under one stratum, ``all``, so "every stratum it measured" and
+        "its one row" are the same question (spec 10.2).
+        """
         rows = {pair for pair in self.measured if pair[0] == suite}
         if not rows:
             return False

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +22,13 @@ from graph._support import (
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     Proposal,
+    ProposalOutcome,
     RefinementKind,
     RefinementTarget,
     Run,
     RunStatus,
     RunUsage,
+    Verdict,
 )
 from auditor.graph.refine.prompts import (
     ALLOWED_TOOLS,
@@ -706,3 +708,39 @@ async def test_a_scripted_call_to_a_tool_the_run_does_not_expose_is_an_error(
     assert row.status is RunStatus.FAILED
     assert "does not expose" in (row.error or "")
     assert row.tool_trace == ()
+
+
+async def test_a_scripted_run_with_a_proposer_stores_no_refinement(
+    refine_service: RefinementService,
+):
+    """Invariant 2: an eval drives the same loop, and its proposals never reach the ledger."""
+    seen: list[Mapping[str, Any]] = []
+
+    async def judge(_run_id: str, raw: Mapping[str, Any]) -> Verdict:
+        seen.append(raw)
+        return Verdict(outcome=ProposalOutcome.STAGED, kind=RefinementKind.ADD_EDGE)
+
+    _product, row = await _drive(
+        refine_service,
+        [Init(data=init_data()), PROPOSES, ANSWERS, SUCCESS],
+        proposer=judge,
+    )
+    assert row.status is RunStatus.SUCCEEDED
+    assert [p["kind"] for p in seen] == ["add_edge"]
+    assert await refine_service.index.refinements.refinements() == []
+
+
+async def test_the_bound_propose_tool_answers_with_the_proposers_verdict(
+    refine_service: RefinementService,
+):
+    async def judge(_run_id: str, _raw: Mapping[str, Any]) -> Verdict:
+        return Verdict(
+            outcome=ProposalOutcome.STAGED,
+            kind=RefinementKind.ADD_EDGE,
+            detail="recorded by the eval",
+        )
+
+    tools = BoundTools(service=refine_service, run_id="no-such-run", proposer=judge)
+    answer = await tools.propose(GOOD)
+    assert "is_error" not in answer
+    assert json.loads(answer["content"][0]["text"])["detail"] == "recorded by the eval"

@@ -4,8 +4,10 @@ import pytest
 
 from auditor.graph.model import CallForm, EdgeKind, UnresolvedRow
 from auditor.graph.refine.models import (
+    CONTROL_STRATUM,
     EvalMetrics,
     EvalRow,
+    EvalStratum,
     Proposal,
     RefinementKind,
     RefinementPayload,
@@ -44,15 +46,16 @@ def _eval(
     *,
     lower: float = 1.0,
     false_adds: float = 0.0,
-    stratum: str = Stratum.SAME_MODULE.value,
+    stratum: EvalStratum | None = None,
     n: int = 80,
 ) -> EvalRow:
+    """One stored row; every suite but `add` is stored under the one control stratum (P2)."""
     return EvalRow(
         repo_identity="/repo/.git",
         runner=RunnerKind.CLAUDE,
         model="haiku",
         suite=suite,
-        stratum=stratum,
+        stratum=stratum or (Stratum.SAME_MODULE if suite == "add" else CONTROL_STRATUM),
         metrics=EvalMetrics(n=n, lower_bound_95=lower, false_add_rate=false_adds),
     )
 
@@ -209,8 +212,8 @@ def test_tier_b_reads_the_add_stratum_that_matches_the_proposal():
     """Spec 10.2: tier B's gate is the lower bound of the stratum matching its shape, so a repo
     whose `neither` stratum measured 0.50 does not activate `neither`-shaped proposals."""
     policy = _proven(
-        _eval("add", stratum=Stratum.SAME_MODULE.value),
-        _eval("add", lower=0.50, stratum=Stratum.NEITHER.value),
+        _eval("add"),
+        _eval("add", lower=0.50, stratum=Stratum.NEITHER),
         _eval("collision", lower=0.0),
     )
     assert (
@@ -224,9 +227,7 @@ def test_tier_b_reads_the_add_stratum_that_matches_the_proposal():
 
 
 def test_an_unmeasured_stratum_never_activates():
-    policy = _proven(
-        _eval("add", stratum=Stratum.SAME_MODULE.value), _eval("collision", lower=0.0)
-    )
+    policy = _proven(_eval("add"), _eval("collision", lower=0.0))
     assert (
         policy.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.DIRECT_IMPORT)
         is RefinementStatus.PENDING
@@ -237,14 +238,14 @@ def test_a_caller_that_names_no_stratum_needs_every_measured_one():
     """Without the proposal's shape the conservative reading is the whole suite, so one weak
     stratum holds the gate shut."""
     weak = _proven(
-        _eval("add", stratum=Stratum.SAME_MODULE.value),
-        _eval("add", lower=0.50, stratum=Stratum.NEITHER.value),
+        _eval("add"),
+        _eval("add", lower=0.50, stratum=Stratum.NEITHER),
         _eval("collision", lower=0.0),
     )
     assert weak.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.PENDING
     strong = _proven(
-        _eval("add", stratum=Stratum.SAME_MODULE.value),
-        _eval("add", stratum=Stratum.NEITHER.value),
+        _eval("add"),
+        _eval("add", stratum=Stratum.NEITHER),
         _eval("collision", lower=0.0),
     )
     assert strong.status(RefinementKind.ADD_EDGE, Tier.B) is RefinementStatus.ACTIVE
@@ -281,3 +282,52 @@ def test_tier_c_is_always_pending():
     assert (
         TierPolicy().status(RefinementKind.ADD_EDGE, Tier.C) is RefinementStatus.PENDING
     )
+
+
+def test_a_control_suite_is_read_from_its_one_stratum():
+    """P2: controls are stored under `all`, which is what the gate finds without a stratum."""
+    policy = _proven(_eval("add"), _eval("collision", lower=0.0), _eval("decoy"))
+    assert ("collision", CONTROL_STRATUM) in policy.proven
+    assert ("decoy", CONTROL_STRATUM) in policy.proven
+    assert (
+        policy.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.SAME_MODULE)
+        is RefinementStatus.ACTIVE
+    )
+    assert (
+        policy.status(RefinementKind.RESOLVE_AMBIGUOUS, Tier.A)
+        is RefinementStatus.ACTIVE
+    )
+
+
+def test_the_latest_row_governs_so_a_regression_un_proves_a_stratum():
+    """P1: `of` is handed the newest row per key, so a failing eval takes activation back."""
+    proving = _proven(_eval("add"), _eval("collision", lower=0.0))
+    regressed = _proven(_eval("add", lower=0.50), _eval("collision", lower=0.0))
+    stratum = Stratum.SAME_MODULE
+    assert (
+        proving.status(RefinementKind.ADD_EDGE, Tier.B, stratum=stratum)
+        is RefinementStatus.ACTIVE
+    )
+    assert (
+        regressed.status(RefinementKind.ADD_EDGE, Tier.B, stratum=stratum)
+        is RefinementStatus.PENDING
+    )
+
+
+@pytest.mark.parametrize(
+    ("suite", "lower", "false_adds", "clears"),
+    [
+        ("add", 1.0, 0.0, True),
+        ("add", 0.90, 0.0, False),
+        ("decoy", 1.0, 0.0, True),
+        ("decoy", 0.90, 0.0, False),
+        ("collision", 0.0, 0.0, True),
+        ("collision", 1.0, 0.01, False),
+        ("negative", 0.0, 0.0, True),
+        ("negative", 1.0, 0.01, False),
+    ],
+)
+def test_each_suite_is_judged_by_its_own_gate(suite, lower, false_adds, clears):
+    """P3: `add` and `decoy` clear on their Wilson bound, the two controls on no false add."""
+    policy = _proven(_eval(suite, lower=lower, false_adds=false_adds))
+    assert (policy.proven == policy.measured) is clears

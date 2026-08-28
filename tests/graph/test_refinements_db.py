@@ -10,6 +10,7 @@ from auditor.database import IndexStore
 from auditor.database.refinements import NoSuchRun
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
+    CONTROL_STRATUM,
     Anchor,
     ClientKind,
     EvalMetrics,
@@ -25,6 +26,7 @@ from auditor.graph.refine.models import (
     RunOutcome,
     RunStatus,
     RunUsage,
+    Stratum,
     Tier,
     ToolCall,
     TriggerDetail,
@@ -170,8 +172,8 @@ def _saturated_tuning(run_id: str) -> TuningRow:
     )
 
 
-def _metrics() -> EvalMetrics:
-    """Every metric at a distinct non-default value."""
+def _metrics(lower: float = 0.78) -> EvalMetrics:
+    """Every metric at a distinct non-default value; ``lower`` is what a gate test varies."""
     return EvalMetrics(
         n=20,
         correct=19,
@@ -179,7 +181,7 @@ def _metrics() -> EvalMetrics:
         recall=0.8,
         false_add_rate=0.05,
         false_removal_rate=0.02,
-        lower_bound_95=0.78,
+        lower_bound_95=lower,
     )
 
 
@@ -187,11 +189,11 @@ def _eval(**kw) -> EvalRow:
     return EvalRow(
         repo_identity=IDENTITY,
         runner=RunnerKind.CLAUDE,
-        model="haiku",
+        model=kw.pop("model", "haiku"),
         suite=kw.pop("suite", "add"),
-        stratum=kw.pop("stratum", "bare"),
-        metrics=_metrics(),
-        created_at=100.0,
+        stratum=kw.pop("stratum", CONTROL_STRATUM),
+        metrics=kw.pop("metrics", _metrics()),
+        created_at=kw.pop("created_at", 100.0),
         **kw,
     )
 
@@ -202,7 +204,7 @@ def _saturated_eval() -> EvalRow:
         runner=RunnerKind.CLAUDE,
         model="haiku",
         suite="add",
-        stratum="bare",
+        stratum=CONTROL_STRATUM,
         metrics=_metrics(),
         cost_usd=0.5,
         num_turns=4,
@@ -626,6 +628,50 @@ async def test_eval_rows_filter_by_runner_and_model(refine_store):
     hit = await refine_store.evals.evals(runner=RunnerKind.CLAUDE, model="haiku")
     assert {row.suite for row in hit} == {"add", "retarget"}
     assert await refine_store.evals.evals(model="sonnet") == []
+
+
+async def test_latest_keeps_only_the_newest_row_per_suite_and_stratum(refine_store):
+    """P1: `graph_evals` has no unique key, so the reader is what makes a regression count."""
+    await refine_store.evals.add_eval(_eval(created_at=100.0, metrics=_metrics(0.99)))
+    await refine_store.evals.add_eval(_eval(created_at=200.0, metrics=_metrics(0.40)))
+    rows = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
+    assert [row.metrics.lower_bound_95 for row in rows] == [0.40]
+    assert len(await refine_store.evals.evals()) == 2
+
+
+async def test_latest_reads_created_at_not_insertion_order(refine_store):
+    """The older row inserted second must not win: the newest row is the newest, not the last."""
+    await refine_store.evals.add_eval(_eval(created_at=200.0, metrics=_metrics(0.99)))
+    await refine_store.evals.add_eval(_eval(created_at=100.0, metrics=_metrics(0.40)))
+    (row,) = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
+    assert row.metrics.lower_bound_95 == 0.99
+
+
+async def test_latest_breaks_a_tie_on_eval_id(refine_store):
+    await refine_store.evals.add_eval(_eval(created_at=100.0, metrics=_metrics(0.99)))
+    await refine_store.evals.add_eval(_eval(created_at=100.0, metrics=_metrics(0.40)))
+    (row,) = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
+    assert row.metrics.lower_bound_95 == 0.40
+
+
+async def test_latest_answers_one_row_per_key_and_binds_runner_and_model(refine_store):
+    for suite in ("add", "collision"):
+        await refine_store.evals.add_eval(_eval(suite=suite))
+        await refine_store.evals.add_eval(_eval(suite=suite))
+    await refine_store.evals.add_eval(_eval(suite="add", model="sonnet"))
+    rows = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
+    assert [(row.suite, row.stratum) for row in rows] == [
+        ("add", CONTROL_STRATUM),
+        ("collision", CONTROL_STRATUM),
+    ]
+    assert await refine_store.evals.latest(RunnerKind.FAKE, "haiku") == []
+
+
+async def test_latest_keeps_the_strata_apart(refine_store):
+    for stratum in (Stratum.SAME_MODULE, Stratum.NEITHER):
+        await refine_store.evals.add_eval(_eval(stratum=stratum))
+    rows = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
+    assert {row.stratum for row in rows} == {Stratum.SAME_MODULE, Stratum.NEITHER}
 
 
 async def test_tuning_and_evals_survive_a_forgotten_repo(refine_store):

@@ -13,7 +13,12 @@ from pathlib import Path
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.graph.refine.client import ClientFactory
-from auditor.graph.refine.models import RunnerChoice, RunnerChoiceCode, RunnerKind
+from auditor.graph.refine.models import (
+    Proposer,
+    RunnerChoice,
+    RunnerChoiceCode,
+    RunnerKind,
+)
 from auditor.graph.refine.payloads import BriefPayload, RefinePayload
 from auditor.graph.refine.runner import (
     FakeRunner,
@@ -103,10 +108,13 @@ def build_runner(
     service: RefinementService,
     *,
     client_factory: ClientFactory | None = None,
+    proposer: Proposer | None = None,
 ) -> RefinementRunner:
     """One runner of the given kind, with its client injected or built here."""
     runner = RUNNERS[kind]
-    return runner(service, client_factory or _default_factory(runner))
+    return runner(
+        service, client_factory or _default_factory(runner), proposer=proposer
+    )
 
 
 def _default_factory(runner: type[RefinementRunner]) -> ClientFactory | None:

@@ -902,3 +902,21 @@ class EvalsDB(BaseDB):
         return [
             _eval_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
         ]
+
+    async def latest(self, runner: RunnerKind, model: str) -> list[EvalRow]:
+        """The newest row per ``(suite, stratum)`` for this runner and model (spec 10.3).
+
+        A correlated subquery rather than a window function, which no query in this store uses;
+        the tiebreak is ``eval_id``, this table's own autoincrement key, not ``rowid``.
+        """
+        sql = (
+            "SELECT * FROM graph_evals AS e "
+            "WHERE e.repo_identity = ? AND e.runner = ? AND e.model = ? AND e.eval_id = ("
+            "  SELECT l.eval_id FROM graph_evals AS l"
+            "  WHERE l.repo_identity = e.repo_identity AND l.runner = e.runner"
+            "   AND l.model = e.model AND l.suite = e.suite AND l.stratum = e.stratum"
+            "  ORDER BY l.created_at DESC, l.eval_id DESC LIMIT 1"
+            ") ORDER BY e.suite, e.stratum"
+        )
+        rows = await self._fetch_by_identity(sql, (runner.value, model))
+        return [_eval_from_row(r) for r in rows]

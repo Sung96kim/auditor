@@ -1,5 +1,8 @@
 """What a runner does with a run: opens it, records the brief, proposes, and closes it once."""
 
+from collections.abc import Mapping
+from typing import Any
+
 import pytest
 from graph._support import with_lock_timeout
 
@@ -10,6 +13,7 @@ from auditor.graph.refine.models import (
     ClientKind,
     ProducerKind,
     Proposal,
+    ProposalOutcome,
     RefinementKind,
     RefinementStatus,
     RefinementTarget,
@@ -17,6 +21,7 @@ from auditor.graph.refine.models import (
     RunOutcome,
     RunStatus,
     TriggerKind,
+    Verdict,
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA, RunAnswer
 from auditor.graph.refine.runner import PROPOSE_TOOL, FakeRunner, RefinementJob
@@ -243,3 +248,46 @@ async def test_closing_a_run_the_registry_evicted_does_not_raise(
     ]
     assert product.landed is None
     assert evicted.status is RunStatus.SKIPPED
+
+
+async def test_a_proposer_replaces_the_service_and_stores_nothing(
+    refine_service: RefinementService,
+):
+    """Invariant 2: an eval's proposals go to a judge, so the run commits no refinement row."""
+    seen: list[tuple[str, str]] = []
+
+    async def judge(run_id: str, raw: Mapping[str, Any]) -> Verdict:
+        seen.append((run_id, str(raw.get("kind"))))
+        return Verdict(outcome=ProposalOutcome.STAGED, kind=RefinementKind.ADD_EDGE)
+
+    runner = FakeRunner(refine_service, proposer=judge, script=[GOOD])
+    product = await runner.run(RefinementJob())
+    assert [kind for _, kind in seen] == ["add_edge"]
+    assert seen[0][0] == product.run.run_id
+    assert await refine_service.index.refinements.refinements() == []
+    assert product.landed is not None and product.landed.committed == ()
+
+
+async def test_the_proposers_verdict_is_what_the_trace_records(
+    refine_service: RefinementService,
+):
+    async def judge(_run_id: str, _raw: Mapping[str, Any]) -> Verdict:
+        return Verdict(outcome=ProposalOutcome.REJECTED, kind=RefinementKind.ADD_EDGE)
+
+    await FakeRunner(refine_service, proposer=judge, script=[GOOD]).run(RefinementJob())
+    (row,) = await refine_service.index.runs.runs()
+    assert [call.detail for call in row.tool_trace] == [ProposalOutcome.REJECTED.value]
+
+
+async def test_without_a_proposer_the_runner_uses_the_services_own(
+    refine_service: RefinementService,
+):
+    assert FakeRunner(refine_service).proposer == refine_service.propose
+
+
+async def test_an_eval_run_records_its_trigger_on_the_row(
+    refine_service: RefinementService,
+):
+    await FakeRunner(refine_service).run(RefinementJob(trigger=TriggerKind.EVAL))
+    (row,) = await refine_service.index.runs.runs()
+    assert row.trigger_kind is TriggerKind.EVAL

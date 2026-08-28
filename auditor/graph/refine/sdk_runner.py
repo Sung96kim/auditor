@@ -22,6 +22,7 @@ from auditor.graph.refine.brief import Brief
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     Proposal,
+    Proposer,
     RunAttribution,
     RunnerKind,
     RunOutcome,
@@ -212,6 +213,8 @@ class BoundTools(BaseModel):
 
     service: RefinementService
     run_id: str
+    #: an eval's judge; ``None`` means the service stores the proposal as a real run would
+    proposer: Proposer | None = None
     trace: list[ToolCall] = Field(default_factory=list)
 
     def tools(self) -> tuple[BoundTool, ...]:
@@ -238,8 +241,9 @@ class BoundTools(BaseModel):
 
     async def propose(self, args: Mapping[str, Any]) -> dict[str, Any]:
         """Stage one proposal against this run and answer with the verdict."""
+        propose = self.proposer or self.service.propose
         try:
-            verdict = await self.service.propose(self.run_id, args)
+            verdict = await propose(self.run_id, args)
         except RefinementRefused as exc:
             return _content(str(exc), is_error=True)
         return _content(verdict.model_dump_json())
@@ -476,10 +480,11 @@ class SdkRunner(RefinementRunner):
         service: RefinementService,
         client_factory: ClientFactory | None,
         *,
+        proposer: Proposer | None = None,
         cli_path: Path | None = None,
         managed_settings: Path = MANAGED_SETTINGS,
     ) -> None:
-        super().__init__(service, client_factory)
+        super().__init__(service, client_factory, proposer=proposer)
         self.cli_path = cli_path if cli_path is not None else claude_on_path()
         self.managed_settings = managed_settings
 
@@ -495,7 +500,10 @@ class SdkRunner(RefinementRunner):
                 run, brief, RunOutcome.of(RunStatus.ABORTED, error=refused)
             )
         talk = Conversation(
-            options=options, tools=BoundTools(service=self.service, run_id=run.run_id)
+            options=options,
+            tools=BoundTools(
+                service=self.service, run_id=run.run_id, proposer=self.proposer
+            ),
         )
         try:
             outcome = await self._converse(talk, brief)
