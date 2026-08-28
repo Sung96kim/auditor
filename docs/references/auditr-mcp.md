@@ -27,8 +27,9 @@ claude mcp add auditor -- uv run --directory /path/to/auditor auditr-mcp
 
 ## Starting it
 
-- Claude Code: `claude mcp add --scope project` writes a committable `.mcp.json` instead of the
-  per-project local config.
+- <img src="../../assets/claude-color.svg" height="16" alt="Claude"> Claude Code:
+  `claude mcp add --scope project` writes a committable `.mcp.json` instead of the per-project
+  local config.
 
 ```json
 {
@@ -41,8 +42,9 @@ claude mcp add auditor -- uv run --directory /path/to/auditor auditr-mcp
 - The auditor Claude Code plugin bundles its own server config, so enabling the plugin registers
   the server with no `claude mcp add` at all. See
   [claude-code-plugin.md](claude-code-plugin.md).
-- Codex: `codex mcp add auditor -- auditr-mcp`, or an entry in `~/.codex/config.toml` (a
-  project-scoped `.codex/config.toml` works in trusted projects).
+- <img src="../../assets/codex-color.svg" height="16" alt="Codex"> Codex:
+  `codex mcp add auditor -- auditr-mcp`, or an entry in `~/.codex/config.toml` (a project-scoped
+  `.codex/config.toml` works in trusted projects).
 
 ```toml
 [mcp_servers.auditor]

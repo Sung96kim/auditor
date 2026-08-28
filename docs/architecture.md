@@ -28,6 +28,7 @@ Paths are relative to the repo root.
   owns it.
 - `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagent, hooks,
   statusline, bundled MCP config).
+- `assets/` holds the project icon and the vendored runner marks. See `assets/README.md`.
 
 ## Shared seams
 

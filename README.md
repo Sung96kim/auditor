@@ -52,15 +52,18 @@ docker compose run --rm auditor scan .
   `auditr[graph]` install commands and `uv tool` receipts keep resolving. It costs every install
   about 175 MB: scipy 91 MB (a transitive dependency of scikit-learn), scikit-learn 36 MB,
   numpy 33 MB, networkx 13 MB, snowballstemmer 2 MB.
-- `observer-claude` is what `auditr graph refine` needs: it pulls `claude-agent-sdk`, which bundles
-  its own 342 MB `claude` binary. Install it with `pip install "auditr[observer-claude]"` only if
-  you want model-driven refinement; every other command works without it.
+- <img src="assets/claude-color.svg" height="16" alt="Claude"> `observer-claude` is what `auditr
+  graph refine` needs: it pulls `claude-agent-sdk`, which bundles its own 342 MB `claude` binary.
+  Install it with `pip install "auditr[observer-claude]"` only if you want model-driven
+  refinement; every other command works without it.
 - `observer` is the superset and enables `auditr graph refine` the same way `observer-claude`
-  does, since it pulls `claude-agent-sdk` too. `observer-codex` and `vectors` are declared and
-  nothing uses them yet. Each pulls a large SDK, so leave them out until a release says otherwise.
-- Claude Code plugin: `claude plugin marketplace add Sung96kim/auditor`, then
-  `/plugin install auditor` in a session. See
-  [claude-code-plugin](docs/references/claude-code-plugin.md).
+  does, since it pulls `claude-agent-sdk` too.
+- <img src="assets/codex-color.svg" height="16" alt="Codex"> `observer-codex` and `vectors` are
+  declared and nothing uses them yet. Each pulls a large SDK, so leave them out until a release
+  says otherwise.
+- <img src="assets/claude-color.svg" height="16" alt="Claude"> Claude Code plugin:
+  `claude plugin marketplace add Sung96kim/auditor`, then `/plugin install auditor` in a session.
+  See [claude-code-plugin](docs/references/claude-code-plugin.md).
 
 ## Usage
 

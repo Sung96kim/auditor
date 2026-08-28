@@ -3,7 +3,8 @@
 A deterministic code auditor. Three console scripts (`pyproject.toml` `[project.scripts]`):
 `auditr` (CLI) and `auditr-mcp` (stdio MCP server), each with an `auditor`-prefixed alias, plus
 `auditr-observer` (the observer client, a stdlib-only module at the repo root). `auditor/` is the
-package, `plugin/` the Claude Code plugin, `tests/` mirrors the package.
+package, `plugin/` the Claude Code plugin, `assets/` the project icon and vendored runner marks,
+`tests/` mirrors the package.
 [docs/architecture.md](docs/architecture.md) explains how the pieces fit; read it before
 restructuring anything.
 
