@@ -20,6 +20,7 @@ from auditor.graph.refine.models import (
     RunnerKind,
 )
 from auditor.graph.refine.payloads import RefinePayload
+from auditor.graph.refine.runner import FakeRun
 from auditor.graph.refine.service import RefinementService
 
 
@@ -203,20 +204,22 @@ def test_a_dot_slash_scope_is_the_directory_under_it(refine_repo, claude_runner)
 class ThreeKinds(ClaudeShaped):
     """A run that lands one of each: an edge that waits for a human, and two that do not."""
 
-    script = (
-        SCRIPTED_PROPOSAL,
-        {
-            "kind": "annotate_node",
-            "target": {"node_id": "caller.py::main"},
-            "payload": {"annotation": "the entry point"},
-            "reason": "main is the only caller in this module",
-        },
-        {
-            "kind": "unresolvable",
-            "target": {"node_id": "helper.py::read_event", "name": "loads"},
-            "payload": {"reason_code": "dynamic_dispatch"},
-            "reason": "the name is looked up at run time",
-        },
+    pretends = FakeRun(
+        script=(
+            SCRIPTED_PROPOSAL,
+            {
+                "kind": "annotate_node",
+                "target": {"node_id": "caller.py::main"},
+                "payload": {"annotation": "the entry point"},
+                "reason": "main is the only caller in this module",
+            },
+            {
+                "kind": "unresolvable",
+                "target": {"node_id": "helper.py::read_event", "name": "loads"},
+                "payload": {"reason_code": "dynamic_dispatch"},
+                "reason": "the name is looked up at run time",
+            },
+        )
     )
 
 

@@ -24,7 +24,12 @@ from auditor.graph.refine.models import (
     Verdict,
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA, RunAnswer
-from auditor.graph.refine.runner import PROPOSE_TOOL, FakeRunner, RefinementJob
+from auditor.graph.refine.runner import (
+    PROPOSE_TOOL,
+    FakeRun,
+    FakeRunner,
+    RefinementJob,
+)
 from auditor.graph.refine.service import RefinementService
 
 GOOD = Proposal(
@@ -44,7 +49,7 @@ INVALID = {"kind": "add_edge", "target": {}, "reason": ""}
 async def test_a_scripted_run_lands_its_proposal_and_records_how(
     refine_service: RefinementService,
 ):
-    runner = FakeRunner(refine_service, script=[GOOD])
+    runner = FakeRunner(refine_service, pretend=FakeRun(script=[GOOD]))
     await runner.run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
     assert (row.status, row.runner) == (RunStatus.SUCCEEDED, RunnerKind.FAKE)
@@ -60,7 +65,7 @@ async def test_the_brief_the_run_records_is_the_brief_it_was_given(
     refine_service: RefinementService,
 ):
     """Invariant 2 wants the verbatim prompt, so a later reader can see what was asked."""
-    runner = FakeRunner(refine_service, script=[GOOD])
+    runner = FakeRunner(refine_service, pretend=FakeRun(script=[GOOD]))
     await runner.run(RefinementJob(scope="impl.py"))
     (row,) = await refine_service.index.runs.runs()
     assert "scope: impl.py" in (row.prompt or "")
@@ -87,7 +92,9 @@ async def test_the_producers_own_summary_is_what_the_row_records(
 ):
     """The system prompt asks for that line, so it has to reach the human who reads the run."""
     answer = RunAnswer(summary="one edge", proposed=1, stopped_because="done")
-    await FakeRunner(refine_service, script=[GOOD], answer=answer).run(RefinementJob())
+    await FakeRunner(refine_service, pretend=FakeRun(script=[GOOD], answer=answer)).run(
+        RefinementJob()
+    )
     (row,) = await refine_service.index.runs.runs()
     assert row.summary == "one edge"
 
@@ -95,7 +102,9 @@ async def test_the_producers_own_summary_is_what_the_row_records(
 async def test_a_producer_with_nothing_to_say_leaves_the_counted_line(
     refine_service: RefinementService,
 ):
-    await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
+    await FakeRunner(refine_service, pretend=FakeRun(script=[GOOD])).run(
+        RefinementJob()
+    )
     (row,) = await refine_service.index.runs.runs()
     assert row.summary == "1 committed, 0 rejected"
 
@@ -105,7 +114,9 @@ async def test_a_runner_that_gives_up_aborts_the_run_and_stores_nothing(
 ):
     """Invariant 2: the row exists with its cost, but `abort` promises nothing, so it keeps
     nothing."""
-    await FakeRunner(refine_service, script=[GOOD], stop="boom").run(RefinementJob())
+    await FakeRunner(refine_service, pretend=FakeRun(script=[GOOD], stop="boom")).run(
+        RefinementJob()
+    )
     (row,) = await refine_service.index.runs.runs()
     assert (row.status, row.error) == (RunStatus.ABORTED, "boom")
     assert row.usage.num_turns == 2
@@ -116,7 +127,9 @@ async def test_a_refused_proposal_is_stored_and_the_run_still_succeeds(
     refine_service: RefinementService,
 ):
     """Spec 9.2 stores every rejection, and one bad proposal is not a failed run."""
-    await FakeRunner(refine_service, script=[INVALID]).run(RefinementJob())
+    await FakeRunner(refine_service, pretend=FakeRun(script=[INVALID])).run(
+        RefinementJob()
+    )
     (row,) = await refine_service.index.runs.runs()
     assert row.status is RunStatus.SUCCEEDED
     stored = await refine_service.index.refinements.of_run(row.run_id)
@@ -138,7 +151,9 @@ async def test_a_commit_the_service_refuses_is_not_followed_by_an_abort(
 
     monkeypatch.setattr(refine_service, "terminate", spy)
     async with rebuild_lock(refine_service.identity):
-        await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
+        await FakeRunner(refine_service, pretend=FakeRun(script=[GOOD])).run(
+            RefinementJob()
+        )
     (row,) = await refine_service.index.runs.runs()
     assert row.status is RunStatus.FAILED
     assert "rebuild lock" in (row.error or "")
@@ -188,7 +203,9 @@ async def test_the_product_carries_what_the_commit_landed(
 ):
     """Both surfaces report the verdicts, so the commit result travels with the outcome rather
     than being re-derived from the stored rows, which keep no verify status."""
-    product = await FakeRunner(refine_service, script=[GOOD]).run(RefinementJob())
+    product = await FakeRunner(refine_service, pretend=FakeRun(script=[GOOD])).run(
+        RefinementJob()
+    )
     assert product.landed is not None
     assert product.landed.landed == 1
     assert [v.kind for v in product.landed.committed] == [RefinementKind.ADD_EDGE]
@@ -197,9 +214,9 @@ async def test_the_product_carries_what_the_commit_landed(
 async def test_a_run_that_did_not_commit_landed_nothing(
     refine_service: RefinementService,
 ):
-    product = await FakeRunner(refine_service, script=[GOOD], stop="boom").run(
-        RefinementJob()
-    )
+    product = await FakeRunner(
+        refine_service, pretend=FakeRun(script=[GOOD], stop="boom")
+    ).run(RefinementJob())
     assert product.landed is None
 
 
@@ -208,9 +225,9 @@ async def test_an_unshapeable_proposal_is_traced_and_the_run_still_closes(
 ):
     """`_judge` refuses a payload no `Proposal` can be read out of, and an unguarded producer
     would leave its own run open on the way out."""
-    await FakeRunner(refine_service, script=[{"kind": "not_a_kind"}]).run(
-        RefinementJob()
-    )
+    await FakeRunner(
+        refine_service, pretend=FakeRun(script=[{"kind": "not_a_kind"}])
+    ).run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
     assert row.status is RunStatus.SUCCEEDED
     assert row.finished_at is not None
@@ -224,7 +241,8 @@ async def test_a_runner_can_stop_a_run_failed_as_well_as_aborted(
     """spec 5.3 keeps `aborted` for a cap and `failed` for a producer that broke, so a producer
     has to be able to say which."""
     await FakeRunner(
-        refine_service, stop="the client died", stop_status=RunStatus.FAILED
+        refine_service,
+        pretend=FakeRun(stop="the client died", stop_status=RunStatus.FAILED),
     ).run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
     assert (row.status, row.error) == (RunStatus.FAILED, "the client died")
@@ -260,7 +278,7 @@ async def test_a_proposer_replaces_the_service_and_stores_nothing(
         seen.append((run_id, str(raw.get("kind"))))
         return Verdict(outcome=ProposalOutcome.STAGED, kind=RefinementKind.ADD_EDGE)
 
-    runner = FakeRunner(refine_service, proposer=judge, script=[GOOD])
+    runner = FakeRunner(refine_service, proposer=judge, pretend=FakeRun(script=[GOOD]))
     product = await runner.run(RefinementJob())
     assert [kind for _, kind in seen] == ["add_edge"]
     assert seen[0][0] == product.run.run_id
@@ -274,7 +292,9 @@ async def test_the_proposers_verdict_is_what_the_trace_records(
     async def judge(_run_id: str, _raw: Mapping[str, Any]) -> Verdict:
         return Verdict(outcome=ProposalOutcome.REJECTED, kind=RefinementKind.ADD_EDGE)
 
-    await FakeRunner(refine_service, proposer=judge, script=[GOOD]).run(RefinementJob())
+    await FakeRunner(
+        refine_service, proposer=judge, pretend=FakeRun(script=[GOOD])
+    ).run(RefinementJob())
     (row,) = await refine_service.index.runs.runs()
     assert [call.detail for call in row.tool_trace] == [ProposalOutcome.REJECTED.value]
 

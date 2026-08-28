@@ -9,7 +9,7 @@ nothing here may import it back.
 import logging
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
@@ -155,12 +155,26 @@ class RefinementRunner(ABC):
         return ToolCall(tool=PROPOSE_TOOL, ts=time.time(), detail=detail)
 
 
-class FakeRunner(RefinementRunner):
-    """A runner that replays a scripted set of proposals, so the whole path runs with no SDK.
+class FakeRun(BaseModel):
+    """What one `FakeRunner` pretends its run did, so the double takes one shape not five knobs.
 
     ``stop`` drives the non-succeeded half: the status is the caller's, so `failed` is reachable
     here rather than only through a real client.
     """
+
+    model_config = ConfigDict(frozen=True)
+
+    script: tuple[Mapping[str, Any], ...] = ()
+    #: a producer's own closing line; without one the row counts the rows it landed
+    answer: RunAnswer | None = None
+    stop: str | None = None
+    stop_status: RunStatus = RunStatus.ABORTED
+    #: what this run reports having spent; without one it counts its own turns and nothing else
+    usage: RunUsage | None = None
+
+
+class FakeRunner(RefinementRunner):
+    """A runner that replays a scripted set of proposals, so the whole path runs with no SDK."""
 
     kind: ClassVar[RunnerKind] = RunnerKind.FAKE
 
@@ -170,32 +184,25 @@ class FakeRunner(RefinementRunner):
         client_factory: ClientFactory | None = None,
         *,
         proposer: Proposer | None = None,
-        script: Sequence[Mapping[str, Any]] = (),
-        answer: RunAnswer | None = None,
-        stop: str | None = None,
-        stop_status: RunStatus = RunStatus.ABORTED,
-        usage: RunUsage | None = None,
+        pretend: FakeRun | None = None,
     ) -> None:
         super().__init__(service, client_factory, proposer=proposer)
-        self.script = script
-        self.answer = answer
-        self.stop = stop
-        self.stop_status = stop_status
-        # what this run reports having spent; without one it counts its own turns and nothing else
-        self.usage = usage
+        self.pretend = pretend or FakeRun()
 
     async def run(self, job: RefinementJob) -> RunProduct:
         run, brief = await self._open(job)
-        trace = [await self._propose_one(run.run_id, p) for p in self.script]
+        pretend = self.pretend
+        trace = [await self._propose_one(run.run_id, p) for p in pretend.script]
         attribution = RunAttribution(
-            usage=self.usage or RunUsage(num_turns=len(self.script) + 1),
+            usage=pretend.usage or RunUsage(num_turns=len(pretend.script) + 1),
             tool_trace=tuple(trace),
-            # only a scripted answer is a producer's own line; without one the row counts its rows
-            summary=self.answer.summary if self.answer is not None else None,
+            summary=pretend.answer.summary if pretend.answer is not None else None,
         )
         outcome = (
-            RunOutcome.of(self.stop_status, error=self.stop, attribution=attribution)
-            if self.stop is not None
+            RunOutcome.of(
+                pretend.stop_status, error=pretend.stop, attribution=attribution
+            )
+            if pretend.stop is not None
             else RunOutcome.of(RunStatus.SUCCEEDED, attribution=attribution)
         )
         return await self._close(run, brief, outcome)

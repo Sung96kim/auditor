@@ -394,7 +394,9 @@ async def test_the_bound_propose_tool_answers_with_the_verdict(
     refine_service: RefinementService,
 ):
     run = await refine_service.begin()
-    tools = BoundTools(service=refine_service, run_id=run.run_id)
+    tools = BoundTools(
+        service=refine_service, run_id=run.run_id, proposer=refine_service.propose
+    )
     answer = await tools.propose(GOOD)
     assert "is_error" not in answer
     assert json.loads(answer["content"][0]["text"])["outcome"] == "staged"
@@ -403,7 +405,9 @@ async def test_the_bound_propose_tool_answers_with_the_verdict(
 async def test_the_bound_propose_tool_reports_a_refusal_as_an_error(
     refine_service: RefinementService,
 ):
-    tools = BoundTools(service=refine_service, run_id="no-such-run")
+    tools = BoundTools(
+        service=refine_service, run_id="no-such-run", proposer=refine_service.propose
+    )
     answer = await tools.propose(GOOD)
     assert answer["is_error"] is True
     assert "not open in this process" in answer["content"][0]["text"]
@@ -413,7 +417,9 @@ async def test_the_bound_brief_tool_shows_the_verdicts_so_far(
     refine_service: RefinementService,
 ):
     run = await refine_service.begin()
-    tools = BoundTools(service=refine_service, run_id=run.run_id)
+    tools = BoundTools(
+        service=refine_service, run_id=run.run_id, proposer=refine_service.propose
+    )
     await tools.propose(GOOD)
     text = (await tools.brief({}))["content"][0]["text"]
     assert "Verdicts so far" in text and "staged" in text
@@ -423,7 +429,9 @@ async def test_the_hook_records_one_call_per_tool_use(
     refine_service: RefinementService,
 ):
     run = await refine_service.begin()
-    tools = BoundTools(service=refine_service, run_id=run.run_id)
+    tools = BoundTools(
+        service=refine_service, run_id=run.run_id, proposer=refine_service.propose
+    )
     await tools.record(
         {"tool_name": "Read", "tool_input": {"file_path": "a.py"}, "duration_ms": 5}
     )
@@ -673,7 +681,9 @@ def test_only_an_answer_the_schema_accepts_is_an_answer(raw, kept):
 def test_the_bound_table_is_the_one_the_prompt_names(refine_service: RefinementService):
     """Three modules used to have to agree on these two names; now one table carries them, and
     this is the pin that says so without the SDK installed."""
-    tools = BoundTools(service=refine_service, run_id="run-1")
+    tools = BoundTools(
+        service=refine_service, run_id="run-1", proposer=refine_service.propose
+    )
     table = tools.tools()
     assert tuple(t.name for t in table) == GRAPH_TOOLS
     assert tuple(t.handler.__name__ for t in table) == GRAPH_TOOLS

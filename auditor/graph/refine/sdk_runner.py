@@ -213,8 +213,8 @@ class BoundTools(BaseModel):
 
     service: RefinementService
     run_id: str
-    #: an eval's judge; ``None`` means the service stores the proposal as a real run would
-    proposer: Proposer | None = None
+    #: where a proposal goes: the service's own `propose`, or an eval's judge
+    proposer: Proposer
     trace: list[ToolCall] = Field(default_factory=list)
 
     def tools(self) -> tuple[BoundTool, ...]:
@@ -241,9 +241,8 @@ class BoundTools(BaseModel):
 
     async def propose(self, args: Mapping[str, Any]) -> dict[str, Any]:
         """Stage one proposal against this run and answer with the verdict."""
-        propose = self.proposer or self.service.propose
         try:
-            verdict = await propose(self.run_id, args)
+            verdict = await self.proposer(self.run_id, args)
         except RefinementRefused as exc:
             return _content(str(exc), is_error=True)
         return _content(verdict.model_dump_json())

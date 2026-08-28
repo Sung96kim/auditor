@@ -50,7 +50,9 @@ PINNED = SdkOptions(
 
 @pytest.fixture
 def built(refine_service):
-    tools = BoundTools(service=refine_service, run_id="run-1")
+    tools = BoundTools(
+        service=refine_service, run_id="run-1", proposer=refine_service.propose
+    )
     return sdk_options(PINNED, tools)
 
 
