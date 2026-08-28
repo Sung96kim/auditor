@@ -112,9 +112,22 @@ EVAL_LIB = "def direct_target(uid):\n    return uid\n"
 EVAL_OTHER = "def match(text):\n    return text\n"
 EVAL_PKG_INIT = "from pkg.deep import reexported\n"
 EVAL_PKG_DEEP = "def reexported(uid):\n    return uid\n"
-# `same_target` again under a test role: a decoy for the truth, never a definer of it
+# `same_target` again under a test role: a decoy for the truth, never a definer of it. `uses_same`
+# calls it in its own module, so the edge resolves to a test-role node while the one role-filtered
+# definer of that name is `m.py::same_target` -- D1's strict rule, and only that rule, drops it
 EVAL_TEST_STUB = (
-    "def only_in_tests(uid):\n    return uid\n\ndef same_target(uid):\n    return uid\n"
+    "def only_in_tests(uid):\n    return uid\n\n"
+    "def same_target(uid):\n    return uid\n\n"
+    "def uses_same(uid):\n    return same_target(uid)\n"
+)
+# an attribute call that does resolve, so only the call-form filter can leave it out
+EVAL_ATTRS = (
+    "from m import Holder\n\n_H = Holder()\n\ndef via_attr():\n    return _H.helper()\n"
+)
+# a bare call the node binds itself, which `form_for` reports no form for, and nothing else drops
+EVAL_SHADOW = (
+    "from lib import direct_target\n\n"
+    "def shadowed_call(direct_target):\n    return direct_target(1)\n"
 )
 EVAL_POPULATION = {
     # the `refine_repo` pair as well, so one fixture holds both the suites' truths and a tier B
@@ -126,6 +139,8 @@ EVAL_POPULATION = {
     "pkg/__init__.py": EVAL_PKG_INIT,
     "pkg/deep.py": EVAL_PKG_DEEP,
     "tests/stub.py": EVAL_TEST_STUB,
+    "attrs.py": EVAL_ATTRS,
+    "shadow.py": EVAL_SHADOW,
 }
 
 

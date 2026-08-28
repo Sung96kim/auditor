@@ -30,7 +30,7 @@ from auditor.graph.refine.models import (
     TriggerKind,
 )
 from auditor.graph.refine.prompts import STRUCTURED_OUTPUT_TOOL
-from auditor.graph.refine.runner import FakeRunner, RefinementRunner
+from auditor.graph.refine.runner import FakeRun, FakeRunner, RefinementRunner
 from auditor.graph.refine.sdk_runner import BoundTools, SdkOptions
 from auditor.graph.refine.service import RefinementService
 from auditor.mcp import mcp
@@ -254,21 +254,25 @@ SCRIPTED_PROPOSAL: Mapping[str, Any] = MappingProxyType(
 
 
 def eval_build(
-    answers: Mapping[tuple[str, str], Mapping[str, Any]], **kwargs: Any
+    answers: Mapping[tuple[str, str], Mapping[str, Any]], pretend: FakeRun | None = None
 ) -> Callable[[RefinementService, Proposer], RefinementRunner]:
-    """A `run_eval` runner factory that replays the answer prepared for each masked row.
+    """An `EvalRun` runner factory that replays the answer prepared for each masked row.
 
     The batch's own rows are on the service it is handed, so a scripted eval needs no second copy
-    of what `sample` drew.
+    of what the draw made.
     """
 
     def build(service: RefinementService, proposer: Proposer) -> RefinementRunner:
-        script = [
+        script = tuple(
             answers[key]
             for row in service.facts.synthetic
             if (key := (row.node_id, row.name)) in answers
-        ]
-        return FakeRunner(service, proposer=proposer, script=script, **kwargs)
+        )
+        return FakeRunner(
+            service,
+            proposer=proposer,
+            pretend=(pretend or FakeRun()).model_copy(update={"script": script}),
+        )
 
     return build
 
@@ -281,8 +285,7 @@ class ClaudeShaped(FakeRunner):
     """
 
     kind: ClassVar[RunnerKind] = RunnerKind.CLAUDE
-    script: ClassVar[tuple[Mapping[str, Any], ...]] = (SCRIPTED_PROPOSAL,)
-    stops: ClassVar[str | None] = None
+    pretends: ClassVar[FakeRun] = FakeRun(script=(SCRIPTED_PROPOSAL,))
 
     def __init__(
         self,
@@ -290,9 +293,8 @@ class ClaudeShaped(FakeRunner):
         client_factory: ClientFactory | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(
-            service, client_factory, script=self.script, stop=self.stops, **kwargs
-        )
+        kwargs.setdefault("pretend", self.pretends)
+        super().__init__(service, client_factory, **kwargs)
 
 
 class EvalClaude(ClaudeShaped):
@@ -310,7 +312,9 @@ class EvalClaude(ClaudeShaped):
         **kwargs: Any,
     ) -> None:
         super().__init__(service, client_factory, **kwargs)
-        self.script = tuple(answer_for(row) for row in service.facts.synthetic)
+        self.pretend = self.pretend.model_copy(
+            update={"script": tuple(answer_for(row) for row in service.facts.synthetic)}
+        )
 
 
 def answer_for(row: UnresolvedRow) -> dict[str, Any]:
@@ -359,7 +363,9 @@ class WrongEvalClaude(EvalClaude):
         **kwargs: Any,
     ) -> None:
         super().__init__(service, client_factory, **kwargs)
-        self.script = tuple(_misdirected(p) for p in self.script)
+        self.pretend = self.pretend.model_copy(
+            update={"script": tuple(_misdirected(p) for p in self.pretend.script)}
+        )
 
 
 def _misdirected(proposal: Mapping[str, Any]) -> dict[str, Any]:
@@ -372,8 +378,7 @@ def _misdirected(proposal: Mapping[str, Any]) -> dict[str, Any]:
 class FailingClaude(ClaudeShaped):
     """The same runner, giving up rather than committing."""
 
-    script: ClassVar[tuple[Mapping[str, Any], ...]] = ()
-    stops: ClassVar[str | None] = "the model gave up"
+    pretends: ClassVar[FakeRun] = FakeRun(stop="the model gave up")
 
 
 def hook_payload(

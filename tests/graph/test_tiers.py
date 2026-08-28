@@ -4,10 +4,8 @@ import pytest
 
 from auditor.graph.model import CallForm, EdgeKind, UnresolvedRow
 from auditor.graph.refine.models import (
-    CONTROL_STRATUM,
     EvalMetrics,
     EvalRow,
-    EvalStratum,
     Proposal,
     RefinementKind,
     RefinementPayload,
@@ -46,7 +44,7 @@ def _eval(
     *,
     lower: float = 1.0,
     false_adds: float = 0.0,
-    stratum: EvalStratum | None = None,
+    stratum: Stratum | None = None,
     n: int = 80,
 ) -> EvalRow:
     """One stored row; every suite but `add` is stored under the one control stratum (P2)."""
@@ -55,7 +53,7 @@ def _eval(
         runner=RunnerKind.CLAUDE,
         model="haiku",
         suite=suite,
-        stratum=stratum or (Stratum.SAME_MODULE if suite == "add" else CONTROL_STRATUM),
+        stratum=stratum or (Stratum.SAME_MODULE if suite == "add" else Stratum.ALL),
         metrics=EvalMetrics(n=n, lower_bound_95=lower, false_add_rate=false_adds),
     )
 
@@ -287,8 +285,8 @@ def test_tier_c_is_always_pending():
 def test_a_control_suite_is_read_from_its_one_stratum():
     """P2: controls are stored under `all`, which is what the gate finds without a stratum."""
     policy = _proven(_eval("add"), _eval("collision", lower=0.0), _eval("decoy"))
-    assert ("collision", CONTROL_STRATUM) in policy.proven
-    assert ("decoy", CONTROL_STRATUM) in policy.proven
+    assert ("collision", Stratum.ALL) in policy.proven
+    assert ("decoy", Stratum.ALL) in policy.proven
     assert (
         policy.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.SAME_MODULE)
         is RefinementStatus.ACTIVE

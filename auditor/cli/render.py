@@ -56,6 +56,8 @@ from auditor.graph.refine.models import (
     SuiteTally,
     Verdict,
     flawless_floor,
+    key_of,
+    wilson_lower,
 )
 from auditor.graph.refine.payloads import BriefPayload, EvalReport, RefinePayload
 from auditor.user_settings import UserSettings
@@ -283,6 +285,7 @@ _EVAL_COLUMNS = (
     "correct",
     "wrong",
     "false adds",
+    "off target",
     "precision",
     "recall",
     "lower 95",
@@ -420,30 +423,46 @@ def _landed_note(out: Console, landed: tuple[Verdict, ...]) -> None:
 
 
 def render_graph_eval(out: Console, payload: EvalReport) -> None:
+    plan = payload.plan
+    runs = f"{plan.runs_planned} run{'' if plan.runs_planned == 1 else 's'}"
     out.print(
-        f"[dim]{payload.runs_planned} runs planned for {payload.model or 'the configured model'}"
-        f", each capped by max_budget_usd_per_run[/dim]"
+        f"[dim]{runs} planned for {payload.model}, each capped at "
+        f"${plan.max_budget_usd_per_run:.2f} and this eval at "
+        f"${plan.max_budget_usd_per_eval:.2f}[/dim]",
+        highlight=False,
     )
+    for line in plan.strata:
+        out.print(f"[dim]{line}[/dim]")
     if not payload.suites:
         out.print("[dim](nothing measured)[/dim]")
     else:
         t = _headed_table(_EVAL_COLUMNS)
         for got in payload.suites:
-            t.add_row(*_eval_cells(got, proven=payload.proven))
+            t.add_row(*_eval_cells(got, proven=payload.activation.proven))
         out.print(t)
-    for line in (*payload.short, *payload.empty, *payload.unprovable):
-        out.print(f"[dim]{line}[/dim]")
+    _eval_notes(out, payload)
     out.print(
-        f"[dim]{payload.runs} of {payload.runs_planned} runs measured, "
+        f"[dim]{payload.runs} of {plan.runs_planned} runs measured, "
         f"${payload.cost_usd:.4f} spent[/dim]",
         highlight=False,
     )
     _activation_note(out, payload)
 
 
+def _eval_notes(out: Console, payload: EvalReport) -> None:
+    """Every list the report carries, each said as the question it answers."""
+    notes = payload.notes
+    for line in (*notes.short, *notes.empty, *notes.stopped, *notes.off_target):
+        out.print(f"[dim]{line}[/dim]")
+    for line in notes.unprovable_drawn:
+        out.print(f"[dim]unprovable as drawn, {line}[/dim]")
+    for line in notes.unprovable_judged:
+        out.print(f"[dim]unprovable as judged, {line}[/dim]")
+
+
 def _eval_cells(got: SuiteTally, *, proven: tuple[str, ...]) -> tuple[str, ...]:
     """One measured stratum's row; a proven key is marked where the gate reads it."""
-    key = f"{got.suite}/{got.stratum}"
+    key = key_of(got.suite, got.stratum)
     metrics = got.metrics
     return (
         f"{key} [green]OK[/]" if key in proven else key,
@@ -451,29 +470,45 @@ def _eval_cells(got: SuiteTally, *, proven: tuple[str, ...]) -> tuple[str, ...]:
         str(got.correct),
         str(got.wrong),
         str(got.false_adds),
+        str(got.off_target),
         f"{metrics.precision:.3f}",
         f"{metrics.recall:.3f}",
         f"{metrics.lower_bound_95:.3f}",
-        f"${got.cost_usd:.4f}",
-        str(got.num_turns),
-        str(got.runs),
+        f"${got.spend.cost_usd:.4f}",
+        str(got.spend.num_turns),
+        str(got.spend.runs),
     )
 
 
 def _activation_note(out: Console, payload: EvalReport) -> None:
-    """What this eval just made activatable, and what it would take when nothing is."""
-    strata = sorted(
-        key.removeprefix("add/") for key in payload.proven if key.startswith("add/")
-    )
-    ambiguous = "yes" if "decoy/all" in payload.proven else "no"
-    tier_b = ", ".join(strata) if strata else "no stratum"
+    """What this eval made activatable, read off the gate, and what it would take when nothing is.
+
+    Never re-derived from `proven`: tier B needs its add stratum and the collision control, and a
+    report that read only the first half would say active where the ledger stores pending.
+    """
+    activation = payload.activation
+    ambiguous = "yes" if activation.resolve_ambiguous else "no"
+    tier_b = ", ".join(activation.tier_b) if activation.tier_b else "no stratum"
     out.print(f"[dim]resolve_ambiguous: {ambiguous}; tier B active for {tier_b}[/dim]")
-    if not payload.proven:
-        floor = flawless_floor(payload.min_precision)
+    if not activation.proven:
+        _floor_note(out, payload)
+
+
+def _floor_note(out: Console, payload: EvalReport) -> None:
+    """The smallest flawless run that could clear this bar, or that none can."""
+    floor = flawless_floor(payload.min_precision)
+    if floor is None:
         out.print(
-            f"[dim]{floor} flawless trials are the smallest run that clears "
-            f"{payload.min_precision} (80 give 0.954)[/dim]"
+            f"[dim]no run of any size clears {payload.min_precision}[/dim]",
+            highlight=False,
         )
+        return
+    drew = payload.plan.sample
+    out.print(
+        f"[dim]{floor} flawless trials are the smallest run that clears "
+        f"{payload.min_precision} ({drew} give {wilson_lower(drew, drew):.3f})[/dim]",
+        highlight=False,
+    )
 
 
 def render_graph_brief(out: Console, payload: BriefPayload) -> None:

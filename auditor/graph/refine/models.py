@@ -7,7 +7,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import (
     BaseModel,
@@ -241,16 +241,23 @@ class RunUsage(BaseModel):
 
 
 class Stratum(StrEnum):
-    """The add suite's strata (spec 10.2): how far a proposal's destination is from its source.
+    """Where a measured row belongs: an add stratum, or the one bucket a control is stored under.
 
-    The tier B gate reads the one matching the proposal's own shape, because a repo's strata do
-    not measure alike; here they hold 1,021 / 1,321 / 38 of the add suite's truths, out of 5,590
-    resolved `calls` edges splitting 49 / 46 / 5 per cent.
+    The tier B gate reads the add stratum matching the proposal's own shape, because a repo's
+    strata do not measure alike; here they hold 883 / 1,321 / 38 of the add suite's truths, out of
+    5,590 resolved `calls` edges splitting 49 / 46 / 5 per cent.
     """
 
     SAME_MODULE = "same-module"
     DIRECT_IMPORT = "direct-import"
     NEITHER = "neither"
+    #: every control suite's one bucket, so one type covers both halves of a stored row (spec 10.2)
+    ALL = "all"
+
+    @classmethod
+    def add_strata(cls) -> tuple["Stratum", ...]:
+        """The three the add suite draws, which is every member `of` can answer with."""
+        return (cls.SAME_MODULE, cls.DIRECT_IMPORT, cls.NEITHER)
 
     @classmethod
     def of(cls, src: str, dst: str, *, imports: Collection[str]) -> "Stratum":
@@ -262,11 +269,13 @@ class Stratum(StrEnum):
         return cls.DIRECT_IMPORT if dst_module in imports else cls.NEITHER
 
 
-#: the one stratum every control suite is stored under (spec 10.2)
-CONTROL_STRATUM = "all"
+def key_of(suite: str, stratum: Stratum) -> str:
+    """How a report and a go/no-go name one measured stratum.
 
-#: what a stored eval row's stratum column may say: an add stratum, or the controls' one bucket
-EvalStratum = Stratum | Literal["all"]
+    The one builder: a reader that needs the halves back reads the row's own fields, never this
+    string taken apart again.
+    """
+    return f"{suite}/{stratum}"
 
 
 class EvalMetrics(BaseModel):
@@ -951,7 +960,7 @@ class EvalRow(BaseModel):
     runner: RunnerKind
     model: str
     suite: str
-    stratum: EvalStratum
+    stratum: Stratum
     metrics: EvalMetrics = EvalMetrics()
     cost_usd: float = 0.0
     num_turns: int = 0
@@ -978,6 +987,12 @@ ALL_SUITES = (EvalSuite.ADD, EvalSuite.COLLISION, EvalSuite.NEGATIVE, EvalSuite.
 #: the suites a Wilson bound gates, the only ones a flawless floor can rule out (spec 10.2)
 PRECISION_SUITES = (EvalSuite.ADD, EvalSuite.DECOY)
 
+#: the two call forms a tier B proposal can be made of, which is what the add suite draws from
+BOUNDED_FORMS = (CallForm.BARE, CallForm.SELF)
+
+#: how far the flawless floor search goes before it answers "no run of any size clears this"
+FLAWLESS_FLOOR_MAX = 10_000
+
 
 def wilson_lower(correct: int, total: int, *, z: float = 1.96) -> float:
     """The Wilson score interval's lower bound for ``correct`` of ``total``, ``0.0`` on no trials.
@@ -994,16 +1009,35 @@ def wilson_lower(correct: int, total: int, *, z: float = 1.96) -> float:
     return max(0.0, (centre - spread) / denominator)
 
 
-def flawless_floor(min_precision: float, *, z: float = 1.96) -> int:
+def flawless_floor(min_precision: float, *, z: float = 1.96) -> int | None:
     """The smallest number of trials whose flawless run clears ``min_precision`` (spec 10.4).
 
     73 at the default 0.95, so a stratum with fewer truths than that on a repo cannot be proven
-    there however well a runner does.
+    there however well a runner does. Searches to `FLAWLESS_FLOOR_MAX` trials and answers ``None``
+    beyond it, because `wilson_lower(n, n)` is below 1.0 for every finite ``n``.
     """
-    n = 1
-    while wilson_lower(n, n, z=z) < min_precision:
-        n += 1
-    return n
+    for n in range(1, FLAWLESS_FLOOR_MAX + 1):
+        if wilson_lower(n, n, z=z) >= min_precision:
+            return n
+    return None
+
+
+class SuiteSpend(BaseModel):
+    """What one stratum's runs cost, summed off the closed rows (spec 5.3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cost_usd: float = 0.0
+    num_turns: int = 0
+    runs: int = 0
+
+    def plus(self, usage: RunUsage) -> "SuiteSpend":
+        """This spend with one more closed run's usage added."""
+        return SuiteSpend(
+            cost_usd=self.cost_usd + usage.cost_usd,
+            num_turns=self.num_turns + usage.num_turns,
+            runs=self.runs + 1,
+        )
 
 
 class SuiteTally(BaseModel):
@@ -1015,15 +1049,16 @@ class SuiteTally(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     suite: str
-    stratum: EvalStratum
+    stratum: Stratum
     n: int = 0
     correct: int = 0
     wrong: int = 0
     missed: int = 0
+    #: false adds against a trial, plus the off-target adds a real run would have refused
     false_adds: int = 0
-    cost_usd: float = 0.0
-    num_turns: int = 0
-    runs: int = 0
+    #: proposals about a node and name no trial in the batch asked about, scored or not
+    off_target: int = 0
+    spend: SuiteSpend = SuiteSpend()
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -1049,8 +1084,8 @@ class SuiteTally(BaseModel):
             suite=self.suite,
             stratum=self.stratum,
             metrics=self.metrics,
-            cost_usd=self.cost_usd,
-            num_turns=self.num_turns,
+            cost_usd=self.spend.cost_usd,
+            num_turns=self.spend.num_turns,
         )
 
 

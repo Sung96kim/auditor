@@ -15,7 +15,7 @@ from auditor.graph.model import (
     CallForm,
     UnresolvedReason,
 )
-from auditor.graph.refine.models import RefinementStatus
+from auditor.graph.refine.models import ALL_SUITES, RefinementStatus
 from auditor.models import RuleId
 
 ScanTarget = Annotated[Path, typer.Argument(help="File or directory to audit.")]
@@ -264,7 +264,7 @@ RefineModel = Annotated[
 ]
 EvalSample = Annotated[
     int,
-    typer.Option("--sample", min=1, max=500, help="Trials per stratum (default 80)."),
+    typer.Option("--sample", min=1, max=500, help="Trials per stratum."),
 ]
 EvalSeed = Annotated[
     int, typer.Option("--seed", help="Seed the draw, so a run repeats exactly.")
@@ -272,7 +272,8 @@ EvalSeed = Annotated[
 EvalSuiteOption = Annotated[
     str,
     typer.Option(
-        "--suite", help="add, collision, negative, decoy, or all (default all)."
+        "--suite",
+        help=f"{', '.join(suite.value for suite in ALL_SUITES)}, or all.",
     ),
 ]
 QueueReason = Annotated[

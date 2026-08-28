@@ -9,8 +9,10 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, ConfigDict
 
-from auditor.graph.model import CallForm, UnresolvedRow
+from auditor.graph.model import UnresolvedRow
 from auditor.graph.refine.models import (
+    BOUNDED_FORMS,
+    PRECISION_SUITES,
     EvalRow,
     Proposal,
     RefinementKind,
@@ -30,12 +32,12 @@ ALWAYS_ACTIVE = frozenset(
     }
 )
 
-#: the two call forms where "the repo defines it, the call is there, nothing else could bind the
-#: name" holds (spec 10.1)
-_BOUNDED_FORMS = frozenset({CallForm.BARE, CallForm.SELF})
+#: the same two call forms the add suite draws its truths from, so the gate and the eval cannot
+#: drift on what tier B is measured over (spec 10.1)
+_BOUNDED_FORMS = frozenset(BOUNDED_FORMS)
 
 #: suites judged by their precision bound, versus suites judged by having produced no false add
-_PRECISION_SUITES = frozenset({"add", "decoy", "fixtures"})
+_PRECISION_SUITES = frozenset(suite.value for suite in PRECISION_SUITES)
 
 
 class TierPolicy(BaseModel):
@@ -44,9 +46,9 @@ class TierPolicy(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     #: every ``(suite, stratum)`` this runner and model has an eval row for
-    measured: frozenset[tuple[str, str]] = frozenset()
+    measured: frozenset[tuple[str, Stratum]] = frozenset()
     #: the subset of them that met the suite's own gate
-    proven: frozenset[tuple[str, str]] = frozenset()
+    proven: frozenset[tuple[str, Stratum]] = frozenset()
 
     @classmethod
     def of(
@@ -64,9 +66,9 @@ class TierPolicy(BaseModel):
         """
         rows = [row for row in evals if row.runner is runner and row.model == model]
         return cls(
-            measured=frozenset((row.suite, str(row.stratum)) for row in rows),
+            measured=frozenset((row.suite, row.stratum) for row in rows),
             proven=frozenset(
-                (row.suite, str(row.stratum))
+                (row.suite, row.stratum)
                 for row in rows
                 if cls._clears(row, min_precision)
             ),
@@ -133,4 +135,4 @@ class TierPolicy(BaseModel):
             return False
         if stratum is None:
             return rows <= self.proven
-        return (suite, str(stratum)) in self.proven
+        return (suite, stratum) in self.proven

@@ -13,6 +13,7 @@ from typing import get_args
 import typer
 from pydantic import ValidationError
 
+from auditor.cli.console import err_console
 from auditor.cli.helpers import (
     cli_root,
     fail,
@@ -77,7 +78,12 @@ from auditor.graph.refine.models import (
     RefinementStatus,
     RunStatus,
 )
-from auditor.graph.refine.payloads import BriefPayload, EvalReport, RefinePayload
+from auditor.graph.refine.payloads import (
+    BriefPayload,
+    EvalPlan,
+    EvalReport,
+    RefinePayload,
+)
 from auditor.graph.refine.runner import RefinementJob
 from auditor.graph.refine.service import (
     RefinementLedger,
@@ -293,14 +299,30 @@ async def _refine(root: Path, job: RefinementJob) -> RefinePayload:
 
 
 async def _eval(
-    root: Path, job: RefinementJob, *, suites: Sequence[EvalSuite], size: int, seed: int
+    root: Path,
+    job: RefinementJob,
+    *,
+    suites: Sequence[EvalSuite],
+    size: int,
+    seed: int,
+    dry_run: bool,
+    on_plan: Callable[[EvalPlan], None] | None,
 ) -> EvalReport:
     """One measured eval over this checkout, through the same selection `refine` uses."""
     settings = load_settings(root)
     user = load_user(root)
     async with await open_index(root) as index:
         return await drive.evaluate(
-            index, root, settings, user, job=job, suites=suites, size=size, seed=seed
+            index,
+            root,
+            settings,
+            user,
+            job=job,
+            suites=suites,
+            size=size,
+            seed=seed,
+            dry_run=dry_run,
+            on_plan=on_plan,
         )
 
 
@@ -386,23 +408,49 @@ def graph_eval(
     sample: EvalSample = 80,
     seed: EvalSeed = 1,
     suite: EvalSuiteOption = "all",
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the plan and its ceilings, open no run."
+    ),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Measure what this runner and model get right on this repo, and store the numbers the
-    activation gate reads. Every run costs money: the report opens with how many it will spend.
+    activation gate reads. Every run costs money: the plan and its ceilings print before the first
+    run opens, and `--dry-run` stops there.
     Exits 1 when no runner can run or a run did not close, 2 on a bad option."""
     root = cli_root(target)
     job = _job("", runner, model)
     suites = _suites(suite)
     try:
         report = run(
-            _eval(root, job, suites=suites, size=sample, seed=seed), "evaluating…"
+            _eval(
+                root,
+                job,
+                suites=suites,
+                size=sample,
+                seed=seed,
+                dry_run=dry_run,
+                on_plan=None if json_ or dry_run else _print_plan,
+            ),
+            "evaluating…",
         )
     except drive.REFINE_ERRORS as exc:
         fail(str(exc))
     present(report, render_graph_eval, as_json=json_)
-    if report.runs < report.runs_planned:
+    if not dry_run and report.runs < report.plan.runs_planned:
         raise typer.Exit(1)
+
+
+def _print_plan(plan: EvalPlan) -> None:
+    """What this eval may spend, on stderr, while there is still time to stop it.
+
+    `--json` and `--dry-run` both leave this out: their one document already is the plan.
+    """
+    err_console.print(
+        f"[dim]{plan.runs_planned} runs planned, up to "
+        f"${plan.runs_planned * plan.max_budget_usd_per_run:.2f} against the "
+        f"${plan.max_budget_usd_per_eval:.2f} eval ceiling[/dim]",
+        highlight=False,
+    )
 
 
 def _suites(requested: str) -> tuple[EvalSuite, ...]:

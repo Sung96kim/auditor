@@ -6,14 +6,15 @@ drift on the choice logic or on the payload. This is also the only place that re
 """
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from importlib.util import find_spec
 from pathlib import Path
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.graph.refine.client import ClientFactory
-from auditor.graph.refine.eval import run_eval
+from auditor.graph.refine.eval import EvalRun
 from auditor.graph.refine.models import (
     EvalSuite,
     Proposer,
@@ -21,7 +22,12 @@ from auditor.graph.refine.models import (
     RunnerChoiceCode,
     RunnerKind,
 )
-from auditor.graph.refine.payloads import BriefPayload, EvalReport, RefinePayload
+from auditor.graph.refine.payloads import (
+    BriefPayload,
+    EvalPlan,
+    EvalReport,
+    RefinePayload,
+)
 from auditor.graph.refine.runner import (
     FakeRunner,
     RefinementJob,
@@ -190,12 +196,14 @@ async def evaluate(
     suites: Sequence[EvalSuite],
     size: int,
     seed: int,
+    dry_run: bool = False,
+    on_plan: Callable[[EvalPlan], None] | None = None,
     client_factory: ClientFactory | None = None,
 ) -> EvalReport:
     """Measure this checkout's accuracy for one runner and model, and store what it measured.
 
     ``job`` carries the runner and model the way `refine` takes them, so the two commands cannot
-    drift on the choice logic.
+    drift on the choice logic. ``on_plan`` is called with the plan before the first run opens.
 
     Raises:
         RunnerUnavailable: no runner can drive this request, with the reason in the message.
@@ -203,20 +211,24 @@ async def evaluate(
     choice = select_runner(user.observer.runner, requested=job.runner)
     if choice.kind is None:
         raise RunnerUnavailable(choice.detail)
-    kind = choice.kind
-
-    def build(service: RefinementService, proposer: Proposer) -> RefinementRunner:
-        return build_runner(
-            kind, service, client_factory=client_factory, proposer=proposer
-        )
-
-    return await run_eval(
-        RefinementService(index, root, settings, user),
-        build=build,
-        runner=kind,
+    run = EvalRun(
+        service=RefinementService(index, root, settings, user),
+        build=partial(_eval_runner, choice.kind, client_factory),
+        runner=choice.kind,
         # the effective model, which is what `_open` stamps on the run row and the gate reads back
         model=job.model or user.observer.runner.model,
-        suites=suites,
         size=size,
         seed=seed,
+        on_plan=on_plan,
     )
+    return await run.report(suites, dry_run=dry_run)
+
+
+def _eval_runner(
+    kind: RunnerKind,
+    client_factory: ClientFactory | None,
+    service: RefinementService,
+    proposer: Proposer,
+) -> RefinementRunner:
+    """One eval batch's runner: the kind this invocation chose, over that batch's masked queue."""
+    return build_runner(kind, service, client_factory=client_factory, proposer=proposer)
