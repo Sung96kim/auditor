@@ -5,6 +5,7 @@ Its own module because the brief reads the same files under the same role rules,
 that reached into `service.py` for them would close an import cycle.
 """
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -106,13 +107,32 @@ class FactReader(BaseModel):
         name = proposal.target.name
         return await self.index.graph.definers(name) if name else []
 
+    async def stale(self, scope: str) -> tuple[StaleNote, ...]:
+        """Corrections under this scope the graph stopped trusting: staled, or a pinned one that
+        drifted (spec 5.7).
+
+        A reader holding synthetic rows answers with none: an eval's brief must show this
+        checkout's ledger history no more than it shows its queue (spec 10.2).
+        """
+        if self.synthetic:
+            return ()
+        rows = await self.index.refinements.refinements(statuses=_STALE_STATUSES)
+        return tuple(
+            StaleNote.of(row)
+            for row in rows
+            if (row.status is RefinementStatus.STALE or row.drifted)
+            # `StagedRun.covers` again: a correction this run could not have made needs no warning
+            and all(under_scope(node_id, scope) for node_id in row.anchored_ids())
+        )
+
     async def files(
         self, paths: Sequence[str]
     ) -> tuple[dict[str, FileFacts], frozenset[str]]:
         """Re-read the named files, and the paths this checkout holds no file for.
 
         A path with no file and a path the build never cached are different answers, so the second
-        is simply left out and the verifier says `not_loaded` rather than guessing.
+        is simply left out and the verifier says `not_loaded` rather than guessing. The parse
+        itself runs off the event loop, because for an MCP server it is every other tool call.
         """
         loaded: dict[str, FileFacts] = {}
         missing: set[str] = set()
@@ -123,7 +143,9 @@ class FactReader(BaseModel):
             cached = await self.index.graph.hashes(path)
             if cached is None:
                 continue
-            loaded[path] = FileFacts.of(self.root, path, cached.truth, self.roles)
+            loaded[path] = await asyncio.to_thread(
+                FileFacts.of, self.root, path, cached.truth, self.roles
+            )
         return loaded, frozenset(missing)
 
     async def verifier(
@@ -175,7 +197,7 @@ class BriefBuilder(BaseModel):
             commit_sha=commit_sha,
             targets=self._targets(rows, loaded),
             queue_total=queue_total,
-            stale=await self._stale(scope),
+            stale=await self.facts.stale(scope),
             limits=BriefLimits(
                 max_changes=self.limits.max_changes_per_run,
                 max_targets=self.limits.max_nodes_per_run,
@@ -199,18 +221,6 @@ class BriefBuilder(BaseModel):
                 continue
             out.append(_target(row, facts))
         return tuple(out)
-
-    async def _stale(self, scope: str) -> tuple[StaleNote, ...]:
-        """Corrections under this scope the graph stopped trusting: staled, or a pinned one that
-        drifted (spec 5.7)."""
-        rows = await self.facts.index.refinements.refinements(statuses=_STALE_STATUSES)
-        return tuple(
-            StaleNote.of(row)
-            for row in rows
-            if (row.status is RefinementStatus.STALE or row.drifted)
-            # `StagedRun.covers` again: a correction this run could not have made needs no warning
-            and all(under_scope(node_id, scope) for node_id in row.anchored_ids())
-        )
 
 
 def _target(row: UnresolvedRow, facts: FileFacts) -> BriefTarget:
