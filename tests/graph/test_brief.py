@@ -464,6 +464,17 @@ async def test_three_synthetic_rows_brief_exactly_three_targets(refine_service):
     assert brief.queue_total == 3
 
 
+async def test_an_externally_bound_synthetic_row_still_reaches_the_brief(
+    refine_service,
+):
+    """The collision suite is made of the rows a brief hides by default, so a reader holding them
+    must show them: hiding them briefed nothing and the control measured nothing."""
+    bound = MASKED_LOCAL.model_copy(update={"externally_bound": True})
+    brief = await _builder(_synthetic(refine_service, bound)).build("")
+    assert [t.node_id for t in brief.targets] == [QUEUED_CALL]
+    assert brief.queue_total == 1
+
+
 async def test_a_scope_still_narrows_the_synthetic_rows(refine_service):
     service = _synthetic(refine_service, MASKED_LOCAL)
     assert (await _builder(service).build("svc.py")).targets == ()

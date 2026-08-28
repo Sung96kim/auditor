@@ -53,14 +53,13 @@ class FactReader(BaseModel):
         """The queue rows one scope offers, synthetic rows first and alone.
 
         A reader holding synthetic rows answers from them and nothing else, so an eval brief can
-        never be filled out with this checkout's own unresolved rows (spec 10.2).
+        never be filled out with this checkout's own unresolved rows (spec 10.2). ``external`` does
+        not narrow them: a caller that chose these rows means them, and the collision suite is made
+        of exactly the externally bound rows a brief hides by default.
         """
         if self.synthetic:
             rows = [
-                row
-                for row in self.synthetic
-                if under_scope(row.node_id, prefix or "")
-                and (external or not row.externally_bound)
+                row for row in self.synthetic if under_scope(row.node_id, prefix or "")
             ]
             return rows if limit is None else rows[:limit]
         return [
@@ -74,6 +73,7 @@ class FactReader(BaseModel):
         """How many rows that scope holds, under the same synthetic-rows-only rule as `queue`."""
         if self.synthetic:
             return len(await self.queue(prefix, limit=None, external=external))
+
         return await self.index.graph.count_unresolved(prefix, external=external)
 
     async def queue_row(self, proposal: Proposal) -> UnresolvedRow | None:

@@ -702,6 +702,15 @@ async def test_a_control_run_that_proposes_nothing_is_clean(eval_service):
     assert "collision/all" in report.proven
 
 
+async def test_a_collision_batch_actually_briefs_its_rows(eval_service):
+    """The first dogfood briefed nothing here: the model answered "no unresolved rows" and the
+    control cleared its gate without ever being asked a question."""
+    await _evaluate(eval_service, suite=EvalSuite.COLLISION, size=5)
+    (row,) = await eval_service.index.runs.runs()
+    assert "targets: 1 of 1 queue rows" in row.prompt
+    assert "match" in row.prompt
+
+
 async def test_a_control_run_that_adds_an_edge_fails_its_gate(eval_service):
     population = await Population.of(eval_service.facts)
     (trial,) = sample(population, suite=EvalSuite.COLLISION, size=5, seed=1)
