@@ -33,8 +33,8 @@ check first: the graph libraries are core dependencies of `auditr`, so the CLI s
    - `graph refine <scope>` runs a model over the queue under a path and commits what it proposes;
      `graph refine <scope> --brief` shows what that run would be asked, without opening one.
    - `graph eval` measures what a runner gets right on this repo and stores the numbers that decide
-     whether its edge corrections may go active without a human. It costs money per run, so read
-     the run count it prints first.
+     whether its edge corrections may go active without a human. It costs money per run: the plan
+     and its ceilings print before the first run opens, and `--dry-run` stops there.
    - `graph refinements list` and `graph log` are the recorded corrections and the runs that made
      them, newest first. Read them before proposing a correction of your own: a `pending` row is
      one a human still has to accept, so the graph does not carry it yet.

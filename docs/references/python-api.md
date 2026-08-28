@@ -138,16 +138,25 @@ async with await IndexStore.connect(db_path, repo) as index:
   runner choice or on the payload. It owns the single `observer-claude` import guard, and it is the
   only importer of `eval.py`.
 - `auditor.graph.refine.eval`: what `auditr graph eval` measures.
-  `Population.of(facts)` reads the graph, resolves it again and keeps the edges tier B is measured
-  on, plus the collision rows, the decoy pool and the names this repo defines.
-  `sample(population, suite=..., size=..., seed=...)` draws trials per stratum,
-  `batches(trials, size)` groups them into runs that never mix strata, `Judge.over(trials)` scores
-  a batch's proposals without storing any, `tally(judgements, suite=..., spend=...)` sums them, and
-  `run_eval(service, build=..., runner=..., model=..., suites=..., size=..., seed=...)` drives the
-  whole thing and writes one `graph_evals` row per stratum.
+  - `Population.of(facts)` reads the graph, resolves it again and keeps the edges tier B is
+    measured on (`population.ground`), plus the collision rows, the decoy pool, the node kinds and
+    the names this repo defines.
+  - `Ground.excluded_by(rule)` answers which resolved edges each ground-truth rule left out.
+  - `population.sample(suite=..., size=..., seed=...)` draws trials per stratum and
+    `batches(trials, size)` groups them into runs that never mix strata.
+  - `EvalSuiteSpec.of(suite)` is one suite's draw, verdict rule and strata. A suite is one
+    subclass, registered by its own definition; an unhandled suite raises rather than measuring a
+    different one.
+  - `Judge.over(trials)` scores a batch's proposals without storing any, and never scores one its
+    validators refused. `tally(judgements, suite=..., spend=..., off_target=...)` sums them.
+  - `EvalRun(service=..., build=..., runner=..., model=..., size=..., seed=..., on_plan=...)`
+    drives the whole thing: `await run.report(suites)` writes one `graph_evals` row per completely
+    measured stratum, and `report(suites, dry_run=True)` answers with the plan and opens no run.
 - `auditor.graph.refine.models.wilson_lower(correct, total, z=1.96)` and
   `flawless_floor(min_precision, z=1.96)`: the Wilson score interval's lower bound a tier gate
-  reads, and the smallest flawless run that clears a given bar (73 at 0.95).
+  reads, and the smallest flawless run that clears a given bar (73 at 0.95). `flawless_floor`
+  searches to 10,000 trials and answers `None` beyond it, which every caller reads as "unprovable
+  at this bar".
 - `EvalsDB.latest(runner, model)` (`index.evals`): the newest `graph_evals` row per
   `(suite, stratum)`, which is what `TierPolicy.of` expects and what makes a regression un-prove a
   stratum.

@@ -344,6 +344,9 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `max_cost_usd_per_day` (default `2.0`): hard ceiling on spend per day, across every repo.
 - `max_runs_per_day` (default `40`): hard ceiling on runs per day.
 - `max_budget_usd_per_run` (default `0.25`): ceiling handed to one run.
+- `max_budget_usd_per_eval` (default `2.00`): ceiling on one `auditr graph eval` invocation,
+  across every suite. The eval stops before opening a run that would cross it. The default
+  leaves headroom over the six runs a default `--suite all` plans at `max_budget_usd_per_run`.
 - `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
   high-value runs proceed.
 - `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
@@ -380,10 +383,11 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 
 - `mode` (default `"propose"`): `propose` or `off`.
 - `stopwords_max` (default `20`): most repo-specific stopwords a tuning proposal may add.
-- `min_precision` (default `0.95`, 0 to 1): the Wilson 95 per cent lower bound a stratum's
-  measured precision has to reach before that shape may go active. Read off the latest `graph eval`
-  row per suite and stratum, so a later failing eval takes activation back. At 0.95 a flawless run
-  needs 73 trials to clear it. See [graph.md](graph.md).
+- `min_precision` (default `0.95`, 0 to just under 1): the Wilson 95 per cent lower bound a
+  stratum's measured precision has to reach before that shape may go active. Read off the latest
+  `graph eval` row per suite and stratum, so a later failing eval takes activation back. At 0.95 a
+  flawless run needs 73 trials to clear it. 1.0 is refused: `wilson_lower(n, n)` is below 1.0 for
+  every finite `n`, so no run of any size could ever meet it. See [graph.md](graph.md).
 
 ### `vectors` (`VectorsConfig`)
 

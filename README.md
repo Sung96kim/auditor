@@ -97,7 +97,7 @@ auditr graph build .
 auditr graph refinements list
 # let a model work the unresolved queue under a path
 auditr graph refine auditor/cli
-# measure this runner before it may activate corrections
+# measure this runner before it may activate corrections (--dry-run costs nothing)
 auditr graph eval --suite all
 # check PyPI for a newer release and install it
 auditr self update

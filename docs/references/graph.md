@@ -354,6 +354,8 @@ auditr graph eval --suite all
 auditr graph eval --suite add --sample 20 --seed 7
 # a named model, machine readable
 auditr graph eval --model sonnet --json
+# the plan and its ceilings, without opening a run
+auditr graph eval --dry-run
 ```
 
 - An eval masks known-true edges of this repo's own deterministic graph, presents them to a runner
@@ -364,17 +366,37 @@ auditr graph eval --model sonnet --json
   ones. `collision` presents the queue's externally bound rows, where the only right answer is
   `unresolvable` or silence. `negative` presents names this repo defines nowhere.
 - `add` is stratified by how far the destination is from the source: `same-module`,
-  `direct-import`, `neither`. On this repo those hold 1,021 / 1,321 / 38 tier-B-shaped truths out
+  `direct-import`, `neither`. On this repo those hold 883 / 1,321 / 38 tier-B-shaped truths out
   of 5,590 resolved `calls` edges, which split 49 / 46 / 5 per cent.
-- `--sample` is per stratum. A stratum draws `min(sample, available)`, and the report names the
-  strata that drew less (`short`), the strata with nothing to draw (`empty`) and the strata whose
-  draw cannot clear the bar however flawless (`unprovable`).
+- The `same-module` figure is 883 and not 1,021 because a truth's role-filtered definers must be
+  the destination itself: 138 same-module edges resolve to a test-role node whose short name has
+  an unrelated production definer, and a real queue row would carry that definer, never the
+  test-role destination.
+- Two rules leave a resolved `calls` edge out of the ground truth. `not-bounded-form`: the site is
+  an attribute call, or the node binds the name itself. `not-sole-definer`: the role-filtered
+  definers are not this destination alone.
+- `--sample` is per stratum. A stratum draws `min(sample, available)`, and the report names:
+  - `short`: strata that drew fewer trials than asked for.
+  - `empty`: strata with nothing to draw.
+  - `stopped`: strata no row was written for, with the reason.
+  - `off_target`: proposals about a node and name no trial asked about.
+  - `unprovable_drawn`: strata whose draw cannot clear the bar however flawless.
+  - `unprovable_judged`: strata whose judged trials cannot, which a full draw can still hit.
 - `add` and `decoy` clear on the Wilson 95 per cent lower bound of their precision reaching
   `observer.tuning.min_precision`. `collision` and `negative` clear on having produced no false
   add over at least one trial.
 - 73 flawless trials are the smallest run that clears 0.95; 80 give 0.954. A stratum with fewer
   truths than that on a repo cannot be proven there, so `neither` is unprovable here at 0.95 and
   proposals of that shape keep landing `pending`.
+- A Wilson bound reads `correct + wrong`, not `n`, so a stratum a runner mostly ignored is
+  unprovable however large its draw was.
+- An off-target `add_edge` or `resolve_ambiguous` counts as a false add for the stratum it was
+  proposed under: a real run would have refused it, and a control that ignored it could clear its
+  gate over proposals nobody asked for.
+- A stratum whose planned runs did not all complete writes no row. An abort is not a measurement,
+  so the last complete measurement stands rather than being overwritten by a smaller one.
+- A run whose brief did not carry every trial of its batch is `unbriefed`: it measures nothing and
+  writes no row, because the model was never asked the question.
 - The rows live in `graph_evals`, one per `(runner, model, suite, stratum)`. Controls are stored
   under one stratum, `all`. The latest row per key governs: an older passing row does not survive
   a newer failing one.
@@ -384,17 +406,27 @@ auditr graph eval --model sonnet --json
 - Eval runs appear in `auditr graph log` with `trigger_kind` `eval` and never in
   `auditr graph refinements`: the proposals go to a judge, not to the ledger.
 - Cost: one run per twelve trials (`observer.limits.max_nodes_per_run`), each bounded by
-  `observer.budget.max_budget_usd_per_run`. Nothing bounds the total, so the report opens with the
-  number of runs it is about to spend. A run that exceeds its budget is aborted, which stops its
-  suite; the reported `cost_usd` counts that run too, because the money is spent either way, while
-  `runs` counts only the runs that produced measurements.
+  `observer.budget.max_budget_usd_per_run`, and the whole invocation by
+  `observer.budget.max_budget_usd_per_eval` (default `2.00`). The plan (runs, ceilings) prints on
+  stderr before the first run opens, and `--dry-run` stops there.
+- The eval stops before opening a run that would cross the eval ceiling, and the report says
+  `stopped: budget`. A run that exceeds its own budget is aborted, which stops its suite; the
+  reported `cost_usd` counts that run too, because the money is spent either way, while `runs`
+  counts only the runs that produced measurements.
+- `--json` carries one document: `plan` (`sample`, `seed`, `suites`, `strata`, `runs_planned`, the
+  two ceilings), `suites` (one tally per measured stratum, each with a nested `spend` and an
+  `off_target` count), `notes` (the six lists above), `activation` (`proven`, `tier_b`,
+  `resolve_ambiguous`), `cost_usd` and `runs`.
+- `activation` is read off the same `TierPolicy` the ledger reads. Tier B needs its own add
+  stratum and the `collision` control, so `--suite add` alone proves strata and activates nothing.
 - The `false_removal_rate` column is 0 in every row this command writes: no removal kind is
   evaluated yet.
 - Follow-ups: the `fixtures` suite (`--suite fixtures` is refused naming it) and the
   `references_type` half of the add suite, which needs an answer to what a class reference's call
   form means before the tier B gate can judge it.
-- Exit codes: 0 when every planned run closed, 1 when no runner could run or a run did not close
-  (the partial payload is still printed, `--json` included), 2 for a bad option value.
+- Exit codes: 0 when every planned run closed or `--dry-run` was given, 1 when no runner could run
+  or a run did not close (the partial payload is still printed, `--json` included), 2 for a bad
+  option value.
 
 ## Provenance log
 

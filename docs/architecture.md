@@ -307,16 +307,20 @@ flowchart TB
     the runner's own `BoundTools.tools()` table into SDK tools and decides nothing itself.
   - `drive.py` is the runner choice and the one `refine` call both surfaces make, and it owns the
     single `observer-claude` import guard.
-  - `eval.py` is what `auditr graph eval` measures: the population it masks edges out of, the
-    sampling, the judge that scores a batch without storing anything, and the rows it writes. It is
-    the only module here that reads `facts.py`, `verify.py` and `resolve_edges.py` together, so it
-    stays off the fast CLI path and `drive.py` is its only importer. Its vocabulary and arithmetic
-    (`EvalSuite`, `SuiteTally`, `wilson_lower`, `flawless_floor`) live in `models.py` and its wire
-    payload in `refine/payloads.py`, both of which the fast path does load.
+  - `eval.py` is what `auditr graph eval` measures: the population it masks edges out of, one
+    `EvalSuiteSpec` subclass per suite, the judge that scores a batch without storing anything, and
+    `EvalRun`, which owns one invocation's plan, spend and rows. It is the only module here that
+    reads `facts.py`, `verify.py` and `resolve_edges.py` together, so it stays off the fast CLI
+    path and `drive.py` is its only importer. Its vocabulary and arithmetic (`EvalSuite`,
+    `Stratum`, `SuiteSpend`, `SuiteTally`, `key_of`, `wilson_lower`, `flawless_floor`) live in
+    `models.py` and its wire payload in `refine/payloads.py`, both of which the fast path does
+    load. `models.py` owns the two lists both halves read, `PRECISION_SUITES` and `BOUNDED_FORMS`,
+    so the gate in `tiers.py` and the draw in `eval.py` cannot drift on what tier B is measured
+    over.
   - The import order among the last five is one-directional and mandatory:
     `runner.py` <- `sdk_runner.py` <- `sdk_client.py` <- `eval.py` <- `drive.py`. A two-way edge is
-    an `ImportError` at module top, and a deferred import is not an option here; `run_eval` takes
-    the runner factory as an argument for exactly that reason.
+    an `ImportError` at module top, and a deferred import is not an option here; `EvalRun` takes
+    the runner factory as a field for exactly that reason.
 - `refine/verify.py` re-reads every file a proposal names, re-extracts it, and refuses when the file
   no longer hashes to what the build cached. It then checks the destination's short name against the
   src node's own fact tuple for that edge kind and call form, refuses a destination outside the

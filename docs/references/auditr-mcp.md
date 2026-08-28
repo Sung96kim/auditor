@@ -149,8 +149,10 @@ args = ["run", "-i", "--rm",
 - Until `auditr graph eval` has produced numbers for this repo, every `add_edge`, `retarget_edge`,
   `resolve_ambiguous` and `move_node` lands `pending` and needs
   `auditr graph refinements accept <id>` before a build applies it. `confirm_edge`,
-  `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately. There is deliberately
-  no MCP tool for `accept`, `revert`, `pin` or `prune`: activating a correction is a human step.
+  `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately. Tier B and
+  `resolve_ambiguous` become active once `graph eval` has proven them, and a later failing eval
+  takes it back. There is deliberately no MCP tool for `accept`, `revert`, `pin` or `prune`:
+  activating a correction is a human step.
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for
   everything that only reads, mutating for `ignore_add`, `graph_build`, `malware_update_dbs`,
   `malware_install` and every refinement tool that writes (`graph_refine_begin`,
