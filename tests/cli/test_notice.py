@@ -27,6 +27,7 @@ WARNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("graph", "build"),
         ("graph", "clusters"),
         ("graph", "concept"),
+        ("graph", "eval"),
         ("graph", "export"),
         ("graph", "flow"),
         ("graph", "log"),

@@ -265,6 +265,8 @@ auditr graph refinements prune
 - Until `auditr graph eval` has produced numbers for this repo, every `add_edge`, `retarget_edge`,
   `resolve_ambiguous` and `move_node` lands `pending` and needs an explicit `accept`.
   `confirm_edge`, `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately.
+  Tier B and `resolve_ambiguous` become active once `graph eval` has proven them, and a later
+  failing eval takes it back.
 - `accept`, `revert` and `pin` are deliberately CLI-only. An agent may propose and commit; deciding
   that a pending correction is right is a human step, and no MCP tool can take it.
 - They change a status and nothing else. The build is the only place a refinement reaches the graph,
@@ -342,6 +344,57 @@ auditr graph refine auditor/cli --brief
   (the payload is still printed, `--json` included), 2 for a bad `--runner` or `--model` value.
 - `--brief` renders the brief for a scope and stops. It opens no run and records nothing, so it is
   the way to see what a run would be asked before spending anything.
+
+## Eval
+
+```bash
+# measure this runner before it may activate corrections
+auditr graph eval --suite all
+# one suite, a small draw, repeatable
+auditr graph eval --suite add --sample 20 --seed 7
+# a named model, machine readable
+auditr graph eval --model sonnet --json
+```
+
+- An eval masks known-true edges of this repo's own deterministic graph, presents them to a runner
+  as unresolved rows, and judges every proposal against the ground truth.
+- Four suites ship. `add` masks a resolved `calls` edge whose call site is bare or `self`, whose
+  name this repo defines exactly once, at that destination: tier B's own shape. `decoy` presents
+  the same truths as `ambiguous_name` rows offering the true destination among up to three wrong
+  ones. `collision` presents the queue's externally bound rows, where the only right answer is
+  `unresolvable` or silence. `negative` presents names this repo defines nowhere.
+- `add` is stratified by how far the destination is from the source: `same-module`,
+  `direct-import`, `neither`. On this repo those hold 1,021 / 1,321 / 38 tier-B-shaped truths out
+  of 5,590 resolved `calls` edges, which split 49 / 46 / 5 per cent.
+- `--sample` is per stratum. A stratum draws `min(sample, available)`, and the report names the
+  strata that drew less (`short`), the strata with nothing to draw (`empty`) and the strata whose
+  draw cannot clear the bar however flawless (`unprovable`).
+- `add` and `decoy` clear on the Wilson 95 per cent lower bound of their precision reaching
+  `observer.tuning.min_precision`. `collision` and `negative` clear on having produced no false
+  add over at least one trial.
+- 73 flawless trials are the smallest run that clears 0.95; 80 give 0.954. A stratum with fewer
+  truths than that on a repo cannot be proven there, so `neither` is unprovable here at 0.95 and
+  proposals of that shape keep landing `pending`.
+- The rows live in `graph_evals`, one per `(runner, model, suite, stratum)`. Controls are stored
+  under one stratum, `all`. The latest row per key governs: an older passing row does not survive
+  a newer failing one.
+- Each control measures something the add suite cannot. A `collision` row shows its definers, so
+  the model has somewhere wrong to point. A `negative` row offers no `add_edge` at all, so the
+  control catches a model proposing a kind the brief never offered.
+- Eval runs appear in `auditr graph log` with `trigger_kind` `eval` and never in
+  `auditr graph refinements`: the proposals go to a judge, not to the ledger.
+- Cost: one run per twelve trials (`observer.limits.max_nodes_per_run`), each bounded by
+  `observer.budget.max_budget_usd_per_run`. Nothing bounds the total, so the report opens with the
+  number of runs it is about to spend. A run that exceeds its budget is aborted, which stops its
+  suite; the reported `cost_usd` counts that run too, because the money is spent either way, while
+  `runs` counts only the runs that produced measurements.
+- The `false_removal_rate` column is 0 in every row this command writes: no removal kind is
+  evaluated yet.
+- Follow-ups: the `fixtures` suite (`--suite fixtures` is refused naming it) and the
+  `references_type` half of the add suite, which needs an answer to what a class reference's call
+  form means before the tier B gate can judge it.
+- Exit codes: 0 when every planned run closed, 1 when no runner could run or a run did not close
+  (the partial payload is still printed, `--json` included), 2 for a bad option value.
 
 ## Provenance log
 

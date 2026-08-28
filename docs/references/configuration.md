@@ -380,7 +380,10 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 
 - `mode` (default `"propose"`): `propose` or `off`.
 - `stopwords_max` (default `20`): most repo-specific stopwords a tuning proposal may add.
-- `min_precision` (default `0.95`, 0 to 1): measured precision a kind needs before going active.
+- `min_precision` (default `0.95`, 0 to 1): the Wilson 95 per cent lower bound a stratum's
+  measured precision has to reach before that shape may go active. Read off the latest `graph eval`
+  row per suite and stratum, so a later failing eval takes activation back. At 0.95 a flawless run
+  needs 73 trials to clear it. See [graph.md](graph.md).
 
 ### `vectors` (`VectorsConfig`)
 

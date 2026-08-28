@@ -5,7 +5,7 @@
 back, so the ``graph`` sub-app stays a one-way dependency.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import get_args
@@ -23,6 +23,9 @@ from auditor.cli.helpers import (
     run,
 )
 from auditor.cli.options import (
+    EvalSample,
+    EvalSeed,
+    EvalSuiteOption,
     GraphTarget,
     LogRefinements,
     LogSince,
@@ -40,6 +43,7 @@ from auditor.cli.options import (
 )
 from auditor.cli.render import (
     render_graph_brief,
+    render_graph_eval,
     render_graph_log,
     render_graph_prune,
     render_graph_refine,
@@ -66,12 +70,14 @@ from auditor.graph.payloads import (
 from auditor.graph.query import LogQuery
 from auditor.graph.refine import drive
 from auditor.graph.refine.models import (
+    ALL_SUITES,
+    EvalSuite,
     PruneOutcome,
     Refinement,
     RefinementStatus,
     RunStatus,
 )
-from auditor.graph.refine.payloads import BriefPayload, RefinePayload
+from auditor.graph.refine.payloads import BriefPayload, EvalReport, RefinePayload
 from auditor.graph.refine.runner import RefinementJob
 from auditor.graph.refine.service import (
     RefinementLedger,
@@ -286,6 +292,18 @@ async def _refine(root: Path, job: RefinementJob) -> RefinePayload:
         return await drive.refine(index, root, settings, user, job=job)
 
 
+async def _eval(
+    root: Path, job: RefinementJob, *, suites: Sequence[EvalSuite], size: int, seed: int
+) -> EvalReport:
+    """One measured eval over this checkout, through the same selection `refine` uses."""
+    settings = load_settings(root)
+    user = load_user(root)
+    async with await open_index(root) as index:
+        return await drive.evaluate(
+            index, root, settings, user, job=job, suites=suites, size=size, seed=seed
+        )
+
+
 async def _brief(root: Path, scope: str) -> BriefPayload:
     """The brief a run over this scope would be given, with no run opened."""
     settings = load_settings(root)
@@ -361,9 +379,51 @@ def graph_refine(
         raise typer.Exit(1)
 
 
+def graph_eval(
+    target: GraphTarget = Path("."),
+    runner: RefineRunner = None,
+    model: RefineModel = None,
+    sample: EvalSample = 80,
+    seed: EvalSeed = 1,
+    suite: EvalSuiteOption = "all",
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Measure what this runner and model get right on this repo, and store the numbers the
+    activation gate reads. Every run costs money: the report opens with how many it will spend.
+    Exits 1 when no runner can run or a run did not close, 2 on a bad option."""
+    root = cli_root(target)
+    job = _job("", runner, model)
+    suites = _suites(suite)
+    try:
+        report = run(
+            _eval(root, job, suites=suites, size=sample, seed=seed), "evaluating…"
+        )
+    except drive.REFINE_ERRORS as exc:
+        fail(str(exc))
+    present(report, render_graph_eval, as_json=json_)
+    if report.runs < report.runs_planned:
+        raise typer.Exit(1)
+
+
+def _suites(requested: str) -> tuple[EvalSuite, ...]:
+    """The suites one `--suite` value asks for, with the follow-up named when it is asked for."""
+    if requested == "all":
+        return ALL_SUITES
+    if requested == EvalSuite.FIXTURES.value:
+        raise typer.BadParameter(
+            "the fixtures suite is a follow-up: it needs tests/fixtures/graph_eval/ "
+            "with expected answers, which is its own slice"
+        )
+    if requested not in {suite.value for suite in ALL_SUITES}:
+        allowed = ", ".join(suite.value for suite in ALL_SUITES)
+        raise typer.BadParameter(f"unknown --suite: {requested}. Valid: {allowed}, all")
+    return (EvalSuite(requested),)
+
+
 def register(app: typer.Typer) -> None:
     """Mount this module's commands onto the ``graph`` sub-app."""
     app.command("unresolved")(graph_unresolved)
     app.command("refine")(graph_refine)
+    app.command("eval")(graph_eval)
     app.command("log")(graph_log)
     app.add_typer(refinements_app, name="refinements")

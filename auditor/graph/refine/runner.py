@@ -174,18 +174,21 @@ class FakeRunner(RefinementRunner):
         answer: RunAnswer | None = None,
         stop: str | None = None,
         stop_status: RunStatus = RunStatus.ABORTED,
+        usage: RunUsage | None = None,
     ) -> None:
         super().__init__(service, client_factory, proposer=proposer)
         self.script = script
         self.answer = answer
         self.stop = stop
         self.stop_status = stop_status
+        # what this run reports having spent; without one it counts its own turns and nothing else
+        self.usage = usage
 
     async def run(self, job: RefinementJob) -> RunProduct:
         run, brief = await self._open(job)
         trace = [await self._propose_one(run.run_id, p) for p in self.script]
         attribution = RunAttribution(
-            usage=RunUsage(num_turns=len(self.script) + 1),
+            usage=self.usage or RunUsage(num_turns=len(self.script) + 1),
             tool_trace=tuple(trace),
             # only a scripted answer is a producer's own line; without one the row counts its rows
             summary=self.answer.summary if self.answer is not None else None,

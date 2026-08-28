@@ -262,6 +262,19 @@ RefineModel = Annotated[
     str | None,
     typer.Option("--model", help="haiku or sonnet; the configured model when omitted."),
 ]
+EvalSample = Annotated[
+    int,
+    typer.Option("--sample", min=1, max=500, help="Trials per stratum (default 80)."),
+]
+EvalSeed = Annotated[
+    int, typer.Option("--seed", help="Seed the draw, so a run repeats exactly.")
+]
+EvalSuiteOption = Annotated[
+    str,
+    typer.Option(
+        "--suite", help="add, collision, negative, decoy, or all (default all)."
+    ),
+]
 QueueReason = Annotated[
     list[UnresolvedReason] | None,
     typer.Option("--reason", help="Only these queue reasons (repeatable)."),

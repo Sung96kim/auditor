@@ -214,7 +214,8 @@ async def evaluate(
         RefinementService(index, root, settings, user),
         build=build,
         runner=kind,
-        model=job.model,
+        # the effective model, which is what `_open` stamps on the run row and the gate reads back
+        model=job.model or user.observer.runner.model,
         suites=suites,
         size=size,
         seed=seed,

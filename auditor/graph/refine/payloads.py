@@ -131,7 +131,9 @@ class EvalReport(WirePayload):
     unprovable: tuple[str, ...] = ()
     #: the ``suite/stratum`` keys that clear their own gate, read back through `TierPolicy`
     proven: tuple[str, ...] = ()
+    #: every run this invocation closed, the ones that aborted included: what it actually cost
     cost_usd: float = 0.0
+    #: the runs that produced measurements, which is fewer than `runs_planned` when a suite stopped
     runs: int = 0
     #: the batches this invocation set out to spend, printed before the first one opens
     runs_planned: int = 0

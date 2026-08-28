@@ -244,7 +244,8 @@ class Stratum(StrEnum):
     """The add suite's strata (spec 10.2): how far a proposal's destination is from its source.
 
     The tier B gate reads the one matching the proposal's own shape, because a repo's strata do
-    not measure alike; here they run 47 / 23 / 30 per cent of the add suite.
+    not measure alike; here they hold 1,021 / 1,321 / 38 of the add suite's truths, out of 5,590
+    resolved `calls` edges splitting 49 / 46 / 5 per cent.
     """
 
     SAME_MODULE = "same-module"
@@ -969,6 +970,13 @@ class EvalSuite(StrEnum):
     NEGATIVE = "negative"
     DECOY = "decoy"
     FIXTURES = "fixtures"
+
+
+#: the suites `--suite all` means; `fixtures` is a follow-up and is refused by name
+ALL_SUITES = (EvalSuite.ADD, EvalSuite.COLLISION, EvalSuite.NEGATIVE, EvalSuite.DECOY)
+
+#: the suites a Wilson bound gates, the only ones a flawless floor can rule out (spec 10.2)
+PRECISION_SUITES = (EvalSuite.ADD, EvalSuite.DECOY)
 
 
 def wilson_lower(correct: int, total: int, *, z: float = 1.96) -> float:

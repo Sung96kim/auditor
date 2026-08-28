@@ -22,6 +22,7 @@ _HEAVY = (
     "auditor.cli.graph",
     "auditor.graph.build",
     # `render.py` imports the refine wire payload, so its chain is on every fast command's path
+    "auditor.graph.refine.eval",
     "auditor.graph.refine.facts",
     "auditor.graph.refine.verify",
     "auditor.graph.resolve_edges",
@@ -46,6 +47,7 @@ _SUBCOMMANDS = (
     "flow",
     "unresolved",
     "refine",
+    "eval",
     "refinements",
     "log",
 )

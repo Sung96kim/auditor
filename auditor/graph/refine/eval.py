@@ -26,6 +26,7 @@ from auditor.graph.model import (
 from auditor.graph.refine.facts import FactReader
 from auditor.graph.refine.models import (
     CONTROL_STRATUM,
+    PRECISION_SUITES,
     ClientKind,
     EvalStratum,
     EvalSuite,
@@ -67,12 +68,6 @@ BOUNDED_FORMS = (CallForm.BARE, CallForm.SELF)
 
 #: how many decoys a decoy trial offers beside the true destination (spec 10.2)
 DECOY_COUNT = 3
-
-#: the suites `--suite all` means; `fixtures` is a follow-up and is refused by name
-ALL_SUITES = (EvalSuite.ADD, EvalSuite.COLLISION, EvalSuite.NEGATIVE, EvalSuite.DECOY)
-
-#: the suites a Wilson bound gates, which are the only ones a flawless floor can rule out
-PRECISION_SUITES = (EvalSuite.ADD, EvalSuite.DECOY)
 
 #: the key an off-target proposal is recorded under: it belongs to no trial and scores for none
 OFF_TARGET = ("", "")
@@ -533,6 +528,9 @@ class SuiteResult(BaseModel):
     short: tuple[str, ...] = ()
     #: strata with nothing to draw, which measure nothing and so prove nothing
     empty: tuple[str, ...] = ()
+    #: what every run of this suite cost, the one that stopped it included: money is spent whether
+    #: or not its trials could be judged, and the total is what the operator is owed
+    spent: float = 0.0
 
 
 async def run_eval(
@@ -568,6 +566,7 @@ async def run_eval(
                 tallies=measured.tallies,
                 short=measured.short + _short(suite, drawn[suite], size),
                 empty=_empty(suite, drawn[suite]),
+                spent=measured.spent,
             )
         )
     tallies = tuple(got for result in results for got in result.tallies)
@@ -593,7 +592,7 @@ async def run_eval(
         empty=tuple(line for result in results for line in result.empty),
         unprovable=_unprovable(tallies, min_precision),
         proven=tuple(sorted(key_of(*pair) for pair in policy.proven)),
-        cost_usd=sum(got.cost_usd for got in tallies),
+        cost_usd=sum(result.spent for result in results),
         runs=sum(got.runs for got in tallies),
         runs_planned=sum(len(groups) for groups in plan.values()),
     )
@@ -654,6 +653,7 @@ async def _measure(
     judged: list[Judgement] = []
     spend: dict[str, SuiteSpend] = {}
     stopped: list[str] = []
+    spent = 0.0
     for group in groups:
         judge = Judge.over(group)
         row = await _one_batch(service, group, judge, build=build, model=model)
@@ -663,16 +663,20 @@ async def _measure(
                 f"{key}: the run never opened, so its trials are not counted"
             )
             break
+        spent += row.usage.cost_usd
         if row.status is not RunStatus.SUCCEEDED:
             stopped.append(
-                f"{key}: a run ended {row.status.value}, so the suite stopped there"
+                f"{key}: a run ended {row.status.value} after ${row.usage.cost_usd:.4f}, "
+                "so the suite stopped there"
             )
             break
         judged.extend(judge.judgements())
         stratum = str(group[0].stratum)
         spend[stratum] = spend.get(stratum, SuiteSpend()).plus(row.usage)
     return SuiteResult(
-        tallies=tally(judged, suite=suite, spend=spend), short=tuple(stopped)
+        tallies=tally(judged, suite=suite, spend=spend),
+        short=tuple(stopped),
+        spent=spent,
     )
 
 

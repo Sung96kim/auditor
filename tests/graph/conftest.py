@@ -78,6 +78,11 @@ GOD_CONCEPTS = (
 )
 
 
+#: a bare call the resolver cannot place: `caller.main` calls a name `helper` defines
+QUEUED_HELPER = "def read_event():\n    return {}\n"
+QUEUED_CALLER = "def main():\n    return read_event()\n"
+
+
 # every rule the add suite's ground truth applies, in one package: a same-module bare call, a
 # direct-import call, a re-exported call that lands in `neither`, a `self` method call, a name the
 # node binds itself, an attribute call, a definer only a test file has, and an externally bound row
@@ -112,6 +117,10 @@ EVAL_TEST_STUB = (
     "def only_in_tests(uid):\n    return uid\n\ndef same_target(uid):\n    return uid\n"
 )
 EVAL_POPULATION = {
+    # the `refine_repo` pair as well, so one fixture holds both the suites' truths and a tier B
+    # queue row for the gate to open or hold shut
+    "caller.py": QUEUED_CALLER,
+    "helper.py": QUEUED_HELPER,
     "lib.py": EVAL_LIB,
     "other.py": EVAL_OTHER,
     "pkg/__init__.py": EVAL_PKG_INIT,
@@ -432,11 +441,6 @@ async def refine_service_other(refine_service: RefinementService) -> RefinementS
         refine_service.user,
         registry=RunRegistry(),
     )
-
-
-#: a bare call the resolver cannot place: `caller.main` calls a name `helper` defines
-QUEUED_HELPER = "def read_event():\n    return {}\n"
-QUEUED_CALLER = "def main():\n    return read_event()\n"
 
 
 @pytest.fixture

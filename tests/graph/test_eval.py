@@ -12,7 +12,6 @@ from auditor.database import IndexStore
 from auditor.graph.model import CallForm, EdgeKind, FactKind, UnresolvedRow
 from auditor.graph.refine.brief import BriefTarget
 from auditor.graph.refine.eval import (
-    ALL_SUITES,
     DECOY_COUNT,
     JUDGED,
     Judge,
@@ -29,6 +28,7 @@ from auditor.graph.refine.eval import (
     tally,
 )
 from auditor.graph.refine.models import (
+    ALL_SUITES,
     CONTROL_STRATUM,
     EvalSuite,
     Proposal,
@@ -39,6 +39,7 @@ from auditor.graph.refine.models import (
     RefinementTarget,
     RunnerKind,
     RunStatus,
+    RunUsage,
     Stratum,
     Tier,
     TriggerKind,
@@ -734,6 +735,29 @@ async def test_a_run_that_aborts_stops_its_suite_and_the_report_says_so(eval_ser
     assert await eval_service.index.evals.latest(RunnerKind.FAKE, "haiku") == []
 
 
+async def test_a_run_that_aborts_still_reports_what_it_cost(eval_service):
+    """The dogfood spent $0.41 and the report said $0.10: an aborted run's money is still gone."""
+    report = await _evaluate(
+        eval_service,
+        size=1,
+        stop="the model gave up",
+        usage=RunUsage(cost_usd=0.25, num_turns=9),
+    )
+    assert report.suites == ()
+    assert report.runs == 0
+    assert report.cost_usd == pytest.approx(0.25)
+    assert any("$0.2500" in line for line in report.short)
+
+
+async def test_the_reported_cost_covers_every_run_not_only_the_measured_ones(
+    eval_service,
+):
+    report = await _evaluate(eval_service, usage=RunUsage(cost_usd=0.1, num_turns=4))
+    assert report.runs == 3
+    assert report.cost_usd == pytest.approx(0.3)
+    assert sum(got.cost_usd for got in report.suites) == pytest.approx(0.3)
+
+
 async def test_a_short_draw_and_an_empty_stratum_are_both_named(eval_service):
     report = await _evaluate(eval_service, size=3)
     assert any(
@@ -761,4 +785,4 @@ async def test_the_report_carries_what_it_was_asked_for(eval_service):
     report = await _evaluate(eval_service, size=2, seed=9)
     assert (report.runner, report.model) == (RunnerKind.FAKE, "haiku")
     assert (report.sample, report.seed) == (2, 9)
-    assert report.cost_usd == sum(t.cost_usd for t in report.suites)
+    assert report.cost_usd >= sum(t.cost_usd for t in report.suites)

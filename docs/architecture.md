@@ -307,9 +307,16 @@ flowchart TB
     the runner's own `BoundTools.tools()` table into SDK tools and decides nothing itself.
   - `drive.py` is the runner choice and the one `refine` call both surfaces make, and it owns the
     single `observer-claude` import guard.
-  - The import order among the last four is one-directional and mandatory:
-    `runner.py` <- `sdk_runner.py` <- `sdk_client.py` <- `drive.py`. A two-way edge is an
-    `ImportError` at module top, and a deferred import is not an option here.
+  - `eval.py` is what `auditr graph eval` measures: the population it masks edges out of, the
+    sampling, the judge that scores a batch without storing anything, and the rows it writes. It is
+    the only module here that reads `facts.py`, `verify.py` and `resolve_edges.py` together, so it
+    stays off the fast CLI path and `drive.py` is its only importer. Its vocabulary and arithmetic
+    (`EvalSuite`, `SuiteTally`, `wilson_lower`, `flawless_floor`) live in `models.py` and its wire
+    payload in `refine/payloads.py`, both of which the fast path does load.
+  - The import order among the last five is one-directional and mandatory:
+    `runner.py` <- `sdk_runner.py` <- `sdk_client.py` <- `eval.py` <- `drive.py`. A two-way edge is
+    an `ImportError` at module top, and a deferred import is not an option here; `run_eval` takes
+    the runner factory as an argument for exactly that reason.
 - `refine/verify.py` re-reads every file a proposal names, re-extracts it, and refuses when the file
   no longer hashes to what the build cached. It then checks the destination's short name against the
   src node's own fact tuple for that edge kind and call form, refuses a destination outside the
@@ -319,9 +326,10 @@ flowchart TB
   `resolve_edges.NameBindings` and `resolve_edges.form_for`, the same objects the unresolved queue
   dims and shapes a row with.
 - `refine/tiers.py` reads spec 9.2's tier column and spec 10.3's gate. The tier comes from the
-  proposal's shape; whether it activates comes from the eval rows measured on this repo for this
-  runner and model, per suite and stratum. With no rows, everything but the kinds that cannot add
-  an edge starts `pending`.
+  proposal's shape; whether it activates comes from the latest eval row per
+  `(runner, model, suite, stratum)` measured on this repo, so a newer failing eval un-proves a
+  stratum an older one had proven. With no rows, everything but the kinds that cannot add an edge
+  starts `pending`.
 - `refine/conflicts.py` answers a proposal against the resolver's own edges first (an edge the
   resolver now produces is `redundant` and terminal) and then against the active refinements (the
   same edge is a confirmation, another destination for the same name contradicts).

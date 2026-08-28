@@ -53,9 +53,11 @@ from auditor.graph.refine.models import (
     PruneOutcome,
     RefinementStatus,
     RunStatus,
+    SuiteTally,
     Verdict,
+    flawless_floor,
 )
-from auditor.graph.refine.payloads import BriefPayload, RefinePayload
+from auditor.graph.refine.payloads import BriefPayload, EvalReport, RefinePayload
 from auditor.user_settings import UserSettings
 
 _ACCENT = "#7C7CFF"
@@ -274,6 +276,21 @@ _REFINEMENT_COLUMNS = ("id", "kind", "tier", "status", "target")
 #: the decisions view, which only the log has
 _RUN_COLUMNS = ("when", "producer", "runner", "trigger", "status", "n", "summary")
 
+#: one measured suite stratum, in the order the go/no-go reads them (spec 10.2)
+_EVAL_COLUMNS = (
+    "suite/stratum",
+    "n",
+    "correct",
+    "wrong",
+    "false adds",
+    "precision",
+    "recall",
+    "lower 95",
+    "cost",
+    "turns",
+    "runs",
+)
+
 
 def _headed_table(columns: tuple[str, ...]) -> Table:
     """An empty table carrying these headers, in this file's border and header style."""
@@ -399,6 +416,63 @@ def _landed_note(out: Console, landed: tuple[Verdict, ...]) -> None:
         out.print(
             f"[dim]{len(pending)} pending until "
             "`auditr graph refinements accept <id>`[/dim]"
+        )
+
+
+def render_graph_eval(out: Console, payload: EvalReport) -> None:
+    out.print(
+        f"[dim]{payload.runs_planned} runs planned for {payload.model or 'the configured model'}"
+        f", each capped by max_budget_usd_per_run[/dim]"
+    )
+    if not payload.suites:
+        out.print("[dim](nothing measured)[/dim]")
+    else:
+        t = _headed_table(_EVAL_COLUMNS)
+        for got in payload.suites:
+            t.add_row(*_eval_cells(got, proven=payload.proven))
+        out.print(t)
+    for line in (*payload.short, *payload.empty, *payload.unprovable):
+        out.print(f"[dim]{line}[/dim]")
+    out.print(
+        f"[dim]{payload.runs} of {payload.runs_planned} runs measured, "
+        f"${payload.cost_usd:.4f} spent[/dim]",
+        highlight=False,
+    )
+    _activation_note(out, payload)
+
+
+def _eval_cells(got: SuiteTally, *, proven: tuple[str, ...]) -> tuple[str, ...]:
+    """One measured stratum's row; a proven key is marked where the gate reads it."""
+    key = f"{got.suite}/{got.stratum}"
+    metrics = got.metrics
+    return (
+        f"{key} [green]OK[/]" if key in proven else key,
+        str(metrics.n),
+        str(got.correct),
+        str(got.wrong),
+        str(got.false_adds),
+        f"{metrics.precision:.3f}",
+        f"{metrics.recall:.3f}",
+        f"{metrics.lower_bound_95:.3f}",
+        f"${got.cost_usd:.4f}",
+        str(got.num_turns),
+        str(got.runs),
+    )
+
+
+def _activation_note(out: Console, payload: EvalReport) -> None:
+    """What this eval just made activatable, and what it would take when nothing is."""
+    strata = sorted(
+        key.removeprefix("add/") for key in payload.proven if key.startswith("add/")
+    )
+    ambiguous = "yes" if "decoy/all" in payload.proven else "no"
+    tier_b = ", ".join(strata) if strata else "no stratum"
+    out.print(f"[dim]resolve_ambiguous: {ambiguous}; tier B active for {tier_b}[/dim]")
+    if not payload.proven:
+        floor = flawless_floor(payload.min_precision)
+        out.print(
+            f"[dim]{floor} flawless trials are the smallest run that clears "
+            f"{payload.min_precision} (80 give 0.954)[/dim]"
         )
 
 

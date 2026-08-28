@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from auditor.database import open_repo_index
+from auditor.graph.model import UnresolvedRow
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     ProducerKind,
@@ -292,6 +293,80 @@ class ClaudeShaped(FakeRunner):
         super().__init__(
             service, client_factory, script=self.script, stop=self.stops, **kwargs
         )
+
+
+class EvalClaude(ClaudeShaped):
+    """A Claude-shaped runner that answers each masked row from the row itself.
+
+    A good model, not an omniscient one: an add row names its one definer so the answer is right,
+    a decoy row names several candidates and this takes the first, and a row that offers nothing to
+    point at is answered `unresolvable`, which is what a control is judged on.
+    """
+
+    def __init__(
+        self,
+        service: RefinementService,
+        client_factory: ClientFactory | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(service, client_factory, **kwargs)
+        self.script = tuple(answer_for(row) for row in service.facts.synthetic)
+
+
+def answer_for(row: UnresolvedRow) -> dict[str, Any]:
+    """The proposal a careful reader of one brief target would make."""
+    if row.externally_bound or not (row.candidates or row.definers):
+        return {
+            "kind": "unresolvable",
+            "target": {"node_id": row.node_id, "name": row.name},
+            "payload": {"reason_code": row.reason.value},
+            "reason": "nothing in this repo can be pointed at for this name",
+        }
+    if row.candidates:
+        return {
+            "kind": "resolve_ambiguous",
+            "target": {
+                "node_id": row.node_id,
+                "name": row.name,
+                "edge_kind": "calls",
+            },
+            "payload": {"candidate": row.candidates[0]},
+            "reason": "the first candidate is the one this call site reaches",
+        }
+    return {
+        "kind": "add_edge",
+        "target": {
+            "src": row.node_id,
+            "dst": row.definers[0],
+            "edge_kind": "calls",
+            "name": row.name,
+        },
+        "reason": "the call site and the one definition both read",
+    }
+
+
+#: a node the eval package never masks an edge to, so an add pointed here is plainly wrong
+MISDIRECTED_DST = "other.py::match"
+
+
+class WrongEvalClaude(EvalClaude):
+    """The same reader pointing every add at the wrong node: the regression a later eval catches."""
+
+    def __init__(
+        self,
+        service: RefinementService,
+        client_factory: ClientFactory | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(service, client_factory, **kwargs)
+        self.script = tuple(_misdirected(p) for p in self.script)
+
+
+def _misdirected(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    """One proposal aimed somewhere it does not belong; the other kinds are left alone."""
+    if proposal["kind"] != "add_edge":
+        return dict(proposal)
+    return {**proposal, "target": {**proposal["target"], "dst": MISDIRECTED_DST}}
 
 
 class FailingClaude(ClaudeShaped):

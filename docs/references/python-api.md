@@ -113,6 +113,10 @@ async with await IndexStore.connect(db_path, repo) as index:
 - `auditor.graph.refine.verify.FactVerifier`: the AST-fact check one proposal has to pass. Pure, so
   a caller reads the files and hands the facts in. `auditor.graph.refine.facts.FactReader` is the
   reader that does that reading, and the brief builder shares it.
+- `FactReader.queue(prefix, limit=..., external=...)` and `FactReader.count_queue(...)`: the one
+  queue read the brief and the verifier share. A reader holding `synthetic` rows answers from them
+  and nothing else, which is how an eval masks an edge without the stored queue filling the gap.
+  `RefinementService(..., facts=reader)` injects one.
 - `auditor.graph.refine.facts.BriefBuilder(facts=..., limits=...)`: `build(scope, commit_sha=...)`
   returns the `Brief` a run works from, and `Brief.render()` is the prompt text itself, pinned by a
   golden file. The models it builds live in `auditor.graph.refine.brief`, which reads nothing.
@@ -120,16 +124,33 @@ async with await IndexStore.connect(db_path, repo) as index:
   its brief, works, and closes it, answering with a `RunProduct` (the run row it opened, the brief
   and what the commit landed). How the run ended is on the stored row, not on the product, so the
   two cannot disagree. `FakeRunner` replays a scripted set of proposals, which is how the whole
-  path is tested with no SDK installed.
+  path is tested with no SDK installed. Every runner takes a `proposer`
+  (`Callable[[str, Mapping[str, Any]], Awaitable[Verdict]]`), defaulting to the service's own
+  `propose`; an eval passes its judge instead, so nothing it proposes reaches the ledger.
 - `auditor.graph.refine.sdk_runner.SdkRunner`: the Claude producer. SDK-free by design: it talks to
   the client through an injected factory answering to `ClientSession`, so its message loop, init
   check and outcome mapping are all testable without the extra.
 - `auditor.graph.refine.sdk_client.claude_client(options, tools)`: the only importer of
   `claude_agent_sdk`. Builds the real client and the in-process `graph` MCP server from an
   `SdkOptions` and the run's own `BoundTools.tools()` table.
-- `auditor.graph.refine.drive`: `select_runner`, `build_runner`, `refine` and `brief`. The one
-  module the CLI and the MCP tools import from the runner half, so neither can drift on the runner
-  choice or on the payload. It owns the single `observer-claude` import guard.
+- `auditor.graph.refine.drive`: `select_runner`, `build_runner`, `refine`, `brief` and `evaluate`.
+  The one module the CLI and the MCP tools import from the runner half, so neither can drift on the
+  runner choice or on the payload. It owns the single `observer-claude` import guard, and it is the
+  only importer of `eval.py`.
+- `auditor.graph.refine.eval`: what `auditr graph eval` measures.
+  `Population.of(facts)` reads the graph, resolves it again and keeps the edges tier B is measured
+  on, plus the collision rows, the decoy pool and the names this repo defines.
+  `sample(population, suite=..., size=..., seed=...)` draws trials per stratum,
+  `batches(trials, size)` groups them into runs that never mix strata, `Judge.over(trials)` scores
+  a batch's proposals without storing any, `tally(judgements, suite=..., spend=...)` sums them, and
+  `run_eval(service, build=..., runner=..., model=..., suites=..., size=..., seed=...)` drives the
+  whole thing and writes one `graph_evals` row per stratum.
+- `auditor.graph.refine.models.wilson_lower(correct, total, z=1.96)` and
+  `flawless_floor(min_precision, z=1.96)`: the Wilson score interval's lower bound a tier gate
+  reads, and the smallest flawless run that clears a given bar (73 at 0.95).
+- `EvalsDB.latest(runner, model)` (`index.evals`): the newest `graph_evals` row per
+  `(suite, stratum)`, which is what `TierPolicy.of` expects and what makes a regression un-prove a
+  stratum.
 - `auditor.graph.query.LogQuery(index)`: `page(spec)` for `graph log`'s two views and
   `refinements(statuses, limit)` for the corrections page. The one reader the CLI and the MCP tools
   both call, so the two surfaces cannot drift on ordering or on what a time window means. Both
