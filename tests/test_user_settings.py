@@ -245,6 +245,14 @@ FLAT_OBSERVER = {
 }
 
 
+def test_a_min_precision_of_one_is_refused():
+    """`wilson_lower(n, n)` is below 1.0 for every finite `n`, so 1.0 is a bar no measurement can
+    ever meet; accepting it hung the eval after the money was spent."""
+    assert TuningConfig(min_precision=0.999).min_precision == 0.999
+    with pytest.raises(ValidationError):
+        TuningConfig(min_precision=1.0)
+
+
 def test_every_moved_key_names_a_field_that_exists_now():
     """The map is the only thing telling a user where a knob went, so a rename that skips it
     would point at a path the model does not have."""

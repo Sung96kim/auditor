@@ -71,6 +71,11 @@ class BudgetConfig(BaseModel):
     max_budget_usd_per_run: float = Field(
         0.25, ge=0.0, description="Ceiling handed to one run."
     )
+    max_budget_usd_per_eval: float = Field(
+        2.0,
+        ge=0.0,
+        description="Ceiling on one `auditr graph eval` invocation, across every suite.",
+    )
     low_budget_fraction: float = Field(
         0.25,
         ge=0.0,
@@ -164,8 +169,8 @@ class TuningConfig(BaseModel):
     min_precision: float = Field(
         0.95,
         ge=0.0,
-        le=1.0,
-        description="Measured precision a kind needs before going active.",
+        lt=1.0,
+        description="Measured precision a kind needs before going active; 1.0 is unreachable.",
     )
 
 
