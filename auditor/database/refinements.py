@@ -6,10 +6,13 @@ module because they share the row decoders and the ``IN`` clause helper below.
 """
 
 import json
+import logging
 import sqlite3
 import time
 from collections.abc import Sequence
 from typing import Any, ClassVar
+
+from pydantic import ValidationError
 
 from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.graph.refine.models import (
@@ -32,6 +35,8 @@ from auditor.graph.refine.models import (
     TuningRow,
     TuningStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 _DAY_SECONDS = 86_400
 
@@ -129,11 +134,22 @@ def _refinement_values(refinement: Refinement) -> dict[str, Any]:
     }
 
 
-def _eval_from_row(row: sqlite3.Row) -> EvalRow:
-    """One row as an `EvalRow`, rebuilding the metrics block from its flat columns."""
-    data = dict(row)
-    data["metrics"] = {field: data.pop(field) for field in EvalMetrics.model_fields}
-    return EvalRow.model_validate(data)
+def _eval_rows(rows: Sequence[sqlite3.Row]) -> list[EvalRow]:
+    """Readable rows as `EvalRow`s, rebuilding each metrics block from its flat columns.
+
+    A row this build cannot read, an unknown stratum being the one way that happens, is logged and
+    dropped: `service._policy` is on the `propose` path, where a traceback would take down every
+    correction rather than one measurement.
+    """
+    out: list[EvalRow] = []
+    for row in rows:
+        data = dict(row)
+        data["metrics"] = {field: data.pop(field) for field in EvalMetrics.model_fields}
+        try:
+            out.append(EvalRow.model_validate(data))
+        except ValidationError as exc:
+            logger.warning("skipping unreadable graph_evals row: %s", exc)
+    return out
 
 
 def _in_clause(column: str, values: Sequence[object]) -> str:
@@ -886,23 +902,6 @@ class EvalsDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def evals(
-        self, *, runner: RunnerKind | None = None, model: str | None = None
-    ) -> list[EvalRow]:
-        """Eval rows for this identity, newest last. S6's tier gate reads them per stratum."""
-        sql = "SELECT * FROM graph_evals WHERE repo_identity = ?"
-        params: list[Any] = []
-        if runner is not None:
-            sql += " AND runner = ?"
-            params.append(runner.value)
-        if model is not None:
-            sql += " AND model = ?"
-            params.append(model)
-        sql += " ORDER BY eval_id"
-        return [
-            _eval_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
-        ]
-
     async def latest(self, runner: RunnerKind, model: str) -> list[EvalRow]:
         """The newest row per ``(suite, stratum)`` for this runner and model (spec 10.3).
 
@@ -918,5 +917,4 @@ class EvalsDB(BaseDB):
             "  ORDER BY l.created_at DESC, l.eval_id DESC LIMIT 1"
             ") ORDER BY e.suite, e.stratum"
         )
-        rows = await self._fetch_by_identity(sql, (runner.value, model))
-        return [_eval_from_row(r) for r in rows]
+        return _eval_rows(await self._fetch_by_identity(sql, (runner.value, model)))

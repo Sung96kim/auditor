@@ -10,7 +10,6 @@ from auditor.database import IndexStore
 from auditor.database.refinements import NoSuchRun
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
-    CONTROL_STRATUM,
     Anchor,
     ClientKind,
     EvalMetrics,
@@ -191,7 +190,7 @@ def _eval(**kw) -> EvalRow:
         runner=RunnerKind.CLAUDE,
         model=kw.pop("model", "haiku"),
         suite=kw.pop("suite", "add"),
-        stratum=kw.pop("stratum", CONTROL_STRATUM),
+        stratum=kw.pop("stratum", Stratum.ALL),
         metrics=kw.pop("metrics", _metrics()),
         created_at=kw.pop("created_at", 100.0),
         **kw,
@@ -204,7 +203,7 @@ def _saturated_eval() -> EvalRow:
         runner=RunnerKind.CLAUDE,
         model="haiku",
         suite="add",
-        stratum=CONTROL_STRATUM,
+        stratum=Stratum.ALL,
         metrics=_metrics(),
         cost_usd=0.5,
         num_turns=4,
@@ -254,7 +253,7 @@ async def _round_trip_tuning(index, run_id: str) -> None:
 async def _round_trip_eval(index, _run_id: str) -> None:
     row = _saturated_eval()
     eid = await index.evals.add_eval(row)
-    (stored,) = await index.evals.evals()
+    (stored,) = await index.evals.latest(RunnerKind.CLAUDE, "haiku")
     assert stored == row.model_copy(update={"eval_id": eid})
 
 
@@ -621,13 +620,29 @@ async def test_set_tuning_status_moves_one_row(refine_store):
     assert stored.status is TuningStatus.ACTIVE
 
 
-async def test_eval_rows_filter_by_runner_and_model(refine_store):
+async def test_eval_rows_are_bound_to_their_runner_and_model(refine_store):
+    """`latest` is the one reader: a row of another model must not answer this model's gate."""
     await refine_store.evals.add_eval(_eval())
     await refine_store.evals.add_eval(_eval(suite="retarget"))
-    assert len(await refine_store.evals.evals()) == 2
-    hit = await refine_store.evals.evals(runner=RunnerKind.CLAUDE, model="haiku")
+    hit = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
     assert {row.suite for row in hit} == {"add", "retarget"}
-    assert await refine_store.evals.evals(model="sonnet") == []
+    assert await refine_store.evals.latest(RunnerKind.CLAUDE, "sonnet") == []
+
+
+async def test_a_stored_row_this_build_cannot_read_is_dropped_not_raised(refine_store):
+    """`service._policy` is on the `propose` path, where one bad row would take down every
+    correction rather than one measurement."""
+    await refine_store.evals.add_eval(_eval())
+    await refine_store.evals.add_eval(_eval(suite="retarget"))
+
+    def spoil(conn):
+        conn.execute("UPDATE graph_evals SET stratum = 'nonsense' WHERE suite = 'add'")
+        conn.commit()
+        return None
+
+    await refine_store.evals._worker.run(spoil)
+    rows = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
+    assert [row.suite for row in rows] == ["retarget"]
 
 
 async def test_latest_keeps_only_the_newest_row_per_suite_and_stratum(refine_store):
@@ -636,7 +651,6 @@ async def test_latest_keeps_only_the_newest_row_per_suite_and_stratum(refine_sto
     await refine_store.evals.add_eval(_eval(created_at=200.0, metrics=_metrics(0.40)))
     rows = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
     assert [row.metrics.lower_bound_95 for row in rows] == [0.40]
-    assert len(await refine_store.evals.evals()) == 2
 
 
 async def test_latest_reads_created_at_not_insertion_order(refine_store):
@@ -661,8 +675,8 @@ async def test_latest_answers_one_row_per_key_and_binds_runner_and_model(refine_
     await refine_store.evals.add_eval(_eval(suite="add", model="sonnet"))
     rows = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
     assert [(row.suite, row.stratum) for row in rows] == [
-        ("add", CONTROL_STRATUM),
-        ("collision", CONTROL_STRATUM),
+        ("add", Stratum.ALL),
+        ("collision", Stratum.ALL),
     ]
     assert await refine_store.evals.latest(RunnerKind.FAKE, "haiku") == []
 
@@ -681,7 +695,7 @@ async def test_tuning_and_evals_survive_a_forgotten_repo(refine_store):
     await refine_store.repos.register(1.0)
     await refine_store.repos.forget()
     assert len(await refine_store.tuning.tuning()) == 1
-    assert len(await refine_store.evals.evals()) == 1
+    assert len(await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")) == 1
 
 
 async def test_runs_can_exclude_a_status_from_the_default_view(refine_store):
