@@ -1,6 +1,7 @@
 """Frozen records for the refinement tables (spec 5.3, 5.4, 5.5). These cross the store boundary
 in both directions, so every JSON column has a model rather than a raw dict."""
 
+import math
 import re
 import time
 import uuid
@@ -14,6 +15,7 @@ from pydantic import (
     Field,
     ValidationError,
     ValidationInfo,
+    computed_field,
     model_validator,
 )
 
@@ -953,6 +955,95 @@ class EvalRow(BaseModel):
     cost_usd: float = 0.0
     num_turns: int = 0
     created_at: float = Field(default_factory=time.time)
+
+
+class EvalSuite(StrEnum):
+    """The suites `auditr graph eval` can draw trials from (spec 10.2).
+
+    ``FIXTURES`` is in the vocabulary but not in S7, so the CLI can refuse it by name rather than
+    as an unknown value.
+    """
+
+    ADD = "add"
+    COLLISION = "collision"
+    NEGATIVE = "negative"
+    DECOY = "decoy"
+    FIXTURES = "fixtures"
+
+
+def wilson_lower(correct: int, total: int, *, z: float = 1.96) -> float:
+    """The Wilson score interval's lower bound for ``correct`` of ``total``, ``0.0`` on no trials.
+
+    What a tier gate reads (spec 10.2): the point estimate of a short flawless run says 1.0, which
+    is why the bound and not the estimate decides activation.
+    """
+    if total <= 0:
+        return 0.0
+    phat = correct / total
+    denominator = 1.0 + z**2 / total
+    centre = phat + z**2 / (2 * total)
+    spread = z * math.sqrt((phat * (1.0 - phat) + z**2 / (4 * total)) / total)
+    return max(0.0, (centre - spread) / denominator)
+
+
+def flawless_floor(min_precision: float, *, z: float = 1.96) -> int:
+    """The smallest number of trials whose flawless run clears ``min_precision`` (spec 10.4).
+
+    73 at the default 0.95, so a stratum with fewer truths than that on a repo cannot be proven
+    there however well a runner does.
+    """
+    n = 1
+    while wilson_lower(n, n, z=z) < min_precision:
+        n += 1
+    return n
+
+
+class SuiteTally(BaseModel):
+    """One suite stratum's judged trials, and the runs they cost (spec 10.2).
+
+    The four rates are computed once, on `metrics`, rather than recomputed by every reader.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    suite: str
+    stratum: EvalStratum
+    n: int = 0
+    correct: int = 0
+    wrong: int = 0
+    missed: int = 0
+    false_adds: int = 0
+    cost_usd: float = 0.0
+    num_turns: int = 0
+    runs: int = 0
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def metrics(self) -> EvalMetrics:
+        """This stratum's accuracy. ``false_removal_rate`` is 0.0: S7 evaluates no removal kind."""
+        judged = self.correct + self.wrong
+        precision = self.correct / judged if judged else 0.0
+        return EvalMetrics(
+            n=self.n,
+            correct=self.correct,
+            precision=precision,
+            recall=self.correct / self.n if self.n else 0.0,
+            false_add_rate=(self.wrong + self.false_adds) / self.n if self.n else 0.0,
+            lower_bound_95=wilson_lower(self.correct, judged),
+        )
+
+    def row(self, *, identity: str, runner: RunnerKind, model: str) -> EvalRow:
+        """This tally as the `graph_evals` row a tier gate later reads."""
+        return EvalRow(
+            repo_identity=identity,
+            runner=runner,
+            model=model,
+            suite=self.suite,
+            stratum=self.stratum,
+            metrics=self.metrics,
+            cost_usd=self.cost_usd,
+            num_turns=self.num_turns,
+        )
 
 
 class SnapshotPhase(StrEnum):

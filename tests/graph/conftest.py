@@ -78,6 +78,48 @@ GOD_CONCEPTS = (
 )
 
 
+# every rule the add suite's ground truth applies, in one package: a same-module bare call, a
+# direct-import call, a re-exported call that lands in `neither`, a `self` method call, a name the
+# node binds itself, an attribute call, a definer only a test file has, and an externally bound row
+EVAL_MAIN = (
+    "import re\n"
+    "from lib import direct_target\n"
+    "from pkg import reexported\n"
+    "from tests.stub import only_in_tests\n\n"
+    "_RX = re.compile('x')\n\n"
+    "def same_target(uid):\n    return uid\n\n"
+    "def calls_same(uid):\n    return same_target(uid)\n\n"
+    "def calls_direct(uid):\n    return direct_target(uid)\n\n"
+    "def calls_reexported(uid):\n    return reexported(uid)\n\n"
+    "def calls_test_only(uid):\n    return only_in_tests(uid)\n\n"
+    "def binds_then_calls(uid):\n"
+    "    def shadowed(x):\n        return x\n"
+    "    return shadowed(uid)\n\n"
+    "def attribute_call(job):\n    return job.handle()\n\n"
+    "def externally_bound_call(text):\n    return _RX.match(text)\n\n"
+    "class Holder:\n"
+    "    def helper(self):\n        return 1\n\n"
+    "    def uses(self):\n        return self.helper()\n"
+)
+EVAL_LIB = "def direct_target(uid):\n    return uid\n"
+# `match` lives where `m.py` cannot import it, so the call on a receiver aliased from `re` stays
+# unresolved with a definer to name: the shape of a collision row
+EVAL_OTHER = "def match(text):\n    return text\n"
+EVAL_PKG_INIT = "from pkg.deep import reexported\n"
+EVAL_PKG_DEEP = "def reexported(uid):\n    return uid\n"
+# `same_target` again under a test role: a decoy for the truth, never a definer of it
+EVAL_TEST_STUB = (
+    "def only_in_tests(uid):\n    return uid\n\ndef same_target(uid):\n    return uid\n"
+)
+EVAL_POPULATION = {
+    "lib.py": EVAL_LIB,
+    "other.py": EVAL_OTHER,
+    "pkg/__init__.py": EVAL_PKG_INIT,
+    "pkg/deep.py": EVAL_PKG_DEEP,
+    "tests/stub.py": EVAL_TEST_STUB,
+}
+
+
 def _write_graph_repo(
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -147,6 +189,17 @@ def graph_repo_with_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
 def graph_repo_god_concepts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A repo with one pure fan-out hub and one pure bottleneck, so both subkinds are populated."""
     return _write_graph_repo(tmp_path, monkeypatch, module_source=GOD_CONCEPTS)
+
+
+@pytest.fixture
+def graph_repo_eval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The package the eval suites are measured against: every ground-truth rule, once each."""
+    return _write_graph_repo(
+        tmp_path,
+        monkeypatch,
+        module_source=EVAL_MAIN,
+        extra_files=EVAL_POPULATION,
+    )
 
 
 @pytest.fixture
@@ -397,6 +450,15 @@ def refine_repo(graph_repo: Path, process_runs: dict[str, RunRegistry]) -> Path:
     (graph_repo / "caller.py").write_text(QUEUED_CALLER)
     assert CliRunner().invoke(app, ["graph", "build", str(graph_repo)]).exit_code == 0
     return graph_repo
+
+
+@pytest.fixture
+def eval_repo(graph_repo_eval: Path, process_runs: dict[str, RunRegistry]) -> Path:
+    """The eval package, scanned and built, so the suites have a graph to mask edges out of."""
+    assert (
+        CliRunner().invoke(app, ["graph", "build", str(graph_repo_eval)]).exit_code == 0
+    )
+    return graph_repo_eval
 
 
 @pytest.fixture

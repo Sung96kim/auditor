@@ -10,7 +10,9 @@ from auditor.graph.refine.brief import Brief
 from auditor.graph.refine.models import (
     RefinementCounts,
     RunnerChoiceCode,
+    RunnerKind,
     RunReport,
+    SuiteTally,
     Verdict,
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA
@@ -106,3 +108,30 @@ class RefinePayload(WirePayload):
             rejected=landed.rejected if landed else (),
             build=landed.build if landed else None,
         )
+
+
+class EvalReport(WirePayload):
+    """One `auditr graph eval` answer: what each suite stratum measured and what it proves.
+
+    ``unprovable`` is its own list rather than a sentence folded into ``short``: ``short`` means
+    the draw was smaller than ``--sample``, and a full draw can still be too small to clear.
+    """
+
+    runner: RunnerKind
+    model: str
+    sample: int
+    seed: int
+    min_precision: float
+    suites: tuple[SuiteTally, ...] = ()
+    #: strata that drew fewer trials than ``sample``, or whose suite a failed run cut short
+    short: tuple[str, ...] = ()
+    #: strata with nothing to draw, which measure nothing and so prove nothing
+    empty: tuple[str, ...] = ()
+    #: strata whose draw is below `flawless_floor(min_precision)`, so no run can prove them here
+    unprovable: tuple[str, ...] = ()
+    #: the ``suite/stratum`` keys that clear their own gate, read back through `TierPolicy`
+    proven: tuple[str, ...] = ()
+    cost_usd: float = 0.0
+    runs: int = 0
+    #: the batches this invocation set out to spend, printed before the first one opens
+    runs_planned: int = 0

@@ -22,13 +22,14 @@ from auditor.database import open_repo_index
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     ProducerKind,
+    Proposer,
     Run,
     RunnerKind,
     RunStatus,
     TriggerKind,
 )
 from auditor.graph.refine.prompts import STRUCTURED_OUTPUT_TOOL
-from auditor.graph.refine.runner import FakeRunner
+from auditor.graph.refine.runner import FakeRunner, RefinementRunner
 from auditor.graph.refine.sdk_runner import BoundTools, SdkOptions
 from auditor.graph.refine.service import RefinementService
 from auditor.mcp import mcp
@@ -249,6 +250,26 @@ SCRIPTED_PROPOSAL: Mapping[str, Any] = MappingProxyType(
         "reason": GOOD_PROPOSAL["reason"],
     }
 )
+
+
+def eval_build(
+    answers: Mapping[tuple[str, str], Mapping[str, Any]], **kwargs: Any
+) -> Callable[[RefinementService, Proposer], RefinementRunner]:
+    """A `run_eval` runner factory that replays the answer prepared for each masked row.
+
+    The batch's own rows are on the service it is handed, so a scripted eval needs no second copy
+    of what `sample` drew.
+    """
+
+    def build(service: RefinementService, proposer: Proposer) -> RefinementRunner:
+        script = [
+            answers[key]
+            for row in service.facts.synthetic
+            if (key := (row.node_id, row.name)) in answers
+        ]
+        return FakeRunner(service, proposer=proposer, script=script, **kwargs)
+
+    return build
 
 
 class ClaudeShaped(FakeRunner):

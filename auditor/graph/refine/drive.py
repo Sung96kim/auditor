@@ -6,20 +6,22 @@ drift on the choice logic or on the payload. This is also the only place that re
 """
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from importlib.util import find_spec
 from pathlib import Path
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.graph.refine.client import ClientFactory
+from auditor.graph.refine.eval import run_eval
 from auditor.graph.refine.models import (
+    EvalSuite,
     Proposer,
     RunnerChoice,
     RunnerChoiceCode,
     RunnerKind,
 )
-from auditor.graph.refine.payloads import BriefPayload, RefinePayload
+from auditor.graph.refine.payloads import BriefPayload, EvalReport, RefinePayload
 from auditor.graph.refine.runner import (
     FakeRunner,
     RefinementJob,
@@ -176,3 +178,44 @@ async def brief(
     """
     service = RefinementService(index, root, settings, user)
     return BriefPayload.of(await service.preview(scope))
+
+
+async def evaluate(
+    index: IndexStore,
+    root: Path,
+    settings: AuditorSettings,
+    user: UserSettings,
+    *,
+    job: RefinementJob,
+    suites: Sequence[EvalSuite],
+    size: int,
+    seed: int,
+    client_factory: ClientFactory | None = None,
+) -> EvalReport:
+    """Measure this checkout's accuracy for one runner and model, and store what it measured.
+
+    ``job`` carries the runner and model the way `refine` takes them, so the two commands cannot
+    drift on the choice logic.
+
+    Raises:
+        RunnerUnavailable: no runner can drive this request, with the reason in the message.
+    """
+    choice = select_runner(user.observer.runner, requested=job.runner)
+    if choice.kind is None:
+        raise RunnerUnavailable(choice.detail)
+    kind = choice.kind
+
+    def build(service: RefinementService, proposer: Proposer) -> RefinementRunner:
+        return build_runner(
+            kind, service, client_factory=client_factory, proposer=proposer
+        )
+
+    return await run_eval(
+        RefinementService(index, root, settings, user),
+        build=build,
+        runner=kind,
+        model=job.model,
+        suites=suites,
+        size=size,
+        seed=seed,
+    )
