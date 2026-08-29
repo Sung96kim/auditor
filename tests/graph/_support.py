@@ -23,6 +23,7 @@ from auditor.graph.model import UnresolvedRow
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
     Assessment,
+    AssessmentDecision,
     Decision,
     ProducerKind,
     Proposer,
@@ -119,7 +120,10 @@ def add_observer_run(repo: Path, *, status: RunStatus, age_seconds: float) -> st
                         files=("m.py",),
                         assessment=Assessment(
                             files=("m.py",),
-                            verdict=Decision(reason="no structural change"),
+                            verdict=Decision(
+                                decision=AssessmentDecision.SKIP,
+                                reason="no structural change",
+                            ),
                         ),
                     ),
                     summary="no structural change",

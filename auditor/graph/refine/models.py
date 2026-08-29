@@ -236,14 +236,13 @@ class AssessmentDecision(StrEnum):
 class Decision(BaseModel):
     """The gate's answer and the one line a human reads for it (spec 8.6).
 
-    One object rather than two fields, so the rule that produces the pair and the assessment that
-    records it cannot report a decision with another decision's reason.
+    One object rather than two fields prevents mixing decisions' reasons; neither field defaults, as empty verdicts are not answers.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    decision: AssessmentDecision = AssessmentDecision.SKIP
-    reason: str = ""
+    decision: AssessmentDecision
+    reason: str
 
 
 class BatchKind(StrEnum):
@@ -276,7 +275,7 @@ class Assessment(BaseModel):
     stale_refinements: tuple[int, ...] = ()
     affected_flow: tuple[str, ...] = ()
     deferred_pairs: int = 0
-    verdict: Decision = Decision()
+    verdict: Decision
 
     @property
     def decided_to_run(self) -> bool:
@@ -285,8 +284,11 @@ class Assessment(BaseModel):
 
 
 class TriggerDetail(BaseModel):
-    """What the trigger carried: the files it named and, for an edit batch, the spec 8.6
-    assessment that decided it, whose ``verdict`` is the only "why" a run row has."""
+    """What the trigger carried: the files it named and the assessment that decided the batch.
+
+    The assessment is spec 8.6's, present for an edit batch only, and its ``verdict`` is the one
+    "why" such a run row has.
+    """
 
     model_config = ConfigDict(frozen=True)
 

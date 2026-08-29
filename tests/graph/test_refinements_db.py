@@ -13,6 +13,7 @@ from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     Anchor,
     Assessment,
+    AssessmentDecision,
     ClientKind,
     Decision,
     EvalMetrics,
@@ -89,7 +90,10 @@ def _assessment_run(**kw) -> Run:
             "trigger_detail": TriggerDetail(
                 files=("m.py",),
                 assessment=Assessment(
-                    files=("m.py",), verdict=Decision(reason="no structural change")
+                    files=("m.py",),
+                    verdict=Decision(
+                        decision=AssessmentDecision.SKIP, reason="no structural change"
+                    ),
                 ),
             ),
             **kw,
@@ -111,7 +115,10 @@ def _saturated_run() -> Run:
         trigger_kind=TriggerKind.EDIT,
         trigger_detail=TriggerDetail(
             files=("m.py",),
-            assessment=Assessment(files=("m.py",), verdict=Decision(reason="edited")),
+            assessment=Assessment(
+                files=("m.py",),
+                verdict=Decision(decision=AssessmentDecision.SKIP, reason="edited"),
+            ),
         ),
         session_id="s1",
         agent_name="refiner",

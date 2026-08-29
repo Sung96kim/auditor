@@ -32,6 +32,7 @@ from auditor.graph.payloads import (
 )
 from auditor.graph.refine.models import (
     Assessment,
+    AssessmentDecision,
     Decision,
     NodePair,
     ProducerKind,
@@ -609,7 +610,7 @@ def _declined(*files: str, reason: str, **over) -> RunRowPayload:
                 files=files,
                 assessment=Assessment(
                     files=files,
-                    verdict=Decision(reason=reason),
+                    verdict=Decision(decision=AssessmentDecision.SKIP, reason=reason),
                     **over,
                 ),
             ),

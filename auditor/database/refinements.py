@@ -393,14 +393,8 @@ class RunsDB(BaseDB):
     ) -> PruneOutcome:
         """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
 
-        ``retention_days`` is the daemon's ``ObserverConfig.skipped_retention_days``. An
-        assessment row is the only kind swept: it is the observer's own, it called no runner, it
-        carries the object that says so, and it has no ``error`` because its reason lives on that
-        object. A run evicted from the registry and one the stranded sweep closed are `skipped`
-        too, but both write their reason into ``error`` and that is the only record of them, so
-        they are kept whatever their age. The tuning and refinement clauses are the invariant rather
-        than the filter: a row owning either is left alone instead of orphaning it, and both
-        counts come back because a caller told only about the runs cannot see the rest.
+        The gate's own rows alone: the observer's, no runner, and a reason on the assessment
+        rather than in ``error``, which is the only record an evicted or stranded run has.
         """
         cutoff = (time.time() if now is None else now) - retention_days * DAY_SECONDS
         identity = self.partition.identity
@@ -408,6 +402,7 @@ class RunsDB(BaseDB):
             "SELECT run_id FROM graph_runs WHERE repo_identity = ? AND status = ? "
             "AND started_at < ? AND runner = ? AND producer = ? AND error IS NULL "
             "AND json_extract(trigger_detail, '$.assessment') IS NOT NULL "
+            # neither table has an ON DELETE, so a row owning either is kept rather than orphaned
             "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?) "
             "AND run_id NOT IN (SELECT run_id FROM graph_refinements "
             "WHERE repo_identity = ? AND status != ?)"

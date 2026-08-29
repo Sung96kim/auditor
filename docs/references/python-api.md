@@ -183,8 +183,13 @@ read, no clock. The caller does the I/O and hands the values in.
 - `auditor.observer.assess.assess(stage1, *, before, after, scheduling, budget, max_nodes_per_run,
   flow_nodes=frozenset()) -> Assessment` is the whole thing for a batch that was rebuilt for;
   `assess_unchanged(stage1)` is the answer for one stage 1 dropped.
-- `decide(*, new_pairs, bounded_pairs, stale_refinements, scheduling, budget) -> Decision` is the
-  rule itself, public because a suspect batch and a verify batch gate against the same state.
+- `decide(*, new_pairs, bounded_pairs, stale_refinements, scheduling, budget, kind=BatchKind.EDIT)
+  -> (Decision, pairs)` is the rule itself, public because a suspect batch and a verify batch gate
+  against the same state; `kind` is what tells the three apart. It refuses a spent day for all of
+  them, and applies the two low-budget rules to `edit` alone. The second half is the pairs a run
+  would take, empty on every skip, which is what `deferred_pairs` is measured against.
+- `narrowing(*, new_pairs, bounded_pairs, budget, kind=BatchKind.EDIT) -> (pairs, narrowed)` is the
+  low-budget rule's one home, called once per assessment through `decide`.
 - `new_rows(before, after)`, `new_pairs(before, after)`,
   `resolved_pairs(before, after, *, removed_nodes)` and
   `staled_refinements(before, after, *, changed_nodes)` are the stage 2 diffs. They compare on

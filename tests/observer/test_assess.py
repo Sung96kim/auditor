@@ -308,25 +308,25 @@ def test_a_path_deleted_and_recreated_in_one_batch_ends_where_the_batch_left_it(
     assert stage1.verdicts[0].outcome is outcome
 
 
-def test_a_path_outside_the_repo_never_reaches_stage_one(tmp_path: Path):
-    """Spec 8.6 stage 0 is the hook's filter, and stage 1 classifies whatever it is handed, so a
-    batch built from what stage 0 admitted is the empty batch."""
-    finder = FileDiscovery(tmp_path)
-    assert finder.auditable("../outside.py", must_exist=False) is False
-    admitted = [r for r in ("../outside.py",) if finder.auditable(r, must_exist=False)]
+def _refused_by_stage_zero(root: Path, rel: str) -> None:
+    """Stage 0 turns `rel` away and stage 1 is handed what it admitted, which is nothing."""
+    finder = FileDiscovery(root)
+    assert finder.auditable(rel, must_exist=False) is False
+    admitted = [r for r in (rel,) if finder.auditable(r, must_exist=False)]
     assert stage_one(tuple(_edited(_NEW_BARE_CALLEE, path=r) for r in admitted)) == (
         Stage1()
     )
+
+
+def test_a_path_outside_the_repo_never_reaches_stage_one(tmp_path: Path):
+    """Spec 8.6 stage 0 is the hook's filter, and stage 1 classifies whatever it is handed, so a
+    batch built from what stage 0 admitted is the empty batch."""
+    _refused_by_stage_zero(tmp_path, "../outside.py")
 
 
 def test_a_file_no_language_claims_never_reaches_stage_one(tmp_path: Path):
     """The suffix set comes from the registered languages, so a note is not an edit to assess."""
-    finder = FileDiscovery(tmp_path)
-    assert finder.auditable("notes.md", must_exist=False) is False
-    admitted = [r for r in ("notes.md",) if finder.auditable(r, must_exist=False)]
-    assert stage_one(tuple(_edited(_NEW_BARE_CALLEE, path=r) for r in admitted)) == (
-        Stage1()
-    )
+    _refused_by_stage_zero(tmp_path, "notes.md")
 
 
 def test_stage_zero_keeps_a_deleted_path_so_stage_one_can_remove_its_nodes(
@@ -376,6 +376,7 @@ def _assess(stage1, before, after, **over) -> Assessment:
 
 
 _GET = "m.py::Store.get"
+_MIN2 = SchedulingConfig(min_new_unresolved=2)
 _MIN20 = SchedulingConfig(min_new_unresolved=20)
 _STAGE1 = stage_one((_edited(_NEW_BARE_CALLEE),))
 
@@ -400,6 +401,15 @@ def _staled(anchors: tuple[str, ...]) -> tuple[GraphSnapshot, GraphSnapshot]:
             )
         ),
     )
+
+
+def test_a_copied_snapshot_answers_for_the_pairs_it_was_copied_with():
+    """`model_copy(update=...)` re-runs nothing, so a view cached on first read would go on
+    answering for the tuple the copy replaced and stage 2 would diff one queue against another."""
+    before = _snapshot((_pair(_GET, "widen"),))
+    assert [p.name for p in before.by_key.values()] == ["widen"]
+    after = before.model_copy(update={"pairs": (_pair(_GET, "render"),)})
+    assert [p.name for p in after.by_key.values()] == ["render"]
 
 
 def test_a_pair_absent_before_is_new():
@@ -659,12 +669,13 @@ def test_under_the_bar_the_deferral_counts_what_the_run_could_actually_take():
     assert (len(result.new_pairs), result.deferred_pairs) == (15, 1)
 
 
-_MIN2 = SchedulingConfig(min_new_unresolved=2)
 _NO_STALE = SchedulingConfig(run_on_stale=False)
 _SKIP, _RUN = AssessmentDecision.SKIP, AssessmentDecision.RUN
 
 
-def _decide(*, scheduling=None, new=0, stale=0, bounded=None, **over) -> Decision:
+def _gate(
+    *, scheduling=None, new=0, stale=0, bounded=None, **over
+) -> tuple[Decision, tuple[NodePair, ...]]:
     """One `decide` call, so a new keyword lands here rather than in a dozen cases."""
     pairs = tuple(NodePair(node_id=f"m.py::n{i}", name="w") for i in range(new))
     return decide(
@@ -674,6 +685,11 @@ def _decide(*, scheduling=None, new=0, stale=0, bounded=None, **over) -> Decisio
         scheduling=scheduling or SchedulingConfig(),
         **{"budget": _budget(), **over},
     )
+
+
+def _decide(**over) -> Decision:
+    """The verdict alone, which is what all but one case asserts on."""
+    return _gate(**over)[0]
 
 
 def test_a_gate_that_fires_on_nothing_is_refused_by_the_config():
@@ -734,6 +750,27 @@ def test_a_spent_day_stops_every_batch(kind):
     """The ceiling is hard, and it is read before the narrowing that a suspect batch skips."""
     verdict = _decide(new=5, budget=_budget(fraction=0.0, evaluated=False), kind=kind)
     assert (verdict.decision, verdict.reason) == (_SKIP, "the day's budget is spent")
+
+
+@pytest.mark.parametrize(
+    ("over", "targets"),
+    [
+        ({"budget": _budget(fraction=0.0)}, 0),
+        ({"budget": _budget(fraction=0.1, evaluated=False)}, 0),
+        ({"scheduling": _MIN20}, 0),
+        ({}, 3),
+    ],
+    ids=[
+        "a spent day",
+        "no eval row under the bar",
+        "below the threshold",
+        "a run",
+    ],
+)
+def test_only_a_gate_that_said_yes_hands_back_pairs_to_run(over, targets):
+    """`deferred_pairs` is measured off that half, so a skip that handed its pairs back anyway
+    would report a batch nobody opened as one a run had partly taken."""
+    assert len(_gate(new=3, **over)[1]) == targets
 
 
 def test_a_low_budget_that_narrowed_nothing_does_not_take_the_blame():

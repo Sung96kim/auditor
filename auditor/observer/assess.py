@@ -9,7 +9,6 @@ literal is the observer's, not the model's: `graph/refine/models.py` is the shar
 one gate's wording does not belong there.
 """
 
-import functools
 from collections.abc import Callable, Iterable, Sequence
 from enum import StrEnum
 
@@ -307,18 +306,21 @@ class GraphSnapshot(BaseModel):
     pairs: tuple[QueuePair, ...] = ()
     refinements: tuple[RefinementState, ...] = ()
 
-    @functools.cached_property
+    @property
     def by_key(self) -> dict[tuple[str, str, UnresolvedReason], QueuePair]:
-        """The queue under the store's own key, so neither side scans the other and no two rows
-        for one question overwrite each other. Built once: a queue runs to thousands of rows."""
+        """The queue under the store's own key, so no two rows for one question collide.
+
+        Not cached: `model_copy(update=...)` rebuilds a frozen model without re-running anything,
+        so a cache would go on answering for the pairs the copy replaced.
+        """
         return {p.key: p for p in self.pairs}
 
-    @functools.cached_property
+    @property
     def questions(self) -> frozenset[NodePair]:
         """Every distinct pair the queue still holds, however many rows carry it."""
         return frozenset(p.pair for p in self.pairs)
 
-    @functools.cached_property
+    @property
     def by_refinement(self) -> dict[int, RefinementState]:
         return {r.refinement_id: r for r in self.refinements}
 
@@ -442,8 +444,8 @@ def narrowing(
 ) -> tuple[tuple[NodePair, ...], bool]:
     """The pairs the gate counts, and whether the low budget rule actually removed any.
 
-    One home for the narrowing: the deferral arithmetic reports what a run would take, and
-    re-deriving the rule beside it is how the two came to disagree.
+    The rule's one home, called once per assessment through :func:`decide`. A suspect or verify
+    batch drains capacity already paid for, so it never narrows.
     """
     if kind is not BatchKind.EDIT or not budget.low:
         return new_pairs, False
@@ -458,22 +460,27 @@ def decide(
     scheduling: SchedulingConfig,
     budget: BudgetState,
     kind: BatchKind = BatchKind.EDIT,
-) -> Decision:
-    """Spec 8.6's decision: the day ceiling first, then the low budget narrowing.
+) -> tuple[Decision, tuple[NodePair, ...]]:
+    """Spec 8.6's decision and the pairs a run would take, empty whenever the gate said no.
 
-    ``bounded_pairs`` is the ``call_form in {bare, self}`` subset, the only shape that can still
-    auto-activate; under the low budget bar it replaces ``new_pairs`` in the count. A suspect or
-    verify batch is draining idle capacity, so only the spent ceiling stops it.
+    ``bounded_pairs`` is the ``call_form in {bare, self}`` subset, the only shape that can still auto-activate.
+    Under the low budget bar it replaces ``new_pairs`` in the count for edit batches alone; returning the counted set leaves the deferral nothing to re-derive.
     """
     if budget.exhausted:
-        return Decision(
-            decision=AssessmentDecision.SKIP, reason="the day's budget is spent"
+        return (
+            Decision(
+                decision=AssessmentDecision.SKIP, reason="the day's budget is spent"
+            ),
+            (),
         )
     edit = kind is BatchKind.EDIT
     if edit and budget.low and not budget.evaluated:
-        return Decision(
-            decision=AssessmentDecision.SKIP,
-            reason="low budget and no eval row for this runner",
+        return (
+            Decision(
+                decision=AssessmentDecision.SKIP,
+                reason="low budget and no eval row for this runner",
+            ),
+            (),
         )
     counted, narrowed = narrowing(
         new_pairs=new_pairs, bounded_pairs=bounded_pairs, budget=budget, kind=kind
@@ -481,24 +488,30 @@ def decide(
     new_fired = len(counted) >= scheduling.min_new_unresolved
     stale_fired = scheduling.run_on_stale and bool(stale_refinements)
     if new_fired or stale_fired:
-        return Decision(
-            decision=AssessmentDecision.RUN,
-            reason=_run_reason(
-                questions=len(counted),
-                stale=len(stale_refinements),
-                new_fired=new_fired,
-                stale_fired=stale_fired,
+        return (
+            Decision(
+                decision=AssessmentDecision.RUN,
+                reason=_run_reason(
+                    questions=len(counted),
+                    stale=len(stale_refinements),
+                    new_fired=new_fired,
+                    stale_fired=stale_fired,
+                ),
             ),
+            counted,
         )
-    return Decision(
-        decision=AssessmentDecision.SKIP,
-        reason=_skip_reason(
-            new=new_pairs,
-            bounded=bounded_pairs,
-            stale=stale_refinements,
-            scheduling=scheduling,
-            narrowed=narrowed,
+    return (
+        Decision(
+            decision=AssessmentDecision.SKIP,
+            reason=_skip_reason(
+                new=new_pairs,
+                bounded=bounded_pairs,
+                stale=stale_refinements,
+                scheduling=scheduling,
+                narrowed=narrowed,
+            ),
         ),
+        (),
     )
 
 
@@ -532,14 +545,13 @@ def assess(
     fresh = _distinct(rows)
     bounded = _distinct(p for p in rows if p.call_form in _BOUNDED_FORMS)
     staled = staled_refinements(before, after, changed_nodes=stage1.changed_nodes)
-    verdict = decide(
+    verdict, targets = decide(
         new_pairs=fresh,
         bounded_pairs=bounded,
         stale_refinements=staled,
         scheduling=scheduling,
         budget=budget,
     )
-    counted, _ = narrowing(new_pairs=fresh, bounded_pairs=bounded, budget=budget)
     return Assessment(
         files=stage1.files,
         added_nodes=stage1.added_nodes,
@@ -551,10 +563,6 @@ def assess(
         ),
         stale_refinements=staled,
         affected_flow=tuple(sorted(stage1.changed_nodes & flow_nodes)),
-        deferred_pairs=(
-            max(0, len(counted) - max_nodes_per_run)
-            if verdict.decision is AssessmentDecision.RUN
-            else 0
-        ),
+        deferred_pairs=max(0, len(targets) - max_nodes_per_run),
         verdict=verdict,
     )

@@ -255,8 +255,10 @@ class FileDiscovery:
         )
 
     def auditable_shape(self, path: Path | str, *, target: Path | None = None) -> bool:
-        """Whether one path has the shape alone: under the root, a supported language, not
-        excluded. Git is never asked, so a hook can call it per event without a subprocess.
+        """Whether one path has the shape alone: under the root, a supported language, not excluded.
+
+        Stage 0 for S8b's ``/events``, where a path the edit deleted must still be admitted and no
+        per-event ``git check-ignore`` is affordable. Nothing calls it before that slice.
         """
         return self._auditable_shape(self._as_path(path), target or self.root)
 
