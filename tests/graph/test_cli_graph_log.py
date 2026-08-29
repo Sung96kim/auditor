@@ -21,7 +21,7 @@ from graph._support import (
 from typer.testing import CliRunner
 
 from auditor.cli import app
-from auditor.cli.render import render_graph_log
+from auditor.cli.render import _assessment_note, render_graph_log
 from auditor.database import open_repo_index
 from auditor.graph.model import MAX_LOG_ROWS, EdgeKind
 from auditor.graph.payloads import (
@@ -635,6 +635,36 @@ def test_the_log_caps_the_files_it_names_and_says_how_many_it_dropped():
     assert "looked at a.py, b.py, c.py +2 more: no new questions, skipped" in one_line(
         out
     )
+
+
+def test_a_batch_that_named_no_paths_still_shows_why_it_was_skipped():
+    """Stage 0 can drop every path a batch carried, and the reason is the whole of the line."""
+    out = render_text(render_graph_log, _page(_declined(reason="no structural change")))
+    assert "looked at nothing: no structural change, skipped" in one_line(out)
+
+
+def test_the_note_counts_the_whole_batch_not_the_paths_the_wire_carried():
+    """`files` stops at 10 on the wire and the note names 3, so `+N more` has to read the count
+    taken before either cap."""
+    row = _declined(*(f"f{i}.py" for i in range(14)), reason="no new questions")
+    out = render_text(render_graph_log, _page(row), width=220)
+    assert "f0.py, f1.py, f2.py +11 more: no new questions, skipped" in one_line(out)
+
+
+def test_a_path_with_markup_in_it_does_not_take_the_table_down():
+    """Square brackets are legal in a path and common in generated fixtures; rich would either
+    eat one as a style tag or raise."""
+    row = _declined("pkg/[gen]/mod.py", reason="no new questions")
+    assert "pkg/[gen]/mod.py" in one_line(
+        render_text(render_graph_log, _page(row), width=200)
+    )
+
+
+def test_the_assessment_note_is_dimmed_like_every_other_continuation_line():
+    """Both tables put a subordinate line under a primary row through `_note_row`; undimmed this
+    one reads as a second data row rather than an annotation."""
+    note = _assessment_note(_declined("m.py", reason="no structural change"))
+    assert note.startswith("[dim]") and note.endswith("[/]")
 
 
 def test_a_run_row_with_no_assessment_gains_no_note_line():

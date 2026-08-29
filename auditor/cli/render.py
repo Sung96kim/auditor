@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
@@ -264,9 +265,13 @@ def render_graph_unresolved(
 
 def _proposed_values(payload: RefinementRowPayload) -> list[tuple[str, str]]:
     """What the proposal carries beyond its target, so a `pending` row shows what accepting it
-    would change: the label, the annotation, the candidate, the reason code, the call form."""
+    would change: the label, the annotation, the candidate, the reason code, the call form.
+
+    Escaped: these are node ids and model-written text, and a square bracket in one would either
+    be eaten as a style tag or raise `MarkupError` and take the whole table down.
+    """
     return [
-        (name, str(value))
+        (name, escape(str(value)))
         for name, value in payload.payload.model_dump(mode="json").items()
         if value
     ]
@@ -339,7 +344,7 @@ def _refinement_note(row: RefinementRowPayload) -> str:
     why, which is the whole of what a human accepting it has to judge."""
     drift = "[yellow]drifted[/] " if row.drifted else ""
     proposed = " ".join(f"{k}={v}" for k, v in _proposed_values(row))
-    note = f"{proposed} {row.reason}".strip()
+    note = f"{proposed} {escape(row.reason)}".strip()
     return f"{drift}[dim]{note}[/]"
 
 
@@ -553,15 +558,19 @@ def _assessment_note(row: RunRowPayload) -> str:
     """Spec 8.6's log line: what the batch looked at, what the gate found, what it did.
 
     Composed rather than stored: every part is already a column, and a stored sentence would go
-    stale the moment the status it names is what a reader should trust.
+    stale the moment the status it names is what a reader should trust. Only a row with no
+    assessment has no line: a batch whose paths stage 0 all dropped still has a reason, and the
+    reason is the whole payload of the feature.
     """
     detail = row.trigger_detail
-    if detail.assessment is None or not detail.files:
+    if detail.assessment is None:
         return ""
-    named = ", ".join(detail.files[:LOG_NOTE_FILES])
+    named = ", ".join(escape(f) for f in detail.files[:LOG_NOTE_FILES])
     extra = detail.file_count - LOG_NOTE_FILES
     more = f" +{extra} more" if extra > 0 else ""
-    return f"looked at {named}{more}: {detail.assessment.verdict.reason}, {row.status.value}"
+    looked = f"looked at {named}{more}" if detail.files else "looked at nothing"
+    reason = escape(detail.assessment.verdict.reason)
+    return f"[dim]{looked}: {reason}, {row.status.value}[/]"
 
 
 def _runs_table(payload: LogReport) -> Table:
