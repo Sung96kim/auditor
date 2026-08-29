@@ -112,9 +112,7 @@ EVAL_LIB = "def direct_target(uid):\n    return uid\n"
 EVAL_OTHER = "def match(text):\n    return text\n"
 EVAL_PKG_INIT = "from pkg.deep import reexported\n"
 EVAL_PKG_DEEP = "def reexported(uid):\n    return uid\n"
-# `same_target` again under a test role: a decoy for the truth, never a definer of it. `uses_same`
-# calls it in its own module, so the edge resolves to a test-role node while the one role-filtered
-# definer of that name is `m.py::same_target` -- D1's strict rule, and only that rule, drops it
+# `uses_same` resolves to a test-role `same_target` whose one role-filtered definer is elsewhere
 EVAL_TEST_STUB = (
     "def only_in_tests(uid):\n    return uid\n\n"
     "def same_target(uid):\n    return uid\n\n"
@@ -124,8 +122,7 @@ EVAL_TEST_STUB = (
 EVAL_ATTRS = (
     "from m import Holder\n\n_H = Holder()\n\ndef via_attr():\n    return _H.helper()\n"
 )
-# a name bound from a non-repo import and defined here too: the call resolves to the repo
-# definer, while the queue row it would write carries `externally_bound`, so it is tier C
+# Bound from non-repo import and defined here; externally-bound rule excludes it.
 EVAL_EXTBOUND = (
     "from re import escape\n\n"
     "def escape(text):\n    return text\n\n"

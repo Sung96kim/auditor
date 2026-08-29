@@ -3,6 +3,7 @@ writes, what the foreign keys refuse, and what another checkout's identity canno
 
 import json
 import sqlite3
+from collections.abc import Sequence
 
 import pytest
 
@@ -55,6 +56,18 @@ async def other_store(tmp_path, refine_store):
     )
     yield store
     await store.aclose()
+
+
+async def _write_raw(
+    store: IndexStore, sql: str, params: Sequence[object] = ()
+) -> None:
+    """Plant a row no writer would, in the one place this file reaches for a raw connection."""
+
+    def op(conn: sqlite3.Connection) -> None:
+        conn.execute(sql, params)
+        conn.commit()
+
+    await store._worker.run(op)
 
 
 def _run(**kw) -> Run:
@@ -589,10 +602,8 @@ async def test_deleting_a_refinement_cascades_to_its_anchors(refine_store):
         _refinement(run_id),
         (Anchor(path="m.py", node_id="m.py::f", truth_sha="t1", file_sha="f1"),),
     )
-    await refine_store._worker.run(
-        lambda c: c.execute(
-            "DELETE FROM graph_refinements WHERE refinement_id = ?", (rid,)
-        )
+    await _write_raw(
+        refine_store, "DELETE FROM graph_refinements WHERE refinement_id = ?", (rid,)
     )
     assert await refine_store.refinements.anchors([rid]) == {}
 
@@ -635,12 +646,9 @@ async def test_a_stored_row_this_build_cannot_read_is_dropped_not_raised(refine_
     await refine_store.evals.add_eval(_eval())
     await refine_store.evals.add_eval(_eval(suite="retarget"))
 
-    def spoil(conn):
-        conn.execute("UPDATE graph_evals SET stratum = 'nonsense' WHERE suite = 'add'")
-        conn.commit()
-        return None
-
-    await refine_store.evals._worker.run(spoil)
+    await _write_raw(
+        refine_store, "UPDATE graph_evals SET stratum = 'nonsense' WHERE suite = 'add'"
+    )
     rows = await refine_store.evals.latest(RunnerKind.CLAUDE, "haiku")
     assert [row.suite for row in rows] == ["retarget"]
 
@@ -857,12 +865,10 @@ async def test_a_row_written_outside_the_text_rules_still_reads_back(refine_stor
     another tool, does not make every build fail on it."""
     run_id = await refine_store.runs.add_run(_run())
     rid = await refine_store.refinements.add_refinement(_refinement(run_id), ())
-    await refine_store._worker.run(
-        lambda c: c.execute(
-            "UPDATE graph_refinements SET payload = ?, reason = '' "
-            "WHERE refinement_id = ?",
-            (json.dumps({"annotation": "x" * 400}), rid),
-        )
+    await _write_raw(
+        refine_store,
+        "UPDATE graph_refinements SET payload = ?, reason = '' WHERE refinement_id = ?",
+        (json.dumps({"annotation": "x" * 400}), rid),
     )
     (stored,) = await refine_store.refinements.refinements()
     assert len(stored.payload.annotation or "") == 400

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     Proposal,
     ProposalOutcome,
+    Proposer,
     RefinementKind,
     RefinementTarget,
     Run,
@@ -85,6 +86,20 @@ ANSWERS = Assistant(tool_calls=(("StructuredOutput", ANSWER),))
 SUCCESS = Result(
     structured_output=ANSWER, model_usage=MODEL_USAGE, total_cost_usd=0.004, num_turns=3
 )
+
+
+@pytest.fixture
+def bound_tools(refine_service: RefinementService) -> Callable[..., BoundTools]:
+    """A tool table on this service, so a required `proposer` costs one argument, not five."""
+
+    def make(run_id: str, proposer: Proposer | None = None) -> BoundTools:
+        return BoundTools(
+            service=refine_service,
+            run_id=run_id,
+            proposer=proposer or refine_service.propose,
+        )
+
+    return make
 
 
 def _runner(
@@ -391,47 +406,35 @@ async def test_two_model_entries_are_summed(refine_service: RefinementService):
 
 
 async def test_the_bound_propose_tool_answers_with_the_verdict(
-    refine_service: RefinementService,
+    refine_service: RefinementService, bound_tools
 ):
     run = await refine_service.begin()
-    tools = BoundTools(
-        service=refine_service, run_id=run.run_id, proposer=refine_service.propose
-    )
-    answer = await tools.propose(GOOD)
+    answer = await bound_tools(run.run_id).propose(GOOD)
     assert "is_error" not in answer
     assert json.loads(answer["content"][0]["text"])["outcome"] == "staged"
 
 
-async def test_the_bound_propose_tool_reports_a_refusal_as_an_error(
-    refine_service: RefinementService,
-):
-    tools = BoundTools(
-        service=refine_service, run_id="no-such-run", proposer=refine_service.propose
-    )
-    answer = await tools.propose(GOOD)
+async def test_the_bound_propose_tool_reports_a_refusal_as_an_error(bound_tools):
+    answer = await bound_tools("no-such-run").propose(GOOD)
     assert answer["is_error"] is True
     assert "not open in this process" in answer["content"][0]["text"]
 
 
 async def test_the_bound_brief_tool_shows_the_verdicts_so_far(
-    refine_service: RefinementService,
+    refine_service: RefinementService, bound_tools
 ):
     run = await refine_service.begin()
-    tools = BoundTools(
-        service=refine_service, run_id=run.run_id, proposer=refine_service.propose
-    )
+    tools = bound_tools(run.run_id)
     await tools.propose(GOOD)
     text = (await tools.brief({}))["content"][0]["text"]
     assert "Verdicts so far" in text and "staged" in text
 
 
 async def test_the_hook_records_one_call_per_tool_use(
-    refine_service: RefinementService,
+    refine_service: RefinementService, bound_tools
 ):
     run = await refine_service.begin()
-    tools = BoundTools(
-        service=refine_service, run_id=run.run_id, proposer=refine_service.propose
-    )
+    tools = bound_tools(run.run_id)
     await tools.record(
         {"tool_name": "Read", "tool_input": {"file_path": "a.py"}, "duration_ms": 5}
     )
@@ -678,13 +681,10 @@ def test_only_an_answer_the_schema_accepts_is_an_answer(raw, kept):
     assert (run_answer(raw) is not None) is kept
 
 
-def test_the_bound_table_is_the_one_the_prompt_names(refine_service: RefinementService):
+def test_the_bound_table_is_the_one_the_prompt_names(bound_tools):
     """Three modules used to have to agree on these two names; now one table carries them, and
     this is the pin that says so without the SDK installed."""
-    tools = BoundTools(
-        service=refine_service, run_id="run-1", proposer=refine_service.propose
-    )
-    table = tools.tools()
+    table = bound_tools("run-1").tools()
     assert tuple(t.name for t in table) == GRAPH_TOOLS
     assert tuple(t.handler.__name__ for t in table) == GRAPH_TOOLS
     assert {t.qualified for t in table} <= set(ALLOWED_TOOLS)
@@ -740,9 +740,7 @@ async def test_a_scripted_run_with_a_proposer_stores_no_refinement(
     assert await refine_service.index.refinements.refinements() == []
 
 
-async def test_the_bound_propose_tool_answers_with_the_proposers_verdict(
-    refine_service: RefinementService,
-):
+async def test_the_bound_propose_tool_answers_with_the_proposers_verdict(bound_tools):
     async def judge(_run_id: str, _raw: Mapping[str, Any]) -> Verdict:
         return Verdict(
             outcome=ProposalOutcome.STAGED,
@@ -750,7 +748,6 @@ async def test_the_bound_propose_tool_answers_with_the_proposers_verdict(
             detail="recorded by the eval",
         )
 
-    tools = BoundTools(service=refine_service, run_id="no-such-run", proposer=judge)
-    answer = await tools.propose(GOOD)
+    answer = await bound_tools("no-such-run", judge).propose(GOOD)
     assert "is_error" not in answer
     assert json.loads(answer["content"][0]["text"])["detail"] == "recorded by the eval"

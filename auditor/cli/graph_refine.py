@@ -414,11 +414,8 @@ def graph_eval(
     ),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Measure what this runner and model get right on this repo, and store the numbers the
-    activation gate reads. Every run costs money: on the human path the plan and its ceilings
-    print before the first run opens; `--json` prints nothing before its one document and carries
-    `runs_planned` and both ceilings inside it, so `--dry-run --json` reads the plan without
-    spending.
+    """Measure what this runner and model get right on this repo and store the activation gate's numbers.
+    Costs money per run; `--json` shows the plan and ceilings; `--dry-run --json` reads without spending.
     Exits 1 when no runner can run or a run did not close, 2 on a bad option."""
     root = cli_root(target)
     job = _job("", runner, model)

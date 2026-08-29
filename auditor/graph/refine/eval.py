@@ -340,11 +340,12 @@ class Population(BaseModel):
         the same short name, then the destination's own module, then the rest of the graph.
         """
         want = self.kinds.get(truth.dst)
+        by_closeness = self._decoy_pools(truth)
         same_kind = [
             [node for node in pool if self.kinds.get(node) == want]
-            for pool in self._decoy_pools(truth)
+            for pool in by_closeness
         ]
-        pools = (*same_kind, *self._decoy_pools(truth))
+        pools = (*same_kind, *by_closeness)
         out: list[str] = []
         for fresh in (True, False):
             for pool in pools:
@@ -431,6 +432,9 @@ def _control(suite: EvalSuite, row: UnresolvedRow) -> Trial:
     return Trial(suite=suite, stratum=Stratum.ALL, row=row)
 
 
+#: how one suite draws: a `Population` method over the seeded RNG and the per-stratum cap
+Draw = Callable[[Population, random.Random, int], tuple[Trial, ...]]
+
 #: every suite this build can draw, filled by `EvalSuiteSpec.__init_subclass__`
 _SPECS: dict[EvalSuite, "EvalSuiteSpec"] = {}
 
@@ -446,6 +450,8 @@ class EvalSuiteSpec(BaseModel):
 
     SUITE: ClassVar[EvalSuite]
     STRATA: ClassVar[tuple[Stratum, ...]] = (Stratum.ALL,)
+    #: the `Population` method this suite's trials come from, named rather than forwarded to
+    DRAW: ClassVar[Draw]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -469,11 +475,11 @@ class EvalSuiteSpec(BaseModel):
         """Whether a Wilson bound gates this suite, rather than having produced no false add."""
         return self.SUITE in PRECISION_SUITES
 
-    @abstractmethod
     def draw(
         self, population: Population, rng: random.Random, size: int
     ) -> tuple[Trial, ...]:
         """This suite's trials, at most ``size`` per stratum."""
+        return self.DRAW(population, rng, size)
 
     @abstractmethod
     def verdict(self, trial: Trial, proposed: Sequence[Proposal]) -> str:
@@ -485,11 +491,7 @@ class AddSuite(EvalSuiteSpec):
 
     SUITE: ClassVar[EvalSuite] = EvalSuite.ADD
     STRATA: ClassVar[tuple[Stratum, ...]] = Stratum.add_strata()
-
-    def draw(
-        self, population: Population, rng: random.Random, size: int
-    ) -> tuple[Trial, ...]:
-        return population.adds(rng, size)
+    DRAW: ClassVar[Draw] = staticmethod(Population.adds)
 
     def verdict(self, trial: Trial, proposed: Sequence[Proposal]) -> str:
         added = [p for p in proposed if p.kind is RefinementKind.ADD_EDGE]
@@ -508,11 +510,7 @@ class DecoySuite(EvalSuiteSpec):
     """The same truths offered as candidates, judged on which one the runner picks."""
 
     SUITE: ClassVar[EvalSuite] = EvalSuite.DECOY
-
-    def draw(
-        self, population: Population, rng: random.Random, size: int
-    ) -> tuple[Trial, ...]:
-        return population.decoys(rng, size)
+    DRAW: ClassVar[Draw] = staticmethod(Population.decoys)
 
     def verdict(self, trial: Trial, proposed: Sequence[Proposal]) -> str:
         chosen = [p for p in proposed if p.kind is RefinementKind.RESOLVE_AMBIGUOUS]
@@ -527,11 +525,7 @@ class CollisionSuite(EvalSuiteSpec):
     """Externally bound queue rows, where the only right answer is to add nothing."""
 
     SUITE: ClassVar[EvalSuite] = EvalSuite.COLLISION
-
-    def draw(
-        self, population: Population, rng: random.Random, size: int
-    ) -> tuple[Trial, ...]:
-        return population.collision_trials(rng, size)
+    DRAW: ClassVar[Draw] = staticmethod(Population.collision_trials)
 
     def verdict(self, trial: Trial, proposed: Sequence[Proposal]) -> str:
         return (
@@ -545,11 +539,7 @@ class NegativeSuite(EvalSuiteSpec):
     """Names this repo defines nowhere, where any edge at all is a false add."""
 
     SUITE: ClassVar[EvalSuite] = EvalSuite.NEGATIVE
-
-    def draw(
-        self, population: Population, rng: random.Random, size: int
-    ) -> tuple[Trial, ...]:
-        return population.negatives(rng, size)
+    DRAW: ClassVar[Draw] = staticmethod(Population.negatives)
 
     def verdict(self, trial: Trial, proposed: Sequence[Proposal]) -> str:
         return (

@@ -108,8 +108,7 @@ class FactReader(BaseModel):
         return await self.index.graph.definers(name) if name else []
 
     async def stale(self, scope: str) -> tuple[StaleNote, ...]:
-        """Corrections under this scope the graph stopped trusting: staled, or a pinned one that
-        drifted (spec 5.7).
+        """Corrections under this scope the graph stopped trusting (spec 5.7).
 
         A reader holding synthetic rows answers with none: an eval's brief must show this
         checkout's ledger history no more than it shows its queue (spec 10.2).

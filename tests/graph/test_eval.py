@@ -282,6 +282,7 @@ def test_a_suite_this_build_cannot_draw_raises_rather_than_measuring_another():
 def test_every_shipped_suite_has_a_spec_that_agrees_with_the_vocabulary(suite):
     spec = EvalSuiteSpec.of(suite)
     assert spec.SUITE is suite
+    assert spec.DRAW.__name__ in vars(Population)
     assert spec.precision_gated == (suite in PRECISION_SUITES)
 
 
