@@ -196,10 +196,14 @@ read, no clock. The caller does the I/O and hands the values in.
   calendar day.
 - The vocabulary the store shares lives in `auditor.graph.refine.models`: `Assessment`,
   `AssessmentDecision`, `NodePair` and `Spend`, plus `TriggerDetail.assessment`.
-- `FileDiscovery.auditable(path)` and `FileDiscovery.auditable_rel(rel)` are stage 0: one shape
-  rule in two forms, the second answering for a path that may already be gone.
-- `GraphDB.forget_facts(path)` drops one file's cached facts, which is what the `removed` outcome
-  persists with.
+- `FileDiscovery.auditable(path, *, must_exist=True)` is stage 0. It asks what `files()` asks:
+  the shape rules, then `git check-ignore` inside a checkout. `auditable_paths(paths)` is the
+  batch form and makes one git call for the whole batch; `must_exist=False` keeps a deleted path,
+  so stage 1 can still remove its nodes.
+- `FileDiscovery.auditable_shape(path)` is the shape half alone and never runs git, which is what
+  a hook can afford per event.
+- `GraphDB.forget_facts(paths)` drops those files' cached facts in one transaction, which is what
+  the `removed` outcome persists with.
 
 ## Models
 

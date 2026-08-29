@@ -225,14 +225,14 @@ def test_stage_zero_drops_a_path_before_stage_one_ever_sees_it(
     tmp_path: Path, rel: str
 ):
     """Spec 8.6 stage 0 is the hook's filter; the loop and `/events` share this predicate."""
-    assert FileDiscovery(tmp_path).auditable_rel(rel) is False
+    assert FileDiscovery(tmp_path).auditable(rel, must_exist=False) is False
 
 
 def test_stage_zero_keeps_a_deleted_path_so_stage_one_can_remove_its_nodes(
     tmp_path: Path,
 ):
     """The shape predicate is what makes the `REMOVED` branch reachable in production (P13)."""
-    assert FileDiscovery(tmp_path).auditable_rel("pkg/gone.py") is True
+    assert FileDiscovery(tmp_path).auditable("pkg/gone.py", must_exist=False) is True
 
 
 def _pair(node_id: str, name: str, **over) -> QueuePair:

@@ -285,11 +285,68 @@ def test_default_base_ref_on_main_branch(tmp_path):
 def test_auditable_answers_one_path_the_way_a_scan_would(
     tmp_path: Path, rel: str, expected: bool
 ):
-    """Stage 0 of the assessment (spec 8.6) is this predicate, so it must not drift from `files`."""
+    """Stage 0 of the assessment (spec 8.6) is this predicate, case by case."""
     path = tmp_path / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("x = 1\n")
     assert FileDiscovery(tmp_path).auditable(path) is expected
+
+
+def test_auditable_agrees_with_files_over_a_real_checkout(tmp_path: Path):
+    """Stage 0 must not drift from `files`, which is the drift that let a gitignored path in."""
+    _git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    for rel in (
+        "pkg/mod.py",
+        "scratch/junk.py",
+        "fresh.py",
+        "notes.md",
+        ".claude/worktrees/agent-abc/pkg/mod.py",
+    ):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n")
+    _git(
+        tmp_path, "add", "pkg", ".gitignore"
+    )  # `fresh.py` stays untracked but not ignored
+    finder = FileDiscovery(tmp_path)
+    scanned = set(finder.files(tmp_path))
+    seen = [p for p in tmp_path.rglob("*") if p.is_file() and ".git/" not in str(p)]
+    assert finder.auditable_paths(seen) == tuple((p in scanned) for p in seen)
+    assert finder.auditable(tmp_path / "scratch/junk.py") is False
+    assert finder.auditable(tmp_path / "fresh.py") is True
+
+
+def test_a_gitignored_path_is_still_the_right_shape(tmp_path: Path):
+    """The two questions are separable, which is what keeps the hook side free of a subprocess."""
+    _git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch/junk.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable_shape("scratch/junk.py") is True
+    assert finder.auditable("scratch/junk.py") is False
+
+
+def test_gitignore_is_not_consulted_when_the_caller_turned_it_off(tmp_path: Path):
+    """`respect_gitignore=False` drops `--exclude-standard` in `files`, and here too."""
+    _git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch/junk.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path, respect_gitignore=False)
+    assert finder.auditable(tmp_path / "scratch/junk.py") is True
+    assert (tmp_path / "scratch/junk.py") in finder.files(tmp_path)
+
+
+def test_outside_a_checkout_the_shape_is_the_whole_answer(tmp_path: Path):
+    """No git means no ignore rules to honour, which is how `files` falls back to `rglob`."""
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch/junk.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable(tmp_path / "scratch/junk.py") is True
+    assert (tmp_path / "scratch/junk.py") in finder.files(tmp_path)
 
 
 def test_auditable_refuses_a_path_outside_the_root(tmp_path: Path):
@@ -315,25 +372,25 @@ def test_auditable_refuses_a_path_that_is_not_a_file(tmp_path: Path):
         ("../outside.py", False),
     ],
 )
-def test_auditable_rel_answers_for_a_path_that_may_no_longer_exist(
+def test_auditable_answers_for_a_path_that_may_no_longer_exist(
     tmp_path: Path, rel: str, expected: bool
 ):
     """Stage 0 asks the shape question, so a deleted path still reaches stage 1 (P13)."""
-    assert FileDiscovery(tmp_path).auditable_rel(rel) is expected
+    assert FileDiscovery(tmp_path).auditable(rel, must_exist=False) is expected
 
 
-def test_the_two_predicates_agree_on_a_file_that_exists(tmp_path: Path):
-    """One shape rule under both: only existence separates them."""
+def test_only_must_exist_separates_the_two_readings_of_one_path(tmp_path: Path):
+    """One rule under both settings: a live file answers the same either way."""
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg/mod.py").write_text("x = 1\n")
     finder = FileDiscovery(tmp_path)
     assert (
         finder.auditable(tmp_path / "pkg/mod.py")
-        is finder.auditable_rel("pkg/mod.py")
+        is finder.auditable("pkg/mod.py", must_exist=False)
         is True
     )
     assert finder.auditable(tmp_path / "pkg/gone.py") is False
-    assert finder.auditable_rel("pkg/gone.py") is True
+    assert finder.auditable("pkg/gone.py", must_exist=False) is True
 
 
 def test_agent_worktrees_are_excluded_without_git(tmp_path: Path):

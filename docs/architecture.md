@@ -38,10 +38,12 @@ Paths are relative to the repo root.
   lists auditable files through `git ls-files` (exact `.gitignore` handling) or an `rglob` walk
   outside a repo, minus hard-excluded dirs, default generated-file globs, and the configured
   `exclude`, which includes `.claude/worktrees/*` so a second checkout of the same repo is not
-  scanned twice. `FileDiscovery.auditable(path)` and `auditable_rel(rel)` are the two forms of
-  that one shape rule for a caller holding a single path: the first adds the existence test a
-  scanner wants, the second answers for a repo-relative path that may be gone, which is what the
-  observer's stage 0 asks so a deleted path still reaches stage 1. `default_base_ref` and
+  scanned twice. `FileDiscovery.auditable(path)` is that
+  same question for a caller holding a single path, and it asks git the same way: the shape
+  rules, then one `git check-ignore` so a gitignored path answers `False` exactly as `files()`
+  omits it. `auditable_paths(paths)` batches the git call for a whole Stop path set, and
+  `must_exist=False` keeps a deleted path so the observer's stage 0 still reaches stage 1.
+  `auditable_shape(path)` is the shape half with no subprocess, for the hook. `default_base_ref` and
   `git_changed_files` back the diff flags, and `git_output` is the shared one-shot git call
   `paths.repo_identity` uses.
 - `config.py`: `AuditorSettings` (pydantic-settings) is the merged repo config. `load_config`

@@ -7,6 +7,7 @@ relaxed policy.
 """
 
 import subprocess
+from collections.abc import Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -159,6 +160,7 @@ class FileDiscovery:
         respect_gitignore: bool = True,
     ) -> None:
         self.root = root
+        self._resolved_root = root.resolve()
         self.exclude_globs = _DEFAULT_EXCLUDE_GLOBS + tuple(exclude_globs)
         self.respect_gitignore = respect_gitignore
         self.suffixes = self._supported_suffixes()
@@ -186,7 +188,11 @@ class FileDiscovery:
                 p for p in target.rglob("*") if p.is_file() and self._supported(p)
             ]
 
-        out = [p for p in candidates if not self._excluded(p, soft_active=soft_active)]
+        out = [
+            p
+            for p in candidates
+            if not self._excluded(self._rel(p), soft_active=soft_active)
+        ]
         return sorted(set(out))
 
     def all_files(self, target: Path) -> list[Path]:
@@ -201,24 +207,58 @@ class FileDiscovery:
             candidates = [p for p in tracked if self._under(p, target) and p.is_file()]
         else:
             candidates = [p for p in target.rglob("*") if p.is_file()]
-        out = [p for p in candidates if not self._excluded(p, soft_active=soft_active)]
+        out = [
+            p
+            for p in candidates
+            if not self._excluded(self._rel(p), soft_active=soft_active)
+        ]
         return sorted(set(out))
 
-    def auditable(self, path: Path, *, target: Path | None = None) -> bool:
+    def auditable(
+        self,
+        path: Path | str,
+        *,
+        must_exist: bool = True,
+        target: Path | None = None,
+    ) -> bool:
         """Whether one path is a file this scanner would audit (spec 8.6 stage 0).
 
-        The same tests :meth:`files` applies to every candidate, in one call a caller holding a
-        single path can make: it exists, and it has the shape.
+        ``must_exist`` is False for a Stop path set, which carries deletions: a deleted path has
+        to reach stage 1 to have its nodes removed.
         """
-        return path.is_file() and self._auditable_shape(path, target or self.root)
+        return self.auditable_paths((path,), must_exist=must_exist, target=target)[0]
 
-    def auditable_rel(self, rel: str, *, target: Path | None = None) -> bool:
-        """Whether a repo-relative path has that shape, whether or not it still exists.
+    def auditable_paths(
+        self,
+        paths: Sequence[Path | str],
+        *,
+        must_exist: bool = True,
+        target: Path | None = None,
+    ) -> tuple[bool, ...]:
+        """:meth:`auditable` for a whole batch, asking git once instead of once per path.
 
-        Stage 0's own predicate: a Stop path set carries deletions, and a deleted path has to
-        reach stage 1 to have its nodes removed (spec 8.6).
+        Consults exactly what :meth:`files` consults: the shape rules, then ``git check-ignore``
+        while ``respect_gitignore`` is on and the root is a checkout. Outside a checkout the shape
+        is the whole answer, which is how :meth:`files` behaves there too.
         """
-        return self._auditable_shape(self.root / rel, target or self.root)
+        wanted = [self._as_path(p) for p in paths]
+        shaped = [
+            self.auditable_shape(p, target=target) and (not must_exist or p.is_file())
+            for p in wanted
+        ]
+        rels = [self._rel(p) for p in wanted]
+        ignored = self._git_ignored(
+            [r for r, ok in zip(rels, shaped, strict=True) if ok]
+        )
+        return tuple(
+            ok and rel not in ignored for rel, ok in zip(rels, shaped, strict=True)
+        )
+
+    def auditable_shape(self, path: Path | str, *, target: Path | None = None) -> bool:
+        """Whether one path has the shape alone: under the root, a supported language, not
+        excluded. Git is never asked, so a hook can call it per event without a subprocess.
+        """
+        return self._auditable_shape(self._as_path(path), target or self.root)
 
     # --- internals --------------------------------------------------------
 
@@ -256,23 +296,55 @@ class FileDiscovery:
             return None
         return [self.root / line for line in out.stdout.splitlines() if line]
 
+    def _git_ignored(self, rels: Sequence[str]) -> frozenset[str]:
+        """The subset of these repo-relative paths git's ignore rules drop.
+
+        Empty outside a checkout and when ``respect_gitignore`` is off, which are the two cases
+        :meth:`files` also stops asking git in. A tracked path is never reported, matching what
+        ``ls-files --cached --others --exclude-standard`` lists.
+        """
+        if not rels or not self.respect_gitignore:
+            return frozenset()
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(self.root), "check-ignore", "--stdin"],
+                input="\n".join(rels),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            return frozenset()
+        # 0 = something matched, 1 = nothing did; any other code (128 outside a checkout) is
+        # git declining to answer, and the shape is then the whole answer
+        if out.returncode not in (0, 1):
+            return frozenset()
+        return frozenset(line for line in out.stdout.splitlines() if line)
+
+    def _as_path(self, path: Path | str) -> Path:
+        """A repo-relative string as the absolute path every internal predicate takes."""
+        return path if isinstance(path, Path) else self.root / path
+
     def _auditable_shape(self, path: Path, root: Path) -> bool:
-        """Under the root, a supported language, not excluded. No filesystem read."""
+        """Under the root, a supported language, not excluded.
+
+        Resolves the path, so it stats every component of it; it never opens the file and never
+        asks git. A caller on an event loop should batch these through `asyncio.to_thread`.
+        """
         if not self._under(path, root):
             return False
         soft_active = not _in_soft_skip(self._rel(root))
         return self._supported(path) and not self._excluded(
-            path, soft_active=soft_active
+            self._rel(path), soft_active=soft_active
         )
 
     def _rel(self, path: Path) -> str:
         try:
-            return str(path.resolve().relative_to(self.root.resolve()))
+            return str(path.resolve().relative_to(self._resolved_root))
         except ValueError:
             return str(path)
 
-    def _excluded(self, path: Path, *, soft_active: bool = True) -> bool:
-        rel = self._rel(path)
+    def _excluded(self, rel: str, *, soft_active: bool = True) -> bool:
         if set(rel.split("/")) & _EXCLUDE_DIRS:
             return True
         if soft_active and _in_soft_skip(rel):
