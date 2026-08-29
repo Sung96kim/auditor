@@ -8,6 +8,9 @@ from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     STORED_ROW,
     Anchor,
+    Assessment,
+    AssessmentDecision,
+    NodePair,
     Proposal,
     Refinement,
     RefinementKind,
@@ -361,3 +364,24 @@ def test_an_anchor_rebases_its_path_the_way_it_rebases_its_node():
     assert Anchor(node_id="a.py::f", path="a.py", truth_sha="t").rebased("") == Anchor(
         node_id="a.py::f", path="a.py", truth_sha="t"
     )
+
+
+def test_a_trigger_detail_round_trips_an_assessment():
+    detail = TriggerDetail(
+        files=("m.py",),
+        assessment=Assessment(
+            files=("m.py",),
+            new_pairs=(NodePair(node_id="m.py::Store.get", name="widen"),),
+            decision=AssessmentDecision.RUN,
+            reason="1 new question",
+        ),
+    )
+    back = TriggerDetail.model_validate_json(detail.model_dump_json())
+    assert back == detail
+    assert back.assessment is not None
+    assert back.assessment.new_pairs[0].name == "widen"
+
+
+def test_a_trigger_detail_without_an_assessment_still_decodes_the_old_shape():
+    """Every row written before this slice holds `{"files": [...], "reason": ""}`."""
+    assert TriggerDetail.model_validate_json('{"files": ["m.py"]}').assessment is None

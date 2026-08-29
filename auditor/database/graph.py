@@ -181,6 +181,22 @@ class GraphDB(BaseDB):
 
         await self._worker.run(op)
 
+    async def forget_facts(self, path: str) -> None:
+        """Drop one file's cached facts, for a path that is gone (spec 8.6's removed outcome).
+
+        The narrow form of what :meth:`IndexStore.prune` already does in bulk, for the one caller
+        that holds a single path and no keep set. Nothing else is keyed by path: the spec 5.5 pair
+        is two columns of this row, and `graph_unresolved` is node keyed.
+        """
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "DELETE FROM graph_facts WHERE repo = ? AND path = ?", (self.repo, path)
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
     async def facts_hash(self, path: str) -> str | None:
         row = await self._fetch_one(
             "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?", (path,)

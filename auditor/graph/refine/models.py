@@ -219,13 +219,58 @@ class ToolCall(BaseModel):
     detail: str = ""
 
 
+class NodePair(BaseModel):
+    """One ``(node_id, name)`` the queue holds and a run can target (spec 5.6)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    name: str
+
+
+class AssessmentDecision(StrEnum):
+    RUN = "run"
+    SKIP = "skip"
+
+
+class Assessment(BaseModel):
+    """Why one edit batch did or did not earn a refinement run (spec 8.6).
+
+    ``files`` is attribution only: ``facts_changed_nodes`` can name nodes outside them when the
+    tree moved. ``deferred_pairs`` is a count because the pairs themselves stay in the queue.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    files: tuple[str, ...] = ()
+    added_nodes: tuple[str, ...] = ()
+    removed_nodes: tuple[str, ...] = ()
+    facts_changed_nodes: tuple[str, ...] = ()
+    new_pairs: tuple[NodePair, ...] = ()
+    resolved_pairs: tuple[NodePair, ...] = ()
+    stale_refinements: tuple[int, ...] = ()
+    affected_flow: tuple[str, ...] = ()
+    deferred_pairs: int = 0
+    decision: AssessmentDecision = AssessmentDecision.SKIP
+    reason: str = ""
+
+    @property
+    def decided_to_run(self) -> bool:
+        """Whether the gate let this batch through, so no caller compares enum members by hand."""
+        return self.decision is AssessmentDecision.RUN
+
+
 class TriggerDetail(BaseModel):
-    """What the trigger carried: the files it named and, for a gate decision, why."""
+    """What the trigger carried: the files it named and, for a gate decision, why.
+
+    For an edit batch it also carries the spec 8.6 assessment that decided it.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     files: tuple[str, ...] = ()
     reason: str = ""
+    assessment: Assessment | None = None
 
 
 class RunUsage(BaseModel):
@@ -238,6 +283,15 @@ class RunUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     num_turns: int = 0
+
+
+class Spend(BaseModel):
+    """What a window of model-calling runs cost this checkout: spec 8.4's two day ceilings."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cost_usd: float = 0.0
+    runs: int = 0
 
 
 class Stratum(StrEnum):

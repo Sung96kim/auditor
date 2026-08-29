@@ -46,6 +46,31 @@ async def test_clear_facts_forces_reextraction(graph_store):
     )  # so the next scan re-extracts
 
 
+async def test_forget_facts_drops_one_path_and_leaves_the_rest(graph_store):
+    await graph_store.graph.set_facts("a.py", "{}", "h1")
+    await graph_store.graph.set_facts("b.py", "{}", "h2")
+    await graph_store.graph.forget_facts("a.py")
+    assert await graph_store.graph.facts_hash("a.py") is None
+    assert await graph_store.graph.facts_hash("b.py") == "h2"
+
+
+async def test_forget_facts_takes_the_hash_pair_with_it(graph_store):
+    """The spec 5.5 pair lives in the same row, so a build cannot read half a forgotten file."""
+    await graph_store.graph.set_facts(
+        "a.py", "{}", "h1", hashes=FileHashes(truth="t1", facts="f1")
+    )
+    await graph_store.graph.forget_facts("a.py")
+    assert await graph_store.graph.hashes("a.py") is None
+
+
+async def test_forget_facts_leaves_the_unresolved_queue_alone(graph_store):
+    """Same reason `prune` does: the queue is node keyed and every build replaces it whole."""
+    await graph_store.graph.set_facts("gone.py", "{}", "h1")
+    await graph_store.graph.replace_unresolved([_row("gone.py::f", "handle")])
+    await graph_store.graph.forget_facts("gone.py")
+    assert len(await graph_store.graph.unresolved()) == 1
+
+
 async def test_replace_graph_and_query(graph_store):
     nodes = [_n("a", rank=0.9, cluster_id=1), _n("b", cluster_id=1)]
     edges = [GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS, weight=1.0)]
