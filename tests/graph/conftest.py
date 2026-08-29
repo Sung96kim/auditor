@@ -124,6 +124,13 @@ EVAL_TEST_STUB = (
 EVAL_ATTRS = (
     "from m import Holder\n\n_H = Holder()\n\ndef via_attr():\n    return _H.helper()\n"
 )
+# a name bound from a non-repo import and defined here too: the call resolves to the repo
+# definer, while the queue row it would write carries `externally_bound`, so it is tier C
+EVAL_EXTBOUND = (
+    "from re import escape\n\n"
+    "def escape(text):\n    return text\n\n"
+    "def calls_escape(text):\n    return escape(text)\n"
+)
 # a bare call the node binds itself, which `form_for` reports no form for, and nothing else drops
 EVAL_SHADOW = (
     "from lib import direct_target\n\n"
@@ -141,6 +148,7 @@ EVAL_POPULATION = {
     "tests/stub.py": EVAL_TEST_STUB,
     "attrs.py": EVAL_ATTRS,
     "shadow.py": EVAL_SHADOW,
+    "extbound.py": EVAL_EXTBOUND,
 }
 
 

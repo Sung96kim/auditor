@@ -179,7 +179,8 @@ def test_a_human_dry_run_shows_the_whole_plan(eval_repo, eval_runner):
     )
     shown = one_line(render_text(render_graph_eval, payload, width=120))
     assert (
-        "6 runs planned for haiku, each capped at $0.25 and this eval at $2.00" in shown
+        "6 runs planned for haiku, each capped at $0.25, up to $1.50 against the "
+        "$12.00 eval ceiling" in shown
     )
     assert "add/same-module: 2 trials" in shown
     assert "(nothing measured)" in shown
@@ -191,8 +192,9 @@ def test_the_human_path_prints_what_it_may_spend_before_it_spends(
     """The plan is only a cost guard if it is read while there is still money to save."""
     result = invoke("graph", "eval", str(eval_repo), "--suite", "add", "--sample", "1")
     assert result.exit_code == 0
-    assert "3 runs planned, up to $0.75 against the $2.00 eval ceiling" in one_line(
-        result.output
+    assert (
+        "3 runs planned, each capped at $0.25, up to $0.75 against the "
+        "$12.00 eval ceiling" in one_line(result.output)
     )
 
 

@@ -72,7 +72,7 @@ class BudgetConfig(BaseModel):
         0.25, ge=0.0, description="Ceiling handed to one run."
     )
     max_budget_usd_per_eval: float = Field(
-        2.0,
+        12.0,
         ge=0.0,
         description="Ceiling on one `auditr graph eval` invocation, across every suite.",
     )

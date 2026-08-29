@@ -24,6 +24,7 @@ from auditor.cli.helpers import (
     run,
 )
 from auditor.cli.options import (
+    EVAL_SAMPLE_DEFAULT,
     EvalSample,
     EvalSeed,
     EvalSuiteOption,
@@ -405,7 +406,7 @@ def graph_eval(
     target: GraphTarget = Path("."),
     runner: RefineRunner = None,
     model: RefineModel = None,
-    sample: EvalSample = 80,
+    sample: EvalSample = EVAL_SAMPLE_DEFAULT,
     seed: EvalSeed = 1,
     suite: EvalSuiteOption = "all",
     dry_run: bool = typer.Option(
@@ -414,8 +415,10 @@ def graph_eval(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Measure what this runner and model get right on this repo, and store the numbers the
-    activation gate reads. Every run costs money: the plan and its ceilings print before the first
-    run opens, and `--dry-run` stops there.
+    activation gate reads. Every run costs money: on the human path the plan and its ceilings
+    print before the first run opens; `--json` prints nothing before its one document and carries
+    `runs_planned` and both ceilings inside it, so `--dry-run --json` reads the plan without
+    spending.
     Exits 1 when no runner can run or a run did not close, 2 on a bad option."""
     root = cli_root(target)
     job = _job("", runner, model)
@@ -445,12 +448,7 @@ def _print_plan(plan: EvalPlan) -> None:
 
     `--json` and `--dry-run` both leave this out: their one document already is the plan.
     """
-    err_console.print(
-        f"[dim]{plan.runs_planned} runs planned, up to "
-        f"${plan.runs_planned * plan.max_budget_usd_per_run:.2f} against the "
-        f"${plan.max_budget_usd_per_eval:.2f} eval ceiling[/dim]",
-        highlight=False,
-    )
+    err_console.print(f"[dim]{plan.budget_line()}[/dim]", highlight=False)
 
 
 def _suites(requested: str) -> tuple[EvalSuite, ...]:

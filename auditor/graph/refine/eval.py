@@ -87,6 +87,9 @@ SCORING_KINDS = (RefinementKind.ADD_EDGE, RefinementKind.RESOLVE_AMBIGUOUS)
 #: how one batch's runner is built: the service holding its masked queue, and its judge
 RunnerFactory = Callable[[RefinementService, Proposer], RefinementRunner]
 
+#: what a stratum that did not finish its runs leaves behind, said once however it stopped
+NO_ROW = "no row is written and the last complete measurement stands"
+
 
 class ExclusionRule(StrEnum):
     """Why a resolved `calls` edge is not one of the add suite's truths (spec 10.2)."""
@@ -95,6 +98,8 @@ class ExclusionRule(StrEnum):
     NOT_BOUNDED_FORM = "not-bounded-form"
     #: the role-filtered definers a real queue row would carry are not this destination alone
     NOT_SOLE_DEFINER = "not-sole-definer"
+    #: the caller's module binds the name from a non-repo import, so the queue's row is tier C
+    EXTERNALLY_BOUND = "externally-bound"
 
 
 class Truth(BaseModel):
@@ -119,9 +124,8 @@ def truth_of(
 ) -> Truth | ExclusionRule:
     """Spec 10.2's tier B shape for one resolved `calls` edge, or the rule that leaves it out.
 
-    One decision point for both answers, so a rule that stops excluding turns up as an extra truth
-    a count can catch. The queue's externally-bound rule is subsumed by the call-form filter: the
-    receivers here are ``(None,)`` or ``self``/``cls``, which no module binds from a non-repo import.
+    One decision point for both answers, and the three rules are the three tier B conditions
+    `TierPolicy.tier` reads, each applied through the call the queue writer itself makes.
     """
     name = short_name(edge.dst)
     found = form_for(call_forms(node), name, node.local_names)
@@ -130,13 +134,17 @@ def truth_of(
     if tuple(definers.get(name, ())) != (edge.dst,):
         return ExclusionRule.NOT_SOLE_DEFINER
     call_form, receivers = found
+    receiver_root = receivers[0] if receivers else None
+    # `UnresolvedCollector._row`'s own call: the called name as well as the receiver it was on
+    if bindings.externally_bound(node.module, name, receiver_root):
+        return ExclusionRule.EXTERNALLY_BOUND
     return Truth(
         src=edge.src,
         dst=edge.dst,
         name=name,
         edge_kind=EdgeKind.CALLS,
         call_form=call_form,
-        receiver_root=receivers[0] if receivers else None,
+        receiver_root=receiver_root,
         stratum=Stratum.of(
             edge.src,
             edge.dst,
@@ -410,6 +418,8 @@ def _masked(truth: Truth) -> Trial:
             call_form=truth.call_form,
             receiver_root=truth.receiver_root,
             definers=(truth.dst,),
+            # every truth cleared the externally-bound rule, so the queue's own value is False
+            externally_bound=False,
         ),
         truth=truth.dst,
         edge_kind=truth.edge_kind,
@@ -651,9 +661,11 @@ def tally(
 ) -> tuple[SuiteTally, ...]:
     """Sum one suite's judgements per stratum, with the cost and turns its runs spent.
 
-    ``spend`` is read off the closed run rows: a `RunProduct.run` is the row as it was opened, so
-    its usage is still empty and summing that would report every eval as free.
+    ``spend`` is read off the closed run rows: an opened row's usage is still empty and summing
+    that would report every eval as free. A scored off-target proposal lands where the suite's own
+    gate reads it: `wrong` for a precision suite, so the Wilson bound carries it, else `false_adds`.
     """
+    precision = EvalSuiteSpec.of(suite).precision_gated
     grouped: dict[Stratum, list[Judgement]] = {}
     for judgement in judgements:
         grouped.setdefault(judgement.trial.stratum, []).append(judgement)
@@ -661,16 +673,16 @@ def tally(
     for stratum, group in grouped.items():
         counts = Counter(judgement.verdict for judgement in group)
         stray = tuple(off_target.get(stratum, ()))
+        scored = sum(1 for p in stray if p.kind in SCORING_KINDS)
         out.append(
             SuiteTally(
                 suite=suite.value,
                 stratum=stratum,
                 n=len(group),
                 correct=counts["correct"],
-                wrong=counts["wrong"],
+                wrong=counts["wrong"] + (scored if precision else 0),
                 missed=counts["missed"],
-                false_adds=counts["false_add"]
-                + sum(1 for p in stray if p.kind in SCORING_KINDS),
+                false_adds=counts["false_add"] + (0 if precision else scored),
                 off_target=len(stray),
                 spend=spend.get(stratum, SuiteSpend()),
             )
@@ -834,15 +846,15 @@ class EvalRun(BaseModel):
         judged: list[Judgement] = []
         spend: dict[Stratum, SuiteSpend] = {}
         stray: dict[Stratum, list[Proposal]] = {}
-        stopped: list[str] = []
+        stopped: dict[Stratum, str] = {}
         notes: list[str] = []
         spent = 0.0
         for group in groups:
             stratum = group[0].stratum
             key = key_of(suite.value, stratum)
             if self.spent + self.per_run > self.ceiling:
-                stopped.append(
-                    f"{key}: stopped: budget, ${self.spent:.4f} spent of the "
+                stopped[stratum] = (
+                    f"stopped: budget, ${self.spent:.4f} spent of the "
                     f"${self.ceiling:.2f} eval ceiling"
                 )
                 break
@@ -852,15 +864,12 @@ class EvalRun(BaseModel):
                 spent += row.usage.cost_usd
                 self.spent += row.usage.cost_usd
             if unmeasured:
-                stopped.append(f"{key}: {unmeasured}")
+                stopped[stratum] = unmeasured
                 break
             if row is None or row.status is not RunStatus.SUCCEEDED:
                 status = row.status.value if row is not None else "unopened"
                 cost = row.usage.cost_usd if row is not None else 0.0
-                stopped.append(
-                    f"{key}: a run ended {status} after ${cost:.4f}, "
-                    "so the suite stopped there"
-                )
+                stopped[stratum] = f"a run ended {status} after ${cost:.4f}"
                 break
             judged.extend(judge.judgements())
             done[stratum] += 1
@@ -870,19 +879,19 @@ class EvalRun(BaseModel):
         complete = {
             stratum for stratum, runs in planned.items() if done[stratum] == runs
         }
-        stopped.extend(
-            f"{key_of(suite.value, stratum)}: {done[stratum]} of {runs} runs completed, "
-            "so no row is written and the last complete measurement stands"
-            for stratum, runs in planned.items()
-            if stratum not in complete
-        )
+        for stratum, runs in planned.items():
+            if stratum not in complete:
+                stopped.setdefault(stratum, f"{done[stratum]} of {runs} runs completed")
         return SuiteResult(
             tallies=tuple(
                 got
                 for got in tally(judged, suite=suite, spend=spend, off_target=stray)
                 if got.stratum in complete
             ),
-            stopped=tuple(stopped),
+            stopped=tuple(
+                f"{key_of(suite.value, stratum)}: {why}; {NO_ROW}"
+                for stratum, why in stopped.items()
+            ),
             off_target=tuple(notes),
             spent=spent,
         )
@@ -920,9 +929,10 @@ class EvalRun(BaseModel):
         row = await self.service.index.runs.run(product.run.run_id)
         briefed = len(product.brief.targets)
         if briefed != len(trials):
+            status = row.status.value if row is not None else "unopened"
             return row, (
-                f"the run failed unbriefed, {briefed} of {len(trials)} trials reached "
-                "its brief, so nothing it did is a measurement"
+                f"the run ended {status} unbriefed, {briefed} of {len(trials)} trials "
+                "reached its brief, so nothing it did is a measurement"
             )
         return row, ""
 

@@ -424,13 +424,7 @@ def _landed_note(out: Console, landed: tuple[Verdict, ...]) -> None:
 
 def render_graph_eval(out: Console, payload: EvalReport) -> None:
     plan = payload.plan
-    runs = f"{plan.runs_planned} run{'' if plan.runs_planned == 1 else 's'}"
-    out.print(
-        f"[dim]{runs} planned for {payload.model}, each capped at "
-        f"${plan.max_budget_usd_per_run:.2f} and this eval at "
-        f"${plan.max_budget_usd_per_eval:.2f}[/dim]",
-        highlight=False,
-    )
+    out.print(f"[dim]{plan.budget_line(payload.model)}[/dim]", highlight=False)
     for line in plan.strata:
         out.print(f"[dim]{line}[/dim]")
     if not payload.suites:

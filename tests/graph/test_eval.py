@@ -11,6 +11,7 @@ from graph._support import eval_build
 
 import auditor
 from auditor.cli.helpers import load_settings, load_user, open_index
+from auditor.cli.options import EVAL_SAMPLE_DEFAULT
 from auditor.database import IndexStore
 from auditor.graph.model import CallForm, EdgeKind, FactKind, UnresolvedRow
 from auditor.graph.refine import tiers
@@ -53,7 +54,7 @@ from auditor.graph.refine.models import (
     key_of,
     wilson_lower,
 )
-from auditor.graph.refine.payloads import EvalPlan
+from auditor.graph.refine.payloads import EvalPlan, EvalReport
 from auditor.graph.refine.runner import FakeRun
 from auditor.graph.refine.service import (
     RefinementRefused,
@@ -61,6 +62,7 @@ from auditor.graph.refine.service import (
     RunRegistry,
 )
 from auditor.graph.refine.tiers import TierPolicy
+from auditor.user_settings import BudgetConfig, LimitsConfig
 
 #: the four truths `graph_repo_eval` is built to yield, exactly (P6)
 EXPECTED_TRUTHS = {
@@ -77,6 +79,9 @@ EXCLUDED_EDGES = {
     ),
     ExclusionRule.NOT_SOLE_DEFINER: (
         ("tests/stub.py::uses_same", "tests/stub.py::same_target"),
+    ),
+    ExclusionRule.EXTERNALLY_BOUND: (
+        ("extbound.py::calls_escape", "extbound.py::escape"),
     ),
 }
 
@@ -203,7 +208,7 @@ def test_the_published_population_counts_agree_wherever_they_appear():
     ] + [root / "README.md"]
     pattern = re.compile(r"[\d,]+ / [\d,]+ / \d+(?= tier-B-shaped truths)")
     found = {match for page in pages for match in pattern.findall(page.read_text())}
-    assert found <= {POPULATION_COUNTS}
+    assert found == {POPULATION_COUNTS}
     assert POPULATION_COUNTS in (Stratum.__doc__ or "")
 
 
@@ -618,6 +623,24 @@ async def test_an_off_target_proposal_that_adds_or_picks_counts_as_a_false_add(
     )
     assert got.off_target == 1
     assert got.false_adds == scored
+
+
+async def test_an_off_target_add_enters_the_precision_denominator():
+    """A run that answered its one trial right and filed one stray read precision 1.000:
+    `false_adds` feeds only `false_add_rate`, which no precision gate reads."""
+    trial = _add_trial()
+    judge = Judge.over([trial])
+    await judge.propose("run-1", _proposal(RefinementKind.ADD_EDGE, dst=trial.truth))
+    await judge.propose("run-1", OFF_TARGET_PAYLOADS[RefinementKind.ADD_EDGE])
+    (got,) = tally(
+        judge.judgements(),
+        suite=EvalSuite.ADD,
+        spend={},
+        off_target={Stratum.SAME_MODULE: judge.off_target},
+    )
+    assert (got.correct, got.wrong, got.false_adds, got.off_target) == (1, 1, 0, 1)
+    assert got.metrics.precision == 0.5
+    assert got.metrics.lower_bound_95 == pytest.approx(wilson_lower(1, 2))
 
 
 async def test_a_payload_with_no_readable_kind_is_refused_outright():
@@ -1049,7 +1072,7 @@ async def test_a_dry_run_answers_with_the_plan_and_opens_nothing(eval_service):
     assert report.plan.runs_planned == 6
     assert report.plan.suites == tuple(suite.value for suite in ALL_SUITES)
     assert "add/same-module: 2 trials" in report.plan.strata
-    assert report.plan.max_budget_usd_per_eval == 2.0
+    assert report.plan.max_budget_usd_per_eval == 12.0
     assert (report.suites, report.runs, report.cost_usd) == ((), 0, 0.0)
     assert await eval_service.index.runs.runs() == []
     assert [plan.runs_planned for plan in seen] == [6]
@@ -1079,20 +1102,37 @@ async def test_the_plan_reaches_its_reader_before_the_first_run_opens(eval_servi
     assert len(opened) == report.plan.runs_planned == 3
 
 
-async def test_the_eval_ceiling_stops_the_next_run_before_it_opens(eval_service):
-    tight = _reconfigured(eval_service, budget={"max_budget_usd_per_eval": 0.1})
-    report = await _run(tight, {}).report([EvalSuite.ADD])
-    assert report.runs == 0
-    assert report.suites == ()
-    assert any("stopped: budget" in line for line in report.notes.stopped)
-    assert await eval_service.index.runs.runs() == []
+def test_the_default_eval_ceiling_covers_a_default_suite_all_plan():
+    """A ceiling under its own default plan stops `auditr graph eval --suite all` a fifth of the
+    way through and exits 1 on every repo, which is the one invocation four surfaces name."""
+    budget, limits = BudgetConfig(), LimitsConfig()
+    full = [_add_trial(src=f"a.py::f{i}") for i in range(EVAL_SAMPLE_DEFAULT)]
+    strata = sum(len(EvalSuiteSpec.of(suite).STRATA) for suite in ALL_SUITES)
+    planned = strata * len(batches(full, limits.max_nodes_per_run))
+    assert budget.max_budget_usd_per_eval >= planned * budget.max_budget_usd_per_run
 
 
-async def test_a_batch_that_briefs_fewer_trials_than_it_holds_measures_nothing(
-    eval_service, monkeypatch
+@pytest.mark.parametrize(("ceiling", "measured"), [(0.1, 0), (0.4, 2)])
+async def test_the_eval_ceiling_stops_the_next_run_before_it_opens(
+    eval_service, ceiling, measured
 ):
-    """The collision bug's shape: a control cannot clear a gate over questions nobody was asked."""
-    real = await Population.of(eval_service.facts)
+    """The second case is what pins the running total: with `spent` never accumulating, the third
+    run reads the same $0.00 the first one did and every stratum measures."""
+    tight = _reconfigured(eval_service, budget={"max_budget_usd_per_eval": ceiling})
+    report = await _evaluate(
+        tight, pretend=FakeRun(usage=RunUsage(cost_usd=0.1, num_turns=1))
+    )
+    assert report.runs == measured
+    assert len(report.suites) == measured
+    assert any("stopped: budget" in line for line in report.notes.stopped)
+    assert len(await eval_service.index.runs.runs()) == measured
+
+
+async def _unbriefed(
+    service: RefinementService, monkeypatch: pytest.MonkeyPatch
+) -> EvalReport:
+    """One collision batch whose row reaches no brief, which is the collision bug's own shape."""
+    real = await Population.of(service.facts)
     ghost = UnresolvedRow(
         node_id="gone.py::vanished",
         fact_kind=FactKind.CALLEE,
@@ -1107,11 +1147,31 @@ async def test_a_batch_that_briefs_fewer_trials_than_it_holds_measures_nothing(
         return planted
 
     monkeypatch.setattr(Population, "of", classmethod(_fixed))
-    report = await _run(eval_service, {}).report([EvalSuite.COLLISION])
+    return await _run(service, {}).report([EvalSuite.COLLISION])
+
+
+async def test_a_batch_that_briefs_fewer_trials_than_it_holds_measures_nothing(
+    eval_service, monkeypatch
+):
+    """A control cannot clear a gate over questions nobody was asked."""
+    report = await _unbriefed(eval_service, monkeypatch)
     assert report.suites == ()
     assert report.activation.proven == ()
     assert any("unbriefed" in line for line in report.notes.stopped)
     assert await eval_service.index.evals.latest(RunnerKind.FAKE, "haiku") == []
+
+
+async def test_the_unbriefed_line_says_what_the_stored_row_says(
+    eval_service, monkeypatch
+):
+    """The line used to call the run `failed` while `auditr graph log` showed it succeeded: one
+    run, two statuses, and the reader has to guess which surface is lying."""
+    report = await _unbriefed(eval_service, monkeypatch)
+    (row,) = await eval_service.index.runs.runs()
+    (line,) = [note for note in report.notes.stopped if "unbriefed" in note]
+    assert f"the run ended {row.status.value} unbriefed" in line
+    assert row.status is RunStatus.SUCCEEDED
+    assert "nothing it did is a measurement" in line and "no row is written" in line
 
 
 # ---------------------------------------------------------------- the eval brief's isolation

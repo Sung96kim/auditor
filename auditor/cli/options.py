@@ -262,6 +262,8 @@ RefineModel = Annotated[
     str | None,
     typer.Option("--model", help="haiku or sonnet; the configured model when omitted."),
 ]
+#: trials per stratum a bare `auditr graph eval` draws, which is what sizes the default plan
+EVAL_SAMPLE_DEFAULT = 80
 EvalSample = Annotated[
     int,
     typer.Option("--sample", min=1, max=500, help="Trials per stratum."),

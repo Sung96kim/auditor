@@ -129,6 +129,20 @@ class EvalPlan(BaseModel):
     max_budget_usd_per_run: float = 0.0
     max_budget_usd_per_eval: float = 0.0
 
+    def budget_line(self, model: str = "") -> str:
+        """This plan's worst case in one sentence, so the pre-spend guard and the report agree.
+
+        Both renderers call it: one wording twice is a reader checking a number, two is a reader
+        wondering which is the real ceiling.
+        """
+        runs = f"{self.runs_planned} run{'' if self.runs_planned == 1 else 's'}"
+        whose = f" for {model}" if model else ""
+        return (
+            f"{runs} planned{whose}, each capped at ${self.max_budget_usd_per_run:.2f}, "
+            f"up to ${self.runs_planned * self.max_budget_usd_per_run:.2f} against the "
+            f"${self.max_budget_usd_per_eval:.2f} eval ceiling"
+        )
+
 
 class EvalNotes(BaseModel):
     """What the draw and the runs could not do, one list per reason (spec 10.4).

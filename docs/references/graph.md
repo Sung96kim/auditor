@@ -361,10 +361,11 @@ auditr graph eval --dry-run
 - An eval masks known-true edges of this repo's own deterministic graph, presents them to a runner
   as unresolved rows, and judges every proposal against the ground truth.
 - Four suites ship. `add` masks a resolved `calls` edge whose call site is bare or `self`, whose
-  name this repo defines exactly once, at that destination: tier B's own shape. `decoy` presents
-  the same truths as `ambiguous_name` rows offering the true destination among up to three wrong
-  ones. `collision` presents the queue's externally bound rows, where the only right answer is
-  `unresolvable` or silence. `negative` presents names this repo defines nowhere.
+  name this repo defines exactly once, at that destination, and whose caller's module does not bind
+  that name from a non-repo import: tier B's own shape. `decoy` presents the same truths as
+  `ambiguous_name` rows offering the true destination among up to three wrong ones. `collision`
+  presents the queue's externally bound rows, where the only right answer is `unresolvable` or
+  silence. `negative` presents names this repo defines nowhere.
 - `add` is stratified by how far the destination is from the source: `same-module`,
   `direct-import`, `neither`. On this repo those hold 883 / 1,321 / 38 tier-B-shaped truths out
   of 5,590 resolved `calls` edges, which split 49 / 46 / 5 per cent.
@@ -372,9 +373,13 @@ auditr graph eval --dry-run
   the destination itself: 138 same-module edges resolve to a test-role node whose short name has
   an unrelated production definer, and a real queue row would carry that definer, never the
   test-role destination.
-- Two rules leave a resolved `calls` edge out of the ground truth. `not-bounded-form`: the site is
-  an attribute call, or the node binds the name itself. `not-sole-definer`: the role-filtered
-  definers are not this destination alone.
+- Three rules leave a resolved `calls` edge out of the ground truth, one per tier B condition.
+  `not-bounded-form`: the site is an attribute call, or the node binds the name itself.
+  `not-sole-definer`: the role-filtered definers are not this destination alone.
+  `externally-bound`: the caller's module binds the name from a non-repo import, applied through
+  the queue writer's own call (the called name as well as the receiver), so a site the real queue
+  would mark externally bound is left out and a masked add row carries `externally_bound=False`
+  by construction. It removes 0 edges on this repo, so the counts above are the same either way.
 - `--sample` is per stratum. A stratum draws `min(sample, available)`, and the report names:
   - `short`: strata that drew fewer trials than asked for.
   - `empty`: strata with nothing to draw.
@@ -390,9 +395,10 @@ auditr graph eval --dry-run
   proposals of that shape keep landing `pending`.
 - A Wilson bound reads `correct + wrong`, not `n`, so a stratum a runner mostly ignored is
   unprovable however large its draw was.
-- An off-target `add_edge` or `resolve_ambiguous` counts as a false add for the stratum it was
-  proposed under: a real run would have refused it, and a control that ignored it could clear its
-  gate over proposals nobody asked for.
+- An off-target `add_edge` or `resolve_ambiguous` is scored against the stratum it was proposed
+  under, in whichever counter that suite's gate reads: `wrong` for `add` and `decoy`, so it enters
+  the Wilson denominator, and a false add for the two controls. A real run would have refused it,
+  and a suite that ignored it could clear its gate over proposals nobody asked for.
 - A stratum whose planned runs did not all complete writes no row. An abort is not a measurement,
   so the last complete measurement stands rather than being overwritten by a smaller one.
 - A run whose brief did not carry every trial of its batch is `unbriefed`: it measures nothing and
@@ -407,8 +413,10 @@ auditr graph eval --dry-run
   `auditr graph refinements`: the proposals go to a judge, not to the ledger.
 - Cost: one run per twelve trials (`observer.limits.max_nodes_per_run`), each bounded by
   `observer.budget.max_budget_usd_per_run`, and the whole invocation by
-  `observer.budget.max_budget_usd_per_eval` (default `2.00`). The plan (runs, ceilings) prints on
-  stderr before the first run opens, and `--dry-run` stops there.
+  `observer.budget.max_budget_usd_per_eval` (default `12.00`, which covers the roughly 40 runs a
+  default `--suite all --sample 80` plans). On the human path the plan (runs, both ceilings) prints
+  on stderr before the first run opens. Under `--json` nothing precedes the document, which carries
+  `runs_planned` and both ceilings itself, so `--dry-run --json` reads the plan without spending.
 - The eval stops before opening a run that would cross the eval ceiling, and the report says
   `stopped: budget`. A run that exceeds its own budget is aborted, which stops its suite; the
   reported `cost_usd` counts that run too, because the money is spent either way, while `runs`
