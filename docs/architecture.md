@@ -43,7 +43,9 @@ Paths are relative to the repo root.
   rules, then one `git check-ignore` so a gitignored path answers `False` exactly as `files()`
   omits it. `auditable_paths(paths)` batches the git call for a whole Stop path set, and
   `must_exist=False` keeps a deleted path so the observer's stage 0 still reaches stage 1.
-  `auditable_shape(path)` is the shape half with no subprocess, for the hook. `default_base_ref` and
+  `auditable_shape(path)` is the shape half with no subprocess: it is the seam S8b's `/events`
+  needs, where a path the edit deleted must still pass stage 0 and no per-event `git check-ignore`
+  is affordable. Nothing calls it yet; S8b is the slice that does. `default_base_ref` and
   `git_changed_files` back the diff flags, and `git_output` is the shared one-shot git call
   `paths.repo_identity` uses.
 - `config.py`: `AuditorSettings` (pydantic-settings) is the merged repo config. `load_config`
@@ -488,7 +490,9 @@ flowchart TB
   `error` is the only record of it, so it is kept whatever its age, exactly as a real run is. A
   row owning a `graph_tuning` row or a refinement that is not `rejected` is kept too: both
   reference `graph_runs.run_id` with no `ON DELETE`, so the sweep leaves it rather than orphaning
-  what it owns, and it returns both counts for the case where it does cascade.
+  what it owns. The one shape it does cascade through is a row whose refinements are all
+  `rejected`; `decline` stages nothing, so no production assessment row owns any, and
+  `removed_refinements` is there so a caller told "1 run removed" can still see what went with it.
 - `graph/hashes.py` derives the per-node hashes from the extracted facts: `truth_sha` over the fact
   tuples structural edges read, and `facts_sha` over those plus `doc_tokens`.
   - `truth_sha` decides run gating and anchor drift; `facts_sha` decides whether similarity edges

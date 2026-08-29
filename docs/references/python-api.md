@@ -191,20 +191,23 @@ read, no clock. The caller does the I/O and hands the values in.
   `graph_unresolved`'s whole key, `(node_id, name, reason)`, and report distinct `(node_id, name)`
   pairs, so a name asked twice for two reasons is two rows to diff and one question to count.
 - Models: `PathOutcome` (six members), `NodeDigest`, `CachedFile`, `EditedFile`, `PathVerdict`,
-  `Stage1`, `QueuePair`, `RefinementState`, `GraphSnapshot`, `Decision`.
+  `Stage1`, `QueuePair`, `RefinementState`, `GraphSnapshot`.
   `QueuePair.of(row)` narrows an `UnresolvedRow` and `RefinementState.of(refinement)` reads a
   stored row's `anchored_ids()`.
 - `auditor.observer.budget.budget_state(spend, *, config, priced=True, evaluated=False)` builds
   `BudgetState`; `window_start(now)` is `now - DAY_SECONDS`, a rolling 24 hours rather than a
   calendar day.
 - The vocabulary the store shares lives in `auditor.graph.refine.models`: `Assessment`,
-  `AssessmentDecision`, `NodePair` and `Spend`, plus `TriggerDetail.assessment`.
+  `AssessmentDecision`, `BatchKind`, `Decision`, `NodePair` and `Spend`, plus
+  `TriggerDetail.assessment`. `Decision` is the gate's answer and its one human-readable line, and
+  it is `Assessment.verdict`, so a decision can never carry another decision's reason.
 - `FileDiscovery.auditable(path, *, must_exist=True)` is stage 0. It asks what `files()` asks:
   the shape rules, then `git check-ignore` inside a checkout. `auditable_paths(paths)` is the
   batch form and makes one git call for the whole batch; `must_exist=False` keeps a deleted path,
   so stage 1 can still remove its nodes.
 - `FileDiscovery.auditable_shape(path)` is the shape half alone and never runs git, which is what
-  a hook can afford per event.
+  a hook can afford per event. It is the stage 0 seam for S8b's `/events`, where a path the edit
+  deleted must still be admitted; nothing calls it before that slice.
 - `GraphDB.forget_facts(paths)` drops those files' cached facts in one transaction, which is what
   the `removed` outcome persists with.
 
