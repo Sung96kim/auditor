@@ -27,8 +27,8 @@ from auditor.graph.model import (
 from auditor.graph.refine.models import (
     Anchor,
     Assessment,
-    AssessmentDecision,
     ClientKind,
+    Decision,
     ProducerKind,
     Refinement,
     RefinementCounts,
@@ -338,8 +338,7 @@ class AssessmentPayload(WirePayload):
     object stays on the run row, where the run detail reads it.
     """
 
-    decision: AssessmentDecision
-    reason: str = ""
+    verdict: Decision
     added_nodes: int = 0
     removed_nodes: int = 0
     facts_changed_nodes: int = 0
@@ -353,8 +352,7 @@ class AssessmentPayload(WirePayload):
     def of(cls, assessment: Assessment) -> "AssessmentPayload":
         """The length of every tuple, plus the three fields that are already scalars."""
         return cls(
-            decision=assessment.decision,
-            reason=assessment.reason,
+            verdict=assessment.verdict,
             added_nodes=len(assessment.added_nodes),
             removed_nodes=len(assessment.removed_nodes),
             facts_changed_nodes=len(assessment.facts_changed_nodes),
@@ -375,7 +373,6 @@ class TriggerDetailPayload(WirePayload):
 
     files: tuple[str, ...] = ()
     file_count: int = 0
-    reason: str = ""
     assessment: AssessmentPayload | None = None
 
     @classmethod
@@ -384,7 +381,6 @@ class TriggerDetailPayload(WirePayload):
         return cls(
             files=detail.files[:LOG_FILE_CAP],
             file_count=len(detail.files),
-            reason=detail.reason,
             assessment=(
                 None
                 if detail.assessment is None

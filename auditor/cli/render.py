@@ -561,7 +561,7 @@ def _assessment_note(row: RunRowPayload) -> str:
     named = ", ".join(detail.files[:LOG_NOTE_FILES])
     extra = detail.file_count - LOG_NOTE_FILES
     more = f" +{extra} more" if extra > 0 else ""
-    return f"looked at {named}{more}: {detail.assessment.reason}, {row.status.value}"
+    return f"looked at {named}{more}: {detail.assessment.verdict.reason}, {row.status.value}"
 
 
 def _runs_table(payload: LogReport) -> Table:

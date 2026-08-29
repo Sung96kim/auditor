@@ -32,6 +32,7 @@ from auditor.graph.payloads import (
 )
 from auditor.graph.refine.models import (
     Assessment,
+    Decision,
     NodePair,
     ProducerKind,
     Refinement,
@@ -606,7 +607,11 @@ def _declined(*files: str, reason: str, **over) -> RunRowPayload:
             started_at=_STARTED,
             trigger_detail=TriggerDetail(
                 files=files,
-                assessment=Assessment(files=files, reason=reason, **over),
+                assessment=Assessment(
+                    files=files,
+                    verdict=Decision(reason=reason),
+                    **over,
+                ),
             ),
         )
     )
@@ -654,8 +659,10 @@ def test_the_json_row_carries_the_assessment_counts_not_its_ids():
     detail = _page(row).model_dump(mode="json")["runs"][0]["trigger_detail"]
     assert detail["files"] == ["m.py"]
     assert detail["file_count"] == 1
-    assert detail["assessment"]["decision"] == "skip"
-    assert detail["assessment"]["reason"] == "no structural change"
+    assert detail["assessment"]["verdict"] == {
+        "decision": "skip",
+        "reason": "no structural change",
+    }
     assert detail["assessment"]["new_pairs"] == 1
     assert "node_id" not in json.dumps(detail)
 

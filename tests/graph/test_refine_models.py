@@ -10,6 +10,7 @@ from auditor.graph.refine.models import (
     Anchor,
     Assessment,
     AssessmentDecision,
+    Decision,
     NodePair,
     Proposal,
     Refinement,
@@ -372,8 +373,7 @@ def test_a_trigger_detail_round_trips_an_assessment():
         assessment=Assessment(
             files=("m.py",),
             new_pairs=(NodePair(node_id="m.py::Store.get", name="widen"),),
-            decision=AssessmentDecision.RUN,
-            reason="1 new question",
+            verdict=Decision(decision=AssessmentDecision.RUN, reason="1 new question"),
         ),
     )
     back = TriggerDetail.model_validate_json(detail.model_dump_json())

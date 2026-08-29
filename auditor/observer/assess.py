@@ -23,6 +23,7 @@ from auditor.graph.refine.models import (
     BOUNDED_FORMS,
     Assessment,
     AssessmentDecision,
+    Decision,
     NodePair,
     Refinement,
     RefinementStatus,
@@ -317,15 +318,6 @@ class GraphSnapshot(BaseModel):
         return {r.refinement_id: r for r in self.refinements}
 
 
-class Decision(BaseModel):
-    """The gate's answer and the one line a human reads for it (spec 8.6)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    decision: AssessmentDecision
-    reason: str
-
-
 def _distinct(rows: Iterable[QueuePair]) -> tuple[NodePair, ...]:
     """One pair per question, first seen first: the store keys by reason too, and the gate counts
     questions rather than rows."""
@@ -477,8 +469,9 @@ def assess_unchanged(stage1: Stage1) -> Assessment:
     """The assessment for a batch stage 1 dropped: no persist, no rebuild, no run (spec 8.6)."""
     return Assessment(
         files=stage1.files,
-        decision=AssessmentDecision.SKIP,
-        reason="no structural change",
+        verdict=Decision(
+            decision=AssessmentDecision.SKIP, reason="no structural change"
+        ),
     )
 
 
@@ -520,6 +513,5 @@ def assess(
         stale_refinements=staled,
         affected_flow=tuple(sorted(stage1.changed_nodes & flow_nodes)),
         deferred_pairs=max(0, len(fresh) - max_nodes_per_run),
-        decision=verdict.decision,
-        reason=verdict.reason,
+        verdict=verdict,
     )

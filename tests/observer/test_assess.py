@@ -18,6 +18,7 @@ from auditor.graph.model import CallForm, FactKind, UnresolvedReason, Unresolved
 from auditor.graph.refine.models import (
     Assessment,
     AssessmentDecision,
+    Decision,
     NodePair,
     Refinement,
     RefinementKind,
@@ -228,7 +229,7 @@ def test_a_cache_row_with_no_per_node_digests_still_refuses_a_mid_edit_save():
     assert verdict.outcome is PathOutcome.UNPARSED
     assert (verdict.persist, verdict.removed_nodes) == (False, ())
     assert stage1.needs_rebuild is False
-    assert assess_unchanged(stage1).decision is AssessmentDecision.SKIP
+    assert assess_unchanged(stage1).verdict.decision is AssessmentDecision.SKIP
 
 
 def test_a_half_written_cache_pair_is_treated_as_a_truth_change():
@@ -344,6 +345,7 @@ def _assess(stage1, before, after, **over) -> Assessment:
 
 
 _GET = "m.py::Store.get"
+_MIN20 = SchedulingConfig(min_new_unresolved=20)
 _STAGE1 = stage_one((_edited(_NEW_BARE_CALLEE),))
 
 
@@ -372,7 +374,7 @@ def _staled(anchors: tuple[str, ...]) -> tuple[GraphSnapshot, GraphSnapshot]:
 def test_a_pair_absent_before_is_new():
     result = _assess(_STAGE1, _snapshot(), _snapshot((_pair(_GET, "widen"),)))
     assert result.new_pairs == (NodePair(node_id=_GET, name="widen"),)
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.RUN,
         "1 new question",
     )
@@ -399,7 +401,7 @@ def test_two_rows_for_one_question_are_diffed_apart_and_reported_once():
         _STAGE1, _snapshot((ambiguous, unimportable)), _snapshot((moved, unimportable))
     )
     assert result.new_pairs == (NodePair(node_id=_GET, name="render"),)
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.RUN,
         "1 new question",
     )
@@ -415,7 +417,7 @@ def test_two_rows_for_one_question_never_cross_a_bar_meant_for_two():
     )
     result = _assess(_STAGE1, _snapshot(), after, scheduling=_MIN2)
     assert result.new_pairs == (NodePair(node_id=_GET, name="render"),)
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.SKIP,
         "1 new question, below the 2 the gate needs",
     )
@@ -494,7 +496,7 @@ def test_an_externally_bound_pair_never_counts_as_new():
     after = _snapshot((_pair(_GET, "search", externally_bound=True),))
     result = _assess(_STAGE1, _snapshot(), after)
     assert result.new_pairs == ()
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.SKIP,
         "no new questions",
     )
@@ -512,7 +514,7 @@ def test_a_refinement_the_rebuild_staled_on_a_touched_anchor_counts():
     before, after = _staled((_GET,))
     result = _assess(_STAGE1, before, after)
     assert result.stale_refinements == (1,)
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.RUN,
         "1 stale refinement",
     )
@@ -528,7 +530,7 @@ def test_a_docstring_edit_rebuilds_and_finds_nothing():
     stage1 = stage_one((_edited(_DOCSTRING),))
     result = _assess(stage1, _snapshot(), _snapshot())
     assert stage1.needs_rebuild is True
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.SKIP,
         "no new questions",
     )
@@ -536,7 +538,7 @@ def test_a_docstring_edit_rebuilds_and_finds_nothing():
 
 def test_a_batch_that_moved_nothing_never_reaches_stage_two():
     result = assess_unchanged(stage_one((_edited(_COMMENT_ONLY),)))
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.SKIP,
         "no structural change",
     )
@@ -547,7 +549,7 @@ def test_a_changed_node_in_a_recent_flow_is_recorded_and_decides_nothing():
     """`_STAGE1` moves `_GET`, so the flow node is one this batch actually touched."""
     result = _assess(_STAGE1, _snapshot(), _snapshot(), flow_nodes=frozenset({_GET}))
     assert result.affected_flow == (_GET,)
-    assert result.decision is AssessmentDecision.SKIP
+    assert result.verdict.decision is AssessmentDecision.SKIP
 
 
 def test_a_flow_node_this_batch_never_touched_is_not_recorded():
@@ -571,6 +573,18 @@ _MIN0 = SchedulingConfig(min_new_unresolved=0)
 _SKIP, _RUN = AssessmentDecision.SKIP, AssessmentDecision.RUN
 
 
+def _decide(*, scheduling=None, new=0, stale=0, bounded=None, **over) -> Decision:
+    """One `decide` call, so a new keyword lands here rather than in a dozen cases."""
+    pairs = tuple(NodePair(node_id=f"m.py::n{i}", name="w") for i in range(new))
+    return decide(
+        new_pairs=pairs,
+        bounded_pairs=pairs if bounded is None else pairs[:bounded],
+        stale_refinements=tuple(range(1, stale + 1)),
+        scheduling=scheduling or SchedulingConfig(),
+        **{"budget": _budget(), **over},
+    )
+
+
 @pytest.mark.parametrize(
     ("scheduling", "new", "stale", "decision", "reason"),
     [
@@ -584,15 +598,8 @@ _SKIP, _RUN = AssessmentDecision.SKIP, AssessmentDecision.RUN
     ],
 )
 def test_the_decision_rule(scheduling, new, stale, decision, reason):
-    pairs = tuple(NodePair(node_id=f"m.py::n{i}", name="w") for i in range(new))
-    result = decide(
-        new_pairs=pairs,
-        bounded_pairs=pairs,
-        stale_refinements=tuple(range(1, stale + 1)),
-        scheduling=scheduling,
-        budget=_budget(),
-    )
-    assert (result.decision, result.reason) == (decision, reason)
+    verdict = _decide(scheduling=scheduling, new=new, stale=stale)
+    assert (verdict.decision, verdict.reason) == (decision, reason)
 
 
 def test_under_the_bar_with_an_eval_row_only_bare_and_self_pairs_count():
@@ -604,7 +611,7 @@ def test_under_the_bar_with_an_eval_row_only_bare_and_self_pairs_count():
     )
     result = _assess(_STAGE1, _snapshot(), after, budget=_budget(fraction=0.1))
     assert len(result.new_pairs) == 2
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.SKIP,
         "low budget: 0 of 2 new questions are bare or self",
     )
@@ -613,7 +620,7 @@ def test_under_the_bar_with_an_eval_row_only_bare_and_self_pairs_count():
 def test_under_the_bar_with_an_eval_row_a_bare_pair_still_runs():
     after = _snapshot((_pair(_GET, "widen", call_form=CallForm.BARE),))
     result = _assess(_STAGE1, _snapshot(), after, budget=_budget(fraction=0.1))
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.RUN,
         "1 new question",
     )
@@ -629,7 +636,7 @@ def test_under_the_bar_the_reason_counts_only_the_pairs_that_still_qualify():
     )
     result = _assess(_STAGE1, _snapshot(), after, budget=_budget(fraction=0.1))
     assert len(result.new_pairs) == 2
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.RUN,
         "1 new question",
     )
@@ -640,7 +647,7 @@ def test_under_the_bar_with_no_eval_row_edit_runs_are_off():
     result = _assess(
         _STAGE1, _snapshot(), after, budget=_budget(fraction=0.1, evaluated=False)
     )
-    assert (result.decision, result.reason) == (
+    assert (result.verdict.decision, result.verdict.reason) == (
         AssessmentDecision.SKIP,
         "low budget and no eval row for this runner",
     )
@@ -649,6 +656,5 @@ def test_under_the_bar_with_no_eval_row_edit_runs_are_off():
 def test_under_the_bar_with_an_eval_row_the_stale_arm_still_runs():
     """Spec 8.6 narrows the new-pairs clause only; re-confirming is the cheapest run (P16)."""
     before, after = _staled((_GET,))
-    assert _assess(_STAGE1, before, after, budget=_budget(fraction=0.1)).decision is (
-        AssessmentDecision.RUN
-    )
+    result = _assess(_STAGE1, before, after, budget=_budget(fraction=0.1))
+    assert result.verdict.decision is AssessmentDecision.RUN

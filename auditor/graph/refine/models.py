@@ -233,6 +233,19 @@ class AssessmentDecision(StrEnum):
     SKIP = "skip"
 
 
+class Decision(BaseModel):
+    """The gate's answer and the one line a human reads for it (spec 8.6).
+
+    One object rather than two fields, so the rule that produces the pair and the assessment that
+    records it cannot report a decision with another decision's reason.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    decision: AssessmentDecision = AssessmentDecision.SKIP
+    reason: str = ""
+
+
 class Assessment(BaseModel):
     """Why one edit batch did or did not earn a refinement run (spec 8.6).
 
@@ -251,25 +264,21 @@ class Assessment(BaseModel):
     stale_refinements: tuple[int, ...] = ()
     affected_flow: tuple[str, ...] = ()
     deferred_pairs: int = 0
-    decision: AssessmentDecision = AssessmentDecision.SKIP
-    reason: str = ""
+    verdict: Decision = Decision()
 
     @property
     def decided_to_run(self) -> bool:
         """Whether the gate let this batch through, so no caller compares enum members by hand."""
-        return self.decision is AssessmentDecision.RUN
+        return self.verdict.decision is AssessmentDecision.RUN
 
 
 class TriggerDetail(BaseModel):
-    """What the trigger carried: the files it named and, for a gate decision, why.
-
-    For an edit batch it also carries the spec 8.6 assessment that decided it.
-    """
+    """What the trigger carried: the files it named and, for an edit batch, the spec 8.6
+    assessment that decided it, whose ``verdict`` is the only "why" a run row has."""
 
     model_config = ConfigDict(frozen=True)
 
     files: tuple[str, ...] = ()
-    reason: str = ""
     assessment: Assessment | None = None
 
 

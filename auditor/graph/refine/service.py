@@ -538,7 +538,8 @@ class RefinementService:
         """
         if assessment.decided_to_run:
             raise RefinementRefused(
-                f"assessment decided to run: {assessment.reason}. Open the run through `begin`"
+                f"assessment decided to run: {assessment.verdict.reason}. "
+                "Open the run through `begin`"
             )
         run = await self._open(
             producer=ProducerKind.OBSERVER,

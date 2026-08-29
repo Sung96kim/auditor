@@ -394,11 +394,12 @@ def test_an_assessment_on_the_wire_keeps_the_tuple_lengths_and_drops_their_conte
         new_pairs=(graph_refine_models.NodePair(node_id="m.py::c", name="widen"),),
         stale_refinements=(1, 2, 3),
         deferred_pairs=4,
-        reason="no new questions",
+        verdict=graph_refine_models.Decision(reason="no new questions"),
     )
     wire = graph_payloads.AssessmentPayload.of(assessment)
     assert (wire.added_nodes, wire.facts_changed_nodes) == (2, 1)
     assert (wire.new_pairs, wire.stale_refinements, wire.deferred_pairs) == (1, 3, 4)
+    assert wire.verdict.reason == "no new questions"
     assert "m.py::a" not in json.dumps(wire.model_dump(mode="json"))
 
 

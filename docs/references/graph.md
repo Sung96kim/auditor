@@ -477,18 +477,23 @@ auditr graph log --skipped
 - An assessment row carries a second line under it: `looked at <paths>: <reason>, <status>`. It
   names at most 3 paths and counts the rest (`+2 more`), the reason is the gate's own clause
   (`no structural change`, `2 new questions`, `1 stale refinement, run_on_stale is off`), and the
-  status is the row's, so the same line stays true for a batch that ran.
+  status is the row's rather than a stored word, so a row whose status later changed still reads
+  true. A batch that named no paths reads `looked at nothing: <reason>, <status>`: the reason is
+  the whole point of the line and is never suppressed.
 - `--skipped` mixes three kinds of `skipped` row, and the assessment is what tells them apart:
   - the gate's own decisions, which carry `trigger_detail.assessment` and put their reason there;
   - runs evicted from the open-run registry, which carry their reason in `error`;
   - stranded runs the sweep closed, which also carry their reason in `error`.
-- Under `--json` every run row carries `trigger_detail`: `files` (capped at 10), `file_count`, and
-  `assessment` when there is one. The assessment travels as counts, never as node ids, so a fifty
-  row page cannot carry thousands of them: `added_nodes`, `removed_nodes`, `facts_changed_nodes`,
-  `new_pairs`, `resolved_pairs`, `stale_refinements`, `affected_flow` and `deferred_pairs` are all
-  integers, beside `decision` and `reason`. The full object stays on the stored row.
+- Under `--json` every run row carries `trigger_detail`, and it has exactly three keys: `files`
+  (capped at 10), `file_count`, and `assessment` when there is one. The assessment travels as
+  counts, never as node ids, so a fifty row page cannot carry thousands of them: `added_nodes`,
+  `removed_nodes`, `facts_changed_nodes`, `new_pairs`, `resolved_pairs`, `stale_refinements`,
+  `affected_flow` and `deferred_pairs` are all integers, beside `verdict`, which is the
+  `{decision, reason}` pair the gate produced. The full object stays on the stored row.
 - An assessment row costs nothing: `runner` is `none`, `cost_usd` is `0.0`, and no refinement row
-  comes from one. They are swept after `observer.skipped_retention_days` (default 7).
+  comes from one. They are swept after `observer.skipped_retention_days` (default 7), and they are
+  the only rows that sweep takes: an evicted or stranded run is a real run that reached a runner,
+  and it is kept whatever its age.
 
 ## Refinement overlay
 

@@ -16,6 +16,7 @@ from auditor.graph.refine.models import (
     Assessment,
     AssessmentDecision,
     Checkout,
+    Decision,
     ProducerKind,
     Proposal,
     RefinementKind,
@@ -978,11 +979,17 @@ async def test_a_checkout_between_begin_and_commit_refuses_the_commit(
     assert finished is not None and finished.status is RunStatus.REJECTED
 
 
+def _skipped(*files: str, reason: str = "no structural change") -> Assessment:
+    """One declined batch's assessment, whose verdict is the only reason a run row carries."""
+    return Assessment(
+        files=files,
+        verdict=Decision(decision=AssessmentDecision.SKIP, reason=reason),
+    )
+
+
 async def test_a_declined_batch_round_trips_its_assessment(refine_service):
     """Spec 8.6's visibility rule: every batch reaching stage 1 is a row, with the object on it."""
-    assessment = Assessment(
-        files=("m.py",), decision=AssessmentDecision.SKIP, reason="no structural change"
-    )
+    assessment = _skipped("m.py")
     run = await refine_service.decline(assessment)
     stored = await refine_service.index.runs.run(run.run_id)
     assert stored is not None
@@ -1003,14 +1010,18 @@ async def test_a_declined_batch_round_trips_its_assessment(refine_service):
 
 
 async def test_a_declined_batch_leaves_no_refinement_row(refine_service):
-    await refine_service.decline(Assessment(files=("m.py",), reason="no new questions"))
+    await refine_service.decline(_skipped("m.py", reason="no new questions"))
     assert await refine_service.index.refinements.count() == 0
 
 
 async def test_decline_refuses_an_assessment_that_decided_to_run(refine_service):
     with pytest.raises(RefinementRefused):
         await refine_service.decline(
-            Assessment(decision=AssessmentDecision.RUN, reason="1 new question")
+            Assessment(
+                verdict=Decision(
+                    decision=AssessmentDecision.RUN, reason="1 new question"
+                )
+            )
         )
 
 
@@ -1020,9 +1031,7 @@ async def test_a_decline_at_the_open_run_cap_evicts_nothing_and_counts_nothing(
     """A gate that spends nothing must never cost a live run its staging (P7)."""
     refine_service.registry.max_open = 2
     live = [await refine_service.begin() for _ in range(2)]
-    await refine_service.decline(
-        Assessment(files=("m.py",), reason="no structural change")
-    )
+    await refine_service.decline(_skipped("m.py"))
     assert sorted(refine_service.registry.open_runs) == sorted(r.run_id for r in live)
     for run in live:
         stored = await refine_service.index.runs.run(run.run_id)
@@ -1032,8 +1041,7 @@ async def test_a_decline_at_the_open_run_cap_evicts_nothing_and_counts_nothing(
 async def test_a_decline_takes_a_checkout_the_caller_already_read(refine_service):
     """S8c's spec 8.5 guard reads HEAD once; a skip must not spawn `git rev-parse` twice (P7)."""
     run = await refine_service.decline(
-        Assessment(files=("m.py",), reason="no structural change"),
-        checkout=Checkout(branch="feat/x", commit_sha="deadbeef"),
+        _skipped("m.py"), checkout=Checkout(branch="feat/x", commit_sha="deadbeef")
     )
     assert (run.branch, run.commit_sha) == ("feat/x", "deadbeef")
 
@@ -1041,19 +1049,19 @@ async def test_a_decline_takes_a_checkout_the_caller_already_read(refine_service
 async def test_a_decline_records_a_reason_the_caller_wrote(refine_service):
     """A rebuild that raised between the snapshots has no stage 2 and no composed reason (P12)."""
     run = await refine_service.decline(
-        Assessment(files=("m.py",), reason="the rebuild did not run")
+        _skipped("m.py", reason="the rebuild did not run")
     )
     stored = await refine_service.index.runs.run(run.run_id)
     assert stored is not None
     assert stored.trigger_detail.assessment is not None
-    assert stored.trigger_detail.assessment.reason == "the rebuild did not run"
+    assert stored.trigger_detail.assessment.verdict.reason == "the rebuild did not run"
     assert stored.error is None
 
 
 async def test_begin_takes_the_whole_trigger_detail_when_the_caller_has_one(
     refine_service,
 ):
-    detail = TriggerDetail(files=("a.py", "b.py"), reason="edit batch")
+    detail = TriggerDetail(files=("a.py", "b.py"), assessment=_skipped("a.py"))
     run = await refine_service.begin(trigger=TriggerKind.EDIT, detail=detail)
     assert run.trigger_detail == detail
 
@@ -1074,9 +1082,7 @@ async def test_a_terminated_run_still_puts_its_reason_in_error(refine_service):
 
 async def test_an_assessment_row_expires_with_the_retention_window(refine_service):
     """`prune_skipped_runs` already sweeps `skipped`; this proves an assessment row is one."""
-    run = await refine_service.decline(
-        Assessment(files=("m.py",), reason="no structural change")
-    )
+    run = await refine_service.decline(_skipped("m.py"))
     outcome = await refine_service.index.runs.prune_skipped_runs(
         0, now=run.started_at + 86_400.0
     )
