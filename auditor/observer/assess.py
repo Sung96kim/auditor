@@ -3,6 +3,10 @@
 Pure functions over frozen models. Nothing here reads a file, opens a store or looks at a clock:
 the loop does the I/O and hands the results in, which is what lets one rule serve the daemon, the
 tests and a probe.
+
+`assess_unchanged` builds an `Assessment` rather than being a classmethod on it because the reason
+literal is the observer's, not the model's: `graph/refine/models.py` is the shared vocabulary and
+one gate's wording does not belong there.
 """
 
 import functools
@@ -328,8 +332,10 @@ def _distinct(rows: Iterable[QueuePair]) -> tuple[NodePair, ...]:
 def new_rows(before: GraphSnapshot, after: GraphSnapshot) -> tuple[QueuePair, ...]:
     """Rows absent before under the whole key, or whose offer moved (spec 8.6).
 
-    Externally bound rows never count. The rows rather than the pairs, because the low budget
-    narrowing reads a column only a row has.
+    Externally bound rows never count, on this side and on the resolved one. Spec 8.6 defines new
+    on the offer columns alone, so a row that merely stopped being externally bound is not new
+    here even though it has become answerable. The rows rather than the pairs, because the low
+    budget narrowing reads a column only a row has.
     """
     was = before.by_key
     return tuple(

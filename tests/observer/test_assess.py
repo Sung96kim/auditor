@@ -37,6 +37,7 @@ from auditor.observer.assess import (
     PathOutcome,
     QueuePair,
     RefinementState,
+    Stage1,
     assess,
     assess_path,
     assess_unchanged,
@@ -58,12 +59,16 @@ class Store:
 
 
 def _edited(
-    after: str | None, *, before: str | None = _BEFORE, path: str = "m.py"
+    after: str | None,
+    *,
+    before: str | None = _BEFORE,
+    path: str = "m.py",
+    role: str = "production",
 ) -> EditedFile:
     """One path as the loop hands it to Stage 1: the cache row it read, and the re-extraction."""
     cached = None
     if before is not None:
-        facts = extract_file_facts(path, before, "production")
+        facts = extract_file_facts(path, before, role)
         cached = CachedFile(
             content_hash=sha256(before.encode()).hexdigest(),
             hashes=file_hashes(facts.nodes),
@@ -75,13 +80,15 @@ def _edited(
         path=path,
         cached=cached,
         content_hash=sha256(after.encode()).hexdigest(),
-        extracted=extract_file_facts(path, after, "production"),
+        extracted=extract_file_facts(path, after, role),
     )
 
 
 _COMMENT_ONLY = _BEFORE.replace("def load(name):", "# a note\ndef load(name):")
 _BLANK_ONLY = _BEFORE.replace("    return name", "    return name\n")
-_FORMATTED = _BEFORE.replace("def get(self, key):", "def get(self, key):  ")
+_FORMATTED = _BEFORE.replace(
+    "        return load(key)", "        return load(\n            key,\n        )"
+)
 _DOCSTRING = _BEFORE.replace(
     "    return name", '    """Look it up."""\n    return name'
 )
@@ -214,10 +221,14 @@ def test_an_init_import_edit_moves_the_truth_hash():
 
 
 def test_a_test_file_edit_is_classified_like_any_other():
-    """The caller-role gate lives in the queue writer, not here; stage 1 only reads hashes."""
-    assert assess_path(_edited(_NEW_BARE_CALLEE, path="tests/test_m.py")).outcome is (
-        PathOutcome.TRUTH
-    )
+    """The caller-role gate lives in the queue writer, not here; stage 1 only reads hashes, and
+    `role` is not one of them, so a test file moves the same hashes a production file does."""
+    as_test = _edited(_NEW_BARE_CALLEE, path="tests/test_m.py", role="test")
+    as_production = _edited(_NEW_BARE_CALLEE, path="tests/test_m.py", role="production")
+    assert as_test.cached == as_production.cached
+    verdict = assess_path(as_test)
+    assert verdict.outcome is PathOutcome.TRUTH
+    assert verdict.facts_changed_nodes == ("tests/test_m.py::Store.get",)
 
 
 def test_a_cache_row_with_no_per_node_digests_still_refuses_a_mid_edit_save():
@@ -292,12 +303,25 @@ def test_a_path_deleted_and_recreated_in_one_batch_ends_where_the_batch_left_it(
     assert stage1.verdicts[0].outcome is outcome, case
 
 
-@pytest.mark.parametrize("rel", ["notes.md", "../outside.py"])
-def test_stage_zero_drops_a_path_before_stage_one_ever_sees_it(
-    tmp_path: Path, rel: str
-):
-    """Spec 8.6 stage 0 is the hook's filter; the loop and `/events` share this predicate."""
-    assert FileDiscovery(tmp_path).auditable(rel, must_exist=False) is False
+def test_a_path_outside_the_repo_never_reaches_stage_one(tmp_path: Path):
+    """Spec 8.6 stage 0 is the hook's filter, and stage 1 classifies whatever it is handed, so a
+    batch built from what stage 0 admitted is the empty batch."""
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable("../outside.py", must_exist=False) is False
+    admitted = [r for r in ("../outside.py",) if finder.auditable(r, must_exist=False)]
+    assert stage_one(tuple(_edited(_NEW_BARE_CALLEE, path=r) for r in admitted)) == (
+        Stage1()
+    )
+
+
+def test_a_file_no_language_claims_never_reaches_stage_one(tmp_path: Path):
+    """The suffix set comes from the registered languages, so a note is not an edit to assess."""
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable("notes.md", must_exist=False) is False
+    admitted = [r for r in ("notes.md",) if finder.auditable(r, must_exist=False)]
+    assert stage_one(tuple(_edited(_NEW_BARE_CALLEE, path=r) for r in admitted)) == (
+        Stage1()
+    )
 
 
 def test_stage_zero_keeps_a_deleted_path_so_stage_one_can_remove_its_nodes(
@@ -374,6 +398,9 @@ def _staled(anchors: tuple[str, ...]) -> tuple[GraphSnapshot, GraphSnapshot]:
 
 
 def test_a_pair_absent_before_is_new():
+    """The batch is the new bare callee, and the queue row is on the node that edit moved, so the
+    two halves of the case are the same node rather than two unrelated fixtures."""
+    assert _STAGE1.facts_changed_nodes == (_GET,)
     result = _assess(_STAGE1, _snapshot(), _snapshot((_pair(_GET, "widen"),)))
     assert result.new_pairs == (NodePair(node_id=_GET, name="widen"),)
     assert (result.verdict.decision, result.verdict.reason) == (
@@ -495,7 +522,19 @@ def test_an_unchanged_pair_is_not_new():
 
 
 def test_an_externally_bound_pair_never_counts_as_new():
-    after = _snapshot((_pair(_GET, "search", externally_bound=True),))
+    """Spec 15's case is an attribute call on a third-party object: it is a question no refiner
+    in this repo could answer, whatever the budget."""
+    after = _snapshot(
+        (
+            _pair(
+                _GET,
+                "search",
+                call_form=CallForm.ATTR,
+                externally_bound=True,
+                receiver_root="requests",
+            ),
+        )
+    )
     result = _assess(_STAGE1, _snapshot(), after)
     assert result.new_pairs == ()
     assert (result.verdict.decision, result.verdict.reason) == (
@@ -520,6 +559,20 @@ def test_a_refinement_the_rebuild_staled_on_a_touched_anchor_counts():
         AssessmentDecision.RUN,
         "1 stale refinement",
     )
+
+
+def test_a_refinement_already_stale_before_the_rebuild_is_not_reported_again():
+    """`staled_refinements` is the status delta. Reported on status alone, a refinement stale
+    before and after is re-reported on every edit touching its anchor, and with `run_on_stale` on
+    that is a paid run per edit, for ever."""
+    stale = RefinementState(
+        refinement_id=1, status=RefinementStatus.STALE, anchor_nodes=(_GET,)
+    )
+    result = _assess(
+        _STAGE1, _snapshot(refinements=(stale,)), _snapshot(refinements=(stale,))
+    )
+    assert result.stale_refinements == ()
+    assert result.verdict.decision is AssessmentDecision.SKIP
 
 
 def test_a_refinement_staled_on_an_anchor_this_batch_never_touched_is_excluded():
@@ -681,6 +734,25 @@ def test_a_full_budget_with_no_eval_row_still_runs():
     """The arm is `low and not evaluated`: a fresh install at full budget refines normally."""
     verdict = _decide(new=1, budget=_budget(fraction=1.0, evaluated=False))
     assert (verdict.decision, verdict.reason) == (_RUN, "1 new question")
+
+
+def test_a_batch_under_min_new_unresolved_does_not_earn_a_run():
+    """Spec 15's `min_new_unresolved = 2` case: one question is not two, and the reason names the
+    bar rather than the count."""
+    assert _decide(scheduling=_MIN2, new=1).reason == (
+        "1 new question, below the 2 the gate needs"
+    )
+    assert _decide(scheduling=_MIN2, new=1).decision is _SKIP
+    assert _decide(scheduling=_MIN2, new=2).decision is _RUN
+
+
+def test_run_on_stale_off_leaves_a_staled_refinement_alone():
+    """Spec 15's `run_on_stale = false` case: the arm is off, so the only clause left is empty."""
+    verdict = _decide(scheduling=_NO_STALE, new=0, stale=1)
+    assert (verdict.decision, verdict.reason) == (
+        _SKIP,
+        "1 stale refinement, run_on_stale is off",
+    )
 
 
 def test_under_the_bar_with_an_eval_row_only_bare_and_self_pairs_count():
