@@ -179,14 +179,17 @@ read, no clock. The caller does the I/O and hands the values in.
 
 - `auditor.observer.assess.assess_path(edited) -> PathVerdict` classifies one edited path against
   the facts cached for it, and `stage_one(edited) -> Stage1` does a whole batch, deduplicating by
-  path with the first occurrence winning.
+  path, the last read of a path winning.
 - `auditor.observer.assess.assess(stage1, *, before, after, scheduling, budget, max_nodes_per_run,
   flow_nodes=frozenset()) -> Assessment` is the whole thing for a batch that was rebuilt for;
   `assess_unchanged(stage1)` is the answer for one stage 1 dropped.
 - `decide(*, new_pairs, bounded_pairs, stale_refinements, scheduling, budget) -> Decision` is the
   rule itself, public because a suspect batch and a verify batch gate against the same state.
-- `new_pairs(before, after)`, `resolved_pairs(before, after, *, removed_nodes)` and
-  `staled_refinements(before, after, *, changed_nodes)` are the three stage 2 diffs.
+- `new_rows(before, after)`, `new_pairs(before, after)`,
+  `resolved_pairs(before, after, *, removed_nodes)` and
+  `staled_refinements(before, after, *, changed_nodes)` are the stage 2 diffs. They compare on
+  `graph_unresolved`'s whole key, `(node_id, name, reason)`, and report distinct `(node_id, name)`
+  pairs, so a name asked twice for two reasons is two rows to diff and one question to count.
 - Models: `PathOutcome` (six members), `NodeDigest`, `CachedFile`, `EditedFile`, `PathVerdict`,
   `Stage1`, `QueuePair`, `RefinementState`, `GraphSnapshot`, `Decision`.
   `QueuePair.of(row)` narrows an `UnresolvedRow` and `RefinementState.of(refinement)` reads a

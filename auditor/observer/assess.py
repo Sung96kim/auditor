@@ -5,13 +5,20 @@ the loop does the I/O and hands the results in, which is what lets one rule serv
 tests and a probe.
 """
 
-from collections.abc import Callable, Sequence
+import functools
+from collections.abc import Callable, Iterable, Sequence
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
 from auditor.graph.hashes import FileHashes, file_hashes, node_facts_sha, node_truth_sha
-from auditor.graph.model import CallForm, FileGraphFacts, GraphNode, UnresolvedRow
+from auditor.graph.model import (
+    CallForm,
+    FileGraphFacts,
+    GraphNode,
+    UnresolvedReason,
+    UnresolvedRow,
+)
 from auditor.graph.refine.models import (
     BOUNDED_FORMS,
     Assessment,
@@ -224,18 +231,25 @@ _BOUNDED_FORMS = frozenset(BOUNDED_FORMS)
 class QueuePair(BaseModel):
     """One ``graph_unresolved`` row as the diff compares it (spec 8.6 stage 2).
 
-    Only the columns the diff and the low budget rule read: the identity, what the resolver
-    offered, and the two flags that decide whether the pair may count at all.
+    Only the columns the diff and the low budget rule read: the whole stored key, what the
+    resolver offered, and the two flags that decide whether the row may count at all. ``reason``
+    has no default because it is a key column, and one invented for it would merge two rows.
     """
 
     model_config = ConfigDict(frozen=True)
 
     node_id: str
     name: str
+    reason: UnresolvedReason
     call_form: CallForm = CallForm.BARE
     candidates: tuple[str, ...] = ()
     definers: tuple[str, ...] = ()
     externally_bound: bool = False
+
+    @property
+    def key(self) -> tuple[str, str, UnresolvedReason]:
+        """The store's own key, so two rows for one question never collapse into one (spec 5.6)."""
+        return (self.node_id, self.name, self.reason)
 
     @property
     def pair(self) -> NodePair:
@@ -243,7 +257,7 @@ class QueuePair(BaseModel):
 
     @property
     def offer(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        """What the resolver offered here; a move in it makes an existing pair new (spec 8.6)."""
+        """What the resolver offered here; a move in it makes an existing row new (spec 8.6)."""
         return (self.candidates, self.definers)
 
     @classmethod
@@ -252,6 +266,7 @@ class QueuePair(BaseModel):
         return cls(
             node_id=row.node_id,
             name=row.name,
+            reason=row.reason,
             call_form=row.call_form,
             candidates=row.candidates,
             definers=row.definers,
@@ -286,12 +301,18 @@ class GraphSnapshot(BaseModel):
     pairs: tuple[QueuePair, ...] = ()
     refinements: tuple[RefinementState, ...] = ()
 
-    @property
-    def by_pair(self) -> dict[tuple[str, str], QueuePair]:
-        """The queue keyed the way spec 8.6 diffs it, so neither side scans the other."""
-        return {(p.node_id, p.name): p for p in self.pairs}
+    @functools.cached_property
+    def by_key(self) -> dict[tuple[str, str, UnresolvedReason], QueuePair]:
+        """The queue under the store's own key, so neither side scans the other and no two rows
+        for one question overwrite each other. Built once: a queue runs to thousands of rows."""
+        return {p.key: p for p in self.pairs}
 
-    @property
+    @functools.cached_property
+    def questions(self) -> frozenset[NodePair]:
+        """Every distinct pair the queue still holds, however many rows carry it."""
+        return frozenset(p.pair for p in self.pairs)
+
+    @functools.cached_property
     def by_refinement(self) -> dict[int, RefinementState]:
         return {r.refinement_id: r for r in self.refinements}
 
@@ -305,17 +326,29 @@ class Decision(BaseModel):
     reason: str
 
 
-def new_pairs(before: GraphSnapshot, after: GraphSnapshot) -> tuple[NodePair, ...]:
-    """Pairs absent before, or whose offer moved. Externally bound rows never count (spec 8.6)."""
-    was = before.by_pair
+def _distinct(rows: Iterable[QueuePair]) -> tuple[NodePair, ...]:
+    """One pair per question, first seen first: the store keys by reason too, and the gate counts
+    questions rather than rows."""
+    return tuple({p.pair: None for p in rows})
+
+
+def new_rows(before: GraphSnapshot, after: GraphSnapshot) -> tuple[QueuePair, ...]:
+    """Rows absent before under the whole key, or whose offer moved (spec 8.6).
+
+    Externally bound rows never count. The rows rather than the pairs, because the low budget
+    narrowing reads a column only a row has.
+    """
+    was = before.by_key
     return tuple(
-        p.pair
+        p
         for p in after.pairs
-        if not p.externally_bound
-        and (
-            (p.node_id, p.name) not in was or was[(p.node_id, p.name)].offer != p.offer
-        )
+        if not p.externally_bound and (p.key not in was or was[p.key].offer != p.offer)
     )
+
+
+def new_pairs(before: GraphSnapshot, after: GraphSnapshot) -> tuple[NodePair, ...]:
+    """The distinct questions :func:`new_rows` found, which is what the gate's bar counts."""
+    return _distinct(new_rows(before, after))
 
 
 def resolved_pairs(
@@ -324,13 +357,16 @@ def resolved_pairs(
     """Pairs that disappeared and whose node survived: the resolver settled them (spec 8.6).
 
     A renamed node produces a removal and a new pair, never a resolution, which is why the removed
-    set is subtracted rather than the pair simply being counted as gone.
+    set is subtracted. Externally bound rows are excluded on both sides, as in :func:`new_rows`,
+    and a question still carried by any row is not settled.
     """
-    now = after.by_pair
-    return tuple(
-        p.pair
+    still_open = after.questions
+    return _distinct(
+        p
         for p in before.pairs
-        if (p.node_id, p.name) not in now and p.node_id not in removed_nodes
+        if not p.externally_bound
+        and p.pair not in still_open
+        and p.node_id not in removed_nodes
     )
 
 
@@ -461,11 +497,9 @@ def assess(
     ``before`` and ``after`` are the snapshots the rebuild took around its one persist commit;
     ``flow_nodes`` is what a recent flow query asked about, which is recorded and decides nothing.
     """
-    fresh = new_pairs(before, after)
-    forms = after.by_pair
-    bounded = tuple(
-        p for p in fresh if forms[(p.node_id, p.name)].call_form in _BOUNDED_FORMS
-    )
+    rows = new_rows(before, after)
+    fresh = _distinct(rows)
+    bounded = _distinct(p for p in rows if p.call_form in _BOUNDED_FORMS)
     staled = staled_refinements(before, after, changed_nodes=stage1.changed_nodes)
     verdict = decide(
         new_pairs=fresh,

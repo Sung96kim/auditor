@@ -14,12 +14,16 @@ import pytest
 from auditor.discovery import FileDiscovery
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.hashes import file_hashes
-from auditor.graph.model import CallForm
+from auditor.graph.model import CallForm, FactKind, UnresolvedReason, UnresolvedRow
 from auditor.graph.refine.models import (
     Assessment,
     AssessmentDecision,
     NodePair,
+    Refinement,
+    RefinementKind,
+    RefinementPayload,
     RefinementStatus,
+    RefinementTarget,
     Spend,
 )
 from auditor.observer.assess import (
@@ -301,7 +305,15 @@ def test_stage_zero_keeps_a_deleted_path_so_stage_one_can_remove_its_nodes(
 
 
 def _pair(node_id: str, name: str, **over) -> QueuePair:
-    return QueuePair(node_id=node_id, name=name, **over)
+    """One queue row; `reason` is a key column, so a case that needs two rows names it."""
+    return QueuePair(
+        **{
+            "node_id": node_id,
+            "name": name,
+            "reason": UnresolvedReason.UNIMPORTABLE_NAME,
+            **over,
+        }
+    )
 
 
 def _snapshot(pairs=(), refinements=()) -> GraphSnapshot:
@@ -364,6 +376,102 @@ def test_a_pair_absent_before_is_new():
         AssessmentDecision.RUN,
         "1 new question",
     )
+
+
+def test_two_rows_for_one_question_are_diffed_apart_and_reported_once():
+    """`graph_unresolved` keys on `reason` too, so a bare `render()` and an `obj.render()` on one
+    node are two rows. Keyed on the pair alone the second row masks the first, whose offer moved
+    to what the second already held, and a real new question is dropped."""
+    ambiguous = _pair(
+        _GET,
+        "render",
+        reason=UnresolvedReason.AMBIGUOUS_NAME,
+        definers=("a.py::render",),
+    )
+    unimportable = _pair(
+        _GET,
+        "render",
+        reason=UnresolvedReason.UNIMPORTABLE_NAME,
+        definers=("b.py::render",),
+    )
+    moved = ambiguous.model_copy(update={"definers": ("b.py::render",)})
+    result = _assess(
+        _STAGE1, _snapshot((ambiguous, unimportable)), _snapshot((moved, unimportable))
+    )
+    assert result.new_pairs == (NodePair(node_id=_GET, name="render"),)
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.RUN,
+        "1 new question",
+    )
+
+
+def test_two_rows_for_one_question_never_cross_a_bar_meant_for_two():
+    """`min_new_unresolved` counts questions: one name asked twice is still one question."""
+    after = _snapshot(
+        (
+            _pair(_GET, "render", reason=UnresolvedReason.AMBIGUOUS_NAME),
+            _pair(_GET, "render", reason=UnresolvedReason.UNIMPORTABLE_NAME),
+        )
+    )
+    result = _assess(_STAGE1, _snapshot(), after, scheduling=_MIN2)
+    assert result.new_pairs == (NodePair(node_id=_GET, name="render"),)
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.SKIP,
+        "1 new question, below the 2 the gate needs",
+    )
+
+
+def test_a_question_one_of_whose_rows_survived_is_not_resolved():
+    """The resolver settled nothing while any row still asks the same name."""
+    ambiguous = _pair(_GET, "render", reason=UnresolvedReason.AMBIGUOUS_NAME)
+    unimportable = _pair(_GET, "render", reason=UnresolvedReason.UNIMPORTABLE_NAME)
+    result = _assess(
+        _STAGE1, _snapshot((ambiguous, unimportable)), _snapshot((ambiguous,))
+    )
+    assert result.resolved_pairs == ()
+
+
+def test_an_externally_bound_pair_that_vanished_is_not_a_resolution():
+    """The same predicate on both sides: a row that never counted as new cannot be settled."""
+    before = _snapshot((_pair(_GET, "search", externally_bound=True),))
+    assert _assess(_STAGE1, before, _snapshot()).resolved_pairs == ()
+
+
+def test_a_stored_row_reaches_the_diff_with_every_column_it_is_keyed_by():
+    """`QueuePair.of` is the only adapter between the store and stage 2, so a dropped column
+    here is invisible to every case that builds its rows by hand."""
+    row = UnresolvedRow(
+        node_id=_GET,
+        fact_kind=FactKind.CALLEE,
+        name="render",
+        reason=UnresolvedReason.AMBIGUOUS_NAME,
+        call_form=CallForm.ATTR,
+        candidates=("a.py::render",),
+        definers=("b.py::render",),
+        externally_bound=True,
+    )
+    narrowed = QueuePair.of(row)
+    assert narrowed.key == (_GET, "render", UnresolvedReason.AMBIGUOUS_NAME)
+    assert narrowed.offer == (("a.py::render",), ("b.py::render",))
+    assert (narrowed.call_form, narrowed.externally_bound) == (CallForm.ATTR, True)
+
+
+def test_a_stored_refinement_reaches_the_diff_with_its_status_and_anchors():
+    """`RefinementState.of` is the other adapter, and `staled_refinements` reads both fields."""
+    state = RefinementState.of(
+        Refinement(
+            refinement_id=7,
+            run_id="run-1",
+            repo_identity="id",
+            kind=RefinementKind.ANNOTATE_NODE,
+            status=RefinementStatus.STALE,
+            target=RefinementTarget(node_id=_GET),
+            payload=RefinementPayload(annotation="entry point"),
+            reason="judged by hand",
+        )
+    )
+    assert (state.refinement_id, state.status) == (7, RefinementStatus.STALE)
+    assert state.anchor_nodes == (_GET,)
 
 
 def test_a_pair_whose_offer_moved_is_new():
