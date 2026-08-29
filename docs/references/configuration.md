@@ -39,7 +39,10 @@ security = { min_severity = "high" }
 
 - `extends` (default `"base"`): profile chain root. A built-in name (`base`, `strict`, `pydantic`,
   `all-strict`) or a path to a TOML file.
-- `exclude` (default `[]`): extra globs to skip, added to the built-in defaults.
+- `exclude` (default `[]`): extra globs to skip, added to the built-in defaults. Those
+  defaults are the generated-file patterns (`*.gen.py`, `*_pb2.py`, `*.gen.ts`, `*.d.ts` and
+  friends) plus `.claude/worktrees/*`: an agent worktree is a second checkout of the same
+  repo, so scanning it double counts every finding in it.
 - `resolve_packages` (default `[]`): dotted-name prefixes of dependency packages whose installed
   source the callee resolver may read from the scanned project's environment. Repo-local
   resolution always works; this extends it. Set with no environment found, the scan warns and

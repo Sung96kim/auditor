@@ -35,8 +35,13 @@ Paths are relative to the repo root.
 - `discovery.py`: `find_root` walks up for `.git` / `pyproject.toml` / `.auditor`. `FileDiscovery`
   lists auditable files through `git ls-files` (exact `.gitignore` handling) or an `rglob` walk
   outside a repo, minus hard-excluded dirs, default generated-file globs, and the configured
-  `exclude`. `default_base_ref` and `git_changed_files` back the diff flags, and `git_output` is
-  the shared one-shot git call `paths.repo_identity` uses.
+  `exclude`, which includes `.claude/worktrees/*` so a second checkout of the same repo is not
+  scanned twice. `FileDiscovery.auditable(path)` and `auditable_rel(rel)` are the two forms of
+  that one shape rule for a caller holding a single path: the first adds the existence test a
+  scanner wants, the second answers for a repo-relative path that may be gone, which is what the
+  observer's stage 0 asks so a deleted path still reaches stage 1. `default_base_ref` and
+  `git_changed_files` back the diff flags, and `git_output` is the shared one-shot git call
+  `paths.repo_identity` uses.
 - `config.py`: `AuditorSettings` (pydantic-settings) is the merged repo config. `load_config`
   layers profile, `pyproject [tool.auditor]`, `.auditor/config.toml`, then injected overrides,
   loading plugins between the raw read and validation so a config may name plugin-contributed

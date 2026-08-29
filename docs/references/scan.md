@@ -57,9 +57,9 @@ auditr scan . -vvv
 - A file is auditable when its extension belongs to a registered language, or when its filename
   matches a manifest the auditor knows. `auditr plugins list` prints the registered languages.
 - Git-ignored files are skipped unless `--include-gitignored`.
-- Vendor and build directories, the default generated-file globs, and soft-skipped migration
-  directories are all dropped before anything is read. The exact sets are in
-  [discover.md](discover.md).
+- Vendor and build directories, the default generated-file globs, agent worktrees under
+  `.claude/worktrees/`, and soft-skipped migration directories are all dropped before anything is
+  read. The exact sets are in [discover.md](discover.md).
 - Every file is classified into a role. Role decides how strictly it is audited; `-t` audits
   test-role files at production strength. See [discover.md](discover.md).
 - Files no language auditor claims still go through a content secret sweep. Binaries and files

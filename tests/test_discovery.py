@@ -266,3 +266,82 @@ def test_default_base_ref_on_main_branch(tmp_path):
     _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
     ref = default_base_ref(tmp_path)
     assert ref in ("main", "origin/main")
+
+
+@pytest.mark.parametrize(
+    ("rel", "expected"),
+    [
+        ("pkg/mod.py", True),
+        ("pkg/mod.pyc", False),
+        ("README.md", False),
+        (".auditor/cache.py", False),
+        ("node_modules/x/a.py", False),
+        ("gen/thing.gen.py", False),
+        (".claude/worktrees/agent-abc/pkg/mod.py", False),
+        # only the worktrees glob is a default exclude, so the rest of `.claude/` stays auditable
+        (".claude/settings.json", True),
+    ],
+)
+def test_auditable_answers_one_path_the_way_a_scan_would(
+    tmp_path: Path, rel: str, expected: bool
+):
+    """Stage 0 of the assessment (spec 8.6) is this predicate, so it must not drift from `files`."""
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x = 1\n")
+    assert FileDiscovery(tmp_path).auditable(path) is expected
+
+
+def test_auditable_refuses_a_path_outside_the_root(tmp_path: Path):
+    outside = tmp_path.parent / "elsewhere.py"
+    outside.write_text("x = 1\n")
+    assert FileDiscovery(tmp_path).auditable(outside) is False
+
+
+def test_auditable_refuses_a_path_that_is_not_a_file(tmp_path: Path):
+    (tmp_path / "pkg").mkdir()
+    assert FileDiscovery(tmp_path).auditable(tmp_path / "pkg") is False
+    assert FileDiscovery(tmp_path).auditable(tmp_path / "gone.py") is False
+
+
+@pytest.mark.parametrize(
+    ("rel", "expected"),
+    [
+        ("pkg/mod.py", True),
+        ("pkg/gone.py", True),
+        ("notes.md", False),
+        ("node_modules/x/a.py", False),
+        (".claude/worktrees/agent-abc/pkg/mod.py", False),
+        ("../outside.py", False),
+    ],
+)
+def test_auditable_rel_answers_for_a_path_that_may_no_longer_exist(
+    tmp_path: Path, rel: str, expected: bool
+):
+    """Stage 0 asks the shape question, so a deleted path still reaches stage 1 (P13)."""
+    assert FileDiscovery(tmp_path).auditable_rel(rel) is expected
+
+
+def test_the_two_predicates_agree_on_a_file_that_exists(tmp_path: Path):
+    """One shape rule under both: only existence separates them."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg/mod.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path)
+    assert (
+        finder.auditable(tmp_path / "pkg/mod.py")
+        is finder.auditable_rel("pkg/mod.py")
+        is True
+    )
+    assert finder.auditable(tmp_path / "pkg/gone.py") is False
+    assert finder.auditable_rel("pkg/gone.py") is True
+
+
+def test_agent_worktrees_are_excluded_without_git(tmp_path: Path):
+    """`.claude/` is gitignored in this repo, so the glob only bites a tree git is not listing."""
+    for rel in ("pkg/mod.py", ".claude/worktrees/agent-abc/pkg/mod.py"):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n")
+    found = FileDiscovery(tmp_path, respect_gitignore=False).files(tmp_path)
+    assert [p.name for p in found] == ["mod.py"]
+    assert all(".claude" not in str(p) for p in found)

@@ -36,6 +36,8 @@ _DEFAULT_EXCLUDE_GLOBS = (
     "*.generated.ts",
     "*.generated.tsx",
     "*.d.ts",
+    # spec 5.2: agent worktrees live inside the root and are checkouts of it, not source
+    ".claude/worktrees/*",
 )
 
 
@@ -202,6 +204,22 @@ class FileDiscovery:
         out = [p for p in candidates if not self._excluded(p, soft_active=soft_active)]
         return sorted(set(out))
 
+    def auditable(self, path: Path, *, target: Path | None = None) -> bool:
+        """Whether one path is a file this scanner would audit (spec 8.6 stage 0).
+
+        The same tests :meth:`files` applies to every candidate, in one call a caller holding a
+        single path can make: it exists, and it has the shape.
+        """
+        return path.is_file() and self._auditable_shape(path, target or self.root)
+
+    def auditable_rel(self, rel: str, *, target: Path | None = None) -> bool:
+        """Whether a repo-relative path has that shape, whether or not it still exists.
+
+        Stage 0's own predicate: a Stop path set carries deletions, and a deleted path has to
+        reach stage 1 to have its nodes removed (spec 8.6).
+        """
+        return self._auditable_shape(self.root / rel, target or self.root)
+
     # --- internals --------------------------------------------------------
 
     def _supported(self, path: Path) -> bool:
@@ -237,6 +255,15 @@ class FileDiscovery:
         except (subprocess.SubprocessError, FileNotFoundError):
             return None
         return [self.root / line for line in out.stdout.splitlines() if line]
+
+    def _auditable_shape(self, path: Path, root: Path) -> bool:
+        """Under the root, a supported language, not excluded. No filesystem read."""
+        if not self._under(path, root):
+            return False
+        soft_active = not _in_soft_skip(self._rel(root))
+        return self._supported(path) and not self._excluded(
+            path, soft_active=soft_active
+        )
 
     def _rel(self, path: Path) -> str:
         try:
