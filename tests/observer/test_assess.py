@@ -101,20 +101,24 @@ _RENAMED_FN = _BEFORE.replace("def load(", "def fetch(").replace(
 )
 
 
+#: the whole source of each case is a parameter, so the ids are given by hand: the default would
+#: put a whole module body in every collected id and in every row of spec 15's map
+_EDIT_CASES = {
+    "comment only": (_COMMENT_ONLY, PathOutcome.UNCHANGED),
+    "blank line only": (_BLANK_ONLY, PathOutcome.UNCHANGED),
+    "formatter run": (_FORMATTED, PathOutcome.UNCHANGED),
+    "docstring only": (_DOCSTRING, PathOutcome.FACTS_ONLY),
+    "new bare callee": (_NEW_BARE_CALLEE, PathOutcome.TRUTH),
+    "deleted function": (_DELETED_FN, PathOutcome.TRUTH),
+    "renamed function": (_RENAMED_FN, PathOutcome.TRUTH),
+}
+
+
 @pytest.mark.parametrize(
-    ("case", "after", "outcome"),
-    [
-        ("comment only", _COMMENT_ONLY, PathOutcome.UNCHANGED),
-        ("blank line only", _BLANK_ONLY, PathOutcome.UNCHANGED),
-        ("formatter run", _FORMATTED, PathOutcome.UNCHANGED),
-        ("docstring only", _DOCSTRING, PathOutcome.FACTS_ONLY),
-        ("new bare callee", _NEW_BARE_CALLEE, PathOutcome.TRUTH),
-        ("deleted function", _DELETED_FN, PathOutcome.TRUTH),
-        ("renamed function", _RENAMED_FN, PathOutcome.TRUTH),
-    ],
+    ("after", "outcome"), _EDIT_CASES.values(), ids=list(_EDIT_CASES)
 )
-def test_stage_one_classifies_one_edit(case, after, outcome):
-    assert assess_path(_edited(after)).outcome is outcome, case
+def test_stage_one_classifies_one_edit(after, outcome):
+    assert assess_path(_edited(after)).outcome is outcome
 
 
 def test_identical_bytes_never_reach_the_extractor():
@@ -165,19 +169,19 @@ def test_a_path_with_no_cached_row_adds_every_node_it_has():
     assert verdict.removed_nodes == ()
 
 
+_MOVED_CASES = {
+    "new bare callee": (_NEW_BARE_CALLEE, {"m.py::Store.get"}),
+    "docstring only": (_DOCSTRING, {"m.py::load"}),
+    "deleted function": (_DELETED_FN, set()),
+}
+
+
 @pytest.mark.parametrize(
-    ("case", "after", "moved"),
-    [
-        ("new bare callee", _NEW_BARE_CALLEE, {"m.py::Store.get"}),
-        ("docstring only", _DOCSTRING, {"m.py::load"}),
-        ("deleted function", _DELETED_FN, set()),
-    ],
+    ("after", "moved"), _MOVED_CASES.values(), ids=list(_MOVED_CASES)
 )
-def test_facts_changed_nodes_names_only_the_nodes_whose_digest_moved(
-    case, after, moved
-):
+def test_facts_changed_nodes_names_only_the_nodes_whose_digest_moved(after, moved):
     """The shared ids whose hashes moved, not every id the file still has (P21)."""
-    assert set(assess_path(_edited(after)).facts_changed_nodes) == moved, case
+    assert set(assess_path(_edited(after)).facts_changed_nodes) == moved
 
 
 def test_a_save_the_extractor_cannot_parse_writes_nothing():
@@ -287,20 +291,21 @@ def test_a_path_listed_twice_is_classified_from_the_later_read():
 
 
 @pytest.mark.parametrize(
-    ("case", "order", "outcome"),
+    ("order", "outcome"),
     [
-        ("deleted then recreated", ("gone", "live"), PathOutcome.TRUTH),
-        ("recreated then deleted", ("live", "gone"), PathOutcome.REMOVED),
+        (("gone", "live"), PathOutcome.TRUTH),
+        (("live", "gone"), PathOutcome.REMOVED),
     ],
+    ids=["deleted then recreated", "recreated then deleted"],
 )
 def test_a_path_deleted_and_recreated_in_one_batch_ends_where_the_batch_left_it(
-    case, order, outcome
+    order, outcome
 ):
     """A stash restore or a delete-then-create save puts both reads in one batch, and forgetting
     a live file's facts would drop every node it has until the next full scan."""
     reads = {"gone": _edited(None), "live": _edited(_NEW_BARE_CALLEE)}
     stage1 = stage_one(tuple(reads[k] for k in order))
-    assert stage1.verdicts[0].outcome is outcome, case
+    assert stage1.verdicts[0].outcome is outcome
 
 
 def test_a_path_outside_the_repo_never_reaches_stage_one(tmp_path: Path):

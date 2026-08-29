@@ -818,23 +818,29 @@ async def test_prune_skipped_runs_spares_real_runs_and_recent_ones(refine_store)
 
 
 @pytest.mark.parametrize(
-    ("case", "over"),
+    "over",
     [
-        ("a run that reached a runner", {"runner": RunnerKind.CLAUDE}),
-        ("an agent's own run", {"producer": ProducerKind.AGENT}),
-        ("a stranded or evicted run", {"error": "stranded: no commit within 3600 s"}),
-        ("a row with no assessment on it", {"trigger_detail": TriggerDetail()}),
+        {"runner": RunnerKind.CLAUDE},
+        {"producer": ProducerKind.AGENT},
+        {"error": "stranded: no commit within 3600 s"},
+        {"trigger_detail": TriggerDetail()},
+    ],
+    ids=[
+        "a run that reached a runner",
+        "an agent's own run",
+        "a stranded or evicted run",
+        "a row with no assessment on it",
     ],
 )
 async def test_prune_keeps_every_skipped_row_an_assessment_did_not_write(
-    refine_store, case, over
+    refine_store, over
 ):
     """Eviction and the stranded sweep both write `skipped`, and their reason is the only record
     of them: sweeping those would delete real runs on a window meant for free rows."""
     kept = await refine_store.runs.add_run(_assessment_run(started_at=0.0, **over))
     swept = await refine_store.runs.prune_skipped_runs(0, now=1_000_000.0)
-    assert swept.removed_runs == 0, case
-    assert await refine_store.runs.run(kept) is not None, case
+    assert swept.removed_runs == 0
+    assert await refine_store.runs.run(kept) is not None
 
 
 async def test_prune_leaves_a_row_that_owns_refinements_and_its_rows_alone(
