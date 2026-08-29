@@ -11,7 +11,16 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict
 
 from auditor.graph.hashes import FileHashes, file_hashes, node_facts_sha, node_truth_sha
-from auditor.graph.model import FileGraphFacts, GraphNode
+from auditor.graph.model import CallForm, FileGraphFacts, GraphNode, UnresolvedRow
+from auditor.graph.refine.models import (
+    Assessment,
+    AssessmentDecision,
+    NodePair,
+    Refinement,
+    RefinementStatus,
+)
+from auditor.observer.budget import BudgetState
+from auditor.user_settings import SchedulingConfig
 
 
 class PathOutcome(StrEnum):
@@ -198,3 +207,277 @@ def stage_one(edited: Sequence[EditedFile]) -> Stage1:
     for one in edited:
         seen.setdefault(one.path, one)
     return Stage1(verdicts=tuple(assess_path(e) for e in seen.values()))
+
+
+#: the two call shapes a low budget still lets through, because they can still auto-activate
+_BOUNDED_FORMS = frozenset({CallForm.BARE, CallForm.SELF})
+
+
+class QueuePair(BaseModel):
+    """One ``graph_unresolved`` row as the diff compares it (spec 8.6 stage 2).
+
+    Only the columns the diff and the low budget rule read: the identity, what the resolver
+    offered, and the two flags that decide whether the pair may count at all.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    name: str
+    call_form: CallForm = CallForm.BARE
+    candidates: tuple[str, ...] = ()
+    definers: tuple[str, ...] = ()
+    externally_bound: bool = False
+
+    @property
+    def pair(self) -> NodePair:
+        return NodePair(node_id=self.node_id, name=self.name)
+
+    @property
+    def offer(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """What the resolver offered here; a move in it makes an existing pair new (spec 8.6)."""
+        return (self.candidates, self.definers)
+
+    @classmethod
+    def of(cls, row: UnresolvedRow) -> "QueuePair":
+        """One stored row narrowed to what the assessment reads."""
+        return cls(
+            node_id=row.node_id,
+            name=row.name,
+            call_form=row.call_form,
+            candidates=row.candidates,
+            definers=row.definers,
+            externally_bound=row.externally_bound,
+        )
+
+
+class RefinementState(BaseModel):
+    """One refinement across a rebuild: its status and the nodes it is pinned to (spec 5.5)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    refinement_id: int
+    status: RefinementStatus
+    anchor_nodes: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, refinement: Refinement) -> "RefinementState":
+        """Read off the stored row, whose ``anchored_ids`` already answers the anchor set."""
+        return cls(
+            refinement_id=refinement.refinement_id,
+            status=refinement.status,
+            anchor_nodes=refinement.anchored_ids(),
+        )
+
+
+class GraphSnapshot(BaseModel):
+    """The queue and the refinement statuses at one side of a rebuild's persist (spec 6, 8.6)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pairs: tuple[QueuePair, ...] = ()
+    refinements: tuple[RefinementState, ...] = ()
+
+    @property
+    def by_pair(self) -> dict[tuple[str, str], QueuePair]:
+        """The queue keyed the way spec 8.6 diffs it, so neither side scans the other."""
+        return {(p.node_id, p.name): p for p in self.pairs}
+
+    @property
+    def by_refinement(self) -> dict[int, RefinementState]:
+        return {r.refinement_id: r for r in self.refinements}
+
+
+class Decision(BaseModel):
+    """The gate's answer and the one line a human reads for it (spec 8.6)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    decision: AssessmentDecision
+    reason: str
+
+
+def new_pairs(before: GraphSnapshot, after: GraphSnapshot) -> tuple[NodePair, ...]:
+    """Pairs absent before, or whose offer moved. Externally bound rows never count (spec 8.6)."""
+    was = before.by_pair
+    return tuple(
+        p.pair
+        for p in after.pairs
+        if not p.externally_bound
+        and (
+            (p.node_id, p.name) not in was or was[(p.node_id, p.name)].offer != p.offer
+        )
+    )
+
+
+def resolved_pairs(
+    before: GraphSnapshot, after: GraphSnapshot, *, removed_nodes: frozenset[str]
+) -> tuple[NodePair, ...]:
+    """Pairs that disappeared and whose node survived: the resolver settled them (spec 8.6).
+
+    A renamed node produces a removal and a new pair, never a resolution, which is why the removed
+    set is subtracted rather than the pair simply being counted as gone.
+    """
+    now = after.by_pair
+    return tuple(
+        p.pair
+        for p in before.pairs
+        if (p.node_id, p.name) not in now and p.node_id not in removed_nodes
+    )
+
+
+def staled_refinements(
+    before: GraphSnapshot, after: GraphSnapshot, *, changed_nodes: frozenset[str]
+) -> tuple[int, ...]:
+    """Refinements this rebuild staled because an anchor this batch touched moved (P10).
+
+    A `noop_builds` or Jaccard staleness lands the same status with no anchor of this batch behind
+    it, and an edit cannot re-confirm those, so the intersection is what separates them.
+    """
+    was = before.by_refinement
+    return tuple(
+        sorted(
+            r.refinement_id
+            for r in after.refinements
+            if r.status is RefinementStatus.STALE
+            and r.refinement_id in was
+            and was[r.refinement_id].status is not RefinementStatus.STALE
+            and changed_nodes.intersection(r.anchor_nodes)
+        )
+    )
+
+
+def _plural(n: int, noun: str) -> str:
+    """One count and its noun, so nine reason strings share one pluralizer."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _run_reason(
+    *, questions: int, stale: int, new_fired: bool, stale_fired: bool
+) -> str:
+    """Which clause carried the run, so a reason never credits a bar the count did not clear."""
+    if new_fired and stale_fired:
+        return f"{_plural(questions, 'new question')} and {_plural(stale, 'stale refinement')}"
+    if new_fired:
+        return _plural(questions, "new question")
+    return _plural(stale, "stale refinement")
+
+
+def _skip_reason(
+    *,
+    new: tuple[NodePair, ...],
+    bounded: tuple[NodePair, ...],
+    stale: tuple[int, ...],
+    scheduling: SchedulingConfig,
+    budget: BudgetState,
+) -> str:
+    """Why the gate said no, naming the clause that came closest rather than the emptiest one."""
+    if budget.low and new:
+        return (
+            f"low budget: {len(bounded)} of {len(new)} new questions are bare or self"
+        )
+    if new:
+        return (
+            f"{_plural(len(new), 'new question')}, "
+            f"below the {scheduling.min_new_unresolved} the gate needs"
+        )
+    if stale and not scheduling.run_on_stale:
+        return f"{_plural(len(stale), 'stale refinement')}, run_on_stale is off"
+    return "no new questions"
+
+
+def decide(
+    *,
+    new_pairs: tuple[NodePair, ...],
+    bounded_pairs: tuple[NodePair, ...],
+    stale_refinements: tuple[int, ...],
+    scheduling: SchedulingConfig,
+    budget: BudgetState,
+) -> Decision:
+    """Spec 8.6's decision, low budget narrowing included.
+
+    ``bounded_pairs`` is the ``call_form in {bare, self}`` subset, the only shape that can still
+    auto-activate; under the low budget bar it replaces ``new_pairs`` in the count.
+    """
+    if budget.low and not budget.evaluated:
+        return Decision(
+            decision=AssessmentDecision.SKIP,
+            reason="low budget and no eval row for this runner",
+        )
+    counted = bounded_pairs if budget.low else new_pairs
+    new_fired = len(counted) >= scheduling.min_new_unresolved
+    stale_fired = scheduling.run_on_stale and bool(stale_refinements)
+    if new_fired or stale_fired:
+        return Decision(
+            decision=AssessmentDecision.RUN,
+            reason=_run_reason(
+                questions=len(counted),
+                stale=len(stale_refinements),
+                new_fired=new_fired,
+                stale_fired=stale_fired,
+            ),
+        )
+    return Decision(
+        decision=AssessmentDecision.SKIP,
+        reason=_skip_reason(
+            new=new_pairs,
+            bounded=bounded_pairs,
+            stale=stale_refinements,
+            scheduling=scheduling,
+            budget=budget,
+        ),
+    )
+
+
+def assess_unchanged(stage1: Stage1) -> Assessment:
+    """The assessment for a batch stage 1 dropped: no persist, no rebuild, no run (spec 8.6)."""
+    return Assessment(
+        files=stage1.files,
+        decision=AssessmentDecision.SKIP,
+        reason="no structural change",
+    )
+
+
+def assess(
+    stage1: Stage1,
+    *,
+    before: GraphSnapshot,
+    after: GraphSnapshot,
+    scheduling: SchedulingConfig,
+    budget: BudgetState,
+    max_nodes_per_run: int,
+    flow_nodes: frozenset[str] = frozenset(),
+) -> Assessment:
+    """The whole assessment for a batch the loop rebuilt for (spec 8.6 stages 1 and 2).
+
+    ``before`` and ``after`` are the snapshots the rebuild took around its one persist commit;
+    ``flow_nodes`` is what a recent flow query asked about, which is recorded and decides nothing.
+    """
+    fresh = new_pairs(before, after)
+    forms = after.by_pair
+    bounded = tuple(
+        p for p in fresh if forms[(p.node_id, p.name)].call_form in _BOUNDED_FORMS
+    )
+    staled = staled_refinements(before, after, changed_nodes=stage1.changed_nodes)
+    verdict = decide(
+        new_pairs=fresh,
+        bounded_pairs=bounded,
+        stale_refinements=staled,
+        scheduling=scheduling,
+        budget=budget,
+    )
+    return Assessment(
+        files=stage1.files,
+        added_nodes=stage1.added_nodes,
+        removed_nodes=stage1.removed_nodes,
+        facts_changed_nodes=stage1.facts_changed_nodes,
+        new_pairs=fresh,
+        resolved_pairs=resolved_pairs(
+            before, after, removed_nodes=frozenset(stage1.removed_nodes)
+        ),
+        stale_refinements=staled,
+        affected_flow=tuple(sorted(stage1.changed_nodes & flow_nodes)),
+        deferred_pairs=max(0, len(fresh) - max_nodes_per_run),
+        decision=verdict.decision,
+        reason=verdict.reason,
+    )

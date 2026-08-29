@@ -26,6 +26,7 @@ from auditor.graph.refine.models import (
     RunOutcome,
     RunStatus,
     RunUsage,
+    Spend,
     Stratum,
     Tier,
     ToolCall,
@@ -880,3 +881,29 @@ async def test_finish_run_refuses_an_unknown_run(refine_store):
     somewhere and nothing at all said so."""
     with pytest.raises(NoSuchRun, match="no run nope on this checkout"):
         await refine_store.runs.finish_run("nope", RunOutcome(status=RunStatus.FAILED))
+
+
+async def test_spend_since_sums_only_the_runs_that_called_a_model(graph_store):
+    """An assessment-only row spent nothing, so it consumes neither ceiling (P2)."""
+    identity = graph_store.partition.identity
+    for runner, cost, started in (
+        (RunnerKind.CLAUDE, 0.10, 100.0),
+        (RunnerKind.CLAUDE, 0.05, 200.0),
+        (RunnerKind.NONE, 0.0, 210.0),
+        (RunnerKind.CLAUDE, 9.99, 10.0),
+    ):
+        await graph_store.runs.add_run(
+            Run(
+                repo_identity=identity,
+                runner=runner,
+                started_at=started,
+                usage=RunUsage(cost_usd=cost),
+            )
+        )
+    spend = await graph_store.runs.spend_since(50.0)
+    assert spend.runs == 2
+    assert spend.cost_usd == pytest.approx(0.15)
+
+
+async def test_spend_since_on_an_empty_window_is_zero_not_none(graph_store):
+    assert await graph_store.runs.spend_since(0.0) == Spend()

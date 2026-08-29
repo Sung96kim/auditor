@@ -14,14 +14,30 @@ import pytest
 from auditor.discovery import FileDiscovery
 from auditor.graph.extract import extract_file_facts
 from auditor.graph.hashes import file_hashes
+from auditor.graph.model import CallForm
+from auditor.graph.refine.models import (
+    Assessment,
+    AssessmentDecision,
+    NodePair,
+    RefinementStatus,
+    Spend,
+)
 from auditor.observer.assess import (
     CachedFile,
     EditedFile,
+    GraphSnapshot,
     NodeDigest,
     PathOutcome,
+    QueuePair,
+    RefinementState,
+    assess,
     assess_path,
+    assess_unchanged,
+    decide,
     stage_one,
 )
+from auditor.observer.budget import BudgetState, budget_state
+from auditor.user_settings import BudgetConfig, SchedulingConfig
 
 _BEFORE = """
 def load(name):
@@ -217,3 +233,249 @@ def test_stage_zero_keeps_a_deleted_path_so_stage_one_can_remove_its_nodes(
 ):
     """The shape predicate is what makes the `REMOVED` branch reachable in production (P13)."""
     assert FileDiscovery(tmp_path).auditable_rel("pkg/gone.py") is True
+
+
+def _pair(node_id: str, name: str, **over) -> QueuePair:
+    return QueuePair(node_id=node_id, name=name, **over)
+
+
+def _snapshot(pairs=(), refinements=()) -> GraphSnapshot:
+    return GraphSnapshot(pairs=tuple(pairs), refinements=tuple(refinements))
+
+
+def _budget(*, fraction: float = 1.0, evaluated: bool = True) -> BudgetState:
+    return budget_state(
+        Spend(cost_usd=2.0 * (1.0 - fraction)),
+        config=BudgetConfig(),
+        evaluated=evaluated,
+    )
+
+
+def _assess(stage1, before, after, **over) -> Assessment:
+    """Every case's call, so a new keyword is added once rather than in twenty places."""
+    return assess(
+        stage1,
+        before=before,
+        after=after,
+        **{
+            "scheduling": SchedulingConfig(),
+            "budget": _budget(),
+            "max_nodes_per_run": 12,
+            **over,
+        },
+    )
+
+
+_GET = "m.py::Store.get"
+_STAGE1 = stage_one((_edited(_NEW_BARE_CALLEE),))
+
+
+def _staled(anchors: tuple[str, ...]) -> tuple[GraphSnapshot, GraphSnapshot]:
+    """One refinement, active before and stale after, anchored where the caller says."""
+    return (
+        _snapshot(
+            refinements=(
+                RefinementState(
+                    refinement_id=1,
+                    status=RefinementStatus.ACTIVE,
+                    anchor_nodes=anchors,
+                ),
+            )
+        ),
+        _snapshot(
+            refinements=(
+                RefinementState(
+                    refinement_id=1, status=RefinementStatus.STALE, anchor_nodes=anchors
+                ),
+            )
+        ),
+    )
+
+
+def test_a_pair_absent_before_is_new():
+    result = _assess(_STAGE1, _snapshot(), _snapshot((_pair(_GET, "widen"),)))
+    assert result.new_pairs == (NodePair(node_id=_GET, name="widen"),)
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.RUN,
+        "1 new question",
+    )
+
+
+def test_a_pair_whose_offer_moved_is_new():
+    """Spec 8.6: absent before, or `candidates_json`/`definers_json` changed."""
+    before = _snapshot((_pair(_GET, "widen", candidates=("a.py::widen",)),))
+    after = _snapshot(
+        (_pair(_GET, "widen", candidates=("a.py::widen", "b.py::widen")),)
+    )
+    assert _assess(_STAGE1, before, after).new_pairs != ()
+
+
+def test_an_unchanged_pair_is_not_new():
+    same = (
+        _pair(_GET, "widen", candidates=("a.py::widen",), definers=("a.py::widen",)),
+    )
+    assert _assess(_STAGE1, _snapshot(same), _snapshot(same)).new_pairs == ()
+
+
+def test_an_externally_bound_pair_never_counts_as_new():
+    after = _snapshot((_pair(_GET, "search", externally_bound=True),))
+    result = _assess(_STAGE1, _snapshot(), after)
+    assert result.new_pairs == ()
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.SKIP,
+        "no new questions",
+    )
+
+
+def test_a_pair_that_disappeared_is_resolved_unless_its_node_went_with_it():
+    stage1 = stage_one((_edited(_DELETED_FN),))
+    before = _snapshot((_pair(_GET, "widen"), _pair("m.py::load", "helper")))
+    result = _assess(stage1, before, _snapshot())
+    assert NodePair(node_id=_GET, name="widen") in result.resolved_pairs
+    assert all(p.node_id != "m.py::load" for p in result.resolved_pairs)
+
+
+def test_a_refinement_the_rebuild_staled_on_a_touched_anchor_counts():
+    before, after = _staled((_GET,))
+    result = _assess(_STAGE1, before, after)
+    assert result.stale_refinements == (1,)
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.RUN,
+        "1 stale refinement",
+    )
+
+
+def test_a_refinement_staled_on_an_anchor_this_batch_never_touched_is_excluded():
+    """`noop_builds` and Jaccard drift land the same status, and an edit cannot re-confirm them."""
+    before, after = _staled(("z.py::other",))
+    assert _assess(_STAGE1, before, after).stale_refinements == ()
+
+
+def test_a_docstring_edit_rebuilds_and_finds_nothing():
+    stage1 = stage_one((_edited(_DOCSTRING),))
+    result = _assess(stage1, _snapshot(), _snapshot())
+    assert stage1.needs_rebuild is True
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.SKIP,
+        "no new questions",
+    )
+
+
+def test_a_batch_that_moved_nothing_never_reaches_stage_two():
+    result = assess_unchanged(stage_one((_edited(_COMMENT_ONLY),)))
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.SKIP,
+        "no structural change",
+    )
+    assert result.files == ("m.py",)
+
+
+def test_a_changed_node_in_a_recent_flow_is_recorded_and_decides_nothing():
+    """`_STAGE1` moves `_GET`, so the flow node is one this batch actually touched."""
+    result = _assess(_STAGE1, _snapshot(), _snapshot(), flow_nodes=frozenset({_GET}))
+    assert result.affected_flow == (_GET,)
+    assert result.decision is AssessmentDecision.SKIP
+
+
+def test_a_flow_node_this_batch_never_touched_is_not_recorded():
+    """`affected_flow` is the intersection, not an echo of what the flow cache asked about."""
+    result = _assess(
+        _STAGE1, _snapshot(), _snapshot(), flow_nodes=frozenset({"z.py::other"})
+    )
+    assert result.affected_flow == ()
+
+
+def test_pairs_beyond_the_cap_are_counted_not_dropped():
+    after = _snapshot(_pair(f"m.py::n{i}", "widen") for i in range(15))
+    result = _assess(_STAGE1, _snapshot(), after)
+    assert len(result.new_pairs) == 15
+    assert result.deferred_pairs == 3
+
+
+_MIN2 = SchedulingConfig(min_new_unresolved=2)
+_NO_STALE = SchedulingConfig(run_on_stale=False)
+_MIN0 = SchedulingConfig(min_new_unresolved=0)
+_SKIP, _RUN = AssessmentDecision.SKIP, AssessmentDecision.RUN
+
+
+@pytest.mark.parametrize(
+    ("scheduling", "new", "stale", "decision", "reason"),
+    [
+        (_MIN2, 1, 0, _SKIP, "1 new question, below the 2 the gate needs"),
+        (_MIN2, 2, 0, _RUN, "2 new questions"),
+        (_NO_STALE, 0, 1, _SKIP, "1 stale refinement, run_on_stale is off"),
+        (SchedulingConfig(), 1, 1, _RUN, "1 new question and 1 stale refinement"),
+        (_MIN0, 0, 0, _RUN, "0 new questions"),
+        # the stale arm carried it alone, so the reason must not credit the clause that failed
+        (_MIN2, 1, 1, _RUN, "1 stale refinement"),
+    ],
+)
+def test_the_decision_rule(scheduling, new, stale, decision, reason):
+    pairs = tuple(NodePair(node_id=f"m.py::n{i}", name="w") for i in range(new))
+    result = decide(
+        new_pairs=pairs,
+        bounded_pairs=pairs,
+        stale_refinements=tuple(range(1, stale + 1)),
+        scheduling=scheduling,
+        budget=_budget(),
+    )
+    assert (result.decision, result.reason) == (decision, reason)
+
+
+def test_under_the_bar_with_an_eval_row_only_bare_and_self_pairs_count():
+    after = _snapshot(
+        (
+            _pair(_GET, "widen", call_form=CallForm.ATTR),
+            _pair(_GET, "narrow", call_form=CallForm.ATTR),
+        )
+    )
+    result = _assess(_STAGE1, _snapshot(), after, budget=_budget(fraction=0.1))
+    assert len(result.new_pairs) == 2
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.SKIP,
+        "low budget: 0 of 2 new questions are bare or self",
+    )
+
+
+def test_under_the_bar_with_an_eval_row_a_bare_pair_still_runs():
+    after = _snapshot((_pair(_GET, "widen", call_form=CallForm.BARE),))
+    result = _assess(_STAGE1, _snapshot(), after, budget=_budget(fraction=0.1))
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.RUN,
+        "1 new question",
+    )
+
+
+def test_under_the_bar_the_reason_counts_only_the_pairs_that_still_qualify():
+    """`k`, not `n`: the narrowing exists so a clause that did not fire is not credited."""
+    after = _snapshot(
+        (
+            _pair(_GET, "widen", call_form=CallForm.BARE),
+            _pair(_GET, "narrow", call_form=CallForm.ATTR),
+        )
+    )
+    result = _assess(_STAGE1, _snapshot(), after, budget=_budget(fraction=0.1))
+    assert len(result.new_pairs) == 2
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.RUN,
+        "1 new question",
+    )
+
+
+def test_under_the_bar_with_no_eval_row_edit_runs_are_off():
+    after = _snapshot((_pair(_GET, "widen", call_form=CallForm.BARE),))
+    result = _assess(
+        _STAGE1, _snapshot(), after, budget=_budget(fraction=0.1, evaluated=False)
+    )
+    assert (result.decision, result.reason) == (
+        AssessmentDecision.SKIP,
+        "low budget and no eval row for this runner",
+    )
+
+
+def test_under_the_bar_with_an_eval_row_the_stale_arm_still_runs():
+    """Spec 8.6 narrows the new-pairs clause only; re-confirming is the cheapest run (P16)."""
+    before, after = _staled((_GET,))
+    assert _assess(_STAGE1, before, after, budget=_budget(fraction=0.1)).decision is (
+        AssessmentDecision.RUN
+    )

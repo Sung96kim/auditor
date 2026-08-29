@@ -32,6 +32,7 @@ from auditor.graph.refine.models import (
     RunOutcome,
     RunStatus,
     RunUsage,
+    Spend,
     TuningRow,
     TuningStatus,
 )
@@ -338,6 +339,22 @@ class RunsDB(BaseDB):
             tuple(params),
         )
         return int(row["n"]) if row else 0
+
+    async def spend_since(self, since: float) -> Spend:
+        """What this checkout's model-calling runs cost since ``since`` (spec 8.4).
+
+        One aggregate rather than a filter on :meth:`runs`, which decodes a whole day of the
+        ledger for two numbers. Assessment-only rows are excluded: they called no model, so they
+        consume neither the dollars nor the run count a day ceiling counts.
+        """
+        row = await self._fetch_one_by_identity(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) AS cost_usd, COUNT(*) AS runs "
+            "FROM graph_runs WHERE repo_identity = ? AND started_at >= ? AND runner != ?",
+            (since, RunnerKind.NONE.value),
+        )
+        if row is None:
+            return Spend()
+        return Spend(cost_usd=float(row["cost_usd"]), runs=int(row["runs"]))
 
     async def finish_stranded_runs(
         self, *, older_than: float, now: float | None = None
