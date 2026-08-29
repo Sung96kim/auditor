@@ -181,17 +181,21 @@ class GraphDB(BaseDB):
 
         await self._worker.run(op)
 
-    async def forget_facts(self, path: str) -> None:
-        """Drop one file's cached facts, for a path that is gone (spec 8.6's removed outcome).
+    async def forget_facts(self, paths: Sequence[str]) -> None:
+        """Drop these files' cached facts, for paths that are gone (spec 8.6's removed outcome).
 
-        The narrow form of what :meth:`IndexStore.prune` already does in bulk, for the one caller
-        that holds a single path and no keep set. Nothing else is keyed by path: the spec 5.5 pair
-        is two columns of this row, and `graph_unresolved` is node keyed.
+        One transaction for the batch, the way :meth:`IndexStore.prune` does it in bulk: a batch
+        carries every path a debounce window removed, and forgetting them one await at a time
+        leaves a crash halfway through with the graph half forgotten. Nothing else is keyed by
+        path: the spec 5.5 pair is two columns of this row, and `graph_unresolved` is node keyed.
         """
+        if not paths:
+            return
+        binds = [(self.repo, p) for p in paths]
 
         def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "DELETE FROM graph_facts WHERE repo = ? AND path = ?", (self.repo, path)
+            conn.executemany(
+                "DELETE FROM graph_facts WHERE repo = ? AND path = ?", binds
             )
             conn.commit()
 

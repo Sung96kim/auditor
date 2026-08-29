@@ -12,7 +12,9 @@ from auditor.database.refinements import NoSuchRun
 from auditor.graph.model import EdgeKind
 from auditor.graph.refine.models import (
     Anchor,
+    Assessment,
     ClientKind,
+    Decision,
     EvalMetrics,
     EvalRow,
     ProducerKind,
@@ -76,6 +78,25 @@ def _run(**kw) -> Run:
     return Run(repo_identity=IDENTITY, **{"started_at": 100.0, **kw})
 
 
+def _assessment_run(**kw) -> Run:
+    """The row `decline` writes: the observer's, no runner, no error, and the object that says so,
+    which together are what the retention sweep looks for."""
+    return _run(
+        **{
+            "producer": ProducerKind.OBSERVER,
+            "runner": RunnerKind.NONE,
+            "status": RunStatus.SKIPPED,
+            "trigger_detail": TriggerDetail(
+                files=("m.py",),
+                assessment=Assessment(
+                    files=("m.py",), verdict=Decision(reason="no structural change")
+                ),
+            ),
+            **kw,
+        }
+    )
+
+
 def _saturated_run() -> Run:
     """A run with every field at a distinct non-default value, so a dropped or transposed column
     changes the round-trip result."""
@@ -88,7 +109,10 @@ def _saturated_run() -> Run:
         producer=ProducerKind.OBSERVER,
         runner=RunnerKind.CLAUDE,
         trigger_kind=TriggerKind.EDIT,
-        trigger_detail=TriggerDetail(files=("m.py",), reason="edited"),
+        trigger_detail=TriggerDetail(
+            files=("m.py",),
+            assessment=Assessment(files=("m.py",), verdict=Decision(reason="edited")),
+        ),
         session_id="s1",
         agent_name="refiner",
         branch="main",
@@ -783,37 +807,53 @@ async def test_counts_by_run_splits_what_a_run_kept_from_what_it_refused(refine_
 
 
 async def test_prune_skipped_runs_spares_real_runs_and_recent_ones(refine_store):
-    old_skipped = await refine_store.runs.add_run(
-        _run(status=RunStatus.SKIPPED, started_at=0.0)
-    )
-    await refine_store.runs.add_run(
-        _run(status=RunStatus.SKIPPED, started_at=1_000_000.0)
-    )
+    old_assessment = await refine_store.runs.add_run(_assessment_run(started_at=0.0))
+    await refine_store.runs.add_run(_assessment_run(started_at=1_000_000.0))
     await refine_store.runs.add_run(_run(status=RunStatus.SUCCEEDED, started_at=0.0))
     swept = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
     assert (swept.removed_runs, swept.removed_refinements) == (1, 0)
     kept = {r.run_id for r in await refine_store.runs.runs()}
-    assert old_skipped not in kept
+    assert old_assessment not in kept
     assert len(kept) == 2
 
 
-async def test_prune_counts_the_rejections_it_deletes_with_the_run(refine_store):
-    """The command's own help promised nothing live is deleted, and reported runs only: a caller
-    told "1 run removed" could not see the two rows that went with it."""
-    run_id = await refine_store.runs.add_run(
-        _run(status=RunStatus.SKIPPED, started_at=0.0)
-    )
+@pytest.mark.parametrize(
+    ("case", "over"),
+    [
+        ("a run that reached a runner", {"runner": RunnerKind.CLAUDE}),
+        ("an agent's own run", {"producer": ProducerKind.AGENT}),
+        ("a stranded or evicted run", {"error": "stranded: no commit within 3600 s"}),
+        ("a row with no assessment on it", {"trigger_detail": TriggerDetail()}),
+    ],
+)
+async def test_prune_keeps_every_skipped_row_an_assessment_did_not_write(
+    refine_store, case, over
+):
+    """Eviction and the stranded sweep both write `skipped`, and their reason is the only record
+    of them: sweeping those would delete real runs on a window meant for free rows."""
+    kept = await refine_store.runs.add_run(_assessment_run(started_at=0.0, **over))
+    swept = await refine_store.runs.prune_skipped_runs(0, now=1_000_000.0)
+    assert swept.removed_runs == 0, case
+    assert await refine_store.runs.run(kept) is not None, case
+
+
+async def test_prune_leaves_a_row_that_owns_refinements_and_its_rows_alone(
+    refine_store,
+):
+    """The tuning and refinement clauses are the sweep's invariant rather than its filter: a row
+    owning either is kept, so nothing it owns is ever orphaned."""
+    run_id = await refine_store.runs.add_run(_assessment_run(started_at=0.0))
     for _ in range(2):
         await refine_store.refinements.add_refinement(
-            _refinement(run_id, status=RefinementStatus.REJECTED)
+            _refinement(run_id, status=RefinementStatus.ACTIVE)
         )
     swept = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
     assert (swept.removed_runs, swept.removed_refinements, swept.stranded_runs) == (
-        1,
-        2,
+        0,
+        0,
         0,
     )
-    assert await refine_store.refinements.of_run(run_id) == []
+    assert len(await refine_store.refinements.of_run(run_id)) == 2
 
 
 async def test_a_run_left_queued_by_a_dead_process_is_finished(refine_store):
@@ -884,24 +924,27 @@ async def test_finish_run_refuses_an_unknown_run(refine_store):
 
 
 async def test_spend_since_sums_only_the_runs_that_called_a_model(graph_store):
-    """An assessment-only row spent nothing, so it consumes neither ceiling (P2)."""
+    """An assessment row spent nothing, so it consumes neither ceiling. An agent's run through the
+    MCP tools also has no runner of its own, and it did call a model (P2)."""
     identity = graph_store.partition.identity
-    for runner, cost, started in (
-        (RunnerKind.CLAUDE, 0.10, 100.0),
-        (RunnerKind.CLAUDE, 0.05, 200.0),
-        (RunnerKind.NONE, 0.0, 210.0),
-        (RunnerKind.CLAUDE, 9.99, 10.0),
+    for producer, runner, cost, started in (
+        (ProducerKind.OBSERVER, RunnerKind.CLAUDE, 0.10, 100.0),
+        (ProducerKind.OBSERVER, RunnerKind.CLAUDE, 0.05, 200.0),
+        (ProducerKind.OBSERVER, RunnerKind.NONE, 0.0, 210.0),
+        (ProducerKind.AGENT, RunnerKind.NONE, 0.0, 220.0),
+        (ProducerKind.OBSERVER, RunnerKind.CLAUDE, 9.99, 10.0),
     ):
         await graph_store.runs.add_run(
             Run(
                 repo_identity=identity,
+                producer=producer,
                 runner=runner,
                 started_at=started,
                 usage=RunUsage(cost_usd=cost),
             )
         )
     spend = await graph_store.runs.spend_since(50.0)
-    assert spend.runs == 2
+    assert spend.runs == 3
     assert spend.cost_usd == pytest.approx(0.15)
 
 

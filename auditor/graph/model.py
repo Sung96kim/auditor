@@ -300,6 +300,9 @@ MAX_LOG_ROWS = 500
 LOG_FILE_CAP = 10
 #: how many of them the log line names before it counts the rest; S8b's page reads the same number
 LOG_NOTE_FILES = 3
+#: the length of a day, for the rolling spend window and the retention cutoff, which are the two
+#: places that would otherwise each carry a literal and drift on the type
+DAY_SECONDS = 86_400.0
 # Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
 DEFAULT_FLOW_LIMIT = 200
 DEFAULT_FLOW_DEPTH = 4

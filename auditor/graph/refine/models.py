@@ -433,14 +433,19 @@ class Run(BaseModel):
 
         The partition pair, the scope and the branch/HEAD pair each fan out into more than one
         stored column, which is what made this a thirteen-argument construction at the caller. A
-        caller holding a whole detail passes it, because a batch's file list is not its scope.
+        caller holding a whole detail passes it, because a batch's file list is not its scope, and
+        `begin` refuses the pair rather than letting one silently win here.
         """
         identity, prefix = partition
         return cls(
             repo_identity=identity,
             origin_partition=origin,
             partition_prefix=prefix,
-            trigger_detail=detail or TriggerDetail(files=(scope,) if scope else ()),
+            trigger_detail=(
+                detail
+                if detail is not None
+                else TriggerDetail(files=(scope,) if scope else ())
+            ),
             branch=checkout.branch,
             commit_sha=checkout.commit_sha,
             client=client,

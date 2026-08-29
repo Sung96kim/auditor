@@ -340,9 +340,11 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `worktrees` (default `"main"`): `main` or `all`.
 - `suspects` (default `true`): queue suspect nodes found during a build.
 - `open_browser` (default `true`): open the live page when the daemon starts.
-- `skipped_retention_days` (default `7`): days of skipped-run history kept. `0` is legal and
-  means the next sweep reaps every skipped row, including one written a second ago: the field
-  is `ge=0` and `prune_skipped_runs` compares `started_at < now - days * 86400`.
+- `skipped_retention_days` (default `7`): days of assessment-row history kept. Only the gate's
+  own rows are swept; an evicted or stranded run is `skipped` too and is kept whatever its age.
+  `0` is legal and means the next sweep reaps every assessment row, including one written a
+  second ago: the field is `ge=0` and `prune_skipped_runs` compares
+  `started_at < now - days * 86400`.
 
 `observer.budget` (`BudgetConfig`):
 

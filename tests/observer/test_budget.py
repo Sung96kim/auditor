@@ -46,4 +46,13 @@ def test_a_zero_ceiling_leaves_nothing():
 
 
 def test_the_window_is_a_rolling_day_ending_at_the_injected_now():
-    assert window_start(1_000_000.0) == 1_000_000.0 - DAY_SECONDS
+    """The literal, not the constant: importing the length from the thing under test leaves only
+    a sign flip to catch."""
+    now = 1_000_000.0
+    assert window_start(now) == now - 86_400.0
+    assert window_start(now + 3_600.0) - window_start(now) == 3_600.0
+
+
+def test_the_day_the_window_rolls_is_the_day_retention_counts():
+    """Two homes differing in type is how a rolling window and a cutoff drift apart."""
+    assert DAY_SECONDS == 86_400.0

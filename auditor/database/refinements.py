@@ -15,12 +15,14 @@ from typing import Any, ClassVar
 from pydantic import ValidationError
 
 from auditor.database.base import BaseDB, Column, Index, Table
+from auditor.graph.model import DAY_SECONDS
 from auditor.graph.refine.models import (
     ACTIVE_STATUSES,
     STORED_ROW,
     Anchor,
     EvalMetrics,
     EvalRow,
+    ProducerKind,
     PruneOutcome,
     Refinement,
     RefinementCounts,
@@ -38,8 +40,6 @@ from auditor.graph.refine.models import (
 )
 
 logger = logging.getLogger(__name__)
-
-_DAY_SECONDS = 86_400
 
 
 class NoSuchRun(RuntimeError):
@@ -344,13 +344,15 @@ class RunsDB(BaseDB):
         """What this checkout's model-calling runs cost since ``since`` (spec 8.4).
 
         One aggregate rather than a filter on :meth:`runs`, which decodes a whole day of the
-        ledger for two numbers. Assessment-only rows are excluded: they called no model, so they
-        consume neither the dollars nor the run count a day ceiling counts.
+        ledger for two numbers. Only the rows the observer wrote to record a decision it declined
+        to act on are excluded; a run an agent drove through the MCP tools also has no runner of
+        its own, and it did call a model.
         """
         row = await self._fetch_one_by_identity(
             "SELECT COALESCE(SUM(cost_usd), 0.0) AS cost_usd, COUNT(*) AS runs "
-            "FROM graph_runs WHERE repo_identity = ? AND started_at >= ? AND runner != ?",
-            (since, RunnerKind.NONE.value),
+            "FROM graph_runs WHERE repo_identity = ? AND started_at >= ? "
+            "AND NOT (runner = ? AND producer = ?)",
+            (since, RunnerKind.NONE.value, ProducerKind.OBSERVER.value),
         )
         if row is None:
             return Spend()
@@ -391,17 +393,21 @@ class RunsDB(BaseDB):
     ) -> PruneOutcome:
         """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
 
-        ``retention_days`` is the daemon's ``ObserverConfig.skipped_retention_days``. Real runs are
-        kept forever, and so is a skipped run owning a tuning row or a refinement that is not
-        `rejected`. A run evicted from the registry owns nothing else, so its rejections go with
-        it in the same transaction and Invariant 2 never sees an orphan; both counts come back,
-        because a caller told only about the runs cannot see the rows that went with them.
+        ``retention_days`` is the daemon's ``ObserverConfig.skipped_retention_days``. An
+        assessment row is the only kind swept: it is the observer's own, it called no runner, it
+        carries the object that says so, and it has no ``error`` because its reason lives on that
+        object. A run evicted from the registry and one the stranded sweep closed are `skipped`
+        too, but both write their reason into ``error`` and that is the only record of them, so
+        they are kept whatever their age. The tuning and refinement clauses are the invariant rather
+        than the filter: a row owning either is left alone instead of orphaning it, and both
+        counts come back because a caller told only about the runs cannot see the rest.
         """
-        cutoff = (time.time() if now is None else now) - retention_days * _DAY_SECONDS
+        cutoff = (time.time() if now is None else now) - retention_days * DAY_SECONDS
         identity = self.partition.identity
         eligible = (
             "SELECT run_id FROM graph_runs WHERE repo_identity = ? AND status = ? "
-            "AND started_at < ? "
+            "AND started_at < ? AND runner = ? AND producer = ? AND error IS NULL "
+            "AND json_extract(trigger_detail, '$.assessment') IS NOT NULL "
             "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?) "
             "AND run_id NOT IN (SELECT run_id FROM graph_refinements "
             "WHERE repo_identity = ? AND status != ?)"
@@ -410,6 +416,8 @@ class RunsDB(BaseDB):
             identity,
             RunStatus.SKIPPED.value,
             cutoff,
+            RunnerKind.NONE.value,
+            ProducerKind.OBSERVER.value,
             identity,
             identity,
             RefinementStatus.REJECTED.value,

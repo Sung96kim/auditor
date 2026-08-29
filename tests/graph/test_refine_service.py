@@ -10,7 +10,7 @@ from graph._support import with_lock_timeout
 
 from auditor.database import IndexStore
 from auditor.database.refinements import RefinementsDB
-from auditor.graph.model import EdgeKind
+from auditor.graph.model import DAY_SECONDS, EdgeKind
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.refine.models import (
     Assessment,
@@ -272,18 +272,19 @@ async def test_an_eviction_in_one_repo_leaves_another_repos_run_open(
     assert await refine_service.index.refinements.of_run(mine.run_id) == []
 
 
-async def test_pruning_reaps_an_evicted_run_and_its_rejections(
+async def test_pruning_keeps_an_evicted_run_and_its_rejections(
     refine_service: RefinementService,
 ):
-    """`skipped` was chosen over `failed` because `prune_skipped_runs` can reap it, and the case
-    eviction actually creates is a skipped run that owns rows."""
+    """An evicted run reached a runner and its reason lives in `error`, which is the only record
+    of it: the retention window is for the free rows the gate writes, not for this."""
     refine_service.registry.max_open = 1
     first = await refine_service.begin()
     await refine_service.propose(first.run_id, CALL_EDGE)
     await refine_service.begin()
-    assert (await refine_service.index.runs.prune_skipped_runs(0)).removed_runs == 1
-    assert await refine_service.index.runs.run(first.run_id) is None
-    assert await refine_service.index.refinements.of_run(first.run_id) == []
+    assert (await refine_service.index.runs.prune_skipped_runs(0)).removed_runs == 0
+    evicted = await refine_service.index.runs.run(first.run_id)
+    assert evicted is not None and evicted.status is RunStatus.SKIPPED
+    assert len(await refine_service.index.refinements.of_run(first.run_id)) == 1
 
 
 async def test_pruning_keeps_a_skipped_run_that_owns_a_live_refinement(
@@ -606,12 +607,11 @@ async def test_prune_drops_only_the_skipped_runs_past_the_window(
     refine_service.user = UserSettings.model_validate(
         {"observer": {"skipped_retention_days": 0}}
     )
-    kept = await refine_service.begin()
-    refine_service.registry.max_open = 1
+    declined = await refine_service.decline(_skipped("m.py"))
     await refine_service.begin()
     swept = await refine_service.prune()
     assert (swept.removed_runs, swept.stranded_runs) == (1, 0)
-    assert await refine_service.index.runs.run(kept.run_id) is None
+    assert await refine_service.index.runs.run(declined.run_id) is None
     remaining = await refine_service.index.runs.runs()
     assert [r.status for r in remaining] == [RunStatus.QUEUED]
 
@@ -1066,6 +1066,13 @@ async def test_begin_takes_the_whole_trigger_detail_when_the_caller_has_one(
     assert run.trigger_detail == detail
 
 
+async def test_begin_refuses_a_scope_and_a_detail_together(refine_service):
+    """The row has one column for both and the detail silently won, so a run confined to a prefix
+    was logged as having looked at whatever the detail named."""
+    with pytest.raises(RefinementRefused, match="not both"):
+        await refine_service.begin(scope="pkg", detail=TriggerDetail(files=("a.py",)))
+
+
 async def test_begin_without_a_detail_still_derives_one_from_the_scope(refine_service):
     run = await refine_service.begin(scope="pkg")
     assert run.trigger_detail == TriggerDetail(files=("pkg",))
@@ -1084,7 +1091,7 @@ async def test_an_assessment_row_expires_with_the_retention_window(refine_servic
     """`prune_skipped_runs` already sweeps `skipped`; this proves an assessment row is one."""
     run = await refine_service.decline(_skipped("m.py"))
     outcome = await refine_service.index.runs.prune_skipped_runs(
-        0, now=run.started_at + 86_400.0
+        0, now=run.started_at + DAY_SECONDS
     )
     assert outcome.removed_runs == 1
     assert await refine_service.index.runs.run(run.run_id) is None

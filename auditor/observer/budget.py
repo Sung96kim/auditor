@@ -6,15 +6,18 @@ at 00:01 are gated identically and a laptop that changed timezone does not chang
 
 from pydantic import BaseModel, ConfigDict
 
+from auditor.graph.model import DAY_SECONDS
 from auditor.graph.refine.models import Spend
 from auditor.user_settings import BudgetConfig
 
-#: spec 8.4's per-repo-per-day window, as a rolling span rather than a calendar day
-DAY_SECONDS = 86_400.0
+__all__ = ["DAY_SECONDS", "BudgetState", "budget_state", "window_start"]
 
 
 def window_start(now: float) -> float:
-    """The oldest run a day ceiling counts, given the clock the caller is using."""
+    """The oldest run a day ceiling counts, given the clock the caller is using.
+
+    Spec 8.4's per-repo-per-day window, as a rolling span rather than a calendar day.
+    """
     return now - DAY_SECONDS
 
 

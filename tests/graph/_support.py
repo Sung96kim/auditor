@@ -22,11 +22,14 @@ from auditor.database import open_repo_index
 from auditor.graph.model import UnresolvedRow
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
+    Assessment,
+    Decision,
     ProducerKind,
     Proposer,
     Run,
     RunnerKind,
     RunStatus,
+    TriggerDetail,
     TriggerKind,
 )
 from auditor.graph.refine.prompts import STRUCTURED_OUTPUT_TOOL
@@ -99,8 +102,8 @@ def tool_log(repo: Path, **kw: Any) -> dict[str, Any]:
 
 def add_observer_run(repo: Path, *, status: RunStatus, age_seconds: float) -> str:
     """One observer run row written directly and aged by hand, which is the only way a test can
-    have a run older than a retention window. The assessment writes `skipped` rows in S8;
-    eviction already does today."""
+    have a run older than a retention window. It carries an assessment, because that object plus
+    an empty `error` is what tells the retention sweep an assessment row from a real one."""
 
     async def go() -> str:
         index = await open_repo_index(repo)
@@ -112,6 +115,13 @@ def add_observer_run(repo: Path, *, status: RunStatus, age_seconds: float) -> st
                     runner=RunnerKind.NONE,
                     trigger_kind=TriggerKind.EDIT,
                     status=status,
+                    trigger_detail=TriggerDetail(
+                        files=("m.py",),
+                        assessment=Assessment(
+                            files=("m.py",),
+                            verdict=Decision(reason="no structural change"),
+                        ),
+                    ),
                     summary="no structural change",
                     started_at=time.time() - age_seconds,
                 )

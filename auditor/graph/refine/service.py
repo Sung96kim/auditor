@@ -496,7 +496,15 @@ class RefinementService:
 
         ``scope`` is a repo-relative path prefix; one that could never name a node here is refused
         rather than silently refusing every proposal the run makes.
+
+        Raises:
+            RefinementRefused: an unusable scope, or a scope and a detail together, which the row
+                has one column for and could only record half of.
         """
+        if detail is not None and scope:
+            raise RefinementRefused(
+                "pass scope or detail, not both: a batch's file list is not its scope"
+            )
         try:
             scope = scope_path(scope)
         except ValueError as exc:

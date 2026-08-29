@@ -46,12 +46,36 @@ async def test_clear_facts_forces_reextraction(graph_store):
     )  # so the next scan re-extracts
 
 
-async def test_forget_facts_drops_one_path_and_leaves_the_rest(graph_store):
-    await graph_store.graph.set_facts("a.py", "{}", "h1")
-    await graph_store.graph.set_facts("b.py", "{}", "h2")
-    await graph_store.graph.forget_facts("a.py")
+async def test_forget_facts_drops_the_paths_it_is_given_and_leaves_the_rest(
+    graph_store,
+):
+    for path in ("a.py", "b.py", "c.py"):
+        await graph_store.graph.set_facts(path, "{}", f"h-{path}")
+    await graph_store.graph.forget_facts(["a.py", "c.py"])
     assert await graph_store.graph.facts_hash("a.py") is None
-    assert await graph_store.graph.facts_hash("b.py") == "h2"
+    assert await graph_store.graph.facts_hash("c.py") is None
+    assert await graph_store.graph.facts_hash("b.py") == "h-b.py"
+
+
+async def test_forget_facts_on_an_empty_batch_touches_nothing(graph_store):
+    """A batch whose removed set is empty is the common case, and it must not open a write."""
+    await graph_store.graph.set_facts("a.py", "{}", "h1")
+    await graph_store.graph.forget_facts([])
+    assert await graph_store.graph.facts_hash("a.py") == "h1"
+
+
+async def test_forget_facts_stays_inside_its_own_repo(graph_store, tmp_path):
+    """`graph_facts` is keyed by `(repo, path)` and one database holds every partition, so a
+    delete that dropped the repo predicate would take another checkout's cache with it."""
+    other = await IndexStore.connect(tmp_path / "i.db", repo="other")
+    try:
+        await graph_store.graph.set_facts("a.py", "{}", "mine")
+        await other.graph.set_facts("a.py", "{}", "theirs")
+        await graph_store.graph.forget_facts(["a.py"])
+        assert await graph_store.graph.facts_hash("a.py") is None
+        assert await other.graph.facts_hash("a.py") == "theirs"
+    finally:
+        await other.aclose()
 
 
 async def test_forget_facts_takes_the_hash_pair_with_it(graph_store):
@@ -59,7 +83,7 @@ async def test_forget_facts_takes_the_hash_pair_with_it(graph_store):
     await graph_store.graph.set_facts(
         "a.py", "{}", "h1", hashes=FileHashes(truth="t1", facts="f1")
     )
-    await graph_store.graph.forget_facts("a.py")
+    await graph_store.graph.forget_facts(["a.py"])
     assert await graph_store.graph.hashes("a.py") is None
 
 
@@ -67,7 +91,7 @@ async def test_forget_facts_leaves_the_unresolved_queue_alone(graph_store):
     """Same reason `prune` does: the queue is node keyed and every build replaces it whole."""
     await graph_store.graph.set_facts("gone.py", "{}", "h1")
     await graph_store.graph.replace_unresolved([_row("gone.py::f", "handle")])
-    await graph_store.graph.forget_facts("gone.py")
+    await graph_store.graph.forget_facts(["gone.py"])
     assert len(await graph_store.graph.unresolved()) == 1
 
 

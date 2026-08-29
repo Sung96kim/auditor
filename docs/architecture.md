@@ -482,12 +482,13 @@ flowchart TB
   `trigger_detail.assessment`: the gate's own decisions carry it and put their reason there, while
   evicted and stranded runs carry no assessment and put their reason in `error`.
   `RefinementService.decline` is the ledger's one assessment writer, and it stages nothing, so a
-  skip can never evict a run that is still holding proposals. The observer sweeps all three with
-  `RunsDB.prune_skipped_runs` after
-  `observer.skipped_retention_days`, which returns both counts because deleting such a run deletes
-  the `rejected` refinements it owns. Real runs are never swept, and neither is a skipped run that
-  owns a `graph_tuning` row or a refinement that is not `rejected`: both reference
-  `graph_runs.run_id` with no `ON DELETE`.
+  skip can never evict a run that is still holding proposals. `RunsDB.prune_skipped_runs` sweeps
+  the gate's rows alone after `observer.skipped_retention_days`: the observer's own, no runner, no
+  `error`, and an assessment on the detail. An evicted or stranded run reached a runner and its
+  `error` is the only record of it, so it is kept whatever its age, exactly as a real run is. A
+  row owning a `graph_tuning` row or a refinement that is not `rejected` is kept too: both
+  reference `graph_runs.run_id` with no `ON DELETE`, so the sweep leaves it rather than orphaning
+  what it owns, and it returns both counts for the case where it does cascade.
 - `graph/hashes.py` derives the per-node hashes from the extracted facts: `truth_sha` over the fact
   tuples structural edges read, and `facts_sha` over those plus `doc_tokens`.
   - `truth_sha` decides run gating and anchor drift; `facts_sha` decides whether similarity edges
