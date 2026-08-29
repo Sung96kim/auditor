@@ -23,6 +23,7 @@ from auditor.graph.refine.models import (
     BOUNDED_FORMS,
     Assessment,
     AssessmentDecision,
+    BatchKind,
     Decision,
     NodePair,
     Refinement,
@@ -405,10 +406,14 @@ def _skip_reason(
     bounded: tuple[NodePair, ...],
     stale: tuple[int, ...],
     scheduling: SchedulingConfig,
-    budget: BudgetState,
+    narrowed: bool,
 ) -> str:
-    """Why the gate said no, naming the clause that came closest rather than the emptiest one."""
-    if budget.low and new:
+    """Why the gate said no, naming the clause that came closest rather than the emptiest one.
+
+    The budget is credited only where it actually removed questions: a narrowing that dropped
+    nothing would send a user to wait for a reset when the threshold is the lever.
+    """
+    if narrowed:
         return (
             f"low budget: {len(bounded)} of {len(new)} new questions are bare or self"
         )
@@ -422,6 +427,23 @@ def _skip_reason(
     return "no new questions"
 
 
+def narrowing(
+    *,
+    new_pairs: tuple[NodePair, ...],
+    bounded_pairs: tuple[NodePair, ...],
+    budget: BudgetState,
+    kind: BatchKind = BatchKind.EDIT,
+) -> tuple[tuple[NodePair, ...], bool]:
+    """The pairs the gate counts, and whether the low budget rule actually removed any.
+
+    One home for the narrowing: the deferral arithmetic reports what a run would take, and
+    re-deriving the rule beside it is how the two came to disagree.
+    """
+    if kind is not BatchKind.EDIT or not budget.low:
+        return new_pairs, False
+    return bounded_pairs, len(bounded_pairs) < len(new_pairs)
+
+
 def decide(
     *,
     new_pairs: tuple[NodePair, ...],
@@ -429,18 +451,27 @@ def decide(
     stale_refinements: tuple[int, ...],
     scheduling: SchedulingConfig,
     budget: BudgetState,
+    kind: BatchKind = BatchKind.EDIT,
 ) -> Decision:
-    """Spec 8.6's decision, low budget narrowing included.
+    """Spec 8.6's decision: the day ceiling first, then the low budget narrowing.
 
     ``bounded_pairs`` is the ``call_form in {bare, self}`` subset, the only shape that can still
-    auto-activate; under the low budget bar it replaces ``new_pairs`` in the count.
+    auto-activate; under the low budget bar it replaces ``new_pairs`` in the count. A suspect or
+    verify batch is draining idle capacity, so only the spent ceiling stops it.
     """
-    if budget.low and not budget.evaluated:
+    if budget.exhausted:
+        return Decision(
+            decision=AssessmentDecision.SKIP, reason="the day's budget is spent"
+        )
+    edit = kind is BatchKind.EDIT
+    if edit and budget.low and not budget.evaluated:
         return Decision(
             decision=AssessmentDecision.SKIP,
             reason="low budget and no eval row for this runner",
         )
-    counted = bounded_pairs if budget.low else new_pairs
+    counted, narrowed = narrowing(
+        new_pairs=new_pairs, bounded_pairs=bounded_pairs, budget=budget, kind=kind
+    )
     new_fired = len(counted) >= scheduling.min_new_unresolved
     stale_fired = scheduling.run_on_stale and bool(stale_refinements)
     if new_fired or stale_fired:
@@ -460,7 +491,7 @@ def decide(
             bounded=bounded_pairs,
             stale=stale_refinements,
             scheduling=scheduling,
-            budget=budget,
+            narrowed=narrowed,
         ),
     )
 
@@ -485,10 +516,11 @@ def assess(
     max_nodes_per_run: int,
     flow_nodes: frozenset[str] = frozenset(),
 ) -> Assessment:
-    """The whole assessment for a batch the loop rebuilt for (spec 8.6 stages 1 and 2).
+    """The whole assessment for an edit batch the loop rebuilt for (spec 8.6 stages 1 and 2).
 
     ``before`` and ``after`` are the snapshots the rebuild took around its one persist commit;
     ``flow_nodes`` is what a recent flow query asked about, which is recorded and decides nothing.
+    A suspect or verify batch gates through :func:`decide` directly, with its own ``kind``.
     """
     rows = new_rows(before, after)
     fresh = _distinct(rows)
@@ -501,6 +533,7 @@ def assess(
         scheduling=scheduling,
         budget=budget,
     )
+    counted, _ = narrowing(new_pairs=fresh, bounded_pairs=bounded, budget=budget)
     return Assessment(
         files=stage1.files,
         added_nodes=stage1.added_nodes,
@@ -512,6 +545,10 @@ def assess(
         ),
         stale_refinements=staled,
         affected_flow=tuple(sorted(stage1.changed_nodes & flow_nodes)),
-        deferred_pairs=max(0, len(fresh) - max_nodes_per_run),
+        deferred_pairs=(
+            max(0, len(counted) - max_nodes_per_run)
+            if verdict.decision is AssessmentDecision.RUN
+            else 0
+        ),
         verdict=verdict,
     )

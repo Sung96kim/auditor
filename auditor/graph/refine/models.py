@@ -246,6 +246,18 @@ class Decision(BaseModel):
     reason: str = ""
 
 
+class BatchKind(StrEnum):
+    """Which of spec 8.6's three batches a decision is being made for.
+
+    The low budget rules narrow an edit batch only: a suspect or verify batch is draining idle
+    capacity and stops on the day ceiling alone.
+    """
+
+    EDIT = "edit"
+    SUSPECT = "suspect"
+    VERIFY = "verify"
+
+
 class Assessment(BaseModel):
     """Why one edit batch did or did not earn a refinement run (spec 8.6).
 

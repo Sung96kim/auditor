@@ -346,11 +346,13 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 
 `observer.budget` (`BudgetConfig`):
 
-- `max_cost_usd_per_day` (default `2.0`): hard ceiling on spend per day, across every repo.
-  Read by the assessment gate through `RunsDB.spend_since` over a rolling 24 hour window;
-  rows with `runner = none` spent nothing and do not count against it.
-- `max_runs_per_day` (default `40`): hard ceiling on runs per day. It is what bounds a model
-  with no entry in the price table, and every fraction rule then reads remaining runs.
+- `max_cost_usd_per_day` (default `2.0`): hard ceiling on spend per day, per repository. The
+  window is `RunsDB.spend_since`, a rolling 24 hours scoped to one `repo_identity`, so ten repos
+  under the observer have ten of these ceilings. Assessment rows spent nothing and do not count
+  against it. No reader yet; `decide` takes the state a caller built.
+- `max_runs_per_day` (default `40`): hard ceiling on runs per day, per repository. It is what
+  bounds a model with no entry in the price table, and every fraction rule then reads remaining
+  runs.
 - `max_budget_usd_per_run` (default `0.25`): ceiling handed to one run.
 - `max_budget_usd_per_eval` (default `12.00`): ceiling on one `auditr graph eval` invocation,
   across every suite. The eval stops before opening a run that would cross it. A default
@@ -360,7 +362,10 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
   high-value runs proceed. Strictly below: at exactly the fraction the bar has not been
   crossed. Under it, an edit batch counts only its `bare` and `self` new questions, and with
-  no eval row for the runner about to be used, edit-triggered runs stop outright.
+  no eval row for the runner about to be used, edit-triggered runs stop outright. Both rules are
+  the edit batch's alone: a suspect or verify batch keeps draining idle capacity. `0` is the
+  documented opt-out and means the low budget rule never fires; a spent ceiling still stops every
+  batch, whatever this is set to.
 - `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may
   take. No reader yet; the rate-limit pause is the loop's.
 
@@ -383,9 +388,11 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `idle_shutdown_minutes` (default `30`): idle minutes before the daemon exits.
 - `run_on_stale` (default `true`): re-run when an edit stales an existing refinement. Only a
   refinement anchored on a node the batch itself touched counts, so drift and no-op builds
-  cannot trigger a run. The low budget bar does not narrow this arm.
-- `min_new_unresolved` (default `1`): new unresolved callees an edit batch needs to earn a run.
-  `0` means any batch that reaches stage 2 earns one.
+  cannot trigger a run. The low budget bar does not narrow this arm, but the two rules that stop
+  a batch outright, a spent day ceiling and a low budget with no eval row, are consulted first.
+- `min_new_unresolved` (default `1`): distinct new unresolved callees an edit batch needs to earn
+  a run. One name asked twice for two reasons is two queue rows and one question. The floor is
+  `1`: a gate that fires on nothing opens a model-calling run for every batch that rebuilds.
 
 `observer.runner` (`RunnerConfig`):
 

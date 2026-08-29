@@ -60,14 +60,18 @@ class CodexPrice(BaseModel):
 
 
 class BudgetConfig(BaseModel):
-    """What a day of refinement runs may cost, across every repo."""
+    """What a day of refinement runs may cost, per repository (spec 8.4)."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     max_cost_usd_per_day: float = Field(
-        2.0, ge=0.0, description="Hard ceiling on refinement spend per day, all repos."
+        2.0,
+        ge=0.0,
+        description="Hard ceiling on refinement spend per day, per repository.",
     )
-    max_runs_per_day: int = Field(40, ge=0, description="Hard ceiling on runs per day.")
+    max_runs_per_day: int = Field(
+        40, ge=0, description="Hard ceiling on runs per day, per repository."
+    )
     max_budget_usd_per_run: float = Field(
         0.25, ge=0.0, description="Ceiling handed to one run."
     )
@@ -80,7 +84,10 @@ class BudgetConfig(BaseModel):
         0.25,
         ge=0.0,
         le=1.0,
-        description="Remaining daily budget below which only high-value runs proceed.",
+        description=(
+            "Remaining daily budget below which only high-value runs proceed. "
+            "0 opts out: the low budget rule never fires."
+        ),
     )
     max_utilization: float = Field(
         0.5,
@@ -130,7 +137,12 @@ class SchedulingConfig(BaseModel):
         True, description="Re-run when an edit stales an existing refinement."
     )
     min_new_unresolved: int = Field(
-        1, ge=0, description="New unresolved callees an edit batch needs to earn a run."
+        1,
+        ge=1,
+        description=(
+            "New unresolved callees an edit batch needs to earn a run. At least one: a gate "
+            "that fires on nothing opens a model-calling run for every rebuild."
+        ),
     )
 
 

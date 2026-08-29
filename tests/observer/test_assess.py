@@ -10,6 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from auditor.discovery import FileDiscovery
 from auditor.graph.extract import extract_file_facts
@@ -18,6 +19,7 @@ from auditor.graph.model import CallForm, FactKind, UnresolvedReason, Unresolved
 from auditor.graph.refine.models import (
     Assessment,
     AssessmentDecision,
+    BatchKind,
     Decision,
     NodePair,
     Refinement,
@@ -567,9 +569,40 @@ def test_pairs_beyond_the_cap_are_counted_not_dropped():
     assert result.deferred_pairs == 3
 
 
+def test_a_batch_that_earned_no_run_deferred_nothing():
+    """No run opened, so every pair stayed in the queue: a count here reads as "the rest were
+    taken", which is the opposite of what happened."""
+    after = _snapshot(_pair(f"m.py::n{i}", "widen") for i in range(15))
+    result = _assess(_STAGE1, _snapshot(), after, scheduling=_MIN20)
+    assert result.verdict.decision is AssessmentDecision.SKIP
+    assert result.deferred_pairs == 0
+
+
+def test_under_the_bar_the_deferral_counts_what_the_run_could_actually_take():
+    """The narrowing decides the run's target, so the deferral has to read the same set: 15 new
+    questions of which 2 are bare leaves 13 behind, not 3."""
+    after = _snapshot(
+        _pair(
+            f"m.py::n{i}",
+            "widen",
+            call_form=CallForm.BARE if i < 2 else CallForm.ATTR,
+        )
+        for i in range(15)
+    )
+    result = _assess(
+        _STAGE1,
+        _snapshot(),
+        after,
+        budget=_budget(fraction=0.1),
+        scheduling=SchedulingConfig(min_new_unresolved=2),
+        max_nodes_per_run=1,
+    )
+    assert result.verdict.decision is AssessmentDecision.RUN
+    assert (len(result.new_pairs), result.deferred_pairs) == (15, 1)
+
+
 _MIN2 = SchedulingConfig(min_new_unresolved=2)
 _NO_STALE = SchedulingConfig(run_on_stale=False)
-_MIN0 = SchedulingConfig(min_new_unresolved=0)
 _SKIP, _RUN = AssessmentDecision.SKIP, AssessmentDecision.RUN
 
 
@@ -585,6 +618,12 @@ def _decide(*, scheduling=None, new=0, stale=0, bounded=None, **over) -> Decisio
     )
 
 
+def test_a_gate_that_fires_on_nothing_is_refused_by_the_config():
+    """`min_new_unresolved = 0` opened a model-calling run on every batch that rebuilt."""
+    with pytest.raises(ValidationError):
+        SchedulingConfig(min_new_unresolved=0)
+
+
 @pytest.mark.parametrize(
     ("scheduling", "new", "stale", "decision", "reason"),
     [
@@ -592,7 +631,7 @@ def _decide(*, scheduling=None, new=0, stale=0, bounded=None, **over) -> Decisio
         (_MIN2, 2, 0, _RUN, "2 new questions"),
         (_NO_STALE, 0, 1, _SKIP, "1 stale refinement, run_on_stale is off"),
         (SchedulingConfig(), 1, 1, _RUN, "1 new question and 1 stale refinement"),
-        (_MIN0, 0, 0, _RUN, "0 new questions"),
+        (SchedulingConfig(), 0, 0, _SKIP, "no new questions"),
         # the stale arm carried it alone, so the reason must not credit the clause that failed
         (_MIN2, 1, 1, _RUN, "1 stale refinement"),
     ],
@@ -600,6 +639,48 @@ def _decide(*, scheduling=None, new=0, stale=0, bounded=None, **over) -> Decisio
 def test_the_decision_rule(scheduling, new, stale, decision, reason):
     verdict = _decide(scheduling=scheduling, new=new, stale=stale)
     assert (verdict.decision, verdict.reason) == (decision, reason)
+
+
+@pytest.mark.parametrize(
+    ("kind", "decision"),
+    [
+        (BatchKind.EDIT, _SKIP),
+        (BatchKind.SUSPECT, _RUN),
+        (BatchKind.VERIFY, _RUN),
+    ],
+)
+def test_the_low_budget_rules_narrow_an_edit_batch_alone(kind, decision):
+    """Spec 8.6 disables edit-triggered runs under a low budget with no eval row; a suspect or
+    verify batch keeps draining the idle capacity that is already paid for."""
+    verdict = _decide(new=1, budget=_budget(fraction=0.1, evaluated=False), kind=kind)
+    assert verdict.decision is decision
+
+
+@pytest.mark.parametrize("kind", list(BatchKind))
+def test_a_spent_day_stops_every_batch(kind):
+    """The ceiling is hard, and it is read before the narrowing that a suspect batch skips."""
+    verdict = _decide(new=5, budget=_budget(fraction=0.0, evaluated=False), kind=kind)
+    assert (verdict.decision, verdict.reason) == (_SKIP, "the day's budget is spent")
+
+
+def test_a_low_budget_that_narrowed_nothing_does_not_take_the_blame():
+    """With every new question already bare, the threshold refused the batch, and the reason has
+    to name the lever the user can move."""
+    verdict = _decide(
+        scheduling=SchedulingConfig(min_new_unresolved=10),
+        new=5,
+        budget=_budget(fraction=0.1),
+    )
+    assert (verdict.decision, verdict.reason) == (
+        _SKIP,
+        "5 new questions, below the 10 the gate needs",
+    )
+
+
+def test_a_full_budget_with_no_eval_row_still_runs():
+    """The arm is `low and not evaluated`: a fresh install at full budget refines normally."""
+    verdict = _decide(new=1, budget=_budget(fraction=1.0, evaluated=False))
+    assert (verdict.decision, verdict.reason) == (_RUN, "1 new question")
 
 
 def test_under_the_bar_with_an_eval_row_only_bare_and_self_pairs_count():
