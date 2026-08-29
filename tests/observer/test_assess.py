@@ -707,11 +707,26 @@ def test_the_decision_rule(scheduling, new, stale, decision, reason):
         (BatchKind.VERIFY, _RUN),
     ],
 )
-def test_the_low_budget_rules_narrow_an_edit_batch_alone(kind, decision):
+def test_the_no_eval_row_shutdown_stops_an_edit_batch_alone(kind, decision):
     """Spec 8.6 disables edit-triggered runs under a low budget with no eval row; a suspect or
     verify batch keeps draining the idle capacity that is already paid for."""
     verdict = _decide(new=1, budget=_budget(fraction=0.1, evaluated=False), kind=kind)
     assert verdict.decision is decision
+
+
+@pytest.mark.parametrize(
+    ("kind", "decision", "reason"),
+    [
+        (BatchKind.EDIT, _SKIP, "low budget: 0 of 3 new questions are bare or self"),
+        (BatchKind.SUSPECT, _RUN, "3 new questions"),
+        (BatchKind.VERIFY, _RUN, "3 new questions"),
+    ],
+)
+def test_the_low_budget_narrowing_counts_an_edit_batch_alone(kind, decision, reason):
+    """The eval row exists, so the shutdown is out of the way and the narrowing is the only rule
+    left: three questions none of which is bare clear the bar for every kind but `edit`."""
+    verdict = _decide(new=3, bounded=0, budget=_budget(fraction=0.1), kind=kind)
+    assert (verdict.decision, verdict.reason) == (decision, reason)
 
 
 @pytest.mark.parametrize("kind", list(BatchKind))

@@ -862,6 +862,20 @@ async def test_prune_leaves_a_row_that_owns_refinements_and_its_rows_alone(
     assert len(await refine_store.refinements.of_run(run_id)) == 2
 
 
+async def test_prune_counts_the_rejections_it_deletes_with_the_run(refine_store):
+    """A rejected refinement is not excluded from the sweep, so it goes with its run: the count
+    is the invariant's proof that nothing is left pointing at a row that is gone."""
+    run_id = await refine_store.runs.add_run(_assessment_run(started_at=0.0))
+    for _ in range(2):
+        await refine_store.refinements.add_refinement(
+            _refinement(run_id, status=RefinementStatus.REJECTED)
+        )
+    swept = await refine_store.runs.prune_skipped_runs(7, now=1_000_000.0)
+    assert (swept.removed_runs, swept.removed_refinements) == (1, 2)
+    assert await refine_store.runs.run(run_id) is None
+    assert await refine_store.refinements.of_run(run_id) == []
+
+
 async def test_a_run_left_queued_by_a_dead_process_is_finished(refine_store):
     """A registry is process-local, so nothing else can ever close such a run. The row is aged by
     hand because that is the only way to have one: no test can outlive the window.

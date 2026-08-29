@@ -328,6 +328,18 @@ def test_a_gitignored_path_is_still_the_right_shape(tmp_path: Path):
     assert finder.auditable("scratch/junk.py") is False
 
 
+def test_a_deleted_path_keeps_its_shape_after_the_batched_form_refuses_it(
+    tmp_path: Path,
+):
+    """S8b's `/events` is the caller: a `PostToolUse` path that the edit deleted is exactly the
+    shape stage 0 must admit, and the batched form asks the filesystem instead."""
+    _git(tmp_path, "init")
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable_shape("pkg/gone.py") is True
+    assert finder.auditable_paths(("pkg/gone.py",)) == (False,)
+    assert finder.auditable_paths(("pkg/gone.py",), must_exist=False) == (True,)
+
+
 def test_gitignore_is_not_consulted_when_the_caller_turned_it_off(tmp_path: Path):
     """`respect_gitignore=False` drops `--exclude-standard` in `files`, and here too."""
     _git(tmp_path, "init")
