@@ -26,8 +26,10 @@ from auditor.cli.payloads import (
     SourceInfo,
 )
 from auditor.graph import flow
+from auditor.graph import model as graph_model
 from auditor.graph import payloads as graph_payloads
 from auditor.graph.query import GraphQuery
+from auditor.graph.refine import models as graph_refine_models
 
 
 @pytest.fixture
@@ -381,3 +383,30 @@ def test_the_pairing_sweep_finds_every_command_whose_payload_can_be_read():
         "plugins.py",
         "rules.py",
     }
+
+
+def test_an_assessment_on_the_wire_keeps_the_tuple_lengths_and_drops_their_contents():
+    """A fifty row page carrying every changed node id would fight the log's own row cap (P8)."""
+    assessment = graph_refine_models.Assessment(
+        files=("m.py",),
+        added_nodes=("m.py::a", "m.py::b"),
+        facts_changed_nodes=("m.py::c",),
+        new_pairs=(graph_refine_models.NodePair(node_id="m.py::c", name="widen"),),
+        stale_refinements=(1, 2, 3),
+        deferred_pairs=4,
+        reason="no new questions",
+    )
+    wire = graph_payloads.AssessmentPayload.of(assessment)
+    assert (wire.added_nodes, wire.facts_changed_nodes) == (2, 1)
+    assert (wire.new_pairs, wire.stale_refinements, wire.deferred_pairs) == (1, 3, 4)
+    assert "m.py::a" not in json.dumps(wire.model_dump(mode="json"))
+
+
+def test_a_trigger_detail_on_the_wire_caps_its_paths_and_still_counts_them_all():
+    paths = tuple(f"f{i}.py" for i in range(graph_model.LOG_FILE_CAP + 5))
+    wire = graph_payloads.TriggerDetailPayload.of(
+        graph_refine_models.TriggerDetail(files=paths)
+    )
+    assert len(wire.files) == graph_model.LOG_FILE_CAP
+    assert wire.file_count == len(paths)
+    assert wire.assessment is None

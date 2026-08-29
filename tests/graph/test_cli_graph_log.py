@@ -1,6 +1,7 @@
 """`auditr graph log` — the provenance log, in two views."""
 
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -30,6 +31,8 @@ from auditor.graph.payloads import (
     RunRowPayload,
 )
 from auditor.graph.refine.models import (
+    Assessment,
+    NodePair,
     ProducerKind,
     Refinement,
     RefinementCounts,
@@ -41,6 +44,7 @@ from auditor.graph.refine.models import (
     RunnerKind,
     RunStatus,
     Tier,
+    TriggerDetail,
     TriggerKind,
 )
 
@@ -588,3 +592,77 @@ def test_the_renderer_says_how_much_a_capped_page_left_behind():
     out = render_text(render_graph_log, report)
     assert "1 of 9" in out
     assert "--limit" in out
+
+
+def _declined(*files: str, reason: str, **over) -> RunRowPayload:
+    """One assessment-only run row on the wire, the way `decline` writes it."""
+    return RunRowPayload.of(
+        Run(
+            repo_identity="/repo/.git",
+            producer=ProducerKind.OBSERVER,
+            runner=RunnerKind.NONE,
+            trigger_kind=TriggerKind.EDIT,
+            status=RunStatus.SKIPPED,
+            started_at=_STARTED,
+            trigger_detail=TriggerDetail(
+                files=files,
+                assessment=Assessment(files=files, reason=reason, **over),
+            ),
+        )
+    )
+
+
+def _page(*runs: RunRowPayload) -> LogReport:
+    return LogReport(view=LogView.RUNS, runs=runs, run_count=len(runs))
+
+
+def test_the_log_shows_an_assessment_row_with_its_own_line():
+    """Spec 8.6's sentence: what it looked at, what it found, what it did."""
+    out = render_text(
+        render_graph_log, _page(_declined("m.py", reason="no structural change"))
+    )
+    assert "looked at m.py: no structural change, skipped" in one_line(out)
+
+
+def test_the_log_caps_the_files_it_names_and_says_how_many_it_dropped():
+    row = _declined("a.py", "b.py", "c.py", "d.py", "e.py", reason="no new questions")
+    out = render_text(render_graph_log, _page(row), width=200)
+    assert "looked at a.py, b.py, c.py +2 more: no new questions, skipped" in one_line(
+        out
+    )
+
+
+def test_a_run_row_with_no_assessment_gains_no_note_line():
+    """Stranded and evicted runs are `skipped` too, and their reason is in `error` (drift 3)."""
+    evicted = RunRowPayload.of(
+        Run(
+            repo_identity="/repo/.git",
+            status=RunStatus.SKIPPED,
+            error="evicted: registry full",
+            started_at=_STARTED,
+        )
+    )
+    assert "looked at" not in render_text(render_graph_log, _page(evicted))
+
+
+def test_the_json_row_carries_the_assessment_counts_not_its_ids():
+    row = _declined(
+        "m.py",
+        reason="no structural change",
+        new_pairs=(NodePair(node_id="m.py::Store.get", name="widen"),),
+    )
+    detail = _page(row).model_dump(mode="json")["runs"][0]["trigger_detail"]
+    assert detail["files"] == ["m.py"]
+    assert detail["file_count"] == 1
+    assert detail["assessment"]["decision"] == "skip"
+    assert detail["assessment"]["reason"] == "no structural change"
+    assert detail["assessment"]["new_pairs"] == 1
+    assert "node_id" not in json.dumps(detail)
+
+
+def test_a_pre_assessment_run_row_still_renders():
+    """Every row written before this slice decodes `trigger_detail` to `assessment=None`."""
+    row = RunRowPayload.of(Run(repo_identity="/repo/.git", started_at=_STARTED))
+    payload = _page(row).model_dump(mode="json")
+    assert payload["runs"][0]["trigger_detail"]["assessment"] is None
+    assert "looked at" not in render_text(render_graph_log, _page(row))

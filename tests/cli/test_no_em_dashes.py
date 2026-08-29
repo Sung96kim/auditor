@@ -12,9 +12,15 @@ import pytest
 
 import auditor.cli
 import auditor.mcp
+import auditor.observer
 
 EM_DASH = "—"
-PACKAGES = (Path(auditor.cli.__file__).parent, Path(auditor.mcp.__file__).parent)
+#: `auditor.observer` is swept because `graph log`'s nine assessment reasons are composed there
+PACKAGES = (
+    Path(auditor.cli.__file__).parent,
+    Path(auditor.mcp.__file__).parent,
+    Path(auditor.observer.__file__).parent,
+)
 
 
 # typer prints a command's docstring as its help; fastmcp sends a tool's as its description.

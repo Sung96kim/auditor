@@ -31,6 +31,7 @@ from auditor.graph.refine.facts import BriefBuilder, FactReader
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
 from auditor.graph.refine.models import (
     Anchor,
+    Assessment,
     Checkout,
     ClientKind,
     ProducerKind,
@@ -49,6 +50,7 @@ from auditor.graph.refine.models import (
     RunStatus,
     Stratum,
     Tier,
+    TriggerDetail,
     TriggerKind,
     Verdict,
     VerifyStatus,
@@ -439,6 +441,43 @@ class RefinementService:
         """What every stored id in a run is relative to: a commit must resolve the same pair."""
         return (self.identity, self.prefix)
 
+    async def _open(
+        self,
+        *,
+        scope: str = "",
+        producer: ProducerKind = ProducerKind.AGENT,
+        client: ClientKind = ClientKind.CLI,
+        trigger: TriggerKind = TriggerKind.MANUAL,
+        runner: RunnerKind = RunnerKind.NONE,
+        model: str | None = None,
+        session_id: str | None = None,
+        agent_name: str | None = None,
+        detail: TriggerDetail | None = None,
+        checkout: Checkout | None = None,
+    ) -> Run:
+        """Write one queued ``graph_runs`` row: the half of :meth:`begin` that stages nothing.
+
+        ``scope`` arrives already through ``scope_path``; ``checkout`` is for a caller that has
+        read HEAD itself, so a gate deciding in milliseconds does not spawn two `git rev-parse`
+        processes to say no.
+        """
+        run = Run.begin(
+            partition=self.partition,
+            origin=self.index.repo,
+            scope=scope,
+            checkout=checkout or await self._head(),
+            client=client,
+            producer=producer,
+            runner=runner,
+            trigger=trigger,
+            model=model,
+            session_id=session_id,
+            agent_name=agent_name,
+            detail=detail,
+        )
+        await self.index.runs.add_run(run)
+        return run
+
     async def begin(
         self,
         *,
@@ -450,6 +489,8 @@ class RefinementService:
         model: str | None = None,
         session_id: str | None = None,
         agent_name: str | None = None,
+        detail: TriggerDetail | None = None,
+        checkout: Checkout | None = None,
     ) -> Run:
         """Open a run and record who asked and against which checkout state (Invariant 2).
 
@@ -460,24 +501,56 @@ class RefinementService:
             scope = scope_path(scope)
         except ValueError as exc:
             raise RefinementRefused(str(exc)) from exc
-        run = Run.begin(
-            partition=self.partition,
-            origin=self.index.repo,
+        run = await self._open(
             scope=scope,
-            checkout=await self._head(),
-            client=client,
             producer=producer,
-            runner=runner,
+            client=client,
             trigger=trigger,
+            runner=runner,
             model=model,
             session_id=session_id,
             agent_name=agent_name,
+            detail=detail,
+            checkout=checkout,
         )
-        await self.index.runs.add_run(run)
         _staged, evicted = self.registry.opened(run, scope, self.partition)
         for gone in evicted:
             await self._evict(gone)
         return run
+
+    async def decline(
+        self,
+        assessment: Assessment,
+        *,
+        checkout: Checkout | None = None,
+        client: ClientKind = ClientKind.CLI,
+        trigger: TriggerKind = TriggerKind.EDIT,
+        session_id: str | None = None,
+    ) -> Run:
+        """Record one batch the gate declined as its own run row, spending nothing (spec 8.6).
+
+        Opened with ``runner=none`` and closed ``skipped`` before any runner could exist, with the
+        reason on the assessment rather than in ``error``, which belongs to runs that broke. It
+        stages nothing, so a skip can never evict a run that is holding proposals.
+
+        Raises:
+            RefinementRefused: the assessment decided to run, and a run row is not a skip row.
+        """
+        if assessment.decided_to_run:
+            raise RefinementRefused(
+                f"assessment decided to run: {assessment.reason}. Open the run through `begin`"
+            )
+        run = await self._open(
+            producer=ProducerKind.OBSERVER,
+            client=client,
+            trigger=trigger,
+            runner=RunnerKind.NONE,
+            session_id=session_id,
+            detail=TriggerDetail(files=assessment.files, assessment=assessment),
+            checkout=checkout,
+        )
+        await self._finish(run.run_id, RunStatus.SKIPPED)
+        return await self._stored(run.run_id)
 
     async def propose(
         self, run_id: str, proposal: Proposal | Mapping[str, Any]
@@ -766,8 +839,12 @@ class RefinementService:
             staged.closed = True
             self.registry.close(run_id)
             await self._finish(run_id, status, error=reason, attribution=attribution)
+        return await self._stored(run_id)
+
+    async def _stored(self, run_id: str) -> Run:
+        """Re-read a row this service just wrote, refusing if it somehow is not there."""
         run = await self.index.runs.run(run_id)
-        if run is None:  # the row was written by `begin`, so this cannot happen
+        if run is None:  # the row was written moments ago, so this cannot happen
             raise RefinementRefused.no_such_run(run_id)
         return run
 

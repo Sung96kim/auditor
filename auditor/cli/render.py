@@ -34,7 +34,7 @@ from auditor.cli.payloads import (
 )
 from auditor.config import AuditorSettings
 from auditor.graph.flow import FlowNode, FlowPayload
-from auditor.graph.model import MAX_LOG_ROWS
+from auditor.graph.model import LOG_NOTE_FILES, MAX_LOG_ROWS
 from auditor.graph.payloads import (
     ClustersReport,
     ConceptPayload,
@@ -46,6 +46,7 @@ from auditor.graph.payloads import (
     RefinementRowPayload,
     RefinementsReport,
     RelatedReport,
+    RunRowPayload,
     SearchReport,
     UsagesPayload,
 )
@@ -548,6 +549,21 @@ def _stamp(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).strftime("%m-%d %H:%M") if epoch else ""
 
 
+def _assessment_note(row: RunRowPayload) -> str:
+    """Spec 8.6's log line: what the batch looked at, what the gate found, what it did.
+
+    Composed rather than stored: every part is already a column, and a stored sentence would go
+    stale the moment the status it names is what a reader should trust.
+    """
+    detail = row.trigger_detail
+    if detail.assessment is None or not detail.files:
+        return ""
+    named = ", ".join(detail.files[:LOG_NOTE_FILES])
+    extra = detail.file_count - LOG_NOTE_FILES
+    more = f" +{extra} more" if extra > 0 else ""
+    return f"looked at {named}{more}: {detail.assessment.reason}, {row.status.value}"
+
+
 def _runs_table(payload: LogReport) -> Table:
     """The decisions view: one row per run, with ``n`` the refinement rows that run owns."""
     t = _headed_table(_RUN_COLUMNS)
@@ -561,6 +577,9 @@ def _runs_table(payload: LogReport) -> Table:
             str(row.refinements.total),
             f"[red]{row.error}[/]" if row.error else row.summary or "",
         )
+        note = _assessment_note(row)
+        if note:
+            t.add_row(*_note_row(_RUN_COLUMNS, note))
     return t
 
 

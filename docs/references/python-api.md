@@ -164,6 +164,42 @@ async with await IndexStore.connect(db_path, repo) as index:
   `refinements(statuses, limit)` for the corrections page. The one reader the CLI and the MCP tools
   both call, so the two surfaces cannot drift on ordering or on what a time window means. Both
   answer newest first.
+- `RefinementService.decline(assessment, *, checkout=None, ...)`: the ledger's one assessment
+  writer. Opens a `graph_runs` row with `runner=none` and closes it `skipped` in one call, staging
+  nothing, so a skip can never evict a live run. Refuses an assessment whose decision is `run`.
+  Pass a `Checkout` you already read and it spawns no `git rev-parse`.
+- `RunsDB.spend_since(since) -> Spend` (`index.runs`): one SQL aggregate over this checkout's
+  model-calling runs since a timestamp. Rows with `runner = none` are excluded, because an
+  assessment spent nothing.
+
+## Observer: the change assessment
+
+Spec 8.6's gate, `auditor/observer/`. Every function here is pure: no store handle, no filesystem
+read, no clock. The caller does the I/O and hands the values in.
+
+- `auditor.observer.assess.assess_path(edited) -> PathVerdict` classifies one edited path against
+  the facts cached for it, and `stage_one(edited) -> Stage1` does a whole batch, deduplicating by
+  path with the first occurrence winning.
+- `auditor.observer.assess.assess(stage1, *, before, after, scheduling, budget, max_nodes_per_run,
+  flow_nodes=frozenset()) -> Assessment` is the whole thing for a batch that was rebuilt for;
+  `assess_unchanged(stage1)` is the answer for one stage 1 dropped.
+- `decide(*, new_pairs, bounded_pairs, stale_refinements, scheduling, budget) -> Decision` is the
+  rule itself, public because a suspect batch and a verify batch gate against the same state.
+- `new_pairs(before, after)`, `resolved_pairs(before, after, *, removed_nodes)` and
+  `staled_refinements(before, after, *, changed_nodes)` are the three stage 2 diffs.
+- Models: `PathOutcome` (six members), `NodeDigest`, `CachedFile`, `EditedFile`, `PathVerdict`,
+  `Stage1`, `QueuePair`, `RefinementState`, `GraphSnapshot`, `Decision`.
+  `QueuePair.of(row)` narrows an `UnresolvedRow` and `RefinementState.of(refinement)` reads a
+  stored row's `anchored_ids()`.
+- `auditor.observer.budget.budget_state(spend, *, config, priced=True, evaluated=False)` builds
+  `BudgetState`; `window_start(now)` is `now - DAY_SECONDS`, a rolling 24 hours rather than a
+  calendar day.
+- The vocabulary the store shares lives in `auditor.graph.refine.models`: `Assessment`,
+  `AssessmentDecision`, `NodePair` and `Spend`, plus `TriggerDetail.assessment`.
+- `FileDiscovery.auditable(path)` and `FileDiscovery.auditable_rel(rel)` are stage 0: one shape
+  rule in two forms, the second answering for a path that may already be gone.
+- `GraphDB.forget_facts(path)` drops one file's cached facts, which is what the `removed` outcome
+  persists with.
 
 ## Models
 

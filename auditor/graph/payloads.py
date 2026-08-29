@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, computed_field
 
 from auditor.graph.model import (
+    LOG_FILE_CAP,
     LOG_ROW_LIMIT,
     QUEUE_ID_CAP,
     EdgeKind,
@@ -25,6 +26,8 @@ from auditor.graph.model import (
 )
 from auditor.graph.refine.models import (
     Anchor,
+    Assessment,
+    AssessmentDecision,
     ClientKind,
     ProducerKind,
     Refinement,
@@ -36,6 +39,7 @@ from auditor.graph.refine.models import (
     RunnerKind,
     RunStatus,
     Tier,
+    TriggerDetail,
     TriggerKind,
     Verdict,
 )
@@ -326,6 +330,69 @@ class CommitResult(WirePayload):
         return len(self.committed)
 
 
+class AssessmentPayload(WirePayload):
+    """One assessment as the log shows it: the decision, its reason and the sizes behind it.
+
+    Counts rather than the id tuples the row holds, for the reason the prompt triple below states:
+    a fifty row page carrying every changed node id would fight the log's own cap. The whole
+    object stays on the run row, where the run detail reads it.
+    """
+
+    decision: AssessmentDecision
+    reason: str = ""
+    added_nodes: int = 0
+    removed_nodes: int = 0
+    facts_changed_nodes: int = 0
+    new_pairs: int = 0
+    resolved_pairs: int = 0
+    stale_refinements: int = 0
+    affected_flow: int = 0
+    deferred_pairs: int = 0
+
+    @classmethod
+    def of(cls, assessment: Assessment) -> "AssessmentPayload":
+        """The length of every tuple, plus the three fields that are already scalars."""
+        return cls(
+            decision=assessment.decision,
+            reason=assessment.reason,
+            added_nodes=len(assessment.added_nodes),
+            removed_nodes=len(assessment.removed_nodes),
+            facts_changed_nodes=len(assessment.facts_changed_nodes),
+            new_pairs=len(assessment.new_pairs),
+            resolved_pairs=len(assessment.resolved_pairs),
+            stale_refinements=len(assessment.stale_refinements),
+            affected_flow=len(assessment.affected_flow),
+            deferred_pairs=assessment.deferred_pairs,
+        )
+
+
+class TriggerDetailPayload(WirePayload):
+    """What a run's trigger carried: the paths it named, and the gate decision behind it.
+
+    ``files`` is capped for the same reason the counts replace the id tuples: a Stop path set can
+    name hundreds of paths and a fifty row page would carry all of them.
+    """
+
+    files: tuple[str, ...] = ()
+    file_count: int = 0
+    reason: str = ""
+    assessment: AssessmentPayload | None = None
+
+    @classmethod
+    def of(cls, detail: TriggerDetail) -> "TriggerDetailPayload":
+        """One stored detail on the wire; the paths cap and the assessment narrows to counts."""
+        return cls(
+            files=detail.files[:LOG_FILE_CAP],
+            file_count=len(detail.files),
+            reason=detail.reason,
+            assessment=(
+                None
+                if detail.assessment is None
+                else AssessmentPayload.of(detail.assessment)
+            ),
+        )
+
+
 class RunRowPayload(WirePayload):
     """One run as the log shows it: who made it, against which checkout, and what it cost.
 
@@ -339,6 +406,7 @@ class RunRowPayload(WirePayload):
     client: ClientKind
     runner: RunnerKind
     trigger_kind: TriggerKind
+    trigger_detail: TriggerDetailPayload = TriggerDetailPayload()
     model: str | None = None
     summary: str | None = None
     error: str | None = None
@@ -369,6 +437,7 @@ class RunRowPayload(WirePayload):
             client=run.client,
             runner=run.runner,
             trigger_kind=run.trigger_kind,
+            trigger_detail=TriggerDetailPayload.of(run.trigger_detail),
             model=run.model,
             summary=run.summary,
             error=run.error,

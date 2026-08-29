@@ -296,6 +296,10 @@ QUEUE_ID_CAP = 10
 LOG_ROW_LIMIT = 50
 #: hard ceiling for both, so neither an agent's context nor a terminal takes the whole table
 MAX_LOG_ROWS = 500
+#: how many of a batch's paths a run row carries on the wire, for the same reason as `QUEUE_ID_CAP`
+LOG_FILE_CAP = 10
+#: how many of them the log line names before it counts the rest; S8b's page reads the same number
+LOG_NOTE_FILES = 3
 # Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
 DEFAULT_FLOW_LIMIT = 200
 DEFAULT_FLOW_DEPTH = 4

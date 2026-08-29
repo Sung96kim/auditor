@@ -44,7 +44,9 @@ pnpm build            # rebuild the committed dist/index.html that `graph serve`
   namesakes.
 - `auditr_observer.py` sits at the repo root, outside the package, and imports nothing from
   `auditor` (importing it costs ~0.23 s and hooks run constantly). `auditor/observer/` holds the
-  daemon side; the two share only the `OBSERVER_API_VERSION` literal, pinned by a test.
+  daemon side: `assess.py` is spec 8.6's change assessment and `budget.py` the day ceilings it
+  reads, both pure. The daemon process itself is a later slice. The two sides share only the
+  `OBSERVER_API_VERSION` literal, pinned by a test.
 - Shared seams stay at the `auditor/` top level (`engine.py`, `config.py`, `models.py`,
   `registry.py`); never bury one inside a feature package.
 - `plugin/` is the Claude Code plugin (skills, agents, hooks, statusline). Its Python is

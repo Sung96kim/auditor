@@ -340,12 +340,17 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `worktrees` (default `"main"`): `main` or `all`.
 - `suspects` (default `true`): queue suspect nodes found during a build.
 - `open_browser` (default `true`): open the live page when the daemon starts.
-- `skipped_retention_days` (default `7`): days of skipped-run history kept.
+- `skipped_retention_days` (default `7`): days of skipped-run history kept. `0` is legal and
+  means the next sweep reaps every skipped row, including one written a second ago: the field
+  is `ge=0` and `prune_skipped_runs` compares `started_at < now - days * 86400`.
 
 `observer.budget` (`BudgetConfig`):
 
 - `max_cost_usd_per_day` (default `2.0`): hard ceiling on spend per day, across every repo.
-- `max_runs_per_day` (default `40`): hard ceiling on runs per day.
+  Read by the assessment gate through `RunsDB.spend_since` over a rolling 24 hour window;
+  rows with `runner = none` spent nothing and do not count against it.
+- `max_runs_per_day` (default `40`): hard ceiling on runs per day. It is what bounds a model
+  with no entry in the price table, and every fraction rule then reads remaining runs.
 - `max_budget_usd_per_run` (default `0.25`): ceiling handed to one run.
 - `max_budget_usd_per_eval` (default `12.00`): ceiling on one `auditr graph eval` invocation,
   across every suite. The eval stops before opening a run that would cross it. A default
@@ -353,8 +358,11 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
   covers that plan with headroom. The plan line and `--dry-run` show the worst case before any
   run opens.
 - `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
-  high-value runs proceed.
-- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
+  high-value runs proceed. Strictly below: at exactly the fraction the bar has not been
+  crossed. Under it, an edit batch counts only its `bare` and `self` new questions, and with
+  no eval row for the runner about to be used, edit-triggered runs stop outright.
+- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may
+  take. No reader yet; the rate-limit pause is the loop's.
 
 `observer.limits` (`LimitsConfig`):
 
@@ -373,8 +381,11 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 - `debounce_seconds` (default `20`): quiet period after an edit before assessing it.
 - `session_expiry_minutes` (default `45`): idle minutes before a session is considered gone.
 - `idle_shutdown_minutes` (default `30`): idle minutes before the daemon exits.
-- `run_on_stale` (default `true`): re-run when an edit stales an existing refinement.
+- `run_on_stale` (default `true`): re-run when an edit stales an existing refinement. Only a
+  refinement anchored on a node the batch itself touched counts, so drift and no-op builds
+  cannot trigger a run. The low budget bar does not narrow this arm.
 - `min_new_unresolved` (default `1`): new unresolved callees an edit batch needs to earn a run.
+  `0` means any batch that reaches stage 2 earns one.
 
 `observer.runner` (`RunnerConfig`):
 

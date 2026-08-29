@@ -144,6 +144,10 @@ args = ["run", "-i", "--rm",
   so an empty page with neither set means nothing is recorded.
 - A run's `refinements` is `{committed, rejected}`, the same split `graph_refine_status` reports and
   the same one the run's `summary` line counts.
+- Every run row `graph_refine_start` returns and `graph_log` pages carries `trigger_detail`: the
+  paths the trigger named (capped at 10), `file_count` for the whole batch, and `assessment` when
+  the observer's gate wrote the row. The assessment travels as counts, never as node ids, so a
+  fifty row page cannot carry thousands of them.
 - Staged proposals live in the server process, so one run is opened, filled and committed through
   one server. `graph_refine_status` reports `staged_here: false` in any other process.
   `AUDITOR_REFINE_RUN` pre-binds every tool to one run, which is how a runner-spawned server works

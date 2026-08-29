@@ -19,7 +19,9 @@ Paths are relative to the repo root.
 - `auditor/graph/` is the semantic graph, part of the core install since its libraries moved out
   of the `[graph]` extra; `auditor/graph/ui/` is the Vite frontend `graph serve` embeds.
 - `auditor/cli/lazy.py` holds `LazyGroup`, the deferred sub-app mount, and `auditor/observer/` the
-  observer package. `auditr_observer.py` is the observer's client and lives at the repo root,
+  observer package: `assess.py` is spec 8.6's change assessment, pure functions over frozen models
+  with no store handle and no clock, and `budget.py` turns a window's spend into the day-ceiling
+  state the gate reads. `auditr_observer.py` is the observer's client and lives at the repo root,
   outside the package, so it never imports `auditor`.
 - `auditor/malware/` wraps the opt-in ClamAV and osv-scanner shell-outs. `auditor/reporters/` holds
   one module per output format. `auditor/profiles/*.toml` holds the built-in config profiles
@@ -474,8 +476,12 @@ flowchart TB
   it. Reordering two same-typed columns can no longer transpose a row.
 - Ids inside those tables are toplevel-relative: `partition_prefix` plus the partition-relative id,
   so a repo scanned both at its root and at a subdirectory keeps one namespace.
-- `graph_runs` rows with `status='skipped'` are the assessment-only records, plus the evicted and
-  stranded runs; the observer sweeps them with `RunsDB.prune_skipped_runs` after
+- `graph_runs` rows with `status='skipped'` have three sources, told apart by
+  `trigger_detail.assessment`: the gate's own decisions carry it and put their reason there, while
+  evicted and stranded runs carry no assessment and put their reason in `error`.
+  `RefinementService.decline` is the ledger's one assessment writer, and it stages nothing, so a
+  skip can never evict a run that is still holding proposals. The observer sweeps all three with
+  `RunsDB.prune_skipped_runs` after
   `observer.skipped_retention_days`, which returns both counts because deleting such a run deletes
   the `rejected` refinements it owns. Real runs are never swept, and neither is a skipped run that
   owns a `graph_tuning` row or a refinement that is not `rejected`: both reference
