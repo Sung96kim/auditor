@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from auditor.graph.hashes import FileHashes, file_hashes, node_facts_sha, node_truth_sha
 from auditor.graph.model import CallForm, FileGraphFacts, GraphNode, UnresolvedRow
 from auditor.graph.refine.models import (
+    BOUNDED_FORMS,
     Assessment,
     AssessmentDecision,
     NodePair,
@@ -76,7 +77,8 @@ class EditedFile(BaseModel):
     """One path of a batch as the loop read it.
 
     ``cached`` of ``None`` is a path the index has never seen; ``content_hash`` of ``None`` is a
-    path that is gone.
+    path that is gone; ``extracted`` of ``None`` is a path with no facts to compare, which is the
+    same answer as a file that extracted to nothing.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -111,7 +113,8 @@ def assess_path(edited: EditedFile) -> PathVerdict:
     """Classify one edited path against the facts cached for it (spec 8.6 stage 1).
 
     The content hash short circuit comes first, so a Stop path set's repeated dirty file costs a
-    string comparison rather than a parse.
+    string comparison rather than a parse; a path with no facts to compare is `UNPARSED`, whether
+    or not the index has seen it before.
     """
     cached, extracted = edited.cached, edited.extracted
     if edited.content_hash is None:
@@ -120,16 +123,17 @@ def assess_path(edited: EditedFile) -> PathVerdict:
             outcome=PathOutcome.REMOVED,
             removed_nodes=cached.node_ids if cached else (),
         )
+    if cached is not None and cached.content_hash == edited.content_hash:
+        return PathVerdict(path=edited.path, outcome=PathOutcome.UNCHANGED)
+    # one rule for every shape of "no facts to compare": the loop never extracted, or `extract`
+    # swallowed a SyntaxError and returned nothing, which a file that parses never does because
+    # it always has at least its module node. Persisting either would write the file's nodes away
+    if extracted is None or not extracted.nodes:
+        return PathVerdict(path=edited.path, outcome=PathOutcome.UNPARSED)
     if cached is None:
         return PathVerdict(
             path=edited.path, outcome=PathOutcome.ADDED, added_nodes=_ids(extracted)
         )
-    if cached.content_hash == edited.content_hash or extracted is None:
-        return PathVerdict(path=edited.path, outcome=PathOutcome.UNCHANGED)
-    # `FileExtractor.extract` swallows a SyntaxError and returns no nodes, and a file that parses
-    # always has at least its module node, so this is a save caught mid-edit
-    if cached.node_hashes and not extracted.nodes:
-        return PathVerdict(path=edited.path, outcome=PathOutcome.UNPARSED)
     fresh = file_hashes(extracted.nodes)
     if cached.hashes == fresh:
         return PathVerdict(path=edited.path, outcome=PathOutcome.UNCHANGED)
@@ -200,17 +204,21 @@ class Stage1(BaseModel):
 def stage_one(edited: Sequence[EditedFile]) -> Stage1:
     """Classify a whole batch, one verdict per path, in the order the loop first listed them.
 
-    A path listed twice is classified once, first occurrence winning: a `PostToolUse` event and
-    the Stop path set name the same file, and the debounce hands both over as one batch (P23).
+    A path listed twice is classified from its last read: a `PostToolUse` event and the Stop path
+    set name the same file at different moments, and the later read is the settled one (P23). The
+    caller owns stage 0, so anything handed here is classified, auditable or not.
     """
     seen: dict[str, EditedFile] = {}
     for one in edited:
-        seen.setdefault(one.path, one)
+        # a dict keeps the first insertion's position and the last value, so `files` still lists
+        # the batch in arrival order while the verdict comes from the freshest read
+        seen[one.path] = one
     return Stage1(verdicts=tuple(assess_path(e) for e in seen.values()))
 
 
-#: the two call shapes a low budget still lets through, because they can still auto-activate
-_BOUNDED_FORMS = frozenset({CallForm.BARE, CallForm.SELF})
+#: the same two call forms `tiers` gates on, so the assessment and tier B cannot drift on what a
+#: low budget still lets through (spec 10.1)
+_BOUNDED_FORMS = frozenset(BOUNDED_FORMS)
 
 
 class QueuePair(BaseModel):

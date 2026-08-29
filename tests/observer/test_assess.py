@@ -104,11 +104,33 @@ def test_stage_one_classifies_one_edit(case, after, outcome):
 
 
 def test_identical_bytes_never_reach_the_extractor():
-    """The content hash short circuit is what makes a Stop path set's repeats free (spec 8.2)."""
-    edited = _edited(_BEFORE)
-    verdict = assess_path(edited.model_copy(update={"extracted": None}))
+    """The content hash short circuit is what makes a Stop path set's repeats free (spec 8.2).
+
+    The facts handed in are the ones a `TRUTH` verdict is made of, so only the hash arm can
+    return `UNCHANGED` here: without it this input classifies as a structural change.
+    """
+    loud = extract_file_facts("m.py", _NEW_BARE_CALLEE, "production")
+    verdict = assess_path(_edited(_BEFORE).model_copy(update={"extracted": loud}))
     assert verdict.outcome is PathOutcome.UNCHANGED
     assert verdict.persist is False
+
+
+def test_bytes_that_moved_with_no_facts_to_compare_are_not_called_unchanged():
+    """No extraction is `UNPARSED`, never a silent `UNCHANGED` that leaves the cache behind."""
+    verdict = assess_path(
+        _edited(_NEW_BARE_CALLEE).model_copy(update={"extracted": None})
+    )
+    assert verdict.outcome is PathOutcome.UNPARSED
+    assert verdict.persist is False
+
+
+def test_a_new_path_with_no_facts_to_compare_is_not_added_with_nothing_in_it():
+    """One rule for both: `added` with empty facts would write the next edit into the mid-save
+    hazard `UNPARSED` exists to close."""
+    fresh = _edited(_BEFORE, before=None).model_copy(update={"extracted": None})
+    verdict = assess_path(fresh)
+    assert verdict.outcome is PathOutcome.UNPARSED
+    assert (verdict.persist, verdict.added_nodes) == (False, ())
 
 
 #: `FileExtractor.extract` always emits a module node, so every expectation here carries `m.py`
@@ -153,10 +175,19 @@ def test_a_save_the_extractor_cannot_parse_writes_nothing():
 
 
 def test_a_re_edit_of_a_dirty_file_is_classified_by_hashes_not_by_the_short_circuit():
-    """The first appearance skipped and persisted nothing, so the cache still holds `_BEFORE`."""
-    first = assess_path(_edited(_COMMENT_ONLY))
-    second = assess_path(_edited(_NEW_BARE_CALLEE))
+    """The first appearance persisted nothing, so the cache the second reads still holds
+    `_BEFORE` and the second edit is classified against it, not against the first."""
+    first_edit = _edited(_COMMENT_ONLY)
+    first = assess_path(first_edit)
     assert (first.outcome, first.persist) == (PathOutcome.UNCHANGED, False)
+    second = assess_path(
+        first_edit.model_copy(
+            update={
+                "content_hash": sha256(_NEW_BARE_CALLEE.encode()).hexdigest(),
+                "extracted": extract_file_facts("m.py", _NEW_BARE_CALLEE, "production"),
+            }
+        )
+    )
     assert second.outcome is PathOutcome.TRUTH
     assert "m.py::Store.get" in second.facts_changed_nodes
 
@@ -180,6 +211,20 @@ def test_a_test_file_edit_is_classified_like_any_other():
     assert assess_path(_edited(_NEW_BARE_CALLEE, path="tests/test_m.py")).outcome is (
         PathOutcome.TRUTH
     )
+
+
+def test_a_cache_row_with_no_per_node_digests_still_refuses_a_mid_edit_save():
+    """`facts_hash` and `hashes` are the two store reads a loop reaches for first, so
+    `node_hashes` is empty on that path and `UNPARSED` cannot key off it."""
+    full = _edited("def load(name:\n")
+    assert full.cached is not None
+    thin = full.cached.model_copy(update={"node_hashes": ()})
+    stage1 = stage_one((full.model_copy(update={"cached": thin}),))
+    verdict = stage1.verdicts[0]
+    assert verdict.outcome is PathOutcome.UNPARSED
+    assert (verdict.persist, verdict.removed_nodes) == (False, ())
+    assert stage1.needs_rebuild is False
+    assert assess_unchanged(stage1).decision is AssessmentDecision.SKIP
 
 
 def test_a_half_written_cache_pair_is_treated_as_a_truth_change():
@@ -213,11 +258,31 @@ def test_a_batch_where_nothing_moved_asks_for_no_persist_and_no_rebuild():
     assert stage1.needs_rebuild is False
 
 
-def test_a_path_listed_twice_in_one_batch_is_classified_once():
-    """A `PostToolUse` event and the Stop path set name the same file every time (P23)."""
-    stage1 = stage_one((_edited(_NEW_BARE_CALLEE), _edited(_NEW_BARE_CALLEE)))
+def test_a_path_listed_twice_is_classified_from_the_later_read():
+    """A `PostToolUse` event and the Stop path set read the same file at different moments, and
+    the later read is the one closer to the settled bytes (P23)."""
+    stale, fresh = _edited(_BEFORE), _edited(_NEW_BARE_CALLEE)
+    stage1 = stage_one((stale, fresh))
     assert stage1.files == ("m.py",)
+    assert stage1.verdicts[0].outcome is PathOutcome.TRUTH
     assert stage1.persist_paths == ("m.py",)
+
+
+@pytest.mark.parametrize(
+    ("case", "order", "outcome"),
+    [
+        ("deleted then recreated", ("gone", "live"), PathOutcome.TRUTH),
+        ("recreated then deleted", ("live", "gone"), PathOutcome.REMOVED),
+    ],
+)
+def test_a_path_deleted_and_recreated_in_one_batch_ends_where_the_batch_left_it(
+    case, order, outcome
+):
+    """A stash restore or a delete-then-create save puts both reads in one batch, and forgetting
+    a live file's facts would drop every node it has until the next full scan."""
+    reads = {"gone": _edited(None), "live": _edited(_NEW_BARE_CALLEE)}
+    stage1 = stage_one(tuple(reads[k] for k in order))
+    assert stage1.verdicts[0].outcome is outcome, case
 
 
 @pytest.mark.parametrize("rel", ["notes.md", "../outside.py"])

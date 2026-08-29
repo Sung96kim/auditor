@@ -62,6 +62,7 @@ from auditor.graph.refine.service import (
     RunRegistry,
 )
 from auditor.graph.refine.tiers import TierPolicy
+from auditor.observer import assess
 from auditor.user_settings import BudgetConfig, LimitsConfig
 
 #: the four truths `graph_repo_eval` is built to yield, exactly (P6)
@@ -288,9 +289,9 @@ def test_every_shipped_suite_has_a_spec_that_agrees_with_the_vocabulary(suite):
 
 def test_the_gate_and_the_eval_read_one_list_of_precision_suites():
     """Two lists a module apart already disagreed on `fixtures`: the gate would bound a stratum
-    the eval would never warn about."""
+    the eval would never warn about. The observer's low budget narrowing is the third reader."""
     assert {suite.value for suite in PRECISION_SUITES} == tiers._PRECISION_SUITES
-    assert set(BOUNDED_FORMS) == tiers._BOUNDED_FORMS
+    assert set(BOUNDED_FORMS) == tiers._BOUNDED_FORMS == assess._BOUNDED_FORMS
 
 
 # ---------------------------------------------------------------- sampling
