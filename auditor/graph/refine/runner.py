@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from auditor.graph.payloads import CommitResult
 from auditor.graph.refine.brief import Brief
@@ -72,6 +72,17 @@ class RefinementJob(BaseModel):
     checkout: Checkout | None = None
     #: whether an auditable path was uncommitted when the caller read the tree (spec 8.5)
     dirty: bool = False
+
+    @model_validator(mode="after")
+    def _scope_or_targets(self) -> "RefinementJob":
+        """Refuse the job whose comment above says it cannot exist.
+
+        `RefinementService.brief` silently prefers targets over scope, so a job carrying both
+        would be briefed on one of them and record the other.
+        """
+        if self.scope and self.detail is not None and self.detail.targets:
+            raise ValueError("a job carries a scope or a target list, never both")
+        return self
 
 
 class RunProduct(BaseModel):

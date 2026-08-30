@@ -11,6 +11,7 @@ from auditor.discovery import (
     discover,
     find_root,
     git_changed_files,
+    git_head,
     git_status_paths,
     parse_status_z,
 )
@@ -455,3 +456,15 @@ def test_the_stop_path_set_is_the_whole_dirty_tree_not_a_delta(git_repo):
 
 def test_git_status_paths_is_none_outside_a_checkout(tmp_path):
     assert git_status_paths(tmp_path) is None
+
+
+async def test_git_head_names_the_branch_and_the_commit(git_repo):
+    """Spec 8.5's pre-run read: a run is pinned to what this answers, so both halves matter."""
+    branch, commit = await git_head(git_repo)
+    assert branch in {"main", "master"}
+    assert len(commit) == 40
+
+
+async def test_git_head_is_empty_outside_a_checkout(tmp_path):
+    """A path that is not a checkout pins nothing, and must not raise on the way to saying so."""
+    assert await git_head(tmp_path) == (None, None)

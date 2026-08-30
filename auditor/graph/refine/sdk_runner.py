@@ -289,6 +289,22 @@ def _is_rate_limit(message: Any) -> bool:
     return hasattr(message, "rate_limit_info")
 
 
+def _utilization(info: Any) -> float | None:
+    """The share of the window the SDK reported, as a 0-1 fraction, or ``None`` for no number.
+
+    `RateLimitInfo.utilization` is documented as a fraction and typed `float | None`, but the SDK
+    is a plain dataclass passing the CLI's JSON through, so a non-numeric value never raises here.
+    """
+    used = getattr(info, "utilization", None)
+    if used is None:
+        return None
+    try:
+        return float(used)
+    except (TypeError, ValueError):
+        logger.warning("rate limit reported a non-numeric utilization: %r", used)
+        return None
+
+
 def rate_limited(message: Any, *, max_utilization: float = 1.0) -> str | None:
     """Why a rate limit stopped this run, or ``None`` when it did not.
 
@@ -298,9 +314,9 @@ def rate_limited(message: Any, *, max_utilization: float = 1.0) -> str | None:
     if not _is_rate_limit(message):
         return None
     info = message.rate_limit_info
-    used = getattr(info, "utilization", None)
+    used = _utilization(info)
     rejected = getattr(info, "status", None) == "rejected"
-    if not rejected and (used is None or float(used) < max_utilization):
+    if not rejected and (used is None or used < max_utilization):
         return None
     return f"paused:ratelimit until {getattr(info, 'resets_at', None)}"
 

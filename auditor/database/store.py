@@ -191,39 +191,31 @@ class IndexStore(BaseDB):
         that is no longer in ``keep_paths`` — i.e. deleted or newly excluded. Scoped to this repo
         and ``prefix`` so a subdirectory scan never evicts files outside it. Returns pruned paths."""
 
+        # IMMEDIATE before the read: in autocommit the file list is one snapshot and the deletes
+        # are another, so a scan that rewrites a file in between loses that row.
         def op(conn: sqlite3.Connection) -> list[str]:
-            # IMMEDIATE before the read: in autocommit the file list is one snapshot and the
-            # deletes are another, so a scan that rewrites a file in between loses that row.
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                indexed = [
-                    r["path"]
-                    for r in conn.execute(
-                        "SELECT path FROM files WHERE repo = ?", (self.repo,)
-                    ).fetchall()
-                ]
-                stale = [
-                    p for p in indexed if p.startswith(prefix) and p not in keep_paths
-                ]
-                for p in stale:
-                    for table in (
-                        "files",
-                        "file_rules",
-                        "findings",
-                        "shapes",
-                        "graph_facts",
-                    ):
-                        conn.execute(
-                            f"DELETE FROM {table} WHERE repo = ? AND path = ?",
-                            (self.repo, p),
-                        )  # noqa: S608  (table name is a fixed literal)
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
+            indexed = [
+                r["path"]
+                for r in conn.execute(
+                    "SELECT path FROM files WHERE repo = ?", (self.repo,)
+                ).fetchall()
+            ]
+            stale = [p for p in indexed if p.startswith(prefix) and p not in keep_paths]
+            for p in stale:
+                for table in (
+                    "files",
+                    "file_rules",
+                    "findings",
+                    "shapes",
+                    "graph_facts",
+                ):
+                    conn.execute(
+                        f"DELETE FROM {table} WHERE repo = ? AND path = ?",
+                        (self.repo, p),
+                    )  # noqa: S608  (table name is a fixed literal)
             return stale
 
-        return await self._worker.run(op)
+        return await self._worker.run(immediate(op))
 
     async def transaction(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
         """Run ``fn`` against the live connection as one commit: everything it writes lands, or

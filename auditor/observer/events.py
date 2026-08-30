@@ -102,7 +102,7 @@ class EventQueue:
         self._signal = threading.Event()
         self._lock = threading.Lock()
         self._keyed: dict[str, threading.Lock] = {}
-        #: every event this daemon has taken; no S8b reader, because `/api/status` counts repos
+        #: every event this daemon has taken; `/api/status` reports the drained half of it
         self.accepted = 0
 
     def spool(self, key: str) -> Spool:

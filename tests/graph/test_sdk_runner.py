@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -51,6 +52,7 @@ from auditor.graph.refine.sdk_runner import (
     SdkOptions,
     SdkRunner,
     from_result,
+    rate_limited,
     run_answer,
 )
 from auditor.graph.refine.service import RefinementService
@@ -781,3 +783,19 @@ async def test_the_bound_propose_tool_answers_with_the_proposers_verdict(bound_t
     answer = await bound_tools("no-such-run", judge).propose(GOOD)
     assert "is_error" not in answer
     assert json.loads(answer["content"][0]["text"])["detail"] == "recorded by the eval"
+
+
+@pytest.mark.parametrize(
+    ("used", "paused"),
+    [(0.9, True), (0.1, False), ("lots", False), (None, False)],
+    ids=["over", "under", "not-a-number", "absent"],
+)
+def test_a_utilization_that_is_not_a_number_does_not_stop_the_run(used, paused):
+    """E1: `RateLimitInfo` is a dataclass passing the CLI's JSON through, so `float` can raise.
+
+    The unit is a 0-1 fraction, which the SDK documents and does not enforce; anything that is
+    not a number is no evidence of a rate limit, so the run goes on.
+    """
+    info = SimpleNamespace(status="allowed_warning", utilization=used, resets_at=None)
+    message = SimpleNamespace(rate_limit_info=info)
+    assert (rate_limited(message, max_utilization=0.5) is not None) is paused

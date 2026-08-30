@@ -419,3 +419,18 @@ def test_a_trigger_detail_on_the_wire_caps_its_paths_and_still_counts_them_all()
     assert len(wire.files) == graph_model.LOG_FILE_CAP
     assert wire.file_count == len(paths)
     assert wire.assessment is None
+
+
+def test_a_trigger_detail_on_the_wire_names_the_pairs_a_run_was_opened_for():
+    """M14: the count is derived separately, so an empty target list still reports the right one."""
+    targets = tuple(
+        graph_refine_models.NodePair(node_id=f"m.py::n{i}", name="load")
+        for i in range(graph_model.LOG_FILE_CAP + 5)
+    )
+    wire = graph_payloads.TriggerDetailPayload.of(
+        graph_refine_models.TriggerDetail(targets=targets)
+    )
+    assert [pair.node_id for pair in wire.targets] == [
+        f"m.py::n{i}" for i in range(graph_model.LOG_FILE_CAP)
+    ]
+    assert wire.target_count == len(targets)

@@ -298,7 +298,7 @@ LOG_ROW_LIMIT = 50
 MAX_LOG_ROWS = 500
 #: how many of a batch's paths a run row carries on the wire, for the same reason as `QUEUE_ID_CAP`
 LOG_FILE_CAP = 10
-#: how many of them the log line names before it counts the rest; S8b's page reads the same number
+#: how many of them the log line names before it counts the rest; the page reads the same number
 LOG_NOTE_FILES = 3
 #: the length of a day, for the rolling spend window and the retention cutoff, which are the two
 #: places that would otherwise each carry a literal and drift on the type

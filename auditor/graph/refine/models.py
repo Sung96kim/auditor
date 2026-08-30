@@ -279,6 +279,25 @@ class Assessment(BaseModel):
     deferred: tuple[NodePair, ...] = ()
     verdict: Decision
 
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_count(cls, data: Any) -> Any:
+        """Read an S8a row, which stored `deferred_pairs` as a count and named no pairs.
+
+        The count is what the log and the page show, so it is kept as that many placeholder
+        pairs rather than decoding to zero and reporting a batch that deferred nothing.
+        """
+        if not isinstance(data, dict) or not isinstance(
+            data.get("deferred_pairs"), int
+        ):
+            return data
+        data = dict(data)
+        count = data.pop("deferred_pairs")
+        data.setdefault(
+            "deferred", tuple(NodePair(node_id="", name="") for _ in range(count))
+        )
+        return data
+
     @property
     def deferred_pairs(self) -> int:
         """How many pairs the cap left behind, which is what the log and the page show."""
