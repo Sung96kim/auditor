@@ -229,16 +229,21 @@ def test_a_far_past_cutoff_keeps_the_rows_and_a_future_one_drops_them(
 
 
 def test_the_refinements_page_is_newest_first_and_cuts_the_window_before_the_limit(
-    logged_repo: Path,
+    logged_repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """Both halves of the contract in one page: the view is newest first, and `--since` is a SQL
     clause, so a `--limit` smaller than the window's contents still answers the newest rows.
+
+    The clock is frozen to eliminate gaps between dispatch-time and write-time `created_at` that
+    could push rows outside the window under load, exercising the `refinement_id` tiebreak across rows with identical timestamps.
 
     This is not the mutation gate for the SQL-versus-Python window: `LogQuery.page` orders
     descending, so a post-limit filter could not lose a row here.
     `tests/graph/test_refinements_db.py::test_the_time_window_runs_before_the_limit_not_after_it`
     is that gate, on the oldest-first reader where the distinction is observable.
     """
+    frozen = time.time()
+    monkeypatch.setattr(time, "time", lambda: frozen)
     for name in ("one", "two", "three"):
         asyncio.run(_add_refinement(logged_repo, name=name, age_days=0))
     asyncio.run(_add_refinement(logged_repo, name="ancient", age_days=30))
