@@ -1,5 +1,7 @@
 """Spec 8.3's work items, over a real store and a `FakeRunner`: $0 and no SDK."""
 
+import asyncio
+import time
 from collections.abc import Sequence
 from typing import ClassVar
 
@@ -21,6 +23,7 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.runner import FakeRun, FakeRunner
 from auditor.graph.refine.service import RefinementService
+from auditor.observer.assess import EditedFile
 from auditor.observer.budget import BudgetState
 from auditor.observer.daemon import Daemon, IdleTimer
 from auditor.observer.events import Event, EventQueue
@@ -68,19 +71,20 @@ class Priced(FakeRunner):
     kind: ClassVar[RunnerKind] = RunnerKind.CLAUDE
 
 
-def _capped(user, nodes: int):
-    """The same settings with a smaller `max_nodes_per_run`, so a cap is reachable in a test."""
+def _limited(user, **knobs):
+    """The same settings with different `observer.limits` knobs, so a cap is reachable here."""
     return user.model_copy(
         update={
             "observer": user.observer.model_copy(
-                update={
-                    "limits": user.observer.limits.model_copy(
-                        update={"max_nodes_per_run": nodes}
-                    )
-                }
+                update={"limits": user.observer.limits.model_copy(update=knobs)}
             )
         }
     )
+
+
+def _capped(user, nodes: int):
+    """The same settings with a smaller `max_nodes_per_run`, which is the cap most cases want."""
+    return _limited(user, max_nodes_per_run=nodes)
 
 
 def _loop(
@@ -676,6 +680,7 @@ async def test_a_pass_that_raises_pauses_the_repo_and_the_next_one_recovers(
     assert (
         loop.pauses.errors.failures == 0
     )  # the pass that finished cleared the backoff
+    daemon.reconcile()
     assert daemon.loops == {}  # and no key is left claiming a loop that stopped
 
 
@@ -752,3 +757,111 @@ async def test_the_tuning_slot_is_reached_and_does_nothing(
 ):
     """C39: spec 8.3 item 5 is S11's; the ladder knows the slot exists and finds no proposal."""
     assert await _loop(refine_service).tuning() == 0
+
+
+async def test_a_driver_that_ended_hands_its_key_back_instead_of_deleting_it(
+    refine_service: RefinementService, tmp_path
+):
+    """L4: `reconcile` iterates `loops` on the daemon's thread, and this runs on the host's.
+
+    A `del` from here lands inside that comprehension, which is a `RuntimeError` on the thread
+    the daemon's whole tick runs on, so the driver hands the key over and `reconcile` frees it.
+    """
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    key = repo_dir_key(loop.root)
+
+    async def once(*, poll: float) -> LoopState:
+        daemon.stopping = True
+        return loop.state
+
+    loop.tick = once
+    await daemon._drive(loop)
+    assert daemon.loops[key] is loop  # the driver wrote nothing
+    assert [k for k, _held in daemon.ended] == [key]
+    daemon.reconcile()
+    assert daemon.loops == {} and list(daemon.ended) == []
+
+
+@pytest.mark.parametrize(
+    "fanout", [1, 2, 8], ids=["one-at-a-time", "in-pairs", "all-four-at-once"]
+)
+async def test_the_edit_batch_reads_its_files_in_chunks_of_this_repo_s_fanout(
+    refine_service: RefinementService, fanout
+):
+    """L11: the fan-out was a bare constant, and a large batch is the thing it exists to bound.
+
+    `_read` is replaced rather than driven through a repo, because what is being pinned is how
+    many of them are in flight and nothing public reports that.
+    """
+    loop = _loop(refine_service)
+    loop.service.user = _limited(refine_service.user, read_fanout=fanout)
+    live, peak = 0, 0
+
+    async def counted(path: str) -> EditedFile:
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        await asyncio.sleep(0)
+        live -= 1
+        return EditedFile(path=path)
+
+    loop._read = counted
+    read = await loop._read_all(tuple(f"f{n}.py" for n in range(4)))
+    assert [f.path for f in read] == ["f0.py", "f1.py", "f2.py", "f3.py"]
+    assert peak == min(fanout, 4)
+
+
+async def _marker(service: RefinementService, node_id: str, name: str) -> int:
+    """One in-force `unresolvable`, which is what the suspect pass reads to build its skip set."""
+    run_id = await service.index.runs.add_run(
+        Run(repo_identity=service.identity, started_at=1.0)
+    )
+    return await service.index.refinements.add_refinement(
+        Refinement(
+            run_id=run_id,
+            repo_identity=service.identity,
+            kind=RefinementKind.UNRESOLVABLE,
+            reason="dispatched by a registry with no literal call site",
+            target=RefinementTarget(node_id=node_id, name=name, reason_code="dynamic"),
+            status=RefinementStatus.ACTIVE,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("cap", "found"), [(1, 1), (2, 2), (500, 3)], ids=["one", "two", "the-default"]
+)
+async def test_the_suppressed_read_takes_no_more_rows_than_this_repo_s_cap(
+    refine_service: RefinementService, cap, found
+):
+    """Review M6: a suspect pass runs once a tick, so an unbounded read decodes the ledger that
+    often. A marker past the cap stops suppressing, which is the cost the cap buys."""
+    for n in range(3):
+        await _marker(refine_service, f"a.py::f{n}", f"name{n}")
+    loop = _loop(refine_service)
+    loop.service.user = _limited(refine_service.user, max_suppressed_rows=cap)
+    assert len(await loop.suppressed()) == found
+
+
+@pytest.mark.parametrize(
+    ("factor", "status"),
+    [(1.0, RunStatus.SKIPPED), (2.0, RunStatus.RUNNING)],
+    ids=["one-window", "two-windows"],
+)
+async def test_the_attach_sweep_gives_a_running_row_this_repo_s_own_longer_window(
+    refine_service: RefinementService, factor, status
+):
+    """L11's sixth constant: the multiplier is a setting, and the attach is one of its readers."""
+    refine_service.user = _limited(
+        refine_service.user, stranded_run_seconds=2, stranded_running_factor=factor
+    )
+    run_id = await refine_service.index.runs.add_run(
+        Run(
+            repo_identity=refine_service.identity,
+            started_at=time.time() - 3.0,
+            status=RunStatus.RUNNING,
+        )
+    )
+    await _loop(refine_service).attach()
+    assert (await refine_service.index.runs.run(run_id)).status is status

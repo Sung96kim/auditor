@@ -25,6 +25,7 @@ from auditor.user_settings import (
     DEFAULT_AUTH_MINUTES,
     DEFAULT_ERROR_SECONDS,
     DEFAULT_RATELIMIT_MINUTES,
+    FEED_EVENT_CAP,
     MAX_ERROR_SECONDS,
 )
 
@@ -34,8 +35,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_PER_REPO = 1
 DEFAULT_GLOBAL = 2
 MINUTE = 60.0
-#: how many events a feed nobody is draining holds before the oldest are dropped (H2)
-FEED_CAP = 2000
 
 
 class LoopState(StrEnum):
@@ -224,7 +223,10 @@ class QueueFeed(EventFeed):
     """
 
     def __init__(
-        self, loop: asyncio.AbstractEventLoop | None = None, *, cap: int = FEED_CAP
+        self,
+        loop: asyncio.AbstractEventLoop | None = None,
+        *,
+        cap: int = FEED_EVENT_CAP,
     ) -> None:
         self._queue: asyncio.Queue[Event] = asyncio.Queue()
         self._loop = loop

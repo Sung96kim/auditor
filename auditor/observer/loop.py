@@ -87,9 +87,6 @@ from auditor.user_settings import UserSettings
 
 logger = logging.getLogger(__name__)
 
-#: how many edited files are read at once: a fan-out bound so a large batch still yields
-_READ_FANOUT = 16
-
 
 class RepoLoop:
     """One attached repo's work, in spec 8.3's priority order.
@@ -154,14 +151,14 @@ class RepoLoop:
         return state
 
     def failed(self, error: BaseException) -> float:
-        """Hold this repo after a pass raised, and answer the seconds its driver should wait."""
+        """Name the exception for the page, take the hold, and answer the driver's wait (L2).
+
+        The hold itself is `Pauses.failed`'s; what this adds is the state move, which is what
+        puts `paused:error` on the badge.
+        """
         wait = self.pauses.failed(str(error) or type(error).__name__, now=self.now())
         self._moved(LoopState.PAUSED_ERROR)
         return wait
-
-    def recovered(self) -> None:
-        """A pass that finished: drop the error hold so the next failure waits the first window."""
-        self.pauses.recovered()
 
     @property
     def runner_kind(self) -> RunnerKind:
@@ -202,10 +199,10 @@ class RepoLoop:
         """
         self._moved(LoopState.BUILDING)
         self.pauses.cleared()
-        # a daemon that died mid-run left its row open, and this is the first pass after it came
-        # back, so the sweep runs here rather than waiting for someone to type `refine prune`
+        limits = self.user.observer.limits
         await self.index.runs.finish_stranded_runs(
-            older_than=self.user.observer.limits.stranded_run_seconds
+            older_than=limits.stranded_run_seconds,
+            running_factor=limits.stranded_running_factor,
         )
         await autoscan(self.root)
         reason = "session-start build"
@@ -321,8 +318,9 @@ class RepoLoop:
     async def _read_all(self, paths: Sequence[str]) -> list[EditedFile]:
         """Every edited path, a bounded chunk at a time so one large batch still yields."""
         out: list[EditedFile] = []
-        for start in range(0, len(paths), _READ_FANOUT):
-            chunk = paths[start : start + _READ_FANOUT]
+        fanout = self.user.observer.limits.read_fanout
+        for start in range(0, len(paths), fanout):
+            chunk = paths[start : start + fanout]
             out.extend(await asyncio.gather(*(self._read(path) for path in chunk)))
         return out
 
@@ -445,15 +443,22 @@ class RepoLoop:
     async def suppressed(self) -> frozenset[NodePair]:
         """Pairs an in-force `unresolvable` or a `redundant` refinement answers (spec 8.3, 5.7).
 
-        Two filtered reads rather than the whole ledger: a reverted `unresolvable` is not a marker
-        in force, and a suspect pass must not decode every refinement ever written.
+        Two filtered reads rather than the whole ledger, and each is bounded by
+        `max_suppressed_rows`: a reverted `unresolvable` is not a marker in force, and a suspect
+        pass runs once a tick, so an unbounded read decodes the ledger that often (review M6).
         """
         ledger = self.index.refinements
+        cap = self.user.observer.limits.max_suppressed_rows
         settled, redundant = await asyncio.gather(
             ledger.refinements(
-                kinds=[RefinementKind.UNRESOLVABLE], statuses=sorted(ACTIVE_STATUSES)
+                kinds=[RefinementKind.UNRESOLVABLE],
+                statuses=sorted(ACTIVE_STATUSES),
+                newest_first=True,
+                limit=cap,
             ),
-            ledger.refinements(statuses=[RefinementStatus.REDUNDANT]),
+            ledger.refinements(
+                statuses=[RefinementStatus.REDUNDANT], newest_first=True, limit=cap
+            ),
         )
         out: set[NodePair] = set()
         for row in (*settled, *redundant):

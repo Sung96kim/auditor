@@ -332,3 +332,51 @@ def test_torn_json_layer_falls_back_to_defaults(project):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json")
     assert load_user_settings(project).observer.runner.model == "haiku"
+
+
+@pytest.mark.parametrize(
+    ("first", "ceiling", "accepted"),
+    [(5.0, 300.0, True), (5.0, 5.0, True), (10.0, 5.0, False)],
+    ids=["the-shipped-pair", "equal", "ceiling-below-the-first-wait"],
+)
+def test_the_error_backoff_ceiling_may_not_sit_below_the_first_wait(
+    first, ceiling, accepted
+):
+    """L9: `Backoff.failed` takes the `min` of the two, so a low ceiling shrinks the first wait."""
+    if accepted:
+        assert (
+            SchedulingConfig(
+                error_backoff_seconds=first, max_error_backoff_seconds=ceiling
+            ).max_error_backoff_seconds
+            == ceiling
+        )
+        return
+    with pytest.raises(ValidationError, match="max_error_backoff_seconds"):
+        SchedulingConfig(error_backoff_seconds=first, max_error_backoff_seconds=ceiling)
+
+
+@pytest.mark.parametrize(
+    ("group", "field", "default"),
+    [
+        (LimitsConfig, "max_suppressed_rows", 500),
+        (LimitsConfig, "max_feed_events", 2000),
+        (LimitsConfig, "read_fanout", 16),
+        (LimitsConfig, "stranded_running_factor", 2.0),
+        (SchedulingConfig, "host_join_seconds", 5.0),
+    ],
+    ids=[
+        "suppressed-rows",
+        "feed-events",
+        "read-fanout",
+        "stranded-running-factor",
+        "host-join-seconds",
+    ],
+)
+def test_the_constants_that_became_settings_kept_their_literal_as_the_default(
+    group, field, default
+):
+    """L11's rule: a "someone will want a different number" constant becomes a bounded field."""
+    assert getattr(group(), field) == default
+    assert group.model_fields[field].description
+    with pytest.raises(ValidationError):
+        group(**{field: 0})

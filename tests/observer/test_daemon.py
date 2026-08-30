@@ -710,8 +710,9 @@ class _RunningReaders:
     daemon that resolved the index on its host thread could never build a loop at all.
     """
 
-    def __init__(self, store) -> None:
+    def __init__(self, store, user: UserSettings | None = None) -> None:
         self.store = store
+        self.overlay = user or UserSettings()
         self.threads: list[str] = []
 
     def index(self, root: Path, *, identity: str | None = None):
@@ -727,7 +728,7 @@ class _RunningReaders:
     def user(self, root: Path) -> UserSettings:
         """This repo's own overlay, which the loop takes in place of the daemon's home layer."""
         self.threads.append(threading.current_thread().name)
-        return UserSettings()
+        return self.overlay
 
 
 def test_a_loop_is_built_with_the_index_resolved_off_the_host_thread(queue, tmp_path):
@@ -745,3 +746,82 @@ def test_a_loop_is_built_with_the_index_resolved_off_the_host_thread(queue, tmp_
         asyncio.run(store.aclose())
     assert key in daemon.loops
     assert readers.threads == [threading.current_thread().name] * 2
+
+
+def _overlay(**limits) -> UserSettings:
+    """A per-repo overlay whose `observer.limits` differ from the shipped home defaults."""
+    base = UserSettings()
+    return base.model_copy(
+        update={
+            "observer": base.observer.model_copy(
+                update={"limits": base.observer.limits.model_copy(update=limits)}
+            )
+        }
+    )
+
+
+def test_a_loop_is_built_from_this_repo_s_own_settings_and_not_the_daemon_s_home_layer(
+    queue, tmp_path
+):
+    """Review M1: the daemon serves many repos, and its home layer is nobody's per-repo answer.
+
+    Built through `ensure_loop`, because `_build` is what chooses between the two: a loop whose
+    `user` a test assigns by hand cannot fail on the choice at all.
+    """
+    store = asyncio.run(open_repo_index(tmp_path))
+    daemon = _daemon(queue)
+    daemon.settings = UserSettings()
+    daemon.readers = _RunningReaders(
+        store, _overlay(max_nodes_per_run=3, max_feed_events=7)
+    )
+    daemon.host.start()
+    try:
+        built = daemon.loops[daemon.ensure_loop(tmp_path)]
+    finally:
+        daemon.stopping = True
+        daemon.host.stop()
+        asyncio.run(store.aclose())
+    assert (
+        daemon.settings.observer.limits.max_nodes_per_run == 12
+    )  # the home layer, untouched
+    assert built.user.observer.limits.max_nodes_per_run == 3
+    assert built.feed.cap == 7  # and the feed cap is a per-repo setting too (L11)
+
+
+def test_the_loop_host_joins_for_the_window_its_daemon_s_settings_name(queue):
+    """L11: the join was a bare constant, and a slow shutdown is what someone would retune."""
+    settings = UserSettings()
+    tuned = settings.model_copy(
+        update={
+            "observer": settings.observer.model_copy(
+                update={
+                    "scheduling": settings.observer.scheduling.model_copy(
+                        update={"host_join_seconds": 0.25}
+                    )
+                }
+            )
+        }
+    )
+    assert LoopHost().join_seconds == 5.0
+    daemon = Daemon(
+        queue=queue,
+        sessions=SessionBook(expiry_minutes=45),
+        idle=IdleTimer(minutes=30.0, now=0.0),
+        settings=tuned,
+    )
+    assert daemon.host.join_seconds == 0.25
+
+
+def test_retiring_a_repo_drops_the_backoff_its_failed_build_left_behind(queue):
+    """L5: nothing else pruned `unbuildable`, so a repo that stopped existing kept it for ever."""
+
+    class _Broken:
+        def config(self, root: Path) -> AuditorSettings:
+            raise RuntimeError("this repo's config will not load")
+
+    daemon = _daemon(queue)
+    daemon.readers = _Broken()
+    key = daemon.ensure_loop(Path("/r"))
+    assert key in daemon.unbuildable
+    daemon.retire(key)
+    assert daemon.unbuildable == {}

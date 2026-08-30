@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -59,15 +60,18 @@ from auditor.paths import (
 )
 from auditor.payload import WirePayload
 from auditor.serve import open_url
-from auditor.user_settings import UserSettings, load_home_settings, load_user_settings
+from auditor.user_settings import (
+    DEFAULT_JOIN_SECONDS,
+    UserSettings,
+    load_home_settings,
+    load_user_settings,
+)
 
 _LOG = logging.getLogger("auditor.observer")
 #: Transport fact, not `SchedulingConfig` setting: daemon is answering or gone, no caller waits
 _ASK_TIMEOUT = 2.0
 #: how long a cancelled loop task gets to unwind before the host thread stops
 _CANCEL_GRACE = 0.25
-#: how long `stop` waits for the host thread; a thread stuck in a subprocess outlives it
-_JOIN_TIMEOUT = 5.0
 _P = TypeVar("_P", bound=WirePayload)
 _T = TypeVar("_T")
 
@@ -258,7 +262,8 @@ class LoopHost:
     because `IndexStore` is bound to one event loop and that loop is this thread's.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, join_seconds: float = DEFAULT_JOIN_SECONDS) -> None:
+        self.join_seconds = join_seconds
         self.loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -307,7 +312,7 @@ class LoopHost:
         if loop is not None:
             loop.call_soon_threadsafe(self._cancel_all, loop)
         if thread is not None:
-            thread.join(timeout=_JOIN_TIMEOUT)
+            thread.join(timeout=self.join_seconds)
             if thread.is_alive():
                 _LOG.warning("observer loop thread did not stop; leaving it behind")
         self._thread = None
@@ -365,15 +370,20 @@ class Daemon:
         self.on_change = on_change or (lambda: None)
         #: spec 8.4's "two globally" is across every loop in one daemon, so the daemon owns it
         self.slots = slots or RunSlots()
-        self.host = host or LoopHost()
         self.readers = readers
         self.settings = settings or UserSettings()
+        self.host = host or LoopHost(
+            join_seconds=self.settings.observer.scheduling.host_join_seconds
+        )
         #: one `RepoLoop` per attached repo, keyed by the spool key `consume` is handed (C-2)
         self.loops: dict[str, RepoLoop] = {}
         #: each repo's own meters, pushed by its loop rather than pulled across threads (H-9)
         self.meters: dict[str, Metered] = {}
         #: repos whose loop would not build, and when each may be tried again
         self.unbuildable: dict[str, Backoff] = {}
+        #: drivers that ended, handed over for `reconcile` to unclaim: a `deque` because the host
+        #: thread appends to it and only the daemon's own thread may write `loops` (L4)
+        self.ended: deque[tuple[str, RepoLoop]] = deque()
         #: what the daemon drained from the spools, delivered to a loop or not
         self.drained = 0
         self.stopping = False
@@ -406,6 +416,7 @@ class Daemon:
         a feed waiting for it instead of being dropped. A repo whose session expired and whose
         spool is gone is retired here, which is the one path to `detached` (M5).
         """
+        self._reap()
         if self.readers is None:
             return
         roots = {Path(s.repo) for s in self.sessions.live(now=self.now())}
@@ -421,9 +432,23 @@ class Daemon:
 
     def retire(self, key: str) -> None:
         """Let this repo's driver finish: it stops as soon as its key is no longer claimed."""
+        # a repo that stopped existing keeps no backoff either (L5)
+        self.unbuildable.pop(key, None)
         held = self.loops.pop(key, None)
         if held is not None:
             _LOG.info("retiring the loop for %s", held.root)
+
+    def _reap(self) -> None:
+        """Unclaim the key of every driver that ended, so `reconcile` builds that repo again.
+
+        The driver hands its key over rather than deleting it: `reconcile` iterates `loops` on
+        this thread, and a delete from the host thread lands inside that iteration (L4).
+        """
+        while self.ended:
+            key, loop = self.ended.popleft()
+            if self.loops.get(key) is loop:
+                del self.loops[key]
+                _LOG.info("the driver for %s ended; its key is free again", key)
 
     def ensure_loop(self, root: Path) -> str:
         """Build this repo's loop if it has none, and answer its spool key.
@@ -482,7 +507,7 @@ class Daemon:
             index=index,
             settings=settings,
             service=service,
-            feed=QueueFeed(),
+            feed=QueueFeed(cap=user.observer.limits.max_feed_events),
             runner_for=self._runner_for,
             slots=self.slots,
             on_change=self.on_change,
@@ -499,7 +524,7 @@ class Daemon:
         """Spec 8.3's ladder for one repo: attach, then tick while the daemon still claims it.
 
         One bad pass pauses this repo with a doubling backoff rather than ending its driver, and
-        a driver that does end unclaims its key, so `reconcile` builds the loop again (H2).
+        a driver that does end hands its key back, so `reconcile` builds the loop again (H2, L4).
         """
         key = repo_dir_key(loop.root)
         attached = False
@@ -513,13 +538,12 @@ class Daemon:
                     else:
                         await loop.attach()
                         attached = True
-                    loop.recovered()
+                    loop.pauses.recovered()
                     await self._publish(loop)
                 except asyncio.CancelledError:
                     raise
                 except Exception as failure:
-                    # `attached` is untouched: a tick that raised is not a repo to rebuild, and
-                    # an attach that raised left it False, so the retry is the attach again
+                    # `attached` is untouched, so a raised attach retries the attach and not a tick
                     wait = loop.failed(failure)
                     _LOG.exception("loop for %s stopped; retrying in %.0fs", key, wait)
                     await self._publish(loop)
@@ -527,9 +551,8 @@ class Daemon:
         except asyncio.CancelledError:
             _LOG.info("loop for %s cancelled at shutdown", loop.root)
         finally:
-            if self.loops.get(key) is loop:
-                del self.loops[key]
             loop.detach()
+            self.ended.append((key, loop))
 
     async def _publish(self, loop: RepoLoop) -> None:
         """Push this loop's two meters onto the daemon, which is what `/api/status` reads (H-9).

@@ -9,7 +9,7 @@ live in ``$AUDITOR_HOME/config.json`` with an optional per-repo overlay, are lay
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, EnvSettingsSource, SettingsConfigDict
 
 from auditor.config import deep_merge, unknown_config_keys
@@ -36,6 +36,14 @@ MAX_ERROR_SECONDS = 300.0
 HELD_EVENT_CAP = 500
 #: how many deferred pairs the loop carries between passes (M-4)
 DEFERRED_CAP = 200
+#: how many events a feed nobody is draining holds before the oldest are dropped (H2)
+FEED_EVENT_CAP = 2000
+#: how many edited files one batch reads at once, so a large batch still yields
+READ_FANOUT = 16
+#: how much longer a `running` row gets than a `queued` one before it is presumed dead
+STRANDED_RUNNING_FACTOR = 2.0
+#: how long `stop` waits for the loop host thread; a thread stuck in a subprocess outlives it
+DEFAULT_JOIN_SECONDS = 5.0
 
 # Where each pre-2 observer key lives now. `runner` and `tuning` are the two names version 2
 # reused for tables, so a file holding the old scalar fails the load rather than passing through
@@ -151,6 +159,26 @@ class LimitsConfig(BaseModel):
         ge=1,
         description="Queue rows one suspect drain reads; the rest wait for the next pass.",
     )
+    max_suppressed_rows: int = Field(
+        500,
+        ge=1,
+        description="Refinement rows one suspect pass reads per marker kind to build its skip set.",
+    )
+    max_feed_events: int = Field(
+        FEED_EVENT_CAP,
+        ge=1,
+        description="Events one loop's feed holds before the oldest are dropped.",
+    )
+    read_fanout: int = Field(
+        READ_FANOUT,
+        ge=1,
+        description="Edited files one batch reads at once, so a large batch still yields.",
+    )
+    stranded_running_factor: float = Field(
+        STRANDED_RUNNING_FACTOR,
+        ge=1.0,
+        description="How much longer a `running` row is given than a `queued` one before it is swept.",
+    )
 
 
 class SchedulingConfig(BaseModel):
@@ -220,7 +248,10 @@ class SchedulingConfig(BaseModel):
     debounce_restart_cap: float = Field(
         DEBOUNCE_WINDOW_CAP,
         ge=0.0,
-        description="How many times the quiet window may restart before the batch is taken.",
+        description=(
+            "Quiet windows a batch may keep collecting over, as a multiplier on "
+            "`debounce_seconds`; fractional, so 2.5 is two and a half windows."
+        ),
     )
     error_backoff_seconds: float = Field(
         DEFAULT_ERROR_SECONDS,
@@ -232,6 +263,21 @@ class SchedulingConfig(BaseModel):
         gt=0.0,
         description="Ceiling on the doubling wait after repeated failures.",
     )
+    host_join_seconds: float = Field(
+        DEFAULT_JOIN_SECONDS,
+        gt=0.0,
+        description="Seconds a stopping daemon waits for its loop thread before leaving it behind.",
+    )
+
+    @model_validator(mode="after")
+    def _ceiling_is_not_below_the_first_wait(self) -> "SchedulingConfig":
+        """A ceiling under the first wait makes the doubling shrink the wait it is capping."""
+        if self.max_error_backoff_seconds < self.error_backoff_seconds:
+            raise ValueError(
+                "observer.scheduling.max_error_backoff_seconds must be at least "
+                "error_backoff_seconds"
+            )
+        return self
 
 
 class RunnerConfig(BaseModel):

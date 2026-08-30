@@ -68,7 +68,7 @@ from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA
 from auditor.graph.refine.tiers import TierPolicy
 from auditor.graph.refine.verify import FactVerifier, FileFacts, VerifyResult
 from auditor.roles import RoleClassifier
-from auditor.user_settings import LimitsConfig, UserSettings
+from auditor.user_settings import STRANDED_RUNNING_FACTOR, LimitsConfig, UserSettings
 
 #: statuses a hand transition may leave; everything else is terminal (spec 5.4, 5.7)
 _ACCEPT_FROM = frozenset({RefinementStatus.PENDING})
@@ -359,11 +359,19 @@ class RefinementLedger(BaseModel):
         return await self._moved(refinement_id, RefinementStatus.ACTIVE, _ACCEPT_FROM)
 
     async def accept_all(self, refinement_ids: Sequence[int]) -> tuple[int, ...]:
-        """Activate every id that is still `pending`, and answer with the ones that moved."""
+        """Activate every id that is still `pending`, and answer with the ones it asked to move.
+
+        The answer is read before the guarded write, so a row a human moved in between is in it
+        and did not move (L3).
+        """
         return await self._moved_all(refinement_ids, RefinementStatus.ACTIVE)
 
     async def reject_all(self, refinement_ids: Sequence[int]) -> tuple[int, ...]:
-        """Reject every id that is still `pending`, and answer with the ones that moved."""
+        """Reject every id that is still `pending`, and answer with the ones it asked to move.
+
+        Same read-then-guarded-write as :meth:`accept_all`, so the answer is the request and not
+        a count of rows the write actually touched (L3).
+        """
         return await self._moved_all(refinement_ids, RefinementStatus.REJECTED)
 
     async def _moved_all(
@@ -395,7 +403,11 @@ class RefinementLedger(BaseModel):
         return await self._moved(refinement_id, RefinementStatus.PINNED, _PIN_FROM)
 
     async def prune(
-        self, retention_days: int, *, stranded_seconds: int
+        self,
+        retention_days: int,
+        *,
+        stranded_seconds: int,
+        running_factor: float = STRANDED_RUNNING_FACTOR,
     ) -> PruneOutcome:
         """Finish the runs a dead process left open, then drop the assessment-only rows older than
         the retention window, with the rejections they own (spec 5.1, 5.7).
@@ -403,7 +415,7 @@ class RefinementLedger(BaseModel):
         Stranded first: a run left `queued` is not yet a row the retention sweep can see.
         """
         stranded = await self.index.runs.finish_stranded_runs(
-            older_than=stranded_seconds
+            older_than=stranded_seconds, running_factor=running_factor
         )
         swept = await self.index.runs.prune_skipped_runs(retention_days)
         return swept.model_copy(update={"stranded_runs": stranded})
@@ -930,9 +942,11 @@ class RefinementService:
 
     async def prune(self) -> PruneOutcome:
         """The ledger's retention sweep at this user's configured windows (spec 5.1, 5.7)."""
+        limits = self.user.observer.limits
         return await self.ledger.prune(
             self.user.observer.skipped_retention_days,
-            stranded_seconds=self.user.observer.limits.stranded_run_seconds,
+            stranded_seconds=limits.stranded_run_seconds,
+            running_factor=limits.stranded_running_factor,
         )
 
     async def rebuild(self) -> GraphBuildReport:

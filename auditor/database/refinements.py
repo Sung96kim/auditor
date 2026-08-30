@@ -41,11 +41,9 @@ from auditor.graph.refine.models import (
     TuningRow,
     TuningStatus,
 )
+from auditor.user_settings import STRANDED_RUNNING_FACTOR
 
 logger = logging.getLogger(__name__)
-
-#: a `running` row is open for a whole model call, so it gets a longer stranded window (M-9)
-RUNNING_STRANDED_FACTOR = 2.0
 
 
 class NoSuchRun(RuntimeError):
@@ -423,16 +421,20 @@ class RunsDB(BaseDB):
         return Spend(cost_usd=float(row["cost_usd"]), runs=int(row["runs"]))
 
     async def finish_stranded_runs(
-        self, *, older_than: float, now: float | None = None
+        self,
+        *,
+        older_than: float,
+        running_factor: float = STRANDED_RUNNING_FACTOR,
+        now: float | None = None,
     ) -> int:
         """Finish this identity's runs still open after their own window (spec 5.3, 8.5).
 
         Both open statuses, on two windows: a `queued` row is open for milliseconds, while a
-        `running` row is open for a whole model call, so it gets ``RUNNING_STRANDED_FACTOR`` times
-        as long before a live run is stamped under its own runner.
+        `running` row is open for a whole model call, so it gets ``running_factor`` times as long
+        before a live run is stamped under its own runner.
         """
         stamp = time.time() if now is None else now
-        running_than = older_than * RUNNING_STRANDED_FACTOR
+        running_than = older_than * running_factor
         sql = (
             "UPDATE graph_runs SET status = ?, error = ?, finished_at = ? "
             "WHERE repo_identity = ? AND status = ? AND started_at < ?"

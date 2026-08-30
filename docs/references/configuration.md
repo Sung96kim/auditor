@@ -393,7 +393,10 @@ called out below. The rest of the table is the observer daemon's own, read by th
   `auditr graph refinements prune` finishes those as `skipped` with a reason, and so does the
   observer's own session-start build, which is the first pass after a daemon that died mid-run
   comes back. Both open statuses are swept, on two windows: a `queued` row past this many seconds,
-  a `running` row past twice as long, because a `running` row is open for a whole model call.
+  a `running` row past `stranded_running_factor` times as long.
+- `stranded_running_factor` (default `2.0`): how much longer a `running` row is given than a
+  `queued` one before the sweep finishes it, because a `running` row is open for a whole model
+  call. Both callers of the sweep read it; the store itself takes it as a parameter.
 - `max_held_events` (default `500`): events a paused loop holds before the oldest are dropped. The
   spool is drained even while the loop cannot spend, so the batch is assessed when the pause lifts.
 - `max_deferred_pairs` (default `200`): pairs an edit batch's node cap left behind that the loop
@@ -403,6 +406,15 @@ called out below. The rest of the table is the observer daemon's own, read by th
 - `max_queue_rows_per_pass` (default `500`): queue rows one suspect drain reads. The cap only ever
   takes the first `max_nodes_per_run` distinct nodes off the front, so the rest wait for the next
   pass.
+- `max_suppressed_rows` (default `500`): refinement rows one suspect pass reads per marker kind,
+  newest first, to build the set of pairs an in-force `unresolvable` or a `redundant` already
+  answers. The pass runs once a tick, so an unbounded read would decode the ledger that often; a
+  pair whose marker falls past the cap becomes drainable again.
+- `max_feed_events` (default `2000`): events one repo's feed holds before the oldest are dropped.
+  The daemon's drain hands batches over from its own thread, so a loop that stopped taking cannot
+  grow the process without end.
+- `read_fanout` (default `16`): edited files one batch reads and extracts at once. A large batch is
+  read a chunk at a time, so the ladder still yields between chunks.
 
 `observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`) is the quiet window
 the loop collects an edit batch over; the window restarts on every event and the last one wins. It
@@ -448,11 +460,15 @@ The rest of the loop's clocks:
   named no reset instant. When it named one, that instant wins.
 - `auth_pause_minutes` (default `15.0`): how long an auth refusal holds the loop before it re-asks
   the runner. The next run after the hold is the probe, and one that reaches the model clears it.
-- `debounce_restart_cap` (default `5.0`): how many times the quiet window may restart before the
-  batch is taken whatever is still arriving.
+- `debounce_restart_cap` (default `5.0`): quiet windows a batch may keep collecting over, as a
+  multiplier on `debounce_seconds` rather than a whole number of restarts, so `2.5` is two and a
+  half windows. Past it the batch is taken whatever is still arriving.
 - `error_backoff_seconds` (default `5.0`) and `max_error_backoff_seconds` (default `300.0`): a pass
   that raises puts the repo in `paused:error` and its driver waits this long, doubling per
-  consecutive failure up to the ceiling. A pass that finishes clears the count.
+  consecutive failure up to the ceiling. A pass that finishes clears the count. The ceiling is
+  refused if it is below the first wait, which would make the doubling shrink the wait instead.
+- `host_join_seconds` (default `5.0`): how long a stopping daemon waits for the thread its loops
+  run on. A thread stuck inside a subprocess outlives it and is logged and left behind.
 
 `observer.runner` (`RunnerConfig`):
 
