@@ -340,7 +340,7 @@ def repo_page(readers: Readers) -> Callable[[str | None], str]:
     """The page at `/`: the built UI for one repo, or the status document with no bundle (P16)."""
 
     def page(repo: str | None) -> str:
-        """What a caller that named no repo, and has no session to fall back on, still gets."""
+        """Render this repo's document, or an empty one when the query named no repo at all."""
         empty: dict[str, list] = {"nodes": [], "edges": [], "clusters": []}
         return render_app_or_status(readers.graph(Path(repo)).graph if repo else empty)
 

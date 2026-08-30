@@ -29,8 +29,9 @@ Paths are relative to the repo root.
   8.4's "one run per repo, two globally") and `payloads.py`. One rule holds the design together:
   the spool is the truth and the in-memory set is only the wakeup, so `POST /events` writes
   `repos/<key>/spool.jsonl` before it answers 202, the drain takes that file by rename and leaves
-  it staged until its consumer returns, and a daemon killed anywhere in between loses nothing. `auditr_observer.py` is the client, at the repo root outside the
-  package so it never imports `auditor`; `auditr observer` is the same surface as a lazy CLI mount.
+  it staged until its consumer returns, and a daemon killed anywhere in between loses nothing.
+  `auditr_observer.py` is the client, at the repo root outside the package so it never imports
+  `auditor`; `auditr observer` is the same surface as a lazy CLI mount.
 - Everything else at `auditor/` top level is a shared seam, described next.
 - `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagent, hooks,
   statusline, bundled MCP config); `assets/` holds the project icon and the vendored runner marks
