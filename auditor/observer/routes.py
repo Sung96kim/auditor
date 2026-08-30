@@ -1,6 +1,7 @@
 """Spec 12.1's handlers: one route, one payload, one `Reply` (spec 8.1)."""
 
 import asyncio
+import logging
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -37,6 +38,7 @@ from auditor.observer.payloads import (
     RepoPayload,
     ReposPayload,
     RestartAck,
+    RestartRequest,
     RunDetailView,
     RunnerEvalPayload,
     RunsView,
@@ -47,16 +49,38 @@ from auditor.observer.payloads import (
 from auditor.observer.server import Reply
 from auditor.observer.sessions import AttachRequest, Session, SessionBook, SessionRef
 from auditor.paths import identity_key, repo_identity
-from auditor.user_settings import UserSettings
+from auditor.payload import WirePayload
+from auditor.user_settings import UserSettings, load_user_settings
 
 Handler = Callable[["Router", str, Mapping[str, str], bytes], Reply]
 Tag = Callable[["Router", Mapping[str, str]], str]
 Meters = Callable[[], tuple[BudgetPayload | None, RateLimitPayload]]
+Read = Callable[[Path], WirePayload]
+
+_LOG = logging.getLogger("auditor.observer")
+#: what a repo-scoped route answers when the query named no repo, or named a path that is not one
+_NO_REPO = "a repo=<path> naming a directory is required"
 
 
 def _no_meters() -> tuple[BudgetPayload | None, RateLimitPayload]:
     """S8b holds neither number; S8c injects the callable that does (S8c seam 3)."""
     return None, RateLimitPayload()
+
+
+def _no_loop_state(key: str) -> str:
+    """S8b runs no loop, so every repo's state is empty until S8c fills it (S8c seam 2)."""
+    return ""
+
+
+def route_pattern(path: str) -> str:
+    """The one route with a variable segment, matched by shape rather than by regex.
+
+    ``/api/runs/`` with an empty id matches too, and its handler answers the same 404 an
+    unknown id gets.
+    """
+    if path.startswith("/api/runs/") and path.count("/") == 3:
+        return "/api/runs/<id>"
+    return path
 
 
 class DaemonIdentity(BaseModel):
@@ -84,6 +108,7 @@ class Readers:
         self._handles: dict[str, IndexStore] = {}
         self._identities: dict[Path, str] = {}
         self._configs: dict[Path, AuditorSettings] = {}
+        self._users: dict[Path, UserSettings] = {}
         self._lock = threading.Lock()
 
     def identity(self, root: Path, *, identity: str | None = None) -> str:
@@ -116,7 +141,7 @@ class Readers:
         """This repo's own `AuditorSettings`, loaded once and kept (S8c seam 4).
 
         Named `config` rather than `settings` because :attr:`settings` is the user's own layer,
-        which P31 put on this object first.
+        which P31 put on this object first. No S8b caller: S8c's `RepoLoop` is the one.
         """
         with self._lock:
             known = self._configs.get(root)
@@ -124,6 +149,26 @@ class Readers:
             known = load_config(root)
             with self._lock:
                 self._configs[root] = known
+        return known
+
+    def user(self, root: Path) -> UserSettings:
+        """This repo's own `UserSettings`, loaded once and kept.
+
+        The daemon serves many repos and :attr:`settings` is its home-level layer, so a per-repo
+        answer resolves the overlay here; a repo whose settings will not load falls back to it.
+        """
+        with self._lock:
+            known = self._users.get(root)
+        if known is None:
+            try:
+                known = load_user_settings(root)
+            except Exception:  # a repo whose overlay will not load still gets an answer
+                _LOG.exception(
+                    "could not read %s's user settings; using the daemon's", root
+                )
+                known = self.settings
+            with self._lock:
+                self._users[root] = known
         return known
 
     def close(self) -> None:
@@ -141,11 +186,17 @@ class Readers:
         return RunsView(repo=str(root), identity=identity, log=report)
 
     def runs_tag(self, root: Path, *, identity: str | None = None) -> str:
-        """`(count, newest started_at)`: two shipped readers, one decoded row, no new SQL (P14)."""
+        """`(repo, count, newest started_at)`: two shipped readers, one decoded row, no new SQL.
+
+        The repo is in the tag because the page has a switcher: two repos whose counts coincide
+        would otherwise share a tag and the second would 304 on the first one's rows (P14).
+        """
+        identity = self.identity(root, identity=identity)
         index = self.index(root, identity=identity)
         count = asyncio.run(index.runs.count())
         newest = asyncio.run(index.runs.runs(limit=1))
-        return f'W/"{count}-{newest[0].started_at if newest else 0}"'
+        started = newest[0].started_at if newest else 0
+        return f'W/"{identity_key(identity)}-{count}-{started}"'
 
     def graph(self, root: Path, *, identity: str | None = None) -> GraphView:
         identity = self.identity(root, identity=identity)
@@ -166,20 +217,16 @@ class Readers:
         walk = asyncio.run(GraphQuery(self.index(root, identity=identity)).flow(symbol))
         return FlowView(repo=str(root), identity=identity, symbol=symbol, flow=walk)
 
-    def run(
-        self, root: Path, run_id: str, *, identity: str | None = None
+    async def _detail(
+        self, index: IndexStore, root: Path, identity: str, run_id: str
     ) -> RunDetailView | None:
-        """One run in full, or None for an id this repo's ledger does not hold (L-7)."""
-        identity = self.identity(root, identity=identity)
-        index = self.index(root, identity=identity)
-        row = asyncio.run(index.runs.run(run_id))
+        """One run's four reads on one event loop, rather than one loop apiece."""
+        row = await index.runs.run(run_id)
         if row is None:
             return None
-        rows = asyncio.run(index.refinements.of_run(run_id))
-        anchors = asyncio.run(
-            index.refinements.anchors([r.refinement_id for r in rows])
-        )
-        trials = [t for t in asyncio.run(index.tuning.tuning()) if t.run_id == run_id]
+        rows = await index.refinements.of_run(run_id)
+        anchors = await index.refinements.anchors([r.refinement_id for r in rows])
+        trials = [t for t in await index.tuning.tuning() if t.run_id == run_id]
         return RunDetailView(
             repo=str(root),
             identity=identity,
@@ -194,22 +241,30 @@ class Readers:
             trials=tuple(trials),
         )
 
-    def _model_for(self, runner: RunnerKind) -> str:
+    def run(
+        self, root: Path, run_id: str, *, identity: str | None = None
+    ) -> RunDetailView | None:
+        """One run in full, or None for an id this repo's ledger does not hold (L-7)."""
+        identity = self.identity(root, identity=identity)
+        index = self.index(root, identity=identity)
+        return asyncio.run(self._detail(index, root, identity, run_id))
+
+    def _model_for(self, runner: RunnerKind, settings: UserSettings) -> str:
         """The model this runner is pinned to, which `EvalsDB.latest` needs beside the runner."""
-        pinned = self.settings.observer.runner
+        pinned = settings.observer.runner
         if runner is RunnerKind.CODEX and pinned.codex_model:
             return pinned.codex_model
         return pinned.model
 
-    def evals(self, root: Path, *, identity: str | None = None) -> EvalsView:
-        """The latest eval row per runner, with the tier policy that says which strata are proven."""
-        identity = self.identity(root, identity=identity)
-        index = self.index(root, identity=identity)
-        minimum = self.settings.observer.tuning.min_precision
+    async def _runner_evals(
+        self, index: IndexStore, settings: UserSettings
+    ) -> tuple[RunnerEvalPayload, ...]:
+        """Every runner's latest eval on one event loop, with the tier policy behind each."""
+        minimum = settings.observer.tuning.min_precision
         runners: list[RunnerEvalPayload] = []
         for runner in RunnerKind:
-            model = self._model_for(runner)
-            rows = asyncio.run(index.evals.latest(runner, model))
+            model = self._model_for(runner, settings)
+            rows = await index.evals.latest(runner, model)
             if not rows:
                 continue
             policy = TierPolicy.of(
@@ -234,64 +289,80 @@ class Readers:
                     ),
                 )
             )
-        return EvalsView(repo=str(root), identity=identity, runners=tuple(runners))
+        return tuple(runners)
+
+    def evals(self, root: Path, *, identity: str | None = None) -> EvalsView:
+        """The latest eval row per runner, with the tier policy that says which strata are proven.
+
+        The runner and its model come from this repo's own settings: `/api/evals` is a per-repo
+        answer, and the daemon's home-level layer is only the fallback.
+        """
+        identity = self.identity(root, identity=identity)
+        index = self.index(root, identity=identity)
+        runners = asyncio.run(self._runner_evals(index, self.user(root)))
+        return EvalsView(repo=str(root), identity=identity, runners=runners)
+
+    async def _repo_paths(self) -> tuple[str, ...]:
+        """Every repo path the shared index holds; the one place its own row format is read."""
+        index = await open_shared_index()
+        try:
+            return tuple(str(row["repo"]) for row in await index.repos.list())
+        finally:
+            await index.aclose()
 
     def repos(self) -> ReposPayload:
         """Every repo the shared index knows, which is the switcher's list (P32)."""
-        rows = asyncio.run(self._shared_repos())
         return ReposPayload(
             repos=tuple(
                 RepoPayload(
-                    repo=str(row["repo"]),
+                    repo=repo,
                     identity=identity,
                     repo_dir_key=identity_key(identity),
                 )
-                for row, identity in (
-                    (row, self.identity(Path(str(row["repo"])))) for row in rows
+                for repo, identity in (
+                    (repo, self.identity(Path(repo)))
+                    for repo in asyncio.run(self._repo_paths())
                 )
             )
         )
 
-    @staticmethod
-    async def _shared_repos() -> list[dict]:
-        index = await open_shared_index()
-        try:
-            return await index.repos.list()
-        finally:
-            await index.aclose()
+
+class RouterDeps(BaseModel):
+    """Everything one `Router` is built from, in the groups S8c widens (item 3a).
+
+    A model rather than eleven keywords: a seam S8c adds is a field here and a line in `serve`,
+    not a new positional threaded through a procedural assembly.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    #: identity: what `/health` answers and `ensure` compares
+    identity: DaemonIdentity
+    #: state the daemon and the handlers share
+    queue: EventQueue
+    sessions: SessionBook
+    #: reads: the store surface and the page document
+    readers: Readers
+    page: Callable[[str | None], str]
+    #: policy: spec 8.2's attach gate, and how a browser is opened on the page
+    gate: Callable[[AttachRequest], str]
+    open_page: Callable[[str], object]
+    #: what one repo's `RepoLoop` is doing; S8b has no loop, so it answers "" (S8c seam 2)
+    loop_state: Callable[[str], str] = _no_loop_state
+    #: the budget and rate limit meters `/api/status` draws; S8c owns both (S8c seam 3)
+    meters: Meters = _no_meters
 
 
 class Router:
     """Turns one method and path into a `Reply`. Holds no socket and no thread."""
 
     def __init__(
-        self,
-        *,
-        identity: DaemonIdentity,
-        queue: EventQueue,
-        sessions: SessionBook,
-        readers: Readers,
-        page: Callable[[str | None], str],
-        gate: Callable[[AttachRequest], str],
-        open_page: Callable[[str], object],
-        url: str = "",
-        started_at: float = 0.0,
-        loop_state: Callable[[str], str] = lambda key: "",
-        meters: Meters = _no_meters,
+        self, deps: RouterDeps, *, url: str = "", started_at: float = 0.0
     ) -> None:
-        self.identity = identity
-        self.queue = queue
-        self.sessions = sessions
-        self.readers = readers
-        self.page = page
-        self.gate = gate
-        self.open_page = open_page
+        self.deps = deps
+        #: late-bound: the URL is only known once the server has a port
         self.url = url
         self.started_at = started_at or time.time()
-        #: what one repo's `RepoLoop` is doing; S8b has no loop, so it answers "" (S8c seam 2)
-        self.loop_state = loop_state
-        #: the budget and rate limit meters `/api/status` draws; S8c owns both (S8c seam 3)
-        self.meters = meters
         self.revision = 0
         self.restarting = False
         self.opened_page = False
@@ -312,59 +383,64 @@ class Router:
         # answered before the table, because it names no payload (P13); GET alone, so that
         # every other method falls through to the table's JSON 404 rather than the page
         if method == "GET" and parsed.path == "/":
-            return Reply.html(self.page(query.get("repo")))
-        key = (method, self._pattern(parsed.path))
+            return Reply.html(self.deps.page(query.get("repo")))
+        key = (method, route_pattern(parsed.path))
         handler = HANDLERS.get(key)
         if handler is None:
             return Reply.error(404, f"no route for {method} {parsed.path}")
         tag = ""
         if ROUTES[key].etag:
             tag = TAGS[key](self, query)
-            if headers.get("If-None-Match") == tag:
+            if tag and headers.get("If-None-Match") == tag:
                 return Reply(status=304, etag=tag)
         reply = handler(self, parsed.path, query, body)
         return reply.model_copy(update={"etag": tag}) if tag else reply
 
-    @staticmethod
-    def _pattern(path: str) -> str:
-        """The one route with a variable segment, matched by shape rather than by regex.
+    def _root(self, query: Mapping[str, str]) -> Path | None:
+        """The repo this query names, or None when it named none or named a path that is not one.
 
-        ``/api/runs/`` with an empty id matches too, and its handler answers the same 404 an
-        unknown id gets.
+        No fallback: the daemon's inherited cwd is a repo the caller never asked about, and
+        answering from it is item 43's silent substitution.
         """
-        if path.startswith("/api/runs/") and path.count("/") == 3:
-            return "/api/runs/<id>"
-        return path
+        raw = query.get("repo", "")
+        root = Path(raw) if raw else None
+        return root if root is not None and root.is_dir() else None
 
-    def _root(self, query: Mapping[str, str]) -> Path:
-        return Path(query.get("repo") or ".")
+    def _scoped(self, query: Mapping[str, str], read: Read) -> Reply:
+        """One repo-scoped answer, or the 400 a query naming no usable repo earns."""
+        root = self._root(query)
+        if root is None:
+            return Reply.error(400, _NO_REPO)
+        return Reply.json(read(root))
 
-    def status_tag(self, query) -> str:
+    def status_tag(self, query: Mapping[str, str]) -> str:
         """Restart-unique: a page holding a tag from a dead daemon must not get a 304 (P14)."""
         return f'W/"{self.started_at:.0f}-{self.revision}"'
 
-    def runs_tag(self, query) -> str:
-        return self.readers.runs_tag(self._root(query))
+    def runs_tag(self, query: Mapping[str, str]) -> str:
+        """Empty for a query that named no usable repo, so its handler answers the 400."""
+        root = self._root(query)
+        return self.deps.readers.runs_tag(root) if root is not None else ""
 
-    def health(self, path, query, body) -> Reply:
+    def health(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
         return Reply.json(
             HealthPayload(
-                home=str(self.identity.home),
-                db_path=str(self.identity.db_path),
-                version=self.identity.version,
-                compat=self.identity.compat,
+                home=str(self.deps.identity.home),
+                db_path=str(self.deps.identity.db_path),
+                version=self.deps.identity.version,
+                compat=self.deps.identity.compat,
             )
         )
 
-    def api_status(self, path, query, body) -> Reply:
-        budget, limits = self.meters()
+    def api_status(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
+        budget, limits = self.deps.meters()
         payload = StatusPayload(
-            home=str(self.identity.home),
-            version=self.identity.version,
-            compat=self.identity.compat,
+            home=str(self.deps.identity.home),
+            version=self.deps.identity.version,
+            compat=self.deps.identity.compat,
             started_at=self.started_at,
             uptime_seconds=time.time() - self.started_at,
-            queued_repos=self.queue.pending_keys,
+            queued_repos=self.deps.queue.pending_keys,
             sessions=tuple(
                 SessionPayload(
                     session_id=s.session_id,
@@ -373,7 +449,7 @@ class Router:
                     started_at=s.started_at,
                     last_seen=s.last_seen,
                 )
-                for s in self.sessions.live(now=time.time())
+                for s in self.deps.sessions.live(now=time.time())
             ),
             budget=budget,
             limits=limits,
@@ -382,10 +458,10 @@ class Router:
             payload
         )  # the tag was already computed and is attached by `dispatch`
 
-    def api_repos(self, path, query, body) -> Reply:
+    def api_repos(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
         """The switcher's list, with the session and queue columns only the router can fill."""
-        live = self.sessions.live(now=time.time())
-        pending = set(self.queue.keys())
+        live = self.deps.sessions.live(now=time.time())
+        pending = set(self.deps.queue.keys())
         return Reply.json(
             ReposPayload(
                 repos=tuple(
@@ -393,38 +469,46 @@ class Router:
                         update={
                             "attached": any(s.repo == row.repo for s in live),
                             "sessions": sum(1 for s in live if s.repo == row.repo),
-                            "queued_repos": int(row.repo_dir_key in pending),
-                            "state": self.loop_state(row.repo_dir_key),
+                            "queued": row.repo_dir_key in pending,
+                            "state": self.deps.loop_state(row.repo_dir_key),
                         }
                     )
-                    for row in self.readers.repos().repos
+                    for row in self.deps.readers.repos().repos
                 )
             )
         )
 
-    def api_graph(self, path, query, body) -> Reply:
-        return Reply.json(self.readers.graph(self._root(query)))
+    def api_graph(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
+        return self._scoped(query, self.deps.readers.graph)
 
-    def api_runs(self, path, query, body) -> Reply:
-        return Reply.json(self.readers.runs(self._root(query)))
+    def api_runs(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
+        return self._scoped(query, self.deps.readers.runs)
 
-    def api_runs_detail(self, path, query, body) -> Reply:
+    def api_runs_detail(
+        self, path: str, query: Mapping[str, str], body: bytes
+    ) -> Reply:
+        root = self._root(query)
+        if root is None:
+            return Reply.error(400, _NO_REPO)
         run_id = path.rsplit("/", 1)[-1]
-        view = self.readers.run(self._root(query), run_id) if run_id else None
+        view = self.deps.readers.run(root, run_id) if run_id else None
         if view is None:
             return Reply.error(404, f"no run {run_id} in this repo's ledger")
         return Reply.json(view)
 
-    def api_refinements(self, path, query, body) -> Reply:
-        return Reply.json(self.readers.refinements(self._root(query)))
+    def api_refinements(
+        self, path: str, query: Mapping[str, str], body: bytes
+    ) -> Reply:
+        return self._scoped(query, self.deps.readers.refinements)
 
-    def api_evals(self, path, query, body) -> Reply:
-        return Reply.json(self.readers.evals(self._root(query)))
+    def api_evals(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
+        return self._scoped(query, self.deps.readers.evals)
 
-    def api_flow(self, path, query, body) -> Reply:
-        return Reply.json(self.readers.flow(self._root(query), query.get("symbol", "")))
+    def api_flow(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
+        symbol = query.get("symbol", "")
+        return self._scoped(query, lambda root: self.deps.readers.flow(root, symbol))
 
-    def events(self, path, query, body) -> Reply:
+    def events(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
         """Stage 0 through the shape predicate, then spool, then 202. No lock is taken here.
 
         `FileDiscovery(root)` is built with the default excludes, so a repo's configured `exclude`
@@ -441,7 +525,7 @@ class Router:
         finder = FileDiscovery(root)
         kept = tuple(p for p in request.paths if finder.auditable_shape(p))
         if kept:
-            self.queue.put(
+            self.deps.queue.put(
                 request.key,
                 Event(
                     repo=str(root),
@@ -452,16 +536,19 @@ class Router:
                     at=time.time(),
                 ),
             )
+            self.bump()  # the queue filling is one of the counters the page polls (P14)
         return Reply.json(
             EventAck(
                 accepted=len(kept),
                 dropped=len(request.paths) - len(kept),
-                queued_repos=self.queue.pending_keys,
+                queued_repos=self.deps.queue.pending_keys,
             ),
             status=202,
         )
 
-    def sessions_attach(self, path, query, body) -> Reply:
+    def sessions_attach(
+        self, path: str, query: Mapping[str, str], body: bytes
+    ) -> Reply:
         try:
             request = AttachRequest.model_validate_json(body or b"{}")
         except ValidationError as invalid:
@@ -472,23 +559,26 @@ class Router:
             return Reply.json(
                 AttachOutcome(attached=False, reason="the daemon is restarting")
             )
-        reason = self.gate(request)
+        reason = self.deps.gate(request)
         if reason:
             return Reply.json(AttachOutcome(attached=False, reason=reason))
         now = time.time()
-        self.sessions.attach(
+        held = {s.session_id: s for s in self.deps.sessions.live(now=now)}
+        earlier = held.get(request.session_id)
+        self.deps.sessions.attach(
             Session(
                 session_id=request.session_id,
                 repo=request.repo,
-                identity=repo_identity(Path(request.repo)),
+                identity=self.deps.readers.identity(Path(request.repo)),
                 client=request.client,
-                started_at=now,
+                #: a re-attach is the same session, so its age is not reset
+                started_at=earlier.started_at if earlier else now,
                 last_seen=now,
             )
         )
         if not self.opened_page:  # spec 12.1: once per daemon lifetime, on first attach
             self.opened_page = True
-            self.open_page(self.url)
+            self.deps.open_page(self.url)
         self.bump()
         return Reply.json(AttachOutcome(attached=True, page_url=self.url))
 
@@ -501,29 +591,45 @@ class Router:
                 400, f"unusable session body: {invalid.error_count()} problems"
             )
 
-    def sessions_heartbeat(self, path, query, body) -> Reply:
+    def sessions_heartbeat(
+        self, path: str, query: Mapping[str, str], body: bytes
+    ) -> Reply:
         ref = self._session_ref(body)
         if isinstance(ref, Reply):
             return ref
-        known = self.sessions.heartbeat(ref.session_id, now=time.time())
+        known = self.deps.sessions.heartbeat(ref.session_id, now=time.time())
         return Reply.json(
             SessionAck(ok=known, reason="" if known else "no such session")
         )
 
-    def sessions_detach(self, path, query, body) -> Reply:
+    def sessions_detach(
+        self, path: str, query: Mapping[str, str], body: bytes
+    ) -> Reply:
         ref = self._session_ref(body)
         if isinstance(ref, Reply):
             return ref
-        known = self.sessions.detach(ref.session_id)
-        self.bump()  # a session leaving is what the page's badge shows (P14)
+        known = self.deps.sessions.detach(ref.session_id)
+        if known:  # a session leaving is what the page's badge shows; an unknown id is not (P14)
+            self.bump()
         return Reply.json(
             SessionAck(ok=known, reason="" if known else "no such session")
         )
 
-    def admin_restart(self, path, query, body) -> Reply:
+    def admin_restart(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
+        """Spec 8.1's re-exec, asked for by a caller whose wire version this daemon does not speak."""
+        try:
+            request = RestartRequest.model_validate_json(body or b"{}")
+        except ValidationError as invalid:
+            return Reply.error(
+                400, f"unusable restart body: {invalid.error_count()} problems"
+            )
+        if request.compat == self.deps.identity.compat:
+            return Reply.json(
+                RestartAck(restarting=False, reason="the wire is already compatible")
+            )
         self.restarting = True
         self.bump()
-        return Reply.json(RestartAck(restarting=True, reason="wire compat mismatch"))
+        return Reply.json(RestartAck(restarting=True, reason=request.reason))
 
 
 #: the one dispatch table: a route with no handler, or a handler no route reaches, fails a test

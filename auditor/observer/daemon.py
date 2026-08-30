@@ -20,7 +20,7 @@ from auditor.config import is_configured, load_config
 from auditor.graph.viz import render_app_or_status
 from auditor.observer import OBSERVER_API_VERSION
 from auditor.observer.events import Event, EventQueue
-from auditor.observer.routes import DaemonIdentity, Readers, Router
+from auditor.observer.routes import DaemonIdentity, Readers, Router, RouterDeps
 from auditor.observer.scheduling import RunSlots
 from auditor.observer.server import ObserverServer
 from auditor.observer.sessions import AttachRequest, SessionBook, attach_refusal
@@ -220,12 +220,15 @@ class Daemon:
         now: Callable[[], float] = time.time,
         consume: Callable[[str, tuple[Event, ...]], object] | None = None,
         slots: RunSlots | None = None,
+        on_change: Callable[[], object] | None = None,
     ) -> None:
         self.queue = queue
         self.sessions = sessions
         self.idle = idle
         self.now = now
         self.consume = consume or self._count
+        #: what a state change the page can see calls; `serve` passes the router's tag counter
+        self.on_change = on_change or (lambda: None)
         #: spec 8.4's "two globally" is across every loop in one daemon, so the daemon owns it
         self.slots = slots or RunSlots()
         self.drained = 0
@@ -261,7 +264,8 @@ class Daemon:
             # the staged batch is dropped only once its consumer has returned (P26)
             self.queue.consumed(key)
         now = self.now()
-        self.sessions.sweep(now=now)
+        if self.sessions.sweep(now=now):
+            self.on_change()  # an expired session is a badge change the page has to see
         if self.idle.due(now) and not self.sessions.live(now=now):
             self.stopping = True
 
@@ -336,21 +340,23 @@ def serve(settings: UserSettings | None = None) -> int:
     sessions = SessionBook(expiry_minutes=scheduling.session_expiry_minutes)
     idle = IdleTimer(minutes=scheduling.idle_shutdown_minutes, now=time.time())
     router = Router(
-        identity=DaemonIdentity(
-            home=home,
-            db_path=index_db_path(),
-            version=__version__,
-            compat=OBSERVER_API_VERSION,
+        RouterDeps(
+            identity=DaemonIdentity(
+                home=home,
+                db_path=index_db_path(),
+                version=__version__,
+                compat=OBSERVER_API_VERSION,
+            ),
+            queue=queue,
+            sessions=sessions,
+            readers=readers,
+            page=repo_page(readers),
+            gate=repo_gate(home, settings),
+            open_page=open_url if settings.observer.open_browser else lambda url: None,
         ),
-        queue=queue,
-        sessions=sessions,
-        readers=readers,
-        page=repo_page(readers),
-        gate=repo_gate(home, settings),
-        open_page=open_url if settings.observer.open_browser else lambda url: None,
         started_at=time.time(),
     )
-    daemon = Daemon(queue=queue, sessions=sessions, idle=idle)
+    daemon = Daemon(queue=queue, sessions=sessions, idle=idle, on_change=router.bump)
     daemon.adopt_home()
     server = ObserverServer(router.dispatch, port=observer_port())
     router.url = server.url

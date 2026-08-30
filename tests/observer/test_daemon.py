@@ -184,13 +184,17 @@ def test_the_default_consumer_counts_what_it_drained(queue):
     assert daemon.drained == 2
 
 
-def test_a_tick_drops_an_expired_session(queue):
-    """Nothing ticks for expiry, but the daemon's own tick is what actually collects them."""
+def test_a_tick_drops_an_expired_session_and_says_the_badge_moved(queue):
+    """`live` filters on read, so only a second sweep finding nothing proves the tick swept."""
+    changed: list[int] = []
     daemon = _daemon(queue)
+    daemon.on_change = lambda: changed.append(1)
     daemon.sessions.attach(_session())
     daemon.clock["now"] = 45 * 60 + 1
     daemon.tick()
     assert daemon.sessions.live(now=daemon.clock["now"]) == ()
+    assert daemon.sessions.sweep(now=daemon.clock["now"]) == 0
+    assert changed == [1]
 
 
 def test_an_idle_daemon_with_no_live_session_stops(queue):

@@ -19,7 +19,7 @@ def test_the_runs_reader_answers_an_empty_page_and_a_stable_tag(refine_repo: Pat
         assert view.log.runs == ()
         assert view.log.run_count == 0
         first = readers.runs_tag(refine_repo)
-        assert first == 'W/"0-0"'
+        assert first.endswith('-0-0"')
         assert readers.runs_tag(refine_repo) == first
     finally:
         readers.close()
@@ -71,5 +71,33 @@ def test_the_run_detail_reader_answers_the_row_and_none_for_an_id_it_does_not_ho
         assert view.refinements == ()
         assert view.trials == ()
         assert readers.run(refine_repo, "never-recorded") is None
+    finally:
+        readers.close()
+
+
+def test_the_runs_tag_moves_when_a_run_lands(refine_repo: Path):
+    """`/api/runs` is polled every 3 s: a tag that stopped tracking the rows would 304 forever."""
+    readers = Readers(settings=UserSettings())
+    try:
+        identity = repo_identity(refine_repo)
+        empty = readers.runs_tag(refine_repo)
+        index = readers.index(refine_repo, identity=identity)
+        asyncio.run(
+            index.runs.add_run(
+                Run(repo_identity=identity, run_id="r-1", started_at=100.0)
+            )
+        )
+        assert readers.runs_tag(refine_repo) != empty
+    finally:
+        readers.close()
+
+
+def test_two_repos_with_the_same_empty_ledger_do_not_share_a_tag(
+    refine_repo: Path, git_repo: Path
+):
+    """The switcher polls one route for both, so a shared tag 304s repo B onto repo A's rows."""
+    readers = Readers(settings=UserSettings())
+    try:
+        assert readers.runs_tag(refine_repo) != readers.runs_tag(git_repo)
     finally:
         readers.close()

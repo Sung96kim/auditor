@@ -112,8 +112,9 @@ class RepoPayload(WirePayload):
     repo_dir_key: str
     attached: bool = False
     sessions: int = 0
-    #: repos, never events: `EventQueue` holds one pending key per repo (P26)
-    queued_repos: int = 0
+    #: whether this one repo has an unconsumed spool; the counts of repos live on the two payloads
+    #: that really count repos, `StatusPayload` and `EventAck`
+    queued: bool = False
     #: spec 8.3's per-repo state machine; S8b has no loop, so it stays empty until S8c fills it
     state: str = ""
 
@@ -222,6 +223,19 @@ class SessionAck(WirePayload):
 
     ok: bool = False
     reason: str = ""
+
+
+class RestartRequest(BaseModel):
+    """``POST /admin/restart``'s body: the wire version the caller speaks, and why it is asking.
+
+    The caller declares its own ``compat`` so a daemon that already speaks it can decline rather
+    than re-exec on any local process's say-so.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    compat: int
+    reason: str = "wire compat mismatch"
 
 
 class RestartAck(WirePayload):

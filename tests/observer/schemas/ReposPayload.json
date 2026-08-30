@@ -12,10 +12,10 @@
           "title": "Identity",
           "type": "string"
         },
-        "queued_repos": {
-          "default": 0,
-          "title": "Queued Repos",
-          "type": "integer"
+        "queued": {
+          "default": false,
+          "title": "Queued",
+          "type": "boolean"
         },
         "repo": {
           "title": "Repo",

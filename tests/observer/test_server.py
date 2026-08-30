@@ -9,9 +9,17 @@ import time
 
 import pytest
 
+from auditor.graph.payloads import RunRowPayload
 from auditor.graph.refine.lock import rebuild_lock
+from auditor.graph.refine.models import (
+    ClientKind,
+    ProducerKind,
+    RunnerKind,
+    RunStatus,
+    TriggerKind,
+)
 from auditor.observer.events import MAX_EVENT_PATHS
-from auditor.observer.payloads import ROUTES, StatusPayload
+from auditor.observer.payloads import ROUTES, RunDetailView, StatusPayload
 from auditor.observer.routes import HANDLERS, TAGS
 from auditor.observer.server import MAX_BODY_BYTES, _Handler, loopback_host
 
@@ -112,10 +120,14 @@ def test_the_page_is_served_outside_the_api_table(daemon_server):
     assert "observer" in body
 
 
-def test_events_answers_202_while_a_rebuild_holds_the_identity_lock(
-    daemon_server, tmp_path, monkeypatch
+def test_events_spools_and_answers_202_without_waiting_on_the_rebuild_lock(
+    daemon_server, daemon_router, tmp_path, monkeypatch
 ):
-    """Spec 20's spike: `POST /events` takes no lock, so a rebuild cannot stall a hook."""
+    """Spec 20's spike: `POST /events` takes no lock, so a rebuild cannot stall a hook.
+
+    The discriminators are the elapsed time and the spool landing on disk while the rebuild
+    still holds the lock; `Router.events` consults no lock on any path, by design.
+    """
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path / "home"))
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("x = 1\n")
@@ -145,6 +157,8 @@ def test_events_answers_202_while_a_rebuild_holds_the_identity_lock(
     assert status == 202
     assert body == {"accepted": 1, "dropped": 0, "queued_repos": 1}
     assert elapsed < 1.0
+    assert daemon_router.deps.queue.keys() == (_KEY,)
+    assert (tmp_path / "repos" / _KEY / "spool.jsonl").exists()
 
 
 def test_events_mirrors_stage_0_and_still_admits_a_deleted_path(
@@ -178,19 +192,34 @@ def test_the_runs_etag_is_stable_and_a_repeat_poll_gets_304(daemon_server, tmp_p
     assert again == 304
 
 
-def test_a_conditional_get_answers_304_without_running_the_query(
-    daemon_server, readers
+def test_a_conditional_get_answers_304_without_running_the_page_query(
+    daemon_server, readers, tmp_path
 ):
-    """The tag exists to avoid `LogQuery.page`, so a 304 must not pay for one (P14)."""
+    """The tag exists to avoid `LogQuery.page`, so a 304 must not pay for one (P14).
+
+    The tag's own two reads are paid on every poll; what P14 buys is skipping the page query,
+    which is the larger of the two.
+    """
     _, call = daemon_server
-    first, headers, _ = call.request("GET", "/api/runs?repo=/r")
+    first, headers, _ = call.request("GET", f"/api/runs?repo={tmp_path}")
     assert first == 200
-    assert readers.page_calls == 1
+    assert (readers.page_calls, readers.tag_calls) == (1, 1)
     again, _, _ = call.request(
-        "GET", "/api/runs?repo=/r", headers={"If-None-Match": headers["ETag"]}
+        "GET",
+        f"/api/runs?repo={tmp_path}",
+        headers={"If-None-Match": headers["ETag"]},
     )
     assert again == 304
-    assert readers.page_calls == 1
+    assert readers.page_calls == 1  # the page query is what the 304 skips
+    assert readers.tag_calls == 2  # the tag itself is still paid for, once per poll
+    readers.rows += 1  # a run lands, so the tag moves and the page is served again
+    moved, _, _ = call.request(
+        "GET",
+        f"/api/runs?repo={tmp_path}",
+        headers={"If-None-Match": headers["ETag"]},
+    )
+    assert moved == 200
+    assert readers.page_calls == 2
 
 
 def test_the_status_tag_does_not_survive_a_restart(daemon_server, daemon_router):
@@ -223,7 +252,7 @@ def test_the_status_body_names_only_what_this_slice_fills(daemon_server):
 
 
 def test_a_reader_that_raises_is_a_json_500_not_a_dropped_connection(
-    daemon_server, readers
+    daemon_server, readers, tmp_path
 ):
     """`socketserver` closes the connection with no answer, and the traceback goes nowhere (P30)."""
 
@@ -232,7 +261,7 @@ def test_a_reader_that_raises_is_a_json_500_not_a_dropped_connection(
 
     readers.runs_tag = boom
     _, call = daemon_server
-    status, _, body = call.request("GET", "/api/runs?repo=/r")
+    status, _, body = call.request("GET", f"/api/runs?repo={tmp_path}")
     assert status == 500
     assert "GET /api/runs" in body["error"]
 
@@ -268,20 +297,47 @@ def test_a_path_set_over_the_cap_is_a_400(daemon_server, tmp_path):
     assert "unusable event body" in body["error"]
 
 
-def test_an_unknown_run_id_is_a_json_404(daemon_server):
-    """`/api/runs/` with no id and an id the ledger never held answer the same way."""
+def test_an_unknown_run_id_is_a_json_404(daemon_server, tmp_path):
+    """The no-route 404 also carries the id, so only the exact body pins the route itself."""
     _, call = daemon_server
-    status, _, body = call.request("GET", "/api/runs/nope")
+    status, _, body = call.request("GET", f"/api/runs/nope?repo={tmp_path}")
     assert status == 404
-    assert "nope" in body["error"]
-    assert call.request("GET", "/api/runs/")[0] == 404
+    assert body == {"error": "no run nope in this repo's ledger"}
+    assert call.request("GET", f"/api/runs/?repo={tmp_path}")[0] == 404
 
 
-def test_a_detach_bumps_the_revision_so_the_badge_moves(daemon_server, daemon_router):
-    """P14 says the counter moves on attach, detach and restart; detach was the unpinned one."""
+def test_a_known_run_id_answers_the_run_detail(daemon_server, readers, tmp_path):
+    """No test got a 200 here, so the route could be deleted with the whole suite green."""
+    readers.detail = RunDetailView(
+        repo=str(tmp_path),
+        identity="id",
+        run=RunRowPayload(
+            run_id="r-1",
+            status=RunStatus.SUCCEEDED,
+            producer=ProducerKind.OBSERVER,
+            client=ClientKind.CLAUDE_CODE,
+            runner=RunnerKind.CLAUDE,
+            trigger_kind=TriggerKind.EDIT,
+        ),
+        prompt="the brief",
+    )
     _, call = daemon_server
+    status, _, body = call.request("GET", f"/api/runs/r-1?repo={tmp_path}")
+    assert status == 200
+    assert body["run"]["run_id"] == "r-1"
+    assert body["prompt"] == "the brief"
+
+
+def test_a_detach_bumps_the_revision_only_for_a_session_the_daemon_held(
+    daemon_server, daemon_router
+):
+    """P14 says the counter moves on a session leaving; a hook spamming detach must not move it."""
+    _, call = daemon_server
+    call.request("POST", "/sessions/attach", {"repo": "/r", "session_id": "s1"})
     before = daemon_router.revision
     call.request("POST", "/sessions/detach", {"session_id": "nobody"})
+    assert daemon_router.revision == before
+    call.request("POST", "/sessions/detach", {"session_id": "s1"})
     assert daemon_router.revision == before + 1
 
 
@@ -310,7 +366,9 @@ def test_attach_answers_the_three_fields_and_names_a_refusal(
         "POST", "/sessions/attach", {"repo": "/r", "session_id": "s1"}
     )
     assert body == {"attached": True, "reason": "", "page_url": daemon_router.url}
-    daemon_router.gate = lambda request: "the repo is not configured for auditor"
+    daemon_router.deps = daemon_router.deps.model_copy(
+        update={"gate": lambda request: "the repo is not configured for auditor"}
+    )
     _, _, refused = call.request(
         "POST", "/sessions/attach", {"repo": "/r", "session_id": "s2"}
     )
@@ -333,7 +391,7 @@ def test_a_heartbeat_for_an_unknown_session_is_answered_not_raised(daemon_server
 def test_a_restart_refuses_the_next_attach_so_ensure_returns_at_once(daemon_server):
     """Spec 8.1: `ensure` returns immediately and the next `ensure` attaches (recon Q8)."""
     _, call = daemon_server
-    _, _, body = call.request("POST", "/admin/restart")
+    _, _, body = call.request("POST", "/admin/restart", {"compat": 99})
     assert body == {"restarting": True, "reason": "wire compat mismatch"}
     _, _, attach = call.request(
         "POST", "/sessions/attach", {"repo": "/r", "session_id": "s1"}
@@ -484,3 +542,81 @@ def test_a_spool_key_cannot_escape_the_home(daemon_server, tmp_path):
     assert status == 400
     assert "unusable event body" in body["error"]
     assert not (tmp_path / "PWNED").exists()
+
+
+@pytest.mark.parametrize(
+    "route", ["/api/repos", "/api/graph", "/api/refinements", "/api/evals", "/api/flow"]
+)
+def test_every_read_route_answers_the_payload_its_route_spec_names(
+    daemon_server, tmp_path, route
+):
+    """Four handlers could be repointed at `api_repos` with the whole suite green (H7)."""
+    _, call = daemon_server
+    status, _, body = call.request("GET", f"{route}?repo={tmp_path}&symbol=x")
+    assert status == 200
+    payload = ROUTES[("GET", route)].payload
+    assert json.loads(payload.model_validate(body).model_dump_json()) == body
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/api/graph",
+        "/api/runs",
+        "/api/runs/r-1",
+        "/api/refinements",
+        "/api/evals",
+        "/api/flow",
+    ],
+)
+def test_a_repo_scoped_route_refuses_to_answer_from_the_daemons_cwd(
+    daemon_server, route
+):
+    """`Path(query.get("repo") or ".")` answered every one of these from the daemon's own cwd."""
+    _, call = daemon_server
+    absent, _, body = call.request("GET", route)
+    assert absent == 400
+    assert body == {"error": "a repo=<path> naming a directory is required"}
+    assert call.request("GET", f"{route}?repo=")[0] == 400
+    assert call.request("GET", f"{route}?repo=/nope-xyz")[0] == 400
+
+
+def test_an_event_bumps_the_revision_so_the_queue_count_is_pollable(
+    daemon_server, daemon_router, tmp_path
+):
+    """`queued_repos` is one of the seven fields this slice fills, and the tag hid every change."""
+    (tmp_path / "src").mkdir()
+    _, call = daemon_server
+    before = daemon_router.revision
+    call.request(
+        "POST",
+        "/events",
+        {"repo": str(tmp_path / "src"), "key": _KEY, "paths": ["a.py"]},
+    )
+    assert daemon_router.revision == before + 1
+
+
+def test_a_restart_a_compatible_caller_asks_for_is_declined(
+    daemon_server, daemon_router
+):
+    """The route had no model behind it, so any local process could re-exec the daemon (M10)."""
+    _, call = daemon_server
+    status, _, body = call.request("POST", "/admin/restart", {"compat": 1})
+    assert status == 200
+    assert body == {"restarting": False, "reason": "the wire is already compatible"}
+    assert daemon_router.restarting is False
+    bad, _, refused = call.request("POST", "/admin/restart", {"compat": "not a number"})
+    assert bad == 400
+    assert "unusable restart body" in refused["error"]
+    assert daemon_router.restarting is False
+
+
+def test_a_re_attach_keeps_the_session_it_already_had(daemon_server, daemon_router):
+    """A second attach for one id is the same session, so its age must not restart (L3)."""
+    _, call = daemon_server
+    call.request("POST", "/sessions/attach", {"repo": "/r", "session_id": "s1"})
+    first = daemon_router.deps.sessions.live(now=time.time())[0]
+    call.request("POST", "/sessions/attach", {"repo": "/r", "session_id": "s1"})
+    again = daemon_router.deps.sessions.live(now=time.time())[0]
+    assert again.started_at == first.started_at
+    assert again.last_seen >= first.last_seen
