@@ -24,7 +24,8 @@ Paths are relative to the repo root.
 - `auditor/observer/` holds the change assessment: `assess.py` classifies an edit batch against the
   graph, `budget.py` turns a window's spend into day-ceiling state. Both are pure, and no shipped
   command calls them yet. `auditr_observer.py` is the client, at the repo root outside the package
-  so it never imports `auditor`; every subcommand reports that the observer is not in this release.
+  so it never imports `auditor`; every subcommand reports that the observer is not in this release
+  and exits 0.
 - Everything else at `auditor/` top level is a shared seam, described next.
 - `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagent, hooks,
   statusline, bundled MCP config); `assets/` holds the project icon and the vendored runner marks
@@ -288,8 +289,9 @@ flowchart TB
   `plugin/.mcp.json` (a `uvx`-launched `auditr-mcp`). `plugin/settings.json` wires the status line
   and `plugin/hooks/hooks.json` the three stdlib hooks (`session_start.py`, `audit_edit.py`,
   `verify_stop.py`).
-- `plugin/statusline/auditor_status.py` replicates the root walk and the repo-dir hash in stdlib
-  only, then reads the `scan` block of `$AUDITOR_HOME/repos/<key>/status.json`.
+- `plugin/statusline/auditor_status.py` re-implements `discovery.find_root`, `paths.repo_identity`,
+  `paths.repo_dir_key` and `paths.auditor_home` in stdlib only, then reads the `scan` block of
+  `$AUDITOR_HOME/repos/<key>/status.json`. `tests/plugin/test_statusline.py` pins each pair.
 
 ## Cross-cutting behavior
 
@@ -309,6 +311,10 @@ flowchart TB
 - The version bump is one `BEGIN IMMEDIATE` transaction in a fixed order: reconcile the identity
   tables, drop the cache tables, create what is missing, stamp `user_version` last. A declaration
   that cannot land leaves the stored version and every cached row untouched.
+- A stored version of 0 on a database that already has cache tables is a lost stamp, not a fresh
+  database, so it rebuilds like any other mismatch. Only an empty file skips the sweep.
+- A downgrade leaves the identity tables intact but unreferenced; `graph build --rebuild` clears
+  cached facts and never touches them.
 - The identity tables key on `repo_identity` (the resolved git common dir), not on the partition,
   so every worktree of a checkout shares them and `index forget` cannot cascade into them.
 - Repo-local state: `<repo>/.auditor/` holds authored input only (`config.toml`, `plugins/`, a

@@ -43,9 +43,9 @@ pnpm --dir auditor/graph/ui run build       # rebuild the committed dist/index.h
   run constantly and `import auditor` costs about 0.23 s. It shares only the
   `OBSERVER_API_VERSION` literal with `auditor/observer/`, and a test pins the pair.
 - `plugin/` is stdlib-only and imports nothing from `auditor`; it drives the installed `auditr`.
-  `plugin/statusline/auditor_status.py` re-implements `discovery.find_root`, `paths.repo_identity`,
-  `paths.repo_dir_key` and `paths.auditor_home` by hand, and `tests/plugin/test_statusline.py`
-  pins each pair; change one side and change the other.
+  `plugin/statusline/auditor_status.py` hand-re-implements package helpers that
+  `tests/plugin/test_statusline.py` pins; change one side and change the other.
+  [docs/architecture.md](docs/architecture.md) names them.
 - `tests/fixtures/` holds fixture repos whose anti-patterns are intentional, so ruff and pytest
   collection both exclude it.
 
@@ -61,7 +61,8 @@ pnpm --dir auditor/graph/ui run build       # rebuild the committed dist/index.h
   `__init__.py` imports its modules purely for that side effect (F401 is waived there).
 - Suppress a finding you have judged in source: `# auditor: skip: RULE-ID` on the offending line,
   or `# auditor: skip-file: RULE-ID`, each with a short parenthetical reason.
-- Comment blocks stay under the `PY-STYLE-LONG-COMMENT` floor of 3 prose lines.
+- Comment blocks stay under the `PY-STYLE-LONG-COMMENT` floor of 3 prose lines, and only where the
+  code is not self-evident.
 
 ## Testing conventions
 

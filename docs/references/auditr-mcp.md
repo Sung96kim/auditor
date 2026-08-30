@@ -87,7 +87,9 @@ args = ["run", "-i", "--rm",
 - Audit: `scan` (a file or directory), `report` (one file, stateless), `manifest` (a Python file's
   AST manifest, no detectors), `discover` (auditable files with their classified role), `aggregate`
   (roll the incremental index into `AUDIT.md`), `finding_detail` (one finding's full record).
-- Rules and suppressions: `rules_list`, `ignore_add`, `ignore_list`, `ignore_remove`.
+- Rules and suppressions: `rules_list` (filter by `category`, `standard` or `framework`; `root`
+  picks the repo whose trusted plugins load, and every row carries the `source` it was registered
+  from, as in [rules.md](rules.md)), `ignore_add`, `ignore_list`, `ignore_remove`.
 - Malware backends: `malware_status`, `malware_update_dbs`, `malware_install`. Only the last two
   touch the network, and only when called.
 - Semantic graph, always registered because the graph libraries are core dependencies:
@@ -180,7 +182,10 @@ args = ["run", "-i", "--rm",
 - A response-limiting middleware caps any single tool response at 500,000 bytes as a backstop.
   Resource reads, where the full artifacts live, are never truncated.
 - A second middleware notes the config keys no model declares on stderr, once per repo the server
-  is asked about. It never writes to stdout, where the protocol lives, and never fails a tool call.
+  is asked about. It reads that repo from the call's own `path`, `file` or `root` argument, most
+  specific first, so it is skipped for the tools that declare none of the three (`malware_status`,
+  `malware_install`). It never writes to stdout, where the protocol lives, and never fails a tool
+  call.
 - The CLI's own JSON (`auditr scan -f json`) is unaffected by any of this.
 
 ## Code mode

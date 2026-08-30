@@ -51,7 +51,8 @@ auditr graph export . --format dot > graph.dot
 - `--rebuild` discards the cached graph facts and re-extracts from scratch. Facts are keyed by file
   content, so an extractor change does not invalidate facts already cached under the same hash; run
   `--rebuild` after upgrading auditor. It is refused with `--no-scan`, which would leave nothing to
-  build from.
+  build from. One lock hold covers the clear, the rescan and the build, so no other build can see
+  the half-rescanned graph.
 - Routine staleness needs neither flag: the default auto-scan already picks up edited files.
 - Setting `enabled = true` under `[tool.auditor.graph]` also makes a plain `auditr scan -i` populate
   graph facts. See [configuration.md](configuration.md).
@@ -101,7 +102,8 @@ auditr graph flow auditor/models.py::Finding . --kinds inherits --expand-hubs
 ```
 
 - Outward it follows `calls` and `callback_arg`. `--in` reverses that: what reaches the symbol.
-- The start symbol always expands, however wide it is. Hub collapsing applies to what it reaches.
+- The start symbol always expands, however wide it is; a bare name resolves there the same way
+  `usages` resolves one. Hub collapsing applies to what it reaches.
 - A reached method with overriders expands each overrider as `dispatches_to`, so a call to a base
   method shows the implementations it can land in. `--in` walks the other way.
 - A symbol registered in a registry module shows that module as a leaf. `--in` on the registry
@@ -169,6 +171,10 @@ auditr graph unresolved . --json --limit 500
   dropped when the node already has an edge of that kind to the same short name, and a name the
   function itself binds (any parameter form, a nested `def`/`class`/lambda, an `except ... as`
   target, a local import, an assignment) never produces a bare row.
+- A `typed_call` row survives only when the receiver's declared type is a repo class whose whole
+  base chain resolves in-repo, so `str.lower`, `Path.mkdir` and pydantic receivers never appear. A
+  receiver known not to be a repo class also removes the plain attribute row for that call: the
+  call is settled, and the same-named repo function is not what it calls.
 - `call_form` is `self` only for a direct `self.method()` or `cls.method()`. A chained
   `self.dep.method()` is `attr` with a receiver root of `self`. A name called both bare and through
   a receiver in the same function gets one row, in whichever form a reader can settle from one file.
@@ -358,9 +364,11 @@ auditr graph log --skipped
 
 - `--runs` (the default) shows one row per decision, with `n`, the number of refinement rows that
   run owns; `--refinements` shows the corrections themselves. Both are newest first, which is the
-  opposite of the order a build applies them in.
-- The `summary` column splits that count for a finished run ("1 committed, 0 rejected"), because a
-  run is not credited with the proposals it refused. An aborted run shows its reason there instead.
+  opposite of the order a build applies them in. A run stays `queued` until it finishes: nothing
+  writes `running` yet.
+- The `summary` column is the model's own one-line answer when it gave one. Without one it splits
+  that count for a finished run ("1 committed, 0 rejected"), because a run is not credited with the
+  proposals it refused. An aborted run shows its reason there instead.
 - `--status` is validated against whichever view is showing, so a run status in the refinements
   view is an error naming the valid set, not an empty page.
 - `--since` takes a duration (`90s`, `45m`, `2h`, `7d`) or an ISO date (`2026-08-20`,

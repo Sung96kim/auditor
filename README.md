@@ -46,7 +46,15 @@ pip install "auditr[mcp,ts]"      # or into the active environment
   and `auditor-mcp` as aliases.
 - Extras gate features: `mcp` for the MCP server, `ts` for TypeScript/React (tree-sitter),
   `observer-claude` for `auditr graph refine` and `auditr graph eval`, `code-mode` for sandboxed
-  tool orchestration. The semantic graph needs no extra.
+  tool orchestration.
+- `observer-claude` pulls `claude-agent-sdk`, which bundles its own 342 MB `claude` binary.
+  `observer` is the superset: it adds the Codex SDK and enables `graph refine` the same way.
+- `observer-codex` pulls the Codex SDK and nothing imports it: `graph refine --runner codex` is
+  refused. See [graph](docs/references/graph.md).
+- `vectors` pulls `sqlite-vec` and `model2vec` and nothing reads it; `model2vec` also needs one
+  online model fetch. See [configuration](docs/references/configuration.md).
+- `graph` is an empty alias, kept so an existing `auditr[graph]` command or `uv tool` receipt keeps
+  resolving; the graph libraries are core dependencies, about 175 MB of every install.
 - <img src="assets/claude-color.svg" height="16" alt="Claude"> Claude Code plugin:
   `claude plugin marketplace add Sung96kim/auditor`, then `/plugin install auditor` in a session.
   See [claude-code-plugin](docs/references/claude-code-plugin.md).
@@ -60,8 +68,8 @@ uv sync --extra dev --extra mcp --extra ts    # what CI installs
 uv run auditr scan .                          # run the working tree
 ```
 
-- Never `--all-extras`: it adds the `observer-*` and `vectors` SDK wheels, about 640 MB nothing in
-  the suite imports.
+- Never `--all-extras`: it adds the `observer-*` and `vectors` SDK wheels, about 640 MB that nothing
+  in the suite imports.
 - `uv tool install .` puts the checkout on PATH.
 
 ### Containers
@@ -125,29 +133,46 @@ uv run pytest tests/malware/test_integration.py -v   # the second CI job; needs 
 
 ## Docs
 
+### Orientation
+
 | I want to | Page | Covers |
 | --- | --- | --- |
-| **Orientation** | | |
 | Understand how the pieces fit | [Architecture](docs/architecture.md) | Modules, seams, pipelines |
 | Configure a repo or my account | [Configuration](docs/references/configuration.md) | Config files, env vars, defaults |
-| **Auditing** | | |
+
+### Auditing
+
+| I want to | Page | Covers |
+| --- | --- | --- |
 | Audit a repo or gate CI | [scan](docs/references/scan.md) | Scoping, filters, gating, baselines |
 | Audit one file | [report](docs/references/report.md) | Stateless audit, JSON shape |
 | See a file's structure | [manifest](docs/references/manifest.md) | AST class+function manifest |
 | See what a scan would cover | [discover](docs/references/discover.md) | Discovery defaults, roles |
 | Produce a repo-wide rollup | [aggregate](docs/references/aggregate.md) | Index rollup, AUDIT.md |
 | Recompute repo-level findings | [crossfile](docs/references/crossfile.md) | Duplicates, dead code, cohesion |
-| **State, policy and rules** | | |
+
+### State, policy and rules
+
+| I want to | Page | Covers |
+| --- | --- | --- |
 | Manage the shared cache | [index](docs/references/index.md) | Audit scope, partitions, pruning |
 | Suppress a finding | [ignore](docs/references/ignore.md) | Ignore scopes, skip directives |
 | See which config layer won | [config](docs/references/config.md) | Layering, profiles, validation |
 | Set up the user config home | [init](docs/references/init.md) | `$AUDITOR_HOME`, overlays, checks |
 | Look up a rule | [rules](docs/references/rules.md) | Rule ids, categories, verdicts |
 | Add or debug a plugin | [plugins](docs/references/plugins.md) | Discovery, trust, contract |
-| **Graph and supply chain** | | |
+
+### Graph and supply chain
+
+| I want to | Page | Covers |
+| --- | --- | --- |
 | Query the semantic code graph | [graph](docs/references/graph.md) | Build, queries, flow, refinement |
 | Scan for malware and advisories | [malware](docs/references/malware.md) | ClamAV, osv-scanner, databases |
-| **Integrations** | | |
+
+### Integrations
+
+| I want to | Page | Covers |
+| --- | --- | --- |
 | Drive the auditor from an agent | [auditr-mcp](docs/references/auditr-mcp.md) | MCP tools, compact payloads |
 | Use it inside Claude Code | [claude-code-plugin](docs/references/claude-code-plugin.md) | Skills, subagent, hooks |
 | Call it from Python | [Python API](docs/references/python-api.md) | Entry points, models, index |
