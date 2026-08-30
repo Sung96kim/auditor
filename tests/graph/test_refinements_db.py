@@ -1015,16 +1015,32 @@ def test_deferred_pairs_counts_the_pairs_the_cap_left_behind():
     )
 
 
-def test_an_older_assessment_row_with_an_integer_count_still_decodes():
-    """`deferred_pairs` was a stored int in S8a; a row that still carries one must not raise."""
+def test_an_older_assessment_row_keeps_the_count_it_stored_as_an_integer():
+    """`deferred_pairs` was a stored int in S8a; the page must not read that row as a zero."""
     stored = {
         "files": ["a.py"],
         "deferred_pairs": 5,
         "verdict": {"decision": "skip", "reason": "no new questions"},
     }
     assessment = Assessment.model_validate(stored)
-    assert assessment.deferred == ()
-    assert assessment.deferred_pairs == 0
+    assert assessment.deferred_pairs == 5
+    assert dict(stored)["deferred_pairs"] == 5  # the caller's payload was not popped
+
+
+async def test_a_guarded_status_move_leaves_a_row_the_guard_does_not_name(
+    refined_facts_store,
+):
+    """L7: the batched doors read then write, so the transition itself has to name its source."""
+    store, rid = refined_facts_store.store, refined_facts_store.refinement_id
+    await store.refinements.set_statuses([rid], RefinementStatus.REVERTED)
+    await store.refinements.set_statuses(
+        [rid], RefinementStatus.ACTIVE, from_status=RefinementStatus.PENDING
+    )
+    assert (await store.refinements.refinement(rid)).status is RefinementStatus.REVERTED
+    await store.refinements.set_statuses(
+        [rid], RefinementStatus.ACTIVE, from_status=RefinementStatus.REVERTED
+    )
+    assert (await store.refinements.refinement(rid)).status is RefinementStatus.ACTIVE
 
 
 def test_a_trigger_detail_carries_the_pairs_a_targeted_run_works_on():

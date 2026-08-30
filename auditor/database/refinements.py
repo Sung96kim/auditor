@@ -37,6 +37,7 @@ from auditor.graph.refine.models import (
     RunUsage,
     Spend,
     TriggerDetail,
+    TriggerKind,
     TuningRow,
     TuningStatus,
 )
@@ -302,6 +303,19 @@ class RunsDB(BaseDB):
                 continue
             out.update(detail.targets)
         return frozenset(out)
+
+    async def opened_since(self, trigger: TriggerKind, since: float) -> int:
+        """How many runs of this trigger this identity opened since ``since`` (spec 8.3).
+
+        One aggregate rather than a filter on :meth:`runs`, which decodes rows for a count: the
+        verify pass asks this once a tick and needs a number, not a page.
+        """
+        row = await self._fetch_one_by_identity(
+            "SELECT COUNT(*) AS n FROM graph_runs "
+            "WHERE repo_identity = ? AND trigger_kind = ? AND started_at >= ?",
+            (trigger.value, since),
+        )
+        return int(row["n"]) if row else 0
 
     async def record_prompt(
         self, run_id: str, *, prompt: str, system_prompt_sha: str
@@ -615,6 +629,7 @@ class RefinementsDB(BaseDB):
         statuses: Sequence[RefinementStatus] | None,
         kinds: Sequence[RefinementKind] | None,
         since: float | None,
+        ids: Sequence[int] | None = None,
     ) -> tuple[str, list[Any]]:
         """The WHERE tail a page and its total share, so the two cannot narrow differently."""
         sql = ""
@@ -625,6 +640,10 @@ class RefinementsDB(BaseDB):
         if kinds:
             sql += _in_clause("kind", kinds)
             params += [k.value for k in kinds]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            sql += f" AND refinement_id IN ({placeholders})"  # noqa: S608  (placeholders only)
+            params += list(ids)
         if since is not None:
             sql += " AND created_at >= ?"
             params.append(since)
@@ -652,6 +671,7 @@ class RefinementsDB(BaseDB):
         statuses: Sequence[RefinementStatus] | None = None,
         kinds: Sequence[RefinementKind] | None = None,
         since: float | None = None,
+        ids: Sequence[int] | None = None,
         newest_first: bool = False,
         limit: int | None = None,
     ) -> list[Refinement]:
@@ -661,7 +681,7 @@ class RefinementsDB(BaseDB):
         Newest first orders on ``created_at`` before the id, because ``since`` filters on
         ``created_at``: a backdated row would otherwise page ahead of rows inside the window.
         """
-        where, params = self._filter(statuses, kinds, since)
+        where, params = self._filter(statuses, kinds, since, ids)
         sql = f"SELECT * FROM graph_refinements WHERE repo_identity = ?{where}"  # noqa: S608
         sql += (
             " ORDER BY created_at DESC, refinement_id DESC"
@@ -766,23 +786,27 @@ class RefinementsDB(BaseDB):
         refinement_ids: Sequence[int],
         status: RefinementStatus,
         *,
+        from_status: RefinementStatus | None = None,
         now: float | None = None,
     ) -> None:
         """Move several refinements to one status as a single write.
 
         A commit whose build failed takes its own inserts back; doing it row by row would leave a
-        window where half of them are still live.
+        window where half of them are still live. ``from_status`` makes the move conditional, so
+        a row a human changed under the caller keeps the status the human gave it.
         """
         if not refinement_ids:
             return
         stamp = time.time() if now is None else now
         identity = self.partition.identity
-        binds = [(status.value, stamp, rid, identity) for rid in refinement_ids]
+        guard = " AND status=?" if from_status is not None else ""
+        tail = (from_status.value,) if from_status is not None else ()
+        binds = [(status.value, stamp, rid, identity, *tail) for rid in refinement_ids]
 
         def op(conn: sqlite3.Connection) -> None:
             conn.executemany(
                 "UPDATE graph_refinements SET status=?, status_at=? "
-                "WHERE refinement_id=? AND repo_identity=?",
+                f"WHERE refinement_id=? AND repo_identity=?{guard}",  # noqa: S608
                 binds,
             )
             conn.commit()

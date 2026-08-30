@@ -359,19 +359,33 @@ class RefinementLedger(BaseModel):
         return await self._moved(refinement_id, RefinementStatus.ACTIVE, _ACCEPT_FROM)
 
     async def accept_all(self, refinement_ids: Sequence[int]) -> tuple[int, ...]:
-        """Activate every id that is still `pending`, and answer with the ones that moved.
+        """Activate every id that is still `pending`, and answer with the ones that moved."""
+        return await self._moved_all(refinement_ids, RefinementStatus.ACTIVE)
 
-        The batched twin of :meth:`accept`, guarded the same way: a row a human reverted or pinned
-        between the caller's read and this write keeps the status the human gave it (spec 10.3).
+    async def reject_all(self, refinement_ids: Sequence[int]) -> tuple[int, ...]:
+        """Reject every id that is still `pending`, and answer with the ones that moved."""
+        return await self._moved_all(refinement_ids, RefinementStatus.REJECTED)
+
+    async def _moved_all(
+        self, refinement_ids: Sequence[int], status: RefinementStatus
+    ) -> tuple[int, ...]:
+        """The batched transition both doors share, guarded the way :meth:`accept` is.
+
+        A row a human reverted or pinned between the caller's read and this write keeps the status
+        the human gave it (spec 10.3): the read filters on `pending` and the write re-checks it.
         """
+        wanted = sorted(set(refinement_ids))
+        if not wanted:
+            return ()
         held = [
             row.refinement_id
             for row in await self.index.refinements.refinements(
-                statuses=[RefinementStatus.PENDING]
+                statuses=[RefinementStatus.PENDING], ids=wanted
             )
-            if row.refinement_id in set(refinement_ids)
         ]
-        await self.index.refinements.set_statuses(held, RefinementStatus.ACTIVE)
+        await self.index.refinements.set_statuses(
+            held, status, from_status=RefinementStatus.PENDING
+        )
         return tuple(held)
 
     async def revert(self, refinement_id: int) -> Refinement:
@@ -595,7 +609,11 @@ class RefinementService:
             trigger=trigger,
             runner=RunnerKind.NONE,
             session_id=session_id,
-            detail=TriggerDetail(files=assessment.files, assessment=assessment),
+            detail=TriggerDetail(
+                files=assessment.files,
+                targets=assessment.targets,
+                assessment=assessment,
+            ),
             checkout=checkout,
             dirty=dirty,
         )
