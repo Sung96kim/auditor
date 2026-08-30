@@ -404,6 +404,32 @@ def staled_refinements(
     )
 
 
+class Bars(BaseModel):
+    """The two bars one work item's gate reads (spec 8.6).
+
+    Per kind rather than per setting: `min_new_unresolved` and `run_on_stale` are documented as
+    edit-batch knobs, so only an edit batch reads them (M6).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    min_new: int = 1
+    on_stale: bool = True
+
+
+def bars_for(kind: BatchKind, scheduling: SchedulingConfig) -> Bars:
+    """Which knobs this batch kind's gate reads: the drain and the verify pass read neither.
+
+    Item 3's own brake is `cooldown_minutes` and item 4's is `verify_cooldown_minutes`, both
+    applied by the loop before the gate is asked at all.
+    """
+    return (
+        Bars(min_new=scheduling.min_new_unresolved, on_stale=scheduling.run_on_stale)
+        if kind is BatchKind.EDIT
+        else Bars()
+    )
+
+
 def _plural(n: int, noun: str) -> str:
     """One count and its noun, so nine reason strings share one pluralizer."""
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
@@ -425,7 +451,7 @@ def _skip_reason(
     new: tuple[NodePair, ...],
     bounded: tuple[NodePair, ...],
     stale: tuple[int, ...],
-    scheduling: SchedulingConfig,
+    bars: Bars,
     narrowed: bool,
 ) -> str:
     """Why the gate said no, naming the clause that came closest rather than the emptiest one.
@@ -440,9 +466,9 @@ def _skip_reason(
     if new:
         return (
             f"{_plural(len(new), 'new question')}, "
-            f"below the {scheduling.min_new_unresolved} the gate needs"
+            f"below the {bars.min_new} the gate needs"
         )
-    if stale and not scheduling.run_on_stale:
+    if stale and not bars.on_stale:
         return f"{_plural(len(stale), 'stale refinement')}, run_on_stale is off"
     return "no new questions"
 
@@ -497,8 +523,9 @@ def decide(
     counted, narrowed = narrowing(
         new_pairs=new_pairs, bounded_pairs=bounded_pairs, budget=budget, kind=kind
     )
-    new_fired = len(counted) >= scheduling.min_new_unresolved
-    stale_fired = scheduling.run_on_stale and bool(stale_refinements)
+    bars = bars_for(kind, scheduling)
+    new_fired = len(counted) >= bars.min_new
+    stale_fired = bars.on_stale and bool(stale_refinements)
     if new_fired or stale_fired:
         return (
             Decision(
@@ -519,7 +546,7 @@ def decide(
                 new=new_pairs,
                 bounded=bounded_pairs,
                 stale=stale_refinements,
-                scheduling=scheduling,
+                bars=bars,
                 narrowed=narrowed,
             ),
         ),
@@ -566,6 +593,25 @@ def _stale_anchor_times(
     return newest
 
 
+def cap_by_node(pairs: Iterable[NodePair], *, max_nodes: int) -> Selection:
+    """Spec 8.3's distinct-node cap, applied in the order it is given.
+
+    The cap counts distinct nodes, so a second question about a node already taken rides along
+    free; what the cap did leave is deferred rather than dropped. The one implementation: both
+    the edit batch's chooser and the suspect drain apply the rule through here (M3).
+    """
+    chosen: list[NodePair] = []
+    deferred: list[NodePair] = []
+    nodes: set[str] = set()
+    for pair in pairs:
+        if pair.node_id in nodes or len(nodes) < max_nodes:
+            nodes.add(pair.node_id)
+            chosen.append(pair)
+        else:
+            deferred.append(pair)
+    return Selection(chosen=tuple(chosen), deferred=tuple(deferred))
+
+
 def choose_targets(
     *,
     pairs: Iterable[NodePair],
@@ -577,13 +623,17 @@ def choose_targets(
     """Spec 8.3 item 2's target list: the questions a run takes, ordered and capped.
 
     Proximity to the edited files first, then a bare or self call form, then rank, which is the
-    newest staled refinement anchored to the node and then the queue's own drain priority. The cap
-    counts distinct nodes, so a second question about a node already taken rides along free.
+    newest staled refinement anchored to the node and then the queue's own drain priority. The
+    ordering is this function's; the cap is :func:`cap_by_node`'s, which the drain shares.
     """
     rows = _rows_by_pair(after.pairs)
     newest = _stale_anchor_times(after, stale_refinements)
-    wanted = {pair for pair in pairs if pair in rows}
-    wanted.update(pair for pair, row in rows.items() if row.node_id in newest)
+    # a dict, not a set: the sort is stable, so its input order has to be the caller's and not
+    # a hash order that changes between processes
+    wanted = dict.fromkeys(pair for pair in pairs if pair in rows)
+    wanted.update(
+        dict.fromkeys(pair for pair, row in rows.items() if row.node_id in newest)
+    )
     touched = frozenset(files)
     dirs = frozenset(_dirname(name) for name in files)
     ordered = sorted(
@@ -597,16 +647,7 @@ def choose_targets(
             row.name,
         ),
     )
-    chosen: list[NodePair] = []
-    deferred: list[NodePair] = []
-    nodes: set[str] = set()
-    for row in ordered:
-        if row.node_id in nodes or len(nodes) < max_nodes:
-            nodes.add(row.node_id)
-            chosen.append(row.pair)
-        else:
-            deferred.append(row.pair)
-    return Selection(chosen=tuple(chosen), deferred=tuple(deferred))
+    return cap_by_node((row.pair for row in ordered), max_nodes=max_nodes)
 
 
 def assess_unchanged(stage1: Stage1) -> Assessment:

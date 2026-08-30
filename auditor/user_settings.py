@@ -23,6 +23,20 @@ TuningMode = Literal["propose", "off"]
 
 CONFIG_VERSION = 2
 
+#: how long a rate limit holds when the SDK named no reset instant
+DEFAULT_RATELIMIT_MINUTES = 5.0
+#: how long an auth refusal holds before the loop re-asks the runner (H-3)
+DEFAULT_AUTH_MINUTES = 15.0
+#: the quiet window may restart at most this many times, so a flood cannot starve the ladder (H-4)
+DEBOUNCE_WINDOW_CAP = 5.0
+#: how long a repo waits after a pass raised, and the ceiling its doubling hits
+DEFAULT_ERROR_SECONDS = 5.0
+MAX_ERROR_SECONDS = 300.0
+#: how many events a paused loop holds before the oldest are dropped (H-5)
+HELD_EVENT_CAP = 500
+#: how many deferred pairs the loop carries between passes (M-4)
+DEFERRED_CAP = 200
+
 # Where each pre-2 observer key lives now. `runner` and `tuning` are the two names version 2
 # reused for tables, so a file holding the old scalar fails the load rather than passing through
 # as an unknown key; the other eighteen are silently dropped without this map.
@@ -117,6 +131,26 @@ class LimitsConfig(BaseModel):
         ge=1,
         description="Seconds before a run still open is presumed dead and finished as skipped.",
     )
+    max_held_events: int = Field(
+        HELD_EVENT_CAP,
+        ge=1,
+        description="Events a paused loop holds before the oldest are dropped.",
+    )
+    max_deferred_pairs: int = Field(
+        DEFERRED_CAP,
+        ge=1,
+        description="Deferred pairs a loop carries from one edit batch to the next drain.",
+    )
+    max_paths_per_batch: int = Field(
+        200,
+        ge=1,
+        description="Edited paths one batch extracts; a larger batch is truncated and says so.",
+    )
+    max_queue_rows_per_pass: int = Field(
+        500,
+        ge=1,
+        description="Queue rows one suspect drain reads; the rest wait for the next pass.",
+    )
 
 
 class SchedulingConfig(BaseModel):
@@ -164,6 +198,39 @@ class SchedulingConfig(BaseModel):
             "New unresolved callees an edit batch needs to earn a run. At least one: a gate "
             "that fires on nothing opens a model-calling run for every rebuild."
         ),
+    )
+    verify_cooldown_minutes: int = Field(
+        60,
+        ge=0,
+        description=(
+            "Minutes between verify runs, so one unsettled refinement is re-asked at most "
+            "once per window. 0 opts out: every tick with a pending row may verify."
+        ),
+    )
+    ratelimit_pause_minutes: float = Field(
+        DEFAULT_RATELIMIT_MINUTES,
+        ge=0.0,
+        description="Minutes a rate limit holds the loop when the runner named no reset instant.",
+    )
+    auth_pause_minutes: float = Field(
+        DEFAULT_AUTH_MINUTES,
+        ge=0.0,
+        description="Minutes an auth refusal holds the loop before it re-asks the runner.",
+    )
+    debounce_restart_cap: float = Field(
+        DEBOUNCE_WINDOW_CAP,
+        ge=0.0,
+        description="How many times the quiet window may restart before the batch is taken.",
+    )
+    error_backoff_seconds: float = Field(
+        DEFAULT_ERROR_SECONDS,
+        gt=0.0,
+        description="Seconds a loop waits after a pass raised; it doubles per consecutive failure.",
+    )
+    max_error_backoff_seconds: float = Field(
+        MAX_ERROR_SECONDS,
+        gt=0.0,
+        description="Ceiling on the doubling wait after repeated failures.",
     )
 
 

@@ -127,6 +127,15 @@ def test_one_question_asked_for_two_reasons_is_ordered_once_by_its_best_row():
 
 
 def test_the_order_is_total_so_two_identical_rows_never_swap():
-    """Sorted on the node id and the name last, so a rerun of the loop picks the same targets."""
-    rows = [_row("pkg/a.py::b", name="z"), _row("pkg/a.py::b", name="a")]
-    assert [p.name for p in _choose(rows, files=()).chosen] == ["a", "z"]
+    """Sorted on the node id then the name, so two rows alike in every other key still order.
+
+    Given in the reverse of the answer, because the sort is stable and its input is the caller's
+    order: a tie-break that stopped working would hand the input straight back.
+    """
+    rows = [_row("pkg/z.py::b", name="z"), _row("pkg/a.py::b", name="a")]
+    assert [p.node_id for p in _choose(rows, files=()).chosen] == [
+        "pkg/a.py::b",
+        "pkg/z.py::b",
+    ]
+    same_node = [_row("pkg/a.py::b", name="z"), _row("pkg/a.py::b", name="a")]
+    assert [p.name for p in _choose(same_node, files=()).chosen] == ["a", "z"]

@@ -1,7 +1,11 @@
 """Spec 8.3's work items, over a real store and a `FakeRunner`: $0 and no SDK."""
 
 from collections.abc import Sequence
+from typing import ClassVar
 
+import pytest
+
+from auditor.graph.model import FactKind, UnresolvedReason, UnresolvedRow
 from auditor.graph.refine.models import (
     NodePair,
     ProducerKind,
@@ -17,9 +21,13 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.runner import FakeRun, FakeRunner
 from auditor.graph.refine.service import RefinementService
-from auditor.observer.events import Event
+from auditor.observer.budget import BudgetState
+from auditor.observer.daemon import Daemon, IdleTimer
+from auditor.observer.events import Event, EventQueue
 from auditor.observer.loop import RepoLoop
 from auditor.observer.scheduling import EventFeed, LoopState, pause_of
+from auditor.observer.sessions import SessionBook
+from auditor.paths import repo_dir_key
 
 _IMPL_WITH_A_NEW_CALL = (
     "from base import Base\nclass Impl(Base):\n    def run(self):\n"
@@ -46,9 +54,18 @@ class Scripted(EventFeed):
         self.groups = (
             [tuple(Event(repo="/r", paths=(p,)) for p in paths)] if paths else []
         )
+        self.waits: list[float] = []
 
     async def take(self, timeout: float) -> tuple[Event, ...]:
+        self.waits.append(timeout)
         return self.groups.pop(0) if self.groups else ()
+
+
+class Priced(FakeRunner):
+    """A fake that answers with the Claude runner's kind, so the paths gated on a real runner
+    and on a priced day are both reachable at $0."""
+
+    kind: ClassVar[RunnerKind] = RunnerKind.CLAUDE
 
 
 def _capped(user, nodes: int):
@@ -73,22 +90,36 @@ def _loop(
     script: Sequence[dict] = (),
     now: float = 1_000.0,
     status=lambda _root: (),
+    real: bool = False,
 ) -> RepoLoop:
     changes: list[int] = []
+    runner = Priced if real else FakeRunner
     loop = RepoLoop(
         root=service.root,
         index=service.index,
         settings=service.settings,
-        user=service.user,
-        feed=feed or Scripted(),
         service=service,
-        runner_for=lambda svc: FakeRunner(svc, pretend=FakeRun(script=tuple(script))),
+        feed=feed or Scripted(),
+        runner_for=lambda svc, proposer: runner(
+            svc, proposer=proposer, pretend=FakeRun(script=tuple(script))
+        ),
         now=lambda: now,
         on_change=lambda: changes.append(1),
         status=status,
     )
     loop.changes = changes
     return loop
+
+
+def _scheduled(user, **knobs):
+    """The same settings with different scheduling knobs, so a window is reachable in a test."""
+    return user.model_copy(
+        update={
+            "observer": user.observer.model_copy(
+                update={"scheduling": user.observer.scheduling.model_copy(update=knobs)}
+            )
+        }
+    )
 
 
 async def _rows(service: RefinementService):
@@ -187,8 +218,8 @@ async def test_the_loop_reports_running_while_a_run_is_open(
         seen.append(loop.state)
         return await refine_service.propose(run_id, proposal)
 
-    loop.runner_for = lambda svc: FakeRunner(
-        svc, proposer=watching, pretend=FakeRun(script=(_NOTE,))
+    loop.runner_for = lambda svc, proposer: FakeRunner(
+        svc, proposer=proposer or watching, pretend=FakeRun(script=(_NOTE,))
     )
     await loop.tick(poll=0.0)
     assert seen == [LoopState.RUNNING]
@@ -224,17 +255,9 @@ async def test_cooldown_is_off_when_the_knob_is_zero(
 ):
     """A repo whose whole queue fits in one run wants every pass to see all of it."""
     loop = _loop(refine_service)
-    loop.service.user = refine_service.user.model_copy(
-        update={
-            "observer": refine_service.user.observer.model_copy(
-                update={
-                    "scheduling": refine_service.user.observer.scheduling.model_copy(
-                        update={"cooldown_minutes": 0}
-                    )
-                }
-            )
-        }
-    )
+    assert await loop.suspects() is True
+    assert await loop.cooldown() != frozenset()  # the default knob is doing work
+    loop.service.user = _scheduled(refine_service.user, cooldown_minutes=0)
     assert await loop.cooldown() == frozenset()
 
 
@@ -277,7 +300,7 @@ async def test_a_spent_day_pauses_the_loop_on_budget(
             usage=RunUsage(cost_usd=99.0),
         )
     )
-    loop = _loop(refine_service)
+    loop = _loop(refine_service, real=True)
     assert (await loop.budget()).exhausted is True
     assert await loop.tick(poll=0.0) is LoopState.PAUSED_BUDGET
 
@@ -356,6 +379,7 @@ async def test_a_verify_run_that_agrees_promotes_the_pending_refinement(
     loop = _loop(
         refine_service,
         script=({"kind": "add_edge", "reason": "same call", "target": _PENDING_EDGE},),
+        real=True,
     )
     assert await loop.verify() is True
     stored = await refine_service.index.refinements.refinement(rid)
@@ -378,6 +402,7 @@ async def test_a_verify_run_that_names_another_destination_rejects_it(
                 "target": {**_PENDING_EDGE, "dst": "base.py::Base.run"},
             },
         ),
+        real=True,
     )
     assert await loop.verify() is True
     stored = await refine_service.index.refinements.refinement(rid)
@@ -389,26 +414,41 @@ async def test_a_verify_run_that_says_nothing_leaves_the_row_pending(
 ):
     """Silence is not disagreement: a run that proposed nothing has judged nothing."""
     rid = await _pending(refine_service)
-    assert await _loop(refine_service).verify() is True
+    assert await _loop(refine_service, real=True).verify() is True
     stored = await refine_service.index.refinements.refinement(rid)
     assert stored.status is RefinementStatus.PENDING
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [_PENDING_EDGE, {**_PENDING_EDGE, "dst": "base.py::Base.run"}],
+    ids=["agrees", "disagrees"],
+)
 async def test_a_verify_run_leaves_a_row_a_human_moved_where_the_human_put_it(
-    refine_service: RefinementService,
+    refine_service: RefinementService, answer: dict
 ):
-    """The one guarded door out of `pending`, so agreement cannot re-activate a reverted row."""
+    """Both doors out of `pending` are guarded, so a revert mid-run outranks either verdict."""
     rid = await _pending(refine_service)
-    await refine_service.ledger.revert(rid)
     loop = _loop(
         refine_service,
-        script=({"kind": "add_edge", "reason": "same call", "target": _PENDING_EDGE},),
+        script=({"kind": "add_edge", "reason": "second opinion", "target": answer},),
+        real=True,
     )
-    assert await loop.verify() is False
-    await loop._judge_pending(
-        [await refine_service.index.refinements.refinement(rid)],
-        [("impl.py::Impl.run", "load_user", "svc.py::load_user")],
-    )
+    inner = loop.runner_for
+
+    def reverting(svc, proposer):
+        """The human moves the row between the run's read of it and the judgement's write."""
+        if proposer is None:
+            return inner(svc, None)
+
+        async def judged(run_id, proposal):
+            await refine_service.ledger.revert(rid)
+            return await proposer(run_id, proposal)
+
+        return inner(svc, judged)
+
+    loop.runner_for = reverting
+    assert await loop.verify() is True
     stored = await refine_service.index.refinements.refinement(rid)
     assert stored.status is RefinementStatus.REVERTED
 
@@ -417,7 +457,294 @@ async def test_verify_finds_nothing_to_do_on_a_repo_with_no_pending_rows(
     refine_service: RefinementService,
 ):
     """Recon 4.4: a fresh home holds zero refinements, so item 4 has to fall through."""
-    assert await _loop(refine_service).verify() is False
+    assert await _loop(refine_service, real=True).verify() is False
+
+
+async def test_five_ticks_over_one_unsettled_row_open_at_most_one_verify_run(
+    refine_service: RefinementService,
+):
+    """H1: silence leaves a row pending, so without a window every tick would re-ask about it."""
+    await _pending(refine_service)
+    loop = _loop(refine_service, real=True)
+    for _ in range(5):
+        await loop.verify()
+    rows = await _rows(refine_service)
+    assert [r.trigger_kind for r in rows].count(TriggerKind.VERIFY) == 1
+
+
+async def test_the_verify_window_reopens_once_it_has_passed(
+    refine_service: RefinementService,
+):
+    """The window is a cooldown, not a switch: an unsettled row is re-asked on the next one."""
+    await _pending(refine_service)
+    loop = _loop(refine_service, real=True)
+    assert await loop.verify() is True
+    loop.service.user = _scheduled(refine_service.user, verify_cooldown_minutes=0)
+    assert await loop.verify() is True
+
+
+async def test_a_fake_runner_opens_no_verify_run_at_all(
+    refine_service: RefinementService,
+):
+    """A fake proposes nothing, so its second opinion could only ever leave the row pending."""
+    await _pending(refine_service)
+    loop = _loop(refine_service)
+    assert await loop.verify() is False
+    assert TriggerKind.VERIFY not in {
+        r.trigger_kind for r in await _rows(refine_service)
+    }
+
+
+async def test_a_pending_row_that_names_no_pair_opens_no_run(
+    refine_service: RefinementService,
+):
+    """A job with no targets is briefed on the whole scope, which is not a second opinion."""
+    run_id = await refine_service.index.runs.add_run(
+        Run(repo_identity=refine_service.identity, started_at=1.0)
+    )
+    await refine_service.index.refinements.add_refinement(
+        Refinement(
+            run_id=run_id,
+            repo_identity=refine_service.identity,
+            kind=RefinementKind.MOVE_NODE,
+            reason="the members moved",
+            target=RefinementTarget(node_id="impl.py::Impl", members=("run",)),
+            status=RefinementStatus.PENDING,
+        )
+    )
+    loop = _loop(refine_service, real=True)
+    assert await loop.verify() is False
+    assert TriggerKind.VERIFY not in {
+        r.trigger_kind for r in await _rows(refine_service)
+    }
+
+
+async def test_the_drain_cap_lets_a_second_question_about_a_taken_node_ride_along(
+    refine_service: RefinementService,
+):
+    """M3: the drain and the edit batch's chooser apply one cap, and it counts distinct nodes."""
+    # the same node at two priorities, with another node's row between them (spec 8.3's order)
+    await refine_service.index.graph.replace_unresolved(
+        [
+            UnresolvedRow(
+                node_id=node_id,
+                fact_kind=FactKind.CALLEE,
+                name=name,
+                reason=UnresolvedReason.UNIMPORTABLE_NAME,
+                priority=priority,
+            )
+            for node_id, name, priority in (
+                ("base.py::Base.run", "first", 1),
+                ("impl.py::Impl.run", "elsewhere", 2),
+                ("base.py::Base.run", "second", 3),
+            )
+        ]
+    )
+    loop = _loop(refine_service)
+    loop.service.user = _capped(refine_service.user, 1)
+    assert await loop.suspects() is True
+    targets = (await _rows(refine_service))[0].trigger_detail.targets
+    assert {pair.node_id for pair in targets} == {"base.py::Base.run"}
+    assert {pair.name for pair in targets} == {"first", "second"}
+
+
+async def test_the_poll_the_ladder_was_given_reaches_the_feed(
+    refine_service: RefinementService,
+):
+    """L14: a regression in `tick`'s poll plumbing is invisible to a feed that drops it."""
+    feed = Scripted()
+    await _loop(refine_service, feed=feed).tick(poll=0.0)
+    assert feed.waits == [0.0]
+
+
+async def test_a_state_change_tells_the_daemon_so_the_status_etag_moves(
+    refine_service: RefinementService,
+):
+    """The page's badge rides an ETag counter, so a transition nobody is told about is stale."""
+    revision = 0
+
+    def bump() -> None:
+        nonlocal revision
+        revision += 1
+
+    loop = _loop(refine_service)
+    loop.on_change = bump
+    assert await loop.attach() is LoopState.OBSERVING
+    assert revision == 2  # detached to building, then building to observing
+
+
+def _daemon_for(loop: RepoLoop, tmp_path) -> Daemon:
+    """A daemon over injected parts, holding this one loop: no port, no lock, no process."""
+    daemon = Daemon(
+        queue=EventQueue(lambda key: tmp_path / "repos" / key / "spool.jsonl"),
+        sessions=SessionBook(expiry_minutes=45),
+        idle=IdleTimer(minutes=30.0, now=0.0),
+    )
+    daemon.loops[repo_dir_key(loop.root)] = loop
+    return daemon
+
+
+async def _queue(service: RefinementService, *rows: tuple[str, int]) -> None:
+    """Replace the queue with one row per (node, priority), so a drain order is arrangeable."""
+    await service.index.graph.replace_unresolved(
+        [
+            UnresolvedRow(
+                node_id=node_id,
+                fact_kind=FactKind.CALLEE,
+                name="load_user",
+                reason=UnresolvedReason.UNIMPORTABLE_NAME,
+                priority=priority,
+            )
+            for node_id, priority in rows
+        ]
+    )
+
+
+async def test_attach_closes_the_run_a_dead_daemon_left_open(
+    refine_service: RefinementService,
+):
+    """M12: nothing else in the daemon sweeps, so a killed run stayed `running` until a human did."""
+    run_id = await refine_service.index.runs.add_run(
+        Run(
+            repo_identity=refine_service.identity,
+            started_at=1.0,
+            status=RunStatus.RUNNING,
+        )
+    )
+    await _loop(refine_service).attach()
+    stored = await refine_service.index.runs.run(run_id)
+    assert stored.status is RunStatus.SKIPPED
+
+
+async def test_the_drain_takes_item_two_s_deferred_pairs_before_the_queue_s_own_order(
+    refine_service: RefinementService,
+):
+    """C29: the deferred set is intent, so the pass that drains has to honour it first."""
+    await _queue(refine_service, ("a.py::first", 1), ("z.py::last", 9))
+    loop = _loop(refine_service)
+    loop.service.user = _capped(refine_service.user, 1)
+    loop.deferred = (NodePair(node_id="z.py::last", name="load_user"),)
+    assert await loop.suspects() is True
+    targets = (await _rows(refine_service))[0].trigger_detail.targets
+    assert [pair.node_id for pair in targets] == ["z.py::last"]
+
+
+async def test_the_suspect_drain_takes_the_queue_in_the_store_s_own_priority_order(
+    refine_service: RefinementService,
+):
+    """Spec 8.3 item 3: the queue's `ORDER BY priority` is the drain order, not an accident."""
+    await _queue(refine_service, ("z.py::last", 1), ("a.py::first", 9))
+    loop = _loop(refine_service)
+    loop.service.user = _capped(refine_service.user, 1)
+    assert await loop.suspects() is True
+    targets = (await _rows(refine_service))[0].trigger_detail.targets
+    assert [pair.node_id for pair in targets] == ["z.py::last"]
+
+
+async def test_a_repo_s_own_observer_settings_are_what_the_loop_reads(
+    refine_service: RefinementService,
+):
+    """M1: the daemon serves many repos, and its home layer is nobody's per-repo answer."""
+    loop = _loop(refine_service)
+    loop.service.user = _capped(refine_service.user, 3)
+    assert loop.user.observer.limits.max_nodes_per_run == 3
+
+
+async def test_a_pass_that_raises_pauses_the_repo_and_the_next_one_recovers(
+    refine_service: RefinementService, tmp_path
+):
+    """H2: `_drive` caught only cancellation, so one bad pass stopped a repo for the daemon's life."""
+    refine_service.user = _scheduled(refine_service.user, error_backoff_seconds=0.01)
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    seen: list[LoopState] = []
+    settled = loop.attach
+
+    async def flaky() -> LoopState:
+        seen.append(loop.state)
+        if len(seen) == 1:
+            raise RuntimeError("the session-start build blew up")
+        return await settled()
+
+    async def once(*, poll: float) -> LoopState:
+        daemon.stopping = True
+        return loop.state
+
+    loop.attach, loop.tick = flaky, once
+    await daemon._drive(loop)
+    assert seen == [LoopState.DETACHED, LoopState.PAUSED_ERROR]
+    assert (
+        loop.pauses.errors.failures == 0
+    )  # the pass that finished cleared the backoff
+    assert daemon.loops == {}  # and no key is left claiming a loop that stopped
+
+
+async def test_a_tick_that_raises_is_retried_without_a_second_session_start_build(
+    refine_service: RefinementService, tmp_path
+):
+    """H2: a bad tick is not a repo to rebuild, so the recovery must not re-run the attach."""
+    refine_service.user = _scheduled(refine_service.user, error_backoff_seconds=0.01)
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    ticks: list[LoopState] = []
+
+    async def flaky(*, poll: float) -> LoopState:
+        ticks.append(loop.state)
+        if len(ticks) == 1:
+            raise RuntimeError("the queue read blew up")
+        daemon.stopping = True
+        return loop.state
+
+    loop.tick = flaky
+    await daemon._drive(loop)
+    assert ticks == [LoopState.OBSERVING, LoopState.PAUSED_ERROR]
+    rows = await _rows(refine_service)
+    assert [r.trigger_kind for r in rows] == [TriggerKind.SESSION_START]
+
+
+async def test_a_driver_whose_key_was_retired_lets_go_of_the_loop(
+    refine_service: RefinementService, tmp_path
+):
+    """M5: `reconcile` unclaims the key, and the driver is what has to notice and detach."""
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    daemon.retire(repo_dir_key(loop.root))
+    await daemon._drive(loop)
+    assert loop.state is LoopState.DETACHED
+
+
+async def test_the_meter_a_loop_publishes_is_its_own_and_names_the_auth_deadline(
+    refine_service: RefinementService, tmp_path
+):
+    """H-9 and M8: the ceilings are per repo, and an auth hold has a deadline of its own."""
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    loop.pauses.apply(pause_of("paused:auth", now=1_000.0))
+    loop._moved(LoopState.PAUSED_AUTH)
+    await daemon._publish(loop)
+    drawn = daemon.repo_meters(repo_dir_key(loop.root))
+    assert drawn.budget.max_cost_usd_per_day == 2.0
+    assert (drawn.limits.paused, drawn.limits.resumes_at) == (
+        True,
+        loop.pauses.auth_until,
+    )
+    assert daemon.repo_meters("some-other-repo").budget is None
+
+
+async def test_the_budget_the_meter_draws_is_the_one_the_tick_acted_on(
+    refine_service: RefinementService, tmp_path
+):
+    """M8: two reads a tick is two answers, and the page drew the one the loop never used."""
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    await loop.tick(poll=0.0)
+    loop.budget = _raises
+    await daemon._publish(loop)
+    assert daemon.repo_meters(repo_dir_key(loop.root)).budget is not None
+
+
+async def _raises() -> BudgetState:
+    raise AssertionError("the tick already read the budget")
 
 
 async def test_the_tuning_slot_is_reached_and_does_nothing(

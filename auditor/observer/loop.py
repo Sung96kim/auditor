@@ -58,13 +58,20 @@ from auditor.observer.assess import (
     Stage1,
     assess,
     assess_unchanged,
+    cap_by_node,
     decide,
     stage_one,
 )
-from auditor.observer.budget import BudgetState, budget_state, window_start
+from auditor.observer.budget import (
+    BudgetState,
+    budget_state,
+    priced_runner,
+    window_start,
+)
 from auditor.observer.events import Event
 from auditor.observer.scheduling import (
     MINUTE,
+    Backoff,
     EventFeed,
     LoopState,
     Pauses,
@@ -80,10 +87,8 @@ from auditor.user_settings import UserSettings
 
 logger = logging.getLogger(__name__)
 
-#: how many events a paused loop holds before the oldest are dropped (H-5)
-HELD_EVENT_CAP = 500
-#: how many deferred pairs the loop carries between passes (M-4)
-DEFERRED_CAP = 200
+#: how many edited files are read at once: a fan-out bound so a large batch still yields
+_READ_FANOUT = 16
 
 
 class RepoLoop:
@@ -100,10 +105,9 @@ class RepoLoop:
         root: Path,
         index: IndexStore,
         settings: AuditorSettings,
-        user: UserSettings,
+        service: RefinementService,
         feed: EventFeed,
-        runner_for: Callable[[RefinementService], RefinementRunner],
-        service: RefinementService | None = None,
+        runner_for: Callable[[RefinementService, Proposer | None], RefinementRunner],
         slots: RunSlots | None = None,
         now: Callable[[], float] = time.time,
         on_change: Callable[[], object] = lambda: None,
@@ -113,16 +117,23 @@ class RepoLoop:
         self.index = index
         self.settings = settings
         self.feed = feed
-        self.service = service or RefinementService(index, root, settings, user)
+        self.service = service
         self.runner_for = runner_for
         self.slots = slots or RunSlots()
         self.now = now
         self.on_change = on_change
         self.status = status
-        self.pauses = Pauses()
+        scheduling = self.user.observer.scheduling
+        self.pauses = Pauses(
+            errors=Backoff(
+                first=scheduling.error_backoff_seconds,
+                ceiling=scheduling.max_error_backoff_seconds,
+            )
+        )
         self.retries = Retries()
-        self.flow_nodes: frozenset[str] = frozenset()
         self.deferred: tuple[NodePair, ...] = ()
+        #: the budget this tick already read, so `/api/status` draws what the tick acted on (M8)
+        self.last_budget: BudgetState | None = None
         self.state = LoopState.DETACHED
         self._held: tuple[Event, ...] = ()
         self._kind: RunnerKind | None = None
@@ -142,11 +153,21 @@ class RepoLoop:
             self.on_change()
         return state
 
+    def failed(self, error: BaseException) -> float:
+        """Hold this repo after a pass raised, and answer the seconds its driver should wait."""
+        wait = self.pauses.failed(str(error) or type(error).__name__, now=self.now())
+        self._moved(LoopState.PAUSED_ERROR)
+        return wait
+
+    def recovered(self) -> None:
+        """A pass that finished: drop the error hold so the next failure waits the first window."""
+        self.pauses.recovered()
+
     @property
     def runner_kind(self) -> RunnerKind:
         """Which runner this loop opens runs with, resolved once: a factory re-reads credentials."""
         if self._kind is None:
-            self._kind = self.runner_for(self.service).kind
+            self._kind = self.runner_for(self.service, None).kind
         return self._kind
 
     async def budget(self) -> BudgetState:
@@ -162,6 +183,7 @@ class RepoLoop:
         return budget_state(
             spend,
             config=self.user.observer.budget,
+            priced=priced_runner(self.runner_kind, runner),
             evaluated=bool(policy.measured),
         )
 
@@ -175,10 +197,16 @@ class RepoLoop:
         """Spec 8.3 item 1: an incremental scan with extraction forced on, then a rebuild.
 
         The scan is forced independently of ``graph.enabled`` (D2), and the rebuild is the one
-        that marks refinements stale and redundant; the loop only has to let it run.
+        that marks refinements stale and redundant; the loop only has to let it run. The stranded
+        sweep runs first, because a daemon killed mid-run is what this attach is recovering from.
         """
         self._moved(LoopState.BUILDING)
         self.pauses.cleared()
+        # a daemon that died mid-run left its row open, and this is the first pass after it came
+        # back, so the sweep runs here rather than waiting for someone to type `refine prune`
+        await self.index.runs.finish_stranded_runs(
+            older_than=self.user.observer.limits.stranded_run_seconds
+        )
         await autoscan(self.root)
         reason = "session-start build"
         try:
@@ -212,24 +240,31 @@ class RepoLoop:
         The feed is drained before the pause is read, so a repo that cannot spend still empties
         its spool; a batch drained while paused is held and assessed when the pause lifts.
         """
+        scheduling = self.user.observer.scheduling
         batch = (
             *self._held,
             *await debounced(
                 self.feed,
-                seconds=float(self.user.observer.scheduling.debounce_seconds),
+                seconds=float(scheduling.debounce_seconds),
                 timeout=poll,
+                restarts=scheduling.debounce_restart_cap,
             ),
         )
         budget = await self.budget()
+        self.last_budget = budget
+        held = batch[-self.user.observer.limits.max_held_events :]
         pause = self.pauses.state(budget=budget, now=self.now())
         if pause is not None:
-            self._held = batch[-HELD_EVENT_CAP:]
+            self._held = held
             return self._moved(pause)
-        self._held = ()
         self._moved(LoopState.OBSERVING)
         if batch:
+            # kept until the batch is assessed, so a raise in `edit_batch` cannot lose the edits
+            self._held = held
             await self.edit_batch(batch, budget=budget)
+            self._held = ()
             return self.state
+        self._held = ()
         if self.user.observer.suspects and await self.suspects(budget=budget):
             return self.state
         if await self.verify(budget=budget):
@@ -240,14 +275,21 @@ class RepoLoop:
     # --- work item 2: edit batches -------------------------------------------
 
     def _paths(self, events: Sequence[Event]) -> tuple[str, ...]:
-        """The batch's auditable paths, first appearance first (stage 0 already ran on them)."""
+        """The batch's auditable paths, first appearance first (stage 0 already ran on them).
+
+        Capped: a resumed loop can hold `max_held_events` events of `MAX_EVENT_PATHS` paths each,
+        and extracting all of them in one coroutine would hold the ladder for minutes.
+        """
         finder = FileDiscovery(self.root)
         seen: dict[str, None] = {}
         for event in events:
             for path in event.paths:
                 if finder.auditable_shape(path):
                     seen.setdefault(path, None)
-        return tuple(seen)
+        cap = self.user.observer.limits.max_paths_per_batch
+        if len(seen) > cap:
+            logger.warning("edit batch of %d paths truncated to %d", len(seen), cap)
+        return tuple(seen)[:cap]
 
     async def _read(self, path: str) -> EditedFile:
         """One edited path as stage 1 needs it: the cache read *before* anything is written."""
@@ -276,6 +318,14 @@ class RepoLoop:
             extracted=extracted,
         )
 
+    async def _read_all(self, paths: Sequence[str]) -> list[EditedFile]:
+        """Every edited path, a bounded chunk at a time so one large batch still yields."""
+        out: list[EditedFile] = []
+        for start in range(0, len(paths), _READ_FANOUT):
+            chunk = paths[start : start + _READ_FANOUT]
+            out.extend(await asyncio.gather(*(self._read(path) for path in chunk)))
+        return out
+
     async def _persist(self, stage1: Stage1, edited: dict[str, EditedFile]) -> None:
         """Write what stage 1 chose to keep, as one commit, so the rebuild reads this edit whole."""
         gone = [
@@ -291,7 +341,9 @@ class RepoLoop:
                 file_hashes(edited[verdict.path].extracted.nodes),
             )
             for verdict in stage1.verdicts
-            if verdict.persist and verdict.outcome is not PathOutcome.REMOVED
+            if verdict.persist
+            and verdict.outcome is not PathOutcome.REMOVED
+            and edited[verdict.path].extracted is not None
         ]
         await self.index.graph.replace_facts(removed=gone, written=written)
 
@@ -314,7 +366,7 @@ class RepoLoop:
         paths = self._paths(events)
         if not paths:
             return None
-        edited = {path: await self._read(path) for path in paths}
+        edited = dict(zip(paths, await self._read_all(paths), strict=True))
         stage1 = stage_one(tuple(edited.values()))
         if not stage1.needs_rebuild:
             return await self._declined(assess_unchanged(stage1))
@@ -343,7 +395,6 @@ class RepoLoop:
             scheduling=self.user.observer.scheduling,
             budget=spend,
             max_nodes_per_run=self.user.observer.limits.max_nodes_per_run,
-            flow_nodes=self.flow_nodes,
         )
         self._defer(assessment.deferred)
         if not assessment.decided_to_run:
@@ -369,7 +420,7 @@ class RepoLoop:
     def _defer(self, pairs: Sequence[NodePair]) -> None:
         """Item 2's leftovers, newest last and capped: intent, not a fact about the repo (P18)."""
         held = dict.fromkeys((*self.deferred, *pairs))
-        self.deferred = tuple(held)[-DEFERRED_CAP:]
+        self.deferred = tuple(held)[-self.user.observer.limits.max_deferred_pairs :]
 
     async def _declined(self, assessment: Assessment) -> Assessment:
         """Invariant 2: a batch that reached stage 1 is a run row, whatever the gate said."""
@@ -422,21 +473,19 @@ class RepoLoop:
         # a rebuild replaces the queue wholesale (spec 5.6), so a deferred pair can stop existing
         self.deferred = tuple(p for p in self.deferred if p in live)
         skip = (await self.cooldown()) | (await self.suppressed())
-        cap = self.user.observer.limits.max_nodes_per_run
-        chosen: list[NodePair] = []
-        nodes: set[str] = set()
-        for pair in [*self.deferred, *queue]:
-            if pair in skip or pair in chosen or not self.retries.allowed(pair):
-                continue
-            if pair.node_id not in nodes and len(nodes) >= cap:
-                break
-            nodes.add(pair.node_id)
-            chosen.append(pair)
+        wanted = (
+            pair
+            for pair in dict.fromkeys((*self.deferred, *queue))
+            if pair not in skip and self.retries.allowed(pair)
+        )
+        chosen = cap_by_node(
+            wanted, max_nodes=self.user.observer.limits.max_nodes_per_run
+        ).chosen
         if not chosen:
             return False
         verdict, _pairs = decide(
-            new_pairs=tuple(chosen),
-            bounded_pairs=tuple(chosen),
+            new_pairs=chosen,
+            bounded_pairs=chosen,
             stale_refinements=(),
             scheduling=self.user.observer.scheduling,
             budget=budget if budget is not None else await self.budget(),
@@ -444,20 +493,38 @@ class RepoLoop:
         )
         if verdict.decision is not AssessmentDecision.RUN:
             return False
-        opened = await self._run(
-            targets=tuple(chosen), trigger=TriggerKind.SUSPECT, files=()
-        )
+        opened = await self._run(targets=chosen, trigger=TriggerKind.SUSPECT, files=())
         if opened:
             self.deferred = tuple(p for p in self.deferred if p not in chosen)
         return opened
 
     async def _queue_pairs(self) -> tuple[NodePair, ...]:
-        """The queue in its stored drain order, which already encodes spec 8.3's priorities."""
+        """The queue in its stored drain order, which already encodes spec 8.3's priorities.
+
+        Bounded: an observing loop reads this once a tick and the cap only ever takes the first
+        `max_nodes_per_run` distinct nodes off the front of it.
+        """
         # `external=False` hides the rows a brief hides, so the drain cannot pick one it cannot ask
-        rows = await self.index.graph.unresolved(external=False)
+        rows = await self.index.graph.unresolved(
+            external=False, limit=self.user.observer.limits.max_queue_rows_per_pass
+        )
         return tuple(NodePair(node_id=row["node_id"], name=row["name"]) for row in rows)
 
     # --- work item 4: verify runs --------------------------------------------
+
+    async def verify_cooled(self) -> bool:
+        """Whether item 4 already had its turn inside `verify_cooldown_minutes` (H1).
+
+        Silence leaves a refinement `pending`, which is the default outcome, so without a window
+        one unsettled row would open a fresh run on every tick for as long as it sits there.
+        """
+        minutes = self.user.observer.scheduling.verify_cooldown_minutes
+        if minutes <= 0:
+            return False
+        opened = await self.index.runs.opened_since(
+            TriggerKind.VERIFY, self.now() - minutes * MINUTE
+        )
+        return opened > 0
 
     async def verify(self, *, budget: BudgetState | None = None) -> bool:
         """Spec 10.3's second opinion for `pending` refinements, shown no first pick.
@@ -465,6 +532,9 @@ class RepoLoop:
         The verify run's proposals are judged and never stored: the injected proposer is the seam
         an eval already uses, so a second opinion cannot insert a second copy of the correction.
         """
+        # a fake run proposes nothing, so it can only ever leave the rows it was opened for pending
+        if self.runner_kind is RunnerKind.FAKE or await self.verify_cooled():
+            return False
         pending = await self.index.refinements.refinements(
             statuses=[RefinementStatus.PENDING],
             limit=self.user.observer.limits.max_nodes_per_run,
@@ -498,6 +568,10 @@ class RepoLoop:
             for row in pending
             if (row.target.node_id or row.target.src) and row.target.name
         )
+        if not targets:
+            # a job with no targets is briefed on the whole scope, which is not a second opinion
+            logger.warning("verify: %d pending rows name no target pair", len(pending))
+            return False
         opened = await self._run(
             targets=targets,
             trigger=TriggerKind.VERIFY,
@@ -524,9 +598,9 @@ class RepoLoop:
                 agreed.append(row.refinement_id)
             else:
                 rejected.append(row.refinement_id)
-        # through the guarded transition, so a row a human moved meanwhile keeps its status (M-2)
+        # both through the guarded transition, so a row a human moved keeps its status (M-2)
         await self.service.ledger.accept_all(agreed)
-        await self.index.refinements.set_statuses(rejected, RefinementStatus.REJECTED)
+        await self.service.ledger.reject_all(rejected)
 
     # --- work item 5: tuning trials ------------------------------------------
 
@@ -549,17 +623,16 @@ class RepoLoop:
         assessment: Assessment | None = None,
         proposer: Proposer | None = None,
     ) -> bool:
-        """Open one target-driven run under the concurrency gate, and read what stopped it.
+        """Open one target-driven run under the concurrency gate, and say whether it landed.
 
         The gate waits rather than refusing: a repo already running, or two runs already in flight
-        anywhere, holds this coroutine until a slot frees (spec 8.4), so a run always opens.
+        anywhere, holds this coroutine until a slot frees (spec 8.4), so a run always opens. What
+        it answers is whether the run reached a terminal state that answered its targets.
         """
         async with self.slots.slot(self.service.identity):
             self._moved(LoopState.RUNNING)
             guard = await self._guard()
-            runner = self.runner_for(self.service)
-            if proposer is not None:
-                runner.proposer = proposer
+            runner = self.runner_for(self.service, proposer)
             job = RefinementJob(
                 trigger=trigger,
                 producer=ProducerKind.OBSERVER,
@@ -576,17 +649,24 @@ class RepoLoop:
                 logger.warning("observer run refused: %s", refused)
                 self.retries.aborted(targets)
                 self._moved(LoopState.OBSERVING)
-                return True
+                return False
             stored = await self.index.runs.run(product.run.run_id)
-            if stored is not None and stored.status in _UNLANDED:
+            landed = stored is None or stored.status not in _UNLANDED
+            if not landed:
                 self.retries.aborted(targets)
-            pause = pause_of(stored.error if stored else None, now=self.now())
+            scheduling = self.user.observer.scheduling
+            pause = pause_of(
+                stored.error if stored else None,
+                now=self.now(),
+                minutes=scheduling.ratelimit_pause_minutes,
+                auth_minutes=scheduling.auth_pause_minutes,
+            )
             if pause is None or pause.state is not LoopState.PAUSED_AUTH:
                 # the run reached the model, so the credentials work: drop any auth hold (H-3)
                 self.pauses.authenticated()
             self.pauses.apply(pause)
             self._moved(LoopState.OBSERVING)
-            return True
+            return landed
 
 
 #: the terminal statuses that mean this run's targets were not answered (spec 8.5)

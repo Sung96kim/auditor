@@ -30,6 +30,7 @@ from auditor.graph.refine.models import (
     Spend,
 )
 from auditor.observer.assess import (
+    Bars,
     CachedFile,
     EditedFile,
     GraphSnapshot,
@@ -41,6 +42,7 @@ from auditor.observer.assess import (
     assess,
     assess_path,
     assess_unchanged,
+    bars_for,
     decide,
     stage_one,
 )
@@ -868,3 +870,45 @@ def test_under_the_bar_with_an_eval_row_the_stale_arm_still_runs():
     before, after = _staled((_GET,))
     result = _assess(_STAGE1, before, after, budget=_budget(fraction=0.1))
     assert result.verdict.decision is AssessmentDecision.RUN
+
+
+@pytest.mark.parametrize(
+    "kind", [BatchKind.SUSPECT, BatchKind.VERIFY], ids=["suspect", "verify"]
+)
+def test_the_edit_batch_knobs_govern_edit_batches_alone(kind):
+    """M6: `min_new_unresolved` and `run_on_stale` are documented as an edit batch's own bars."""
+    scheduling = SchedulingConfig(min_new_unresolved=5, run_on_stale=False)
+    assert bars_for(kind, scheduling) == Bars()
+    assert bars_for(BatchKind.EDIT, scheduling) == Bars(min_new=5, on_stale=False)
+
+
+def test_a_drain_of_one_pair_still_runs_when_an_edit_batch_would_need_five():
+    """The suspect drain's own brake is `cooldown_minutes`, and it never reads the edit bar."""
+    verdict, pairs = decide(
+        new_pairs=(NodePair(node_id="a.py::f", name="load"),),
+        bounded_pairs=(NodePair(node_id="a.py::f", name="load"),),
+        stale_refinements=(),
+        scheduling=SchedulingConfig(min_new_unresolved=5),
+        budget=BudgetState(max_cost_usd_per_day=2.0),
+        kind=BatchKind.SUSPECT,
+    )
+    assert verdict.decision is AssessmentDecision.RUN
+    assert len(pairs) == 1
+
+
+def test_a_skipped_batch_chooses_no_targets_even_when_a_refinement_staled():
+    """The selection is guarded on the verdict, and `choose_targets` unions in the staled anchors."""
+    active = RefinementState(
+        refinement_id=1, status=RefinementStatus.ACTIVE, anchor_nodes=(_GET,)
+    )
+    stale = active.model_copy(update={"status": RefinementStatus.STALE})
+    anchored = _pair(_GET, "widen")
+    result = _assess(
+        _STAGE1,
+        _snapshot((anchored,), (active,)),
+        _snapshot((anchored,), (stale,)),
+        scheduling=SchedulingConfig(run_on_stale=False),
+    )
+    assert result.stale_refinements == (1,)  # the anchor this batch touched did stale
+    assert result.verdict.decision is AssessmentDecision.SKIP
+    assert (result.targets, result.deferred) == ((), ())
