@@ -38,8 +38,12 @@ STATUS_KEYS = (
     "page_url",
 )
 _TIMEOUT = 2.0
+#: `SchedulingConfig.start_timeout_seconds` and `.stop_timeout_seconds`; a test pins the pair,
+#: because this file may not import pydantic-settings to read them
 _START_TIMEOUT = 10.0
 _STOP_TIMEOUT = 10.0
+#: the mount waits `_START_TIMEOUT` itself, so the run that waits on it needs a longer budget
+_LAUNCH_TIMEOUT = _START_TIMEOUT * 2
 
 
 def _version() -> str:
@@ -73,16 +77,21 @@ def daemon_record() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _ask(port: int, method: str, path: str) -> dict | None:
-    """One loopback request, or None when nothing answers. A dead daemon is an answer, not a crash."""
+def _ask(port: int, method: str, path: str, body: str = "") -> dict | None:
+    """One loopback request, or None when nothing answers. A dead daemon is an answer, not a crash.
+
+    ``http.client.HTTPException`` is in the tuple because a recycled port can put a non-HTTP
+    listener where the daemon was, and nothing here may exit non-zero.
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=_TIMEOUT)
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=_TIMEOUT)
-        conn.request(method, path)
-        body = conn.getresponse().read()
-        conn.close()
-        return json.loads(body)
-    except (OSError, ValueError):
+        conn.request(method, path, body or None, {"Content-Type": "application/json"})
+        answer = json.loads(conn.getresponse().read())
+        return answer if isinstance(answer, dict) else None
+    except (OSError, ValueError, http.client.HTTPException):
         return None
+    finally:
+        conn.close()
 
 
 def _page_url(port: int) -> str:
@@ -131,8 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _wait_for(check, timeout: float, poll: float = 0.05) -> bool:
-    """Poll ``check`` until it is true or the deadline passes."""
+def _wait_for(check, timeout: float, poll: float = 0.02) -> bool:
+    """Poll ``check`` until it is true or the deadline passes.
+
+    The stdlib twin of ``auditor.observer.daemon.wait_for``, down to the poll interval.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if check():
@@ -154,10 +166,36 @@ def _launch() -> bool:
         else [sys.executable, "-m", "auditor.cli", "observer", "start"]
     )
     try:
-        subprocess.run(argv, check=False, capture_output=True, timeout=_START_TIMEOUT)
+        subprocess.run(argv, check=False, capture_output=True, timeout=_LAUNCH_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
         return False
     return _wait_for(lambda: _live()[1] is not None, _START_TIMEOUT)
+
+
+def _started_at(port: int) -> float:
+    """When the daemon on this port started, or 0.0 when nothing answers.
+
+    The pid survives ``os.execv``, so this is what tells a restarted daemon from the one that
+    was asked to restart.
+    """
+    started = (_ask(port, "GET", "/api/status") or {}).get("started_at", 0.0)
+    return float(started) if isinstance(started, int | float) else 0.0
+
+
+def _restart(port: int) -> str:
+    """Re-exec a daemon whose wire this client does not speak, and wait for its replacement."""
+    before = _started_at(port)
+    answer = _ask(
+        port,
+        "POST",
+        "/admin/restart",
+        json.dumps({"compat": OBSERVER_API_VERSION}),
+    )
+    if not (answer and answer.get("restarting")):
+        return "wire compat mismatch"
+    if not _wait_for(lambda: _started_at(port) > before, _START_TIMEOUT):
+        return "did not restart"
+    return "restarted"
 
 
 def _stop(record: dict) -> str:
@@ -178,6 +216,11 @@ def _run(command: str) -> dict:
     record, health = _live()
     if command in ("start", "ensure"):
         if health is not None:
+            stale = health.get("compat") != OBSERVER_API_VERSION
+            if (
+                command == "ensure" and stale
+            ):  # P19: the mount's `ensure` restarts it too
+                return _status(_restart(int(record["port"])), *_live())
             return _status("already running", record, health)
         launched = _launch()
         record, health = _live()

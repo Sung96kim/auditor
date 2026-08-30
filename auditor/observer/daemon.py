@@ -1,5 +1,7 @@
 """Spec 8.1's process: the singleton lock, `daemon.json`, the idle timer and the restart exec."""
 
+import http.client
+import json
 import logging
 import os
 import shutil
@@ -20,6 +22,7 @@ from auditor.graph.refine.lock import flock_nb
 from auditor.graph.viz import render_app_or_status
 from auditor.observer import MINUTE, OBSERVER_API_VERSION
 from auditor.observer.events import Event, EventQueue
+from auditor.observer.payloads import HealthPayload, RestartRequest
 from auditor.observer.routes import DaemonIdentity, Readers, Router, RouterDeps
 from auditor.observer.scheduling import RunSlots
 from auditor.observer.server import ObserverServer
@@ -40,6 +43,8 @@ from auditor.serve import open_url
 from auditor.user_settings import UserSettings, load_home_settings, load_user_settings
 
 _LOG = logging.getLogger("auditor.observer")
+#: a loopback request to a process that is either answering or gone; never a wait worth naming
+_ASK_TIMEOUT = 2.0
 
 
 class DaemonRecord(BaseModel):
@@ -163,6 +168,58 @@ def install_logging(path: Path) -> None:
     stdlib.addHandler(observer_log_handler(path))
     logger.add(path, rotation="5 MB", retention=3)
     logger.enable("auditor")
+
+
+def daemon_ask(
+    record: DaemonRecord, method: str, path: str, body: str = ""
+) -> dict | None:
+    """One loopback request to a published daemon, or None when nothing answers.
+
+    Liveness is asked for, never taken: probing the flock meant acquiring it, which could take it
+    from a daemon that was still starting (E5).
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", record.port, timeout=_ASK_TIMEOUT)
+    try:
+        conn.request(method, path, body or None, {"Content-Type": "application/json"})
+        answer = json.loads(conn.getresponse().read())
+        return answer if isinstance(answer, dict) else None
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+
+
+def daemon_health(record: DaemonRecord) -> HealthPayload | None:
+    """What the daemon in ``record`` answers on ``/health``, or None when nothing is there."""
+    answer = daemon_ask(record, "GET", "/health")
+    if answer is None:
+        return None
+    try:
+        return HealthPayload.model_validate(answer)
+    except ValueError:
+        return None
+
+
+def daemon_started_at(record: DaemonRecord) -> float:
+    """When the daemon on this port started, or 0.0 when nothing answers.
+
+    The pid survives ``os.execv``, so this is what tells a restarted daemon from the one that
+    asked for the restart.
+    """
+    answer = daemon_ask(record, "GET", "/api/status") or {}
+    started = answer.get("started_at", 0.0)
+    return float(started) if isinstance(started, int | float) else 0.0
+
+
+def restart_daemon(record: DaemonRecord) -> bool:
+    """Ask a daemon whose wire this install does not speak to re-exec. False when it declined."""
+    answer = daemon_ask(
+        record,
+        "POST",
+        "/admin/restart",
+        RestartRequest(compat=OBSERVER_API_VERSION).model_dump_json(),
+    )
+    return bool(answer and answer.get("restarting"))
 
 
 def stop_daemon(record: DaemonRecord) -> bool:

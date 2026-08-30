@@ -7,11 +7,13 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
 import auditr_observer
+from auditor.cli import observer as cli_observer
 from auditor.observer.daemon import (
     Daemon,
     DaemonLock,
@@ -383,3 +385,107 @@ def test_the_client_and_the_settings_name_the_same_lifecycle_timeouts():
     scheduling = SchedulingConfig()
     assert scheduling.start_timeout_seconds == auditr_observer._START_TIMEOUT
     assert scheduling.stop_timeout_seconds == auditr_observer._STOP_TIMEOUT
+
+
+def _replace_when_restarting(router, port: int, home: Path) -> None:
+    """Stand in for the `os.execv`: a daemon of this install's version takes the port over.
+
+    Only `started_at` distinguishes it, because the pid survives the exec.
+    """
+    for _ in range(1_500):
+        if router.restarting:
+            router.started_at += 1.0
+            _speaks(router, 1)
+            _published(port, home, compat=1)
+            return
+        time.sleep(0.01)
+
+
+def _published(port: int, home: Path, *, compat: int) -> None:
+    """A `daemon.json` for a live server, declaring a wire version of the caller's choosing."""
+    daemon_json_path().parent.mkdir(parents=True, exist_ok=True)
+    write_json_dict(
+        daemon_json_path(),
+        DaemonRecord(
+            pid=os.getpid(),
+            port=port,
+            home=str(home),
+            version="0.10.5",
+            compat=compat,
+        ).model_dump(),
+    )
+
+
+def _speaks(router, compat: int) -> None:
+    router.deps = router.deps.model_copy(
+        update={"identity": router.deps.identity.model_copy(update={"compat": compat})}
+    )
+
+
+def test_the_mount_ensure_restarts_a_daemon_whose_wire_it_cannot_speak(
+    daemon_server, daemon_router, tmp_path, monkeypatch, capsys
+):
+    """`ensure` reported the mismatch, returned `running: true` and left it running (H4)."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    server, _ = daemon_server
+    _speaks(daemon_router, 99)
+    _published(server.port, tmp_path, compat=99)
+    worker = threading.Thread(
+        target=lambda: _replace_when_restarting(daemon_router, server.port, tmp_path),
+        daemon=True,
+    )
+    worker.start()
+    cli_observer.ensure(json_=True)
+    worker.join(timeout=15.0)
+    payload = json.loads(capsys.readouterr().out)
+    assert (
+        daemon_router.restarting is True
+    )  # the mount really asked, rather than reporting
+    assert payload["action"] == "restarted"
+    assert payload["compat"] == 1
+
+
+def test_the_client_ensure_restarts_a_daemon_whose_wire_it_cannot_speak(
+    daemon_server, daemon_router, tmp_path, monkeypatch, capsys
+):
+    """P19 makes the two front doors one surface, and the client never compared compat at all."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    server, _ = daemon_server
+    _speaks(daemon_router, 99)
+    _published(server.port, tmp_path, compat=99)
+    worker = threading.Thread(
+        target=lambda: _replace_when_restarting(daemon_router, server.port, tmp_path),
+        daemon=True,
+    )
+    worker.start()
+    assert auditr_observer.main(["ensure"]) == 0
+    worker.join(timeout=15.0)
+    payload = json.loads(capsys.readouterr().out)
+    assert daemon_router.restarting is True
+    assert payload["action"] == "restarted"
+    assert payload["compat"] == 1
+
+
+def test_a_non_http_listener_on_the_recorded_port_still_exits_zero(
+    tmp_path, monkeypatch, capsys
+):
+    """A recycled port can put anything where the daemon was, and a hook may never fail (F5)."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        _published(listener.getsockname()[1], tmp_path, compat=1)
+
+        def answer() -> None:
+            conn, _ = listener.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(b"NOT-HTTP\r\n\r\n")
+
+        worker = threading.Thread(target=answer, daemon=True)
+        worker.start()
+        assert auditr_observer.main(["status"]) == 0
+        worker.join(timeout=10.0)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["running"] is False
+    assert payload["action"] == "not running"
