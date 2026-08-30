@@ -16,93 +16,64 @@ Paths are relative to the repo root.
   suffixes), manifest (`package.json`).
 - `auditor/database/` is the SQLite layer: `base.py` (worker, table DSL, `BaseDB`), one module per
   table, `store.py` (the `IndexStore` facade).
-- `auditor/graph/` is the semantic graph, part of the core install since its libraries moved out
-  of the `[graph]` extra; `auditor/graph/ui/` is the Vite frontend `graph serve` embeds.
-- `auditor/cli/lazy.py` holds `LazyGroup`, the deferred sub-app mount, and `auditor/observer/` the
-  observer package: `assess.py` is spec 8.6's change assessment, pure functions over frozen models
-  with no store handle and no clock, and `budget.py` turns a window's spend into the day-ceiling
-  state the gate reads. `auditr_observer.py` is the observer's client and lives at the repo root,
-  outside the package, so it never imports `auditor`.
-- `auditor/malware/` wraps the opt-in ClamAV and osv-scanner shell-outs. `auditor/reporters/` holds
-  one module per output format. `auditor/profiles/*.toml` holds the built-in config profiles
+- `auditor/graph/` is the semantic graph, part of the core install; `auditor/graph/ui/` is the Vite
+  frontend `graph serve` embeds, and `auditor/graph/refine/` the refinement layer.
+- `auditor/malware/` wraps the opt-in ClamAV and osv-scanner shell-outs, `auditor/reporters/` holds
+  one module per output format, and `auditor/profiles/*.toml` the built-in config profiles
   (`base`, `strict`, `pydantic`, `all-strict`).
-- Everything else at `auditor/` top level is a shared seam or is described under the command that
-  owns it.
+- `auditor/observer/` holds the change assessment: `assess.py` classifies an edit batch against the
+  graph, `budget.py` turns a window's spend into day-ceiling state. Both are pure, and no shipped
+  command calls them yet. `auditr_observer.py` is the client, at the repo root outside the package
+  so it never imports `auditor`; every subcommand reports that the observer is not in this release.
+- Everything else at `auditor/` top level is a shared seam, described next.
 - `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagent, hooks,
-  statusline, bundled MCP config).
-- `assets/` holds the project icon and the vendored runner marks. See `assets/README.md`.
+  statusline, bundled MCP config); `assets/` holds the project icon and the vendored runner marks
+  (see `assets/README.md`).
 
 ## Shared seams
 
 - `discovery.py`: `find_root` walks up for `.git` / `pyproject.toml` / `.auditor`. `FileDiscovery`
-  lists auditable files through `git ls-files` (exact `.gitignore` handling) or an `rglob` walk
-  outside a repo, minus hard-excluded dirs, default generated-file globs, and the configured
-  `exclude`, which includes `.claude/worktrees/*` so a second checkout of the same repo is not
-  scanned twice. `FileDiscovery.auditable(path)` is that
-  same question for a caller holding a single path, and it asks git the same way: the shape
-  rules, then one `git check-ignore` so a gitignored path answers `False` exactly as `files()`
-  omits it. `auditable_paths(paths)` batches the git call for a whole Stop path set, and
-  `must_exist=False` keeps a deleted path so the observer's stage 0 still reaches stage 1.
-  `auditable_shape(path)` is the shape half with no subprocess: it is the seam S8b's `/events`
-  needs, where a path the edit deleted must still pass stage 0 and no per-event `git check-ignore`
-  is affordable. Nothing calls it yet; S8b is the slice that does. `default_base_ref` and
-  `git_changed_files` back the diff flags, and `git_output` is the shared one-shot git call
-  `paths.repo_identity` uses.
+  lists auditable files through `git ls-files` inside a repo or an `rglob` walk outside one, minus
+  hard-excluded dirs, generated-file globs and the configured `exclude`. `auditable(path)` answers
+  the same question for one path, `auditable_paths(paths)` batches the git call for a set, and
+  `auditable_shape(path)` is the shape half with no subprocess. `default_base_ref` and
+  `git_changed_files` back the diff flags; `git_output` is the shared one-shot git call.
 - `config.py`: `AuditorSettings` (pydantic-settings) is the merged repo config. `load_config`
   layers profile, `pyproject [tool.auditor]`, `.auditor/config.toml`, then injected overrides,
   loading plugins between the raw read and validation so a config may name plugin-contributed
-  rules. `ResolvedConfig.effective(rule_id)` resolves one rule for one file (rule, category, role
-  policy, per-glob override). `GlobalPaths` reads the `AUDITOR_*` env vars. See
-  [configuration.md](references/configuration.md).
-- `user_settings.py`: `UserSettings` (pydantic-settings, `AUDITOR_USER_` prefix) holds the
-  personal `observer` and `vectors` settings. `load_user_settings(root)` layers the model
-  defaults, `$AUDITOR_HOME/config.json`, `$AUDITOR_HOME/repos/<key>/config.json` and the env, in
-  that order. It is a second settings home on purpose, so repo policy and personal settings never
-  share a model or a file.
+  rules. `ResolvedConfig.effective(rule_id)` resolves one rule for one file. `GlobalPaths` reads
+  the `AUDITOR_*` env vars. See [configuration.md](references/configuration.md).
+- `user_settings.py`: `UserSettings` (`AUDITOR_USER_` prefix) holds the personal `observer` and
+  `vectors` settings, layered by `load_user_settings(root)`. A second settings home on purpose, so
+  repo policy and personal settings never share a model or a file.
 - `registry.py`: the process-wide `REGISTRY` singleton. Detectors, `LanguageAuditor`s and
-  `Reporter`s self-register via `__init_subclass__`; `builtins.py` is the single bootstrap import
-  that pulls the built-ins in.
-- `roles.py`: `RoleClassifier` labels each file production, test, test_support, script, or
-  generated from path globs plus parsed content. The role picks the policy `ResolvedConfig`
-  applies, so tests are classified rather than dropped.
+  `Reporter`s self-register via `__init_subclass__`; `builtins.py` is the single bootstrap import.
+- `roles.py`: `RoleClassifier` labels each file production, test, test_support, script or
+  generated from path globs plus parsed content. The role picks the policy `ResolvedConfig` applies.
 - `models.py`: the shared records `Finding`, `ScanResult`, `ManifestEntry`, `IndexEntry`,
-  `Partition` (the identity a checkout's worktrees share, plus the partition prefix), and the
-  `Severity` / `VerdictKind` / `FileRole` enums.
-- `database/store.py`: `IndexStore.connect(db_path, repo_key)` opens the shared db and binds the
-  handle to one repo's partition. `database/base.py`'s `SqliteWorker` owns the one thread-bound
-  connection; every store awaits through it, so writes serialize safely.
+  `Partition`, and the `Severity` / `VerdictKind` / `FileRole` enums.
 - `paths.py`: `auditor_home()`, `index_db_path()`, `repo_key()` (the index partition key),
-  `partition_for()` (the checkout identity plus the toplevel-relative prefix, cached per process
-  and bound by `cli/helpers.open_index`),
-  `read_json_dict()` (the one tolerant JSON-object reader the home's files share), and the
-  user-home layout: `user_config_path()`, `user_schema_path()`, `models_dir()`, plus
-  `repo_identity()` / `repo_dir_key()` / `repo_dir()` / `ensure_repo_dir()`. The repo dir is keyed
-  by sha1 of the resolved git common dir, so worktrees of one checkout share it and a symlinked or
-  moved path does not mint a second one.
-- `skips.py`, `ignores.py`, `baseline.py`: the suppression seams; `gate.py` is the gate they
-  feed (see Cross-cutting behavior).
+  `partition_for()` (the checkout identity plus its toplevel-relative prefix), and the user-home
+  layout (`user_config_path()`, `repo_identity()`, `repo_dir_key()`, `repo_dir()`). The repo dir is
+  keyed by sha1 of the resolved git common dir, so worktrees of one checkout share it.
+- `database/store.py`: `IndexStore.connect(db_path, repo_key)` opens the shared db and binds the
+  handle to one repo's partition; `database/base.py`'s `SqliteWorker` owns the one thread-bound
+  connection, so writes serialize. `database.open_repo_index(root)` is the one place "scoped to
+  this repo's partition and bound to this checkout's identity" is written.
+- `skips.py`, `ignores.py`, `baseline.py`: the suppression seams; `gate.py` is the gate they feed.
 - `reporters/base.py`: the `Reporter` ABC and `render(results, fmt)`. `serve.py` (`ReportServer`)
   serves a rendered page on an ephemeral `127.0.0.1` port and never binds a public interface.
+- `cli/helpers.py`: `present` (pretty at a TTY, raw JSON otherwise), the asyncio bridge, `emit`,
+  `open_index`, `fail`, `load_settings` and `cli_root`, the one root resolution every command goes
+  through. `cli/payloads.py` holds one frozen model per command payload, `cli/render.py` one
+  renderer per payload, `cli/options.py` the shared Typer annotations. `payload.py` holds the
+  `WirePayload` / `WireRows` shells they build on; the graph payloads live beside their query in
+  `graph/payloads.py` and `graph/refine/payloads.py`.
+- `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. The root Typer callback
+  flushes the unknown-key warnings as one stderr block per invocation; the MCP server's
+  `ConfigNoticeMiddleware` prints them once per repo. No command formats the warning itself.
 - Library entry points: `engine.audit_target` and `reporters.render`, both re-exported from
   `auditor`. See [python-api.md](references/python-api.md).
-- `cli/helpers.py`: `present` (pretty at a TTY, raw JSON otherwise), `run` / `run_staged` /
-  `run_live` (the asyncio bridge plus the stderr spinner), `emit`, `open_index`, `fail`,
-  `load_settings` (the loader with both config failures turned into one line) and `cli_root`, the
-  one root resolution every command goes through. `cli/payloads.py` holds one frozen model per
-  command payload and `cli/render.py` one `render_*` function per payload, taking that model and
-  never a dict; `cli/options.py` holds the shared Typer annotations. `present` is generic over the
-  payload, so it dumps the model and a renderer paired with the wrong one is a type error.
-- `payload.py`: the shells every payload module builds on, `WirePayload` (a frozen object) and
-  `WireRows` (a frozen array of one row model), so each payload declares only its own fields.
-  `cli/payloads.py` holds the command payloads; the graph ones live beside their query, in
-  `graph/payloads.py` and `graph/refine/payloads.py`, so the CLI and the MCP tools read the same
-  shape without importing each other. `graph/refine/models.py` and `graph/refine/service.py` each
-  emit one service result as itself rather than copying it into a second model.
-- `config_notice.py`: `ConfigNotice` plus the process-wide `NOTICE`. `cli_root` records the root
-  and `load_settings` hands back the keys the loader already found, so nothing merges a config
-  twice. `ConfigNotice.report()` writes the lines and marks the root as reported; the root typer
-  callback in `cli/apps.py` flushes them as one stderr block per invocation, and the MCP server's
-  `ConfigNoticeMiddleware` prints them once per repo. No command formats the warning.
 
 ## scan
 
@@ -110,38 +81,31 @@ Paths are relative to the repo root.
 [scan.md](references/scan.md).
 
 - `cli/scan.py` validates `--format` before scanning, configures logging, resolves the diff ref
-  (`--since`, `--changed`, `--vs-base`) to a changed-file set via `discovery.git_changed_files`,
-  and folds `--config-json` plus `--malware` into the config overrides. A diff mode turns on
-  `--incremental` so the whole-repo scan stays cheap.
-- `engine.audit_target` resolves the root and config, folds the flag-shaped settings
-  (`--strict-tests`, `--no-skips`, `--include-gitignored`, `--exclude`) into `AuditorSettings`, and
-  decides whether to open the index.
-- `ScanEngine.scan_path` runs the directory pipeline below. `scan_file` is the isolated single-file
-  path; `scan_file_indexed` re-audits one file and then re-runs the cross-file pass over the
-  already-persisted shapes, so a single-file scan still sees repo-level findings.
-- Per file, `ScanEngine._scan_file` classifies the role, builds `ResolvedConfig`, picks the
-  `LanguageAuditor` by path, and partitions that language's detectors into enabled (each with a
-  per-rule fingerprint) and skipped.
-- `_scan_files` audits with bounded concurrency and reports progress into the spinner.
+  (`--since`, `--changed`, `--vs-base`) to a changed-file set, and folds `--config-json` plus
+  `--malware` into the config overrides. A diff mode turns on `--incremental`.
+- `engine.audit_target` resolves the root and config, folds the flag-shaped settings into
+  `AuditorSettings`, and decides whether to open the index.
+- `ScanEngine.scan_path` runs the directory pipeline; `scan_file` is the isolated single-file path
+  and `scan_file_indexed` re-audits one file, then re-runs the cross-file pass over the persisted
+  shapes so a single-file scan still sees repo-level findings.
+- Per file, `_scan_file` classifies the role, builds `ResolvedConfig`, picks the `LanguageAuditor`
+  by path, and partitions that language's detectors into enabled (each with a per-rule fingerprint)
+  and skipped. `_scan_files` audits with bounded concurrency.
 - With an index, `_scan_cached` compares the content hash and each rule fingerprint, re-runs only
-  the rules that missed, then writes back the file row, the per-rule findings, the shape rows, and
-  the graph facts when `[tool.auditor.graph]` is on.
-- `_audit` runs the language auditor, then `skips.filter_findings` drops directive-suppressed
-  findings before the index stores them, so cached rescans stay consistent.
-- After the file pass, `_sweep_unclassified_for_secrets` runs the config secret detectors over
-  every non-binary file no language auditor claims, so a credential in a `.md` or `.sql` file is
-  still caught.
-- `malware.passes.run_malware_passes` runs only when `malware_scan.enabled`.
-- With an index, `IndexStore.prune` drops rows for files that no longer exist under this scan's
-  scope, then `crossfile.run` recomputes the repo-level findings from the shapes table. Without an
-  index, `_apply_crossfile_in_memory` recomputes shapes in memory so a stateless directory scan
-  still reports them.
-- `engine._apply_ignores` filters persistent ignores before results leave `audit_target`.
+  the rules that missed, then writes back the file row, the findings, the shape rows, and the graph
+  facts when `[tool.auditor.graph]` is on.
+- `skips.filter_findings` drops directive-suppressed findings before the index stores them, so
+  cached rescans stay consistent.
+- `_sweep_unclassified_for_secrets` then runs the config secret detectors over every non-binary
+  file no language auditor claimed, and `malware.passes.run_malware_passes` runs when enabled.
+- With an index, `IndexStore.prune` drops rows for files gone from this scan's scope and
+  `crossfile.run` recomputes the repo-level findings from the shapes table; without one,
+  `_apply_crossfile_in_memory` does the same in memory. `engine._apply_ignores` filters persistent
+  ignores last.
 - Back in `cli/scan.py`: `--write-baseline` writes and exits; a directory scan writes the `scan`
-  block of `$AUDITOR_HOME/repos/<key>/status.json` through `status.write_status`; `--baseline`
-  hides recorded findings; `gate.gate_tripped` decides the exit code; `--severity`,
-  `--min-severity` and `--rule` filter the display only; then `cli/summary.print_summary`,
-  `reporters.render`, or `ReportServer`.
+  block of `status.json`; `--baseline` hides recorded findings; `gate.gate_tripped` decides the
+  exit code; `--severity`, `--min-severity` and `--rule` filter the display only; then
+  `cli/summary.print_summary`, `reporters.render`, or `ReportServer`.
 
 ```mermaid
 flowchart TB
@@ -162,471 +126,201 @@ flowchart TB
     L --> N[summary / reporter / serve]
 ```
 
-## report
+## report, manifest, discover
 
-- `cli/report.py` calls the same `engine.audit_target` on one file with cross-file left off, so it
-  is stateless and isolated: no index writes, no cross-file findings. See
-  [report.md](references/report.md).
-- Output defaults to `-f json` (the agent-facing contract), unlike `scan`, whose default is the
-  human summary.
+- `cli/report.py` calls the same `engine.audit_target` on one file with cross-file off, so it is
+  stateless: no index writes, no cross-file findings. It defaults to `-f json`, unlike `scan`.
+  See [report.md](references/report.md).
+- `cli/manifest.py` parses with `ast` and builds `models.ManifestEntry.from_module`. No detectors,
+  no config load, Python only. See [manifest.md](references/manifest.md).
+- `cli/discover.py` loads the config, lists `FileDiscovery.files(target)` and labels each path with
+  `RoleClassifier`, auditing nothing. See [discover.md](references/discover.md).
 
-## manifest
+## aggregate, crossfile
 
-- `cli/manifest.py` parses the file with `ast` and builds `models.ManifestEntry.from_module`. No
-  detectors, no config load, Python only. See [manifest.md](references/manifest.md).
+- `cli/aggregate.py` opens the repo's index partition and hands it to `aggregate.AuditAggregator`,
+  which reconstructs per-file results from the cached rows, applies ignores, and renders one
+  `AUDIT.md`. It never re-scans. See [aggregate.md](references/aggregate.md).
+- `cli/crossfile.py` derives the repo's inputs with `crossfile.CrossFileInputs` and runs the pass
+  against the index. `ScanEngine` holds the same object, so both report the same count.
+  `crossfile.run` groups the `shapes` table for duplicate models and functions within a role, then
+  merges the pure passes: `settings_cohesion.find_scattered`, `fixture_usage.find_unused`,
+  `dead_code.find_dead` and `private_usage.find_leaked_private`. See
+  [crossfile.md](references/crossfile.md).
 
-## discover
+## index, ignore, config, init
 
-- `cli/discover.py` loads the config, lists `FileDiscovery.files(target)`, and labels each path
-  with `RoleClassifier`. It answers what a scan would cover and how strictly each file would be
-  treated, without auditing anything. See [discover.md](references/discover.md).
-
-## aggregate
-
-- `cli/aggregate.py` opens the repo's index partition and hands it to `aggregate.AuditAggregator`.
-  See [aggregate.md](references/aggregate.md).
-- `AuditAggregator` reconstructs per-file results from the cached `files` and `findings` rows,
-  applies persistent ignores, and renders one `AUDIT.md` with severity totals, a per-file table,
-  and the candidates to judge. It never re-scans, so `scan --incremental` has to have run first.
-
-## crossfile
-
-- `cli/crossfile.py` derives the repo's inputs with `crossfile.CrossFileInputs` (the settings the
-  pass reads plus the `pyproject.toml` entry-point names), runs the pass against the index, and
-  reports how many findings survive skip directives and persistent ignores. `ScanEngine` holds the
-  same object, so both report the same count. See [crossfile.md](references/crossfile.md).
-- `crossfile.run` clears the repo-level rules' rows, groups the `shapes` table for duplicate models
-  and functions within a role, then merges the pure passes: `settings_cohesion.find_scattered`,
-  `fixture_usage.find_unused`, `dead_code.find_dead`, and `private_usage.find_leaked_private`. It
-  re-parses nothing.
-
-## index
-
-- `cli/index.py` (`add`, `list`, `repos`, `forget`) is the direct handle on the shared db: register
-  an audit scope, list per-file rows, list every registered repo, drop this repo's cached rows. See
-  [index.md](references/index.md).
-- `add`, `list` and `forget` resolve the repo partition through `paths.repo_key`; `repos` opens the
-  db unpartitioned via `helpers.open_shared_index`.
-
-## ignore
-
-- `cli/ignore.py` (`add`, `list`, `rm`, `clear`) writes rows to the `ignores` table. `add`
-  validates the rule id against `REGISTRY` unless `--force`. See [ignore.md](references/ignore.md).
-- A line-level add calls `engine.finding_evidence_at` to snapshot the offending text.
-  `ignores.IgnoreList` then matches on that hash first and the literal line second, so the ignore
-  follows the code when lines shift.
-- Scope widens as fields are left off: no `--file` is repo-wide, `--file` alone is file-wide,
-  `--file` plus `--line` is one finding.
-
-## config
-
-- `cli/config.py` (`show`, `check`) runs `config.load_config` for the resolved root and
-  dumps the merged `AuditorSettings`. It is how you see which layer won. `--user` dumps the
-  resolved `UserSettings` instead, and `check` reports the keys no model declares in either. See
+- `cli/index.py` (`add`, `list`, `repos`, `forget`) is the direct handle on the shared db. `add`,
+  `list` and `forget` resolve the repo partition through `paths.repo_key`; `repos` opens the db
+  unpartitioned. See [index.md](references/index.md).
+- `cli/ignore.py` (`add`, `list`, `rm`, `clear`) writes rows to the `ignores` table, validating the
+  rule id against `REGISTRY` unless `--force`. A line-level add snapshots the offending text, so
+  `ignores.IgnoreList` matches on that hash first and the literal line second. See
+  [ignore.md](references/ignore.md).
+- `cli/config.py` (`show`, `check`) runs `config.load_config` for the resolved root and dumps the
+  merged `AuditorSettings`, or the resolved `UserSettings` under `--user`. See
   [config.md](references/config.md).
+- `cli/init.py` creates `$AUDITOR_HOME`, writes `config.json`, regenerates `config.schema.json`
+  from `UserSettings.model_json_schema()`, and with `--repo` creates the per-repo overlay and its
+  breadcrumb. See [init.md](references/init.md).
 
-## init
+## rules, plugins
 
-- `cli/init.py` creates `$AUDITOR_HOME`, writes `config.json` with only `$schema` and
-  `config_version`, regenerates `config.schema.json` from `UserSettings.model_json_schema()`, and
-  with `--repo` creates `paths.ensure_repo_dir(root)` plus its overlay. See
-  [init.md](references/init.md).
-- `--check` writes nothing and reports unknown keys, a breadcrumb whose root has vanished, and a
-  leftover `<repo>/.auditor/.status.json`; `--migrate` rewrites that breadcrumb and
-  `--clean-status` deletes that file.
-
-## rules
-
-- `cli/rules.py` (`list`) reads `REGISTRY` directly: rule id, category, framework, default
-  severity, verdict kind, standard refs, and whether the rule came from a plugin. Category,
-  standard and framework filters are validated against the registry. See
+- `cli/rules.py` (`list`) reads `REGISTRY` directly and validates its filters against it. See
   [rules.md](references/rules.md).
-
-## plugins
-
 - `cli/plugins.py` (`list`) constructs a `PluginLoader`, runs a config load through it, and prints
-  `REGISTRY.snapshot()` plus the loader's warnings. See [plugins.md](references/plugins.md).
-- `plugins.PluginLoader` discovers plugins from the `auditor.*` entry-point groups, from modules
-  named in the config's `plugins` list, and from `.auditor/plugins/*.py`. Local plugins execute repo
-  code, so they load only under `trust_local_plugins` or `--allow-local-plugins`.
-- The plugin contract is the ABCs themselves: subclass `Detector`, `LanguageAuditor` or `Reporter`
-  and `__init_subclass__` registers it.
+  `REGISTRY.snapshot()` plus the loader's warnings. `plugins.PluginLoader` discovers plugins from
+  the `auditor.*` entry-point groups, from modules named in the config, and from
+  `.auditor/plugins/*.py`, which execute repo code and so load only under `trust_local_plugins` or
+  `--allow-local-plugins`. The contract is the ABCs themselves. See
+  [plugins.md](references/plugins.md).
 
 ## malware
 
-- `cli/malware.py` (`status`, `install`, `update-dbs`) manages the backends only. The scan itself
+- `cli/malware.py` (`status`, `install`, `update-dbs`) manages the backends only; the scan itself
   rides `auditr scan --malware` or `[tool.auditor.malware_scan]`. See
   [malware.md](references/malware.md).
-- `malware/tools.py` resolves each binary from `$AUDITOR_HOME/bin` first, then `PATH`, and reports
-  versions. Those versions fold into the cache fingerprint, so a database refresh invalidates
-  exactly the malware rows.
-- `malware/passes.py` runs its passes at scan time: `clamav.py` over the files `malware/walk.py`
-  enumerates (no gitignore filter, vendored dirs included by default), and `osv.py` over the repo's
-  lockfiles. `malware/rules.py` registers the rule ids so `rules list`, config and SARIF
-  descriptors know them.
+- `malware/tools.py` resolves each binary from `$AUDITOR_HOME/bin` first, then `PATH`. Those
+  versions fold into the cache fingerprint, so a database refresh invalidates exactly the malware
+  rows.
+- `malware/passes.py` runs `clamav.py` over the files `malware/walk.py` enumerates and `osv.py`
+  over the repo's lockfiles; `malware/rules.py` registers the rule ids.
 - `install` and `update-dbs` are the only networked commands in the subsystem; nothing networked
-  runs at scan time. `install.py` downloads a pinned osv-scanner binary and verifies it against the
-  release SHA256SUMS; ClamAV is left to the platform package manager, whose command the CLI runs
-  after confirmation.
+  runs at scan time. `install.py` verifies a pinned osv-scanner download against the release
+  SHA256SUMS and leaves ClamAV to the platform package manager.
 
 ## graph
 
 - `cli/__init__.py` mounts `graph` through `cli/lazy.py`'s `LazyGraphGroup`, which imports
-  `cli/graph.py` on the first graph subcommand, so numpy, scikit-learn and networkx never load
-  for the other commands. See [graph.md](references/graph.md).
-- A broken graph dependency surfaces as a one-line click error naming `auditr graph`, not a
-  traceback, and the failed import is cached, so a second dispatch repeats that error instead
-  of presenting an empty group as a working one.
-- `graph build` auto-scans first with graph extraction forced on (skip with `--no-scan`), then runs
-  `graph.build.GraphBuilder.run` over the cached per-file facts: dedupe nodes,
-  `resolve_edges.resolve_structural` (returning a `StructuralResult` of deterministic edges plus the
-  facts it could not place), `naming.name_similar_edges` (tf-idf plus LSI),
-  `usage.usage_similar_edges` (callee and operand-type Jaccard), `rank.pagerank`,
-  `cluster.cluster_concepts`, run `detectors.run_graph_detectors`, then persist the nodes, edges,
-  clusters, the unresolved queue and the `GRAPH-*` findings through one `IndexStore.transaction`.
-- The build's write is one commit on purpose: an interrupted build must not leave a new node set
-  beside the previous queue or the previous run's findings. `IndexStore.transaction(fn)` runs `fn`
-  on the live connection and rolls back on any exception; the `write_*` halves of `graph.replace`,
-  `graph.replace_unresolved`, `findings.add` and `findings.clear_for_rules` are what it composes.
-- `build.GraphWrite` is that whole result as one frozen record: `nodes`, `edges`, `clusters`,
-  `unresolved`, `findings` and `detect`. `apply(conn, index)` is the write and `summary()` the
-  counts, so the empty-graph build takes the same path and reports the same shape as any other.
-- `graph/refine/` is the refinement layer. The pure half is stdlib, pydantic and `config.py` with no
-  database; `facts.py` and everything above it read one:
-  - `models.py` holds the frozen records: `Proposal` and the per-kind target rules, the stored
-    `Refinement`, the anchors, the eval rows a tier gate reads, and the shapes every other module
-    here shares (`Verdict`, `RunReport`, `VerifyStatus`, `RunAttribution`, `RunnerChoice`).
-  - `namespace.py` owns the node id: partition-relative against toplevel-relative, plus the
-    readers that take an id apart (`short_name`, `file_of`).
-  - `overlay.py` is the pure merge one build applies, and `lock.py` the cross-process rebuild lock.
-  - `verify.py` is the AST-fact check over the files a proposal names.
-  - `tiers.py` turns a verified proposal into a tier and the status that tier starts in.
-  - `conflicts.py` is the commit-time collision check against prior work.
-  - `facts.py` is the reader a proposal and a brief are both judged against (the queue row, the
-    role-filtered definers, and the files re-read from disk), plus `BriefBuilder`, which turns
-    those reads into a brief.
-  - `prompts.py` is what a model-driven run is told: the system prompt and its sha, the
-    structured-answer schema, and the tool allow-list. It imports nothing from this package.
-  - `brief.py` is the brief as pure models and the text they render to. It reads nothing, because
-    the wire payload imports it and every fast CLI command imports the wire payload.
-  - `client.py` names the client a runner talks through (`ClientSession`, `ClientFactory`). A leaf
-    below both sides of the SDK boundary, so neither has to import the other for the name.
-  - `runner.py` is the producer ABC (`RefinementJob`, `RefinementRunner`, `RunProduct`) plus
-    `FakeRunner`.
-  - `sdk_runner.py` is the Claude producer, deliberately SDK-free: `Conversation`'s message loop,
-    `SdkOptions.refusal`'s init check and the outcome mapping, over an injected client factory.
-  - `sdk_client.py` is the only module that imports `claude_agent_sdk`. Pure translation: it turns
-    the runner's own `BoundTools.tools()` table into SDK tools and decides nothing itself.
-  - `drive.py` is the runner choice and the one `refine` call both surfaces make, and it owns the
-    single `observer-claude` import guard.
-  - `eval.py` is what `auditr graph eval` measures: the population it masks edges out of, one
-    `EvalSuiteSpec` subclass per suite, the judge that scores a batch without storing anything, and
-    `EvalRun`, which owns one invocation's plan, spend and rows. It is the only module here that
-    reads `facts.py`, `verify.py` and `resolve_edges.py` together, so it stays off the fast CLI
-    path and `drive.py` is its only importer. Its vocabulary and arithmetic (`EvalSuite`,
-    `Stratum`, `SuiteSpend`, `SuiteTally`, `key_of`, `wilson_lower`, `flawless_floor`) live in
-    `models.py` and its wire payload in `refine/payloads.py`, both of which the fast path does
-    load. `models.py` owns the two lists both halves read, `PRECISION_SUITES` and `BOUNDED_FORMS`,
-    so the gate in `tiers.py` and the draw in `eval.py` cannot drift on what tier B is measured
-    over.
-  - The import order among the last five is one-directional and mandatory:
-    `runner.py` <- `sdk_runner.py` <- `sdk_client.py` <- `eval.py` <- `drive.py`. A two-way edge is
-    an `ImportError` at module top, and a deferred import is not an option here; `EvalRun` takes
-    the runner factory as a field for exactly that reason.
-- `refine/verify.py` re-reads every file a proposal names, re-extracts it, and refuses when the file
-  no longer hashes to what the build cached. It then checks the destination's short name against the
-  src node's own fact tuple for that edge kind and call form, refuses a destination outside the
-  role-filtered definers (outside the gated candidates for `resolve_ambiguous`), refuses a name the
-  caller's module imported from outside the repo, and refuses endpoints whose node kinds the
-  resolver never pairs. The externally-bound rule and the call-form split are
-  `resolve_edges.NameBindings` and `resolve_edges.form_for`, the same objects the unresolved queue
-  dims and shapes a row with.
-- `refine/tiers.py` reads spec 9.2's tier column and spec 10.3's gate. The tier comes from the
-  proposal's shape; whether it activates comes from the latest eval row per
-  `(runner, model, suite, stratum)` measured on this repo, so a newer failing eval un-proves a
-  stratum an older one had proven. With no rows, everything but the kinds that cannot add an edge
-  starts `pending`.
-- `refine/conflicts.py` answers a proposal against the resolver's own edges first (an edge the
-  resolver now produces is `redundant` and terminal) and then against the active refinements (the
-  same edge is a confirmation, another destination for the same name contradicts).
-- `refine/service.py` is the lifecycle. `begin` writes a `graph_runs` row with the branch and HEAD
-  it started against; `propose` validates the shape, verifies the facts, assigns a tier and stages
-  the proposal in memory, storing a rejection immediately so an aborted run still explains itself;
-  `commit` takes this checkout's rebuild lock once and does the git guard, the conflict checks, the
-  inserts and `GraphBuilder.rebuild(lock_held=True)` inside it. The whole batch is decided before
-  anything is written and inserted as one `IndexStore.transaction`, and a rebuild that fails after
-  it rejects every row the commit inserted, so a run that dies leaves nothing a later `accept`
-  could activate and a retry cannot land the same change twice.
-- `graph/refine/payloads.py` holds the wire models that narrow a service result:
-  `RunReportPayload`, because a `RunReport` carries a whole `Run`, plus `BriefPayload` and
-  `RefinePayload`. It is separate from `graph/payloads.py` because it reaches the refinement
-  models and the brief, which the shared payload module does not. Everything it imports is pure:
-  `render.py` imports it for two renderers, so anything it reached would be loaded by every fast
-  CLI command, and `tests/cli/test_lazy.py` pins that. `Verdict`, `Brief` and
-  `graph/payloads.py`'s `CommitResult` are emitted as themselves rather than copied into a second
-  model.
-- `graph/query.py`'s `LogQuery` is the provenance reader: `page(spec)` for `graph log`'s two views
-  and `refinements(statuses, limit)` for the corrections page. It exists so a frozen wire model
-  never does database I/O and so the CLI and the MCP tools read one page one way. Every filter and
-  every time window is a SQL clause, applied before the `LIMIT`, and both surfaces page newest
-  first.
-- `mcp/refine_tools.py` is spec 9.5's producer surface: the refinement tools an agent drives by
-  hand (`graph_refine_begin | propose | commit | abort | status | brief`), `graph_refine`, which
-  runs a model over the queue in this process through `refine.drive`, and the two readers
-  `graph_refinements` and `graph_log`. It builds a `RefinementService` per call over the process
-  registry for that repo identity and never constructs one of its own. There
-  is deliberately no tool for `accept`, `revert`, `pin` or `prune`: under spec 10.3 activating a
-  correction is a human step, and `auditr graph refinements` is where it happens.
-- `RefinementLedger` is the by-hand half over the index handle alone: `accept`, `revert` and `pin`
-  are status transitions, because the build is the one merge point, and `prune` finishes the runs a
-  dead process left open and then sweeps the retention window. It needs no run registry, no checkout root and no git guard, which is what a
-  `graph refinements accept <id>` surface has to work without. `RefinementService` composes it.
-- `FactReader` does the reads a proposal is judged against (its queue row, the role-filtered
-  definers of the name, a verifier over the files it names). `verify.FactVerifier` is pure by
-  contract, so the reading has an object of its own.
-- A proposal is refused before any file is read when it is not a legal `Proposal` (the model's own
-  validators own that rule), when the run is at `max_changes_per_run`, when it names ids outside
-  the run's scope or outside this partition, when the run already staged it, or when the run
-  already answers that queue name with another destination. Every one of those is stored, so an
-  aborted run still explains itself. That includes a payload no kind could fill: `Proposal.read`
-  re-reads it with the values the validator could not read dropped, and the target rule is relaxed
-  for a row that is being stored as a rejection, since such a row exists to carry the complaint.
-  Only an unreadable `kind` still raises, because the kind chooses the shape.
-- Staged proposals never reach the database. `RunRegistry.process(identity)` is the registry a
-  process stages into for one repo identity, so a service built per tool call finds the run the
-  call before it opened; it is bounded by that identity's `observer.limits.max_open_runs`, so a run
-  whose process dies loses exactly the work that was never promised, and `graph_refine_status`
-  reports `staged_here: false` in any other process rather than an empty list. Keyed by identity
-  because an MCP server takes the repo path per call and therefore holds runs from several
-  checkouts: on one shared registry, one repo's cap decided which of another's runs was evicted,
-  and the eviction was written under the caller's identity, so the evicted row stayed `queued` for
-  ever. Evicting a run to make room finishes its `graph_runs` row `skipped` and stores its staging
-  as rejections, so no row is left `queued`; `prune_skipped_runs` reaps such a run together with
-  those rejections, and keeps any skipped run that owns a refinement which is still live.
-- A run left `queued` by a process that died is reachable from nowhere else, so
-  `RefinementLedger.prune` finishes those too: any `queued` row older than
-  `observer.limits.stranded_run_seconds` becomes `skipped` with `error="stranded: …"`, which is
-  what makes it visible in the log and eligible for the sweep.
-- One run is one critical section. Each `StagedRun` owns an `asyncio.Lock` held for the whole body
-  of `propose`, `commit` and `abort`, and both terminal methods close the run before their first
-  real await, so a second `commit` is refused rather than inserting the same rows twice. The
-  rebuild lock is taken with a bounded timeout by every surface that does not want to wait for
-  ever: `RefinementService.commit`, `RefinementService.rebuild` and the MCP `graph_build` tool all
-  pass `graph.rebuild_lock_timeout_seconds`, so a build holding it becomes a refusal naming the
-  lock file, never a hung tool call, and any failure inside it finishes the run `failed`. The CLI
-  `auditr graph build` still waits, printing that it is waiting: it is interactive and
-  interruptible.
-- A commit that staged nothing takes no lock and runs no build. Spec 6 requires the queue rows to
-  be retired in the same lock as the insert; with no insert there is nothing to retire.
-- `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
-  the active rows against their anchors and the passes are its methods: `edges` merges the edge
-  kinds into the resolver's output, `nodes` applies the node and cluster kinds to the ranked and
-  clustered result, and `queue_rows` retires the rows a refinement answered. Each pass records its
-  verdicts on the object, so `Overlay.outcomes` is whole however many passes the build ran.
-- `build.SimilarityPass` and `build.ClusterPass` are the build's own seams: the name and usage
-  edges plus the text-sparse set, and one ranking and clustering with the cluster rows and queue
-  rows derived from it. Nothing in `run` is rebound to mean something else.
-- The detectors get their own pass: a second `build._clustered` over the edge list captured before
-  the overlay, and the nodes it stamps, so no `GRAPH-*` finding depends on a refinement. It is
-  skipped, exactly, when the overlay placed no edge and moved no node, because that pass would
-  then read the arguments the merged one already did. A build with no refinements pays nothing.
-- Each refinement the build looked at comes back as one `RefinementOutcome` on `GraphWrite.outcomes`,
-  so `refinements.write_outcomes` runs in the same transaction as the graph it describes.
-- `graph build`, the MCP `graph_build` tool and (from S5) the refinement service all go through
-  `GraphBuilder.rebuild`, which holds `$AUDITOR_HOME/observer/locks/<sha1(identity)>.lock` for the
-  whole build. One lock per checkout, not one globally: nothing is shared across identities, and a
-  global lock would queue every repo the daemon watches behind one file. The lock is polled with
-  `fcntl.flock(LOCK_EX | LOCK_NB)` so a waiting caller stays interruptible and prints "waiting for
-  the observer's rebuild" once. POSIX only.
-- `rebuild(snapshot=…)` calls the hook immediately before and immediately after the persist
-  transaction, still inside the lock. That is how the observer's change assessment sees exactly one
-  build's worth of queue delta.
-- The transaction idiom, and the rule that keeps it from growing dead halves:
-  - A store method that writes owns its own commit and is `async`.
-  - Its `write_*` half takes the open connection, writes, and never commits, so a caller can
-    compose several stores into one commit through `IndexStore.transaction`.
-  - A `write_*` half is added only when a transaction calls it. `refinements.write_outcomes` is
-    the one written for a caller in the same change: the overlay writes refinement verdicts inside
-    the build's transaction, so a graph and its provenance land together.
-- `database.open_repo_index(root)` is the one place "connect scoped to this repo's partition and
-  bound to this checkout's identity" is written. `cli.helpers.open_index` and
-  `mcp.helpers.open_index` wrap it with their layer's repair message; nothing else calls
-  `IndexStore.connect` with a repo key alone, because that binds the worktree path as the identity
-  and every identity-scoped query then returns nothing.
-- `BaseDB` carries two read helpers because the index has two scoping keys: `_fetch` / `_fetch_one`
-  bind `repo` (the partition), `_fetch_by_identity` / `_fetch_one_by_identity` bind
-  `partition.identity` (the checkout). A store binds one or the other, never both.
-- `resolve_edges._resolve_name` returns a frozen `Resolution` (`ids`, `gated`, `definers`, `path`,
-  `reason`), which is both how an edge is chosen and the evidence a queue row carries.
-- `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to the
-  `UnresolvedCollector` it owns, which applies the post-pass gates (a settled non-repo receiver, a
-  name the node already has an edge to) and materializes the rows in `drain`.
-- `graph_unresolved` is a partition table rebuilt by every build. The resolver contributes
-  `ambiguous_name` and `unimportable_name` rows; the build pass adds `text_sparse`, `generic_label`
-  and `singleton_cluster` rows after clustering. It is node-keyed, so `IndexStore.prune` never
-  touches it. See [graph.md](references/graph.md).
-- `database/refinements.py` holds the identity stores, one concern each:
-  - `RunsDB` (`index.runs`) owns `graph_runs`, one row per decision, model call or not.
-  - `RefinementsDB` (`index.refinements`) owns `graph_refinements` and
-    `graph_refinement_anchors`: one row per correction, plus the nodes it is pinned to with the
-    `truth_sha` they had when it was made.
-  - `TuningDB` (`index.tuning`) owns `graph_tuning`, the proposed knob changes.
-  - `EvalsDB` (`index.evals`) owns `graph_evals`, one measured accuracy per suite stratum.
-  - They key on `repo_identity` (the resolved git common dir), not on the repo partition, so every
-    worktree of a checkout shares them and `repos.forget()` cannot cascade into them. Reads bind
-    the identity; writes address a globally unique id and bind the identity too.
-- Every insert binds its columns by name through `BaseDB.insert_sql` / `insert_many_sql`, which
-  order the binds by the `Table` declaration and raise `KeyError` on a mapping that does not match
-  it. Reordering two same-typed columns can no longer transpose a row.
-- Ids inside those tables are toplevel-relative: `partition_prefix` plus the partition-relative id,
-  so a repo scanned both at its root and at a subdirectory keeps one namespace.
-- `graph_runs` rows with `status='skipped'` have three sources, told apart by
-  `trigger_detail.assessment`: the gate's own decisions carry it and put their reason there, while
-  evicted and stranded runs carry no assessment and put their reason in `error`.
-  `RefinementService.decline` is the ledger's one assessment writer, and it stages nothing, so a
-  skip can never evict a run that is still holding proposals. `RunsDB.prune_skipped_runs` sweeps
-  the gate's rows alone after `observer.skipped_retention_days`: the observer's own, no runner, no
-  `error`, and an assessment on the detail. An evicted or stranded run reached a runner and its
-  `error` is the only record of it, so it is kept whatever its age, exactly as a real run is. A
-  row owning a `graph_tuning` row or a refinement that is not `rejected` is kept too: both
-  reference `graph_runs.run_id` with no `ON DELETE`, so the sweep leaves it rather than orphaning
-  what it owns. The one shape it does cascade through is a row whose refinements are all
-  `rejected`; `decline` stages nothing, so no production assessment row owns any, and
-  `removed_refinements` is there so a caller told "1 run removed" can still see what went with it.
+  `cli/graph.py` on the first graph subcommand, so numpy, scikit-learn and networkx never load for
+  the other commands. A broken graph dependency surfaces as a one-line error naming `auditr graph`,
+  and the failed import is cached. `cli/graph_refine.py` holds `unresolved`, `refine`, `eval`,
+  `log` and `refinements`, registered from the bottom of `cli/graph.py` in one direction only.
+  See [graph.md](references/graph.md).
+- `graph build` auto-scans with graph extraction forced on, then runs `build.GraphBuilder.run` over
+  the cached facts: dedupe nodes, `resolve_edges.resolve_structural`, `naming.name_similar_edges`
+  (tf-idf plus LSI), `usage.usage_similar_edges` (callee and operand-type Jaccard), `rank.pagerank`,
+  `cluster.cluster_concepts`, `detectors.run_graph_detectors`, then persist through one
+  `IndexStore.transaction`. `build.GraphWrite` is that whole result as one frozen record, so the
+  empty-graph build takes the same path.
+- The write is one commit on purpose: an interrupted build must not leave a new node set beside the
+  previous run's queue or findings.
+- `GraphBuilder.rebuild` holds `$AUDITOR_HOME/observer/locks/<sha1(identity)>.lock` for the whole
+  build, one lock per checkout, polled with `fcntl.flock(LOCK_EX | LOCK_NB)` so a waiting caller
+  stays interruptible. POSIX only.
+- `resolve_edges.StructuralResolver` resolves names into edges; the facts it cannot place go to its
+  `UnresolvedCollector`, which materializes the `graph_unresolved` rows. The build pass adds the
+  `text_sparse`, `generic_label` and `singleton_cluster` rows after clustering.
 - `graph/hashes.py` derives the per-node hashes from the extracted facts: `truth_sha` over the fact
-  tuples structural edges read, and `facts_sha` over those plus `doc_tokens`.
-  - `truth_sha` decides run gating and anchor drift; `facts_sha` decides whether similarity edges
-    rebuild.
-  - Neither covers `line`, `role`, the identity strings the node id already carries, the build-pass
-    fields, the overlay fields (`refined`, `annotation`), or `local_names`.
-  - Every name a node binds is also subtracted from the fact tuples before hashing, because a local
-    identifier reaches `callees`, `class_refs`, `callback_names`, `bare_callees` and the receiver
-    slot of `attr_callees` / `typed_calls`. So a refinement survives a comment, a reformat, a
-    renamed local and a renamed parameter in its own file.
-  - `doc_tokens` keep their local identifiers, so `facts_sha` still moves on a rename. That is the
-    intent: similarity edges read the tokens.
-- `file_hashes` rolls them over the sorted `(node_id, hash)` set, so an added or deleted node moves
-  a file's hash even when every surviving node is unchanged. The scan stores that pair in
-  `graph_facts.truth_sha` / `facts_sha` next to the content hash.
-- The query commands (`related`, `neighbors`, `concept`, `clusters`, `search`, `usages`) all read
-  the persisted tables through `graph.query.GraphQuery`; nothing is recomputed.
-- `graph flow` walks that same persisted graph through `graph.flow.build_flow`: breadth-first over
-  `calls` and `callback_arg`, expanding overriders and registry members as `dispatches_to`,
-  pruned by depth, node limit, test role, `--stop-at` module globs and the `flow_hub_fan_in` hub
-  floor, which compares both a node's incoming fan and its outgoing fan against the floor.
-  `GraphQuery.flow` loads one `GraphCache`, resolves the start symbol out of it, and hangs the
-  `graph_unresolved` rows for the nodes the walk reached off the tree. Every knob travels as one
-  frozen `graph.flow.FlowOptions`, which the CLI command and the MCP tool each build from their
-  own flat parameters.
-- `graph serve` renders `graph.viz.build_payload` into the bundled UI and serves it on
-  `ReportServer`, rebuilding only when no graph exists or `--rebuild` is passed. `graph export`
-  emits Graphviz DOT, or SVG by piping it through the system `dot`.
+  tuples structural edges read (it decides run gating and anchor drift) and `facts_sha` over those
+  plus `doc_tokens` (it decides whether similarity edges rebuild). Names a node binds are
+  subtracted before hashing, so a refinement survives a comment, a reformat and a renamed local.
+- `graph/refine/` is the refinement layer. Its pure half is stdlib, pydantic and `config.py` with
+  no database: `models.py` (the frozen records), `namespace.py` (the node id), `overlay.py` (the
+  merge one build applies), `lock.py`, `verify.py` (the AST-fact check), `tiers.py` (shape to tier),
+  `conflicts.py` (the commit-time collision check), `facts.py` (the reader and `BriefBuilder`),
+  `prompts.py` and `brief.py`.
+- Above it: `runner.py` (the producer ABC plus `FakeRunner`), `sdk_runner.py` (the Claude producer,
+  deliberately SDK-free), `sdk_client.py` (the only importer of `claude_agent_sdk`), `eval.py`
+  (what `auditr graph eval` measures) and `drive.py` (the runner choice and the one `refine` call
+  both surfaces make, and the single `observer-claude` import guard). That import order is
+  one-directional and enforced by module-top imports.
+- `refine/service.py` is the lifecycle: `begin` writes a `graph_runs` row with the branch and HEAD
+  it started against, `propose` verifies and stages in memory (storing a rejection immediately, so
+  an aborted run still explains itself), and `commit` takes the rebuild lock once and does the git
+  guard, the conflict checks, the inserts and `GraphBuilder.rebuild` inside it, as one transaction.
+  `RefinementLedger` is the by-hand half over the index handle alone: `accept`, `revert`, `pin` and
+  `prune` are status transitions, because the build is the one merge point.
+- `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
+  the active rows against their anchors; its passes merge edge kinds into the resolver's output,
+  apply the node and cluster kinds, and retire the queue rows a refinement answered. The `GRAPH-*`
+  detectors get a second pass over the edge list captured before the overlay, so no finding depends
+  on a refinement.
+- `graph/query.py`'s `GraphQuery` answers `related`, `neighbors`, `concept`, `clusters`, `search`
+  and `usages` off the persisted tables; `LogQuery` is the provenance reader both `graph log` and
+  the MCP tools page through, so neither can drift on ordering or on what a time window means.
+- `graph.flow.build_flow` walks the persisted graph breadth-first over `calls` and `callback_arg`,
+  expanding overriders and registry members as `dispatches_to`, pruned by depth, node limit, test
+  role, `--stop-at` globs and the `flow_hub_fan_in` floor. Every knob travels as one frozen
+  `FlowOptions`.
+- `graph/cache.py` holds `GraphCache`, the per-query index of every node and edge in a partition.
+  It is a leaf: `flow.py` and `query.py` import it and nothing imports back.
+- `graph serve` renders `graph.viz.build_payload` into the bundled UI on `ReportServer`, rebuilding
+  only when no graph exists or `--rebuild` is passed. `graph export` emits Graphviz DOT, or SVG by
+  piping it through the system `dot`.
 - `graph/extract.py`, `graph/model.py`, `graph/cache.py` and `graph/flow.py` are stdlib plus
-  pydantic only and never touch numpy. The numpy and scikit-learn modules are imported only from `build.py`, `naming.py`,
-  `usage.py`, `rank.py` and `cluster.py`, which is why `graph/__init__.py` never imports them.
-- `graph/cache.py` holds `GraphCache`, the per-query index of every node and edge in a partition,
-  and `resolve_ids`, the shared bare-name resolver. It is a leaf: `graph/flow.py` and
-  `graph/query.py` both import it and nothing imports back. `GraphQuery.neighbors` and the flow
-  traversal load it once instead of issuing one `GraphDB.edges_of` round trip per visited node.
-  The full load reads the whole partition, so it pays for itself from about six visited nodes up,
-  which `neighbors` reaches from depth 2. At its default depth of 1 `neighbors` visits one node
-  and stays on `edges_of`, as `related` and `usages` do.
+  pydantic and never touch numpy, which only `build.py`, `naming.py`, `usage.py`, `rank.py` and
+  `cluster.py` import.
 
-## self
+## self, version
 
 - `cli/self_update.py` (`update`) queries PyPI, compares versions, and reconstructs the install
-  command from how `auditr` was installed: a `uv tool` receipt (extras and python pinned) takes a
-  `uv tool` upgrade, anything else takes pip. See [self.md](references/self.md).
-
-## version
-
-- `cli/version.py` resolves the installed `auditr` distribution version and falls back to
-  `auditor.__version__` in a source checkout.
-- At a TTY it prints a panel with the install path plus a short-timeout PyPI check that degrades to
-  "offline". Piped, it prints `auditr <version>` and skips the network.
+  command from how `auditr` was installed: a `uv tool` receipt takes a `uv tool` upgrade, anything
+  else takes pip. See [self.md](references/self.md).
+- `cli/version.py` resolves the installed distribution version, falling back to
+  `auditor.__version__` in a source checkout. At a TTY it adds a short-timeout PyPI check that
+  degrades to "offline"; piped, it prints `auditr <version>` and skips the network.
 
 ## auditr-mcp
 
 - `auditor/mcp_server.py` re-exports `main` and `mcp` from `auditor/mcp/`. `mcp/server.py` builds
-  the `FastMCP` instance and caps any single tool response at `MAX_TOOL_RESPONSE_BYTES` so no call
-  floods an agent's context. See [auditr-mcp.md](references/auditr-mcp.md).
-- The tool modules mirror the CLI: `scan_tools.py` (`scan`, `report`, `finding_detail`, `manifest`,
-  `discover`, `aggregate`), `rules_tools.py`, `ignore_tools.py`, `malware_tools.py`,
-  `refine_tools.py`, and `graph_tools.py`. Every module registers unconditionally.
-- Every tool carries an annotation from `mcp/helpers.py`: `READ_ONLY`, `MUTATING` or `DESTRUCTIVE`,
-  so a client can skip confirmation on reads and cache idempotent calls. None declare an open
-  world; the tools touch the local repo only.
+  the `FastMCP` instance and caps any single tool response at `MAX_TOOL_RESPONSE_BYTES`. See
+  [auditr-mcp.md](references/auditr-mcp.md).
+- The tool modules mirror the CLI: `scan_tools.py`, `rules_tools.py`, `ignore_tools.py`,
+  `malware_tools.py`, `refine_tools.py` and `graph_tools.py`. Every module registers
+  unconditionally.
+- Every tool carries a `READ_ONLY`, `MUTATING` or `DESTRUCTIVE` annotation from `mcp/helpers.py`.
+  None declare an open world; the tools touch the local repo only.
 - Payloads too large to inline are published through `mcp/artifacts.py` and returned as a
-  `ResourceLink`. Resource reads bypass the tool-response cap, so a full scan or `AUDIT.md` always
-  arrives in one piece.
+  `ResourceLink`; resource reads bypass the tool-response cap.
+- `mcp/helpers.py` owns the preamble every tool shares: `tool_repo(path)` resolves the root and
+  yields a `ToolRepo` holding an index handle bound to that root's partition and identity, loading
+  the repo policy first and once. `rules_tools.rules_list` is synchronous and so sits outside it,
+  as does `ConfigNoticeMiddleware`, which resolves its own root.
 - `mcp/code_mode.py` stays off unless both the `code-mode` extra is installed and
   `AUDITOR_CODE_MODE` is set.
-- `mcp/helpers.py` owns the preamble every tool shares. `tool_repo(path)` resolves the root and
-  yields a `ToolRepo` holding an index handle bound to that root's partition and identity;
-  `tool_repo_at(root)` is the same for a tool that resolved the root from a file. The preamble
-  loads the repo policy first and once, so `ToolRepo.settings` is already validated and one bad
-  config reads the same from every tool it covers. No tool module calls `IndexStore.connect` or
-  `open_repo_index`, and none holds its handle across an `audit_target` scan, which opens its own
-  connection to the same database; `tests/graph/test_mcp_preamble.py` parses each one to keep it
-  that way and drives every tool that reaches a repo through the preamble against three broken
-  configs.
-- Two things sit outside that seam on purpose. `rules_list` is synchronous, so it cannot hold an
-  async context manager and calls `tool_config(find_root(path))` directly. `server.py`'s
-  `ConfigNoticeMiddleware` resolves its own root for the config notice, so a tool call resolves one
-  twice: once in the middleware and once in the preamble. Both are cheap path walks, and the guard
-  covers tool modules, not the server.
 
 ## Claude Code plugin
 
 - `plugin/` is a self-contained Claude Code plugin; the root `.claude-plugin/marketplace.json`
   publishes it. See [claude-code-plugin.md](references/claude-code-plugin.md).
-- `plugin/.claude-plugin/plugin.json` points at `plugin/skills/` (one directory per skill),
-  `plugin/agents/auditor-reviewer.md` (the review subagent), and `plugin/.mcp.json` (a
-  `uvx`-launched `auditr-mcp`). `plugin/settings.json` wires the status line.
-- `plugin/hooks/hooks.json` registers the stdlib hooks: `session_start.py` on `SessionStart`,
-  `audit_edit.py` on `PostToolUse` matching `Edit|Write`, and `verify_stop.py` on `Stop`.
-- `plugin/statusline/auditor_status.py` replicates `discovery.find_root` and `paths.repo_dir_key`
-  in stdlib only, then reads the `scan` block of `$AUDITOR_HOME/repos/<key>/status.json`, which
-  `status.write_status` refreshes on every directory scan.
+- `plugin/.claude-plugin/plugin.json` points at `plugin/skills/`, `plugin/agents/`, and
+  `plugin/.mcp.json` (a `uvx`-launched `auditr-mcp`). `plugin/settings.json` wires the status line
+  and `plugin/hooks/hooks.json` the three stdlib hooks (`session_start.py`, `audit_edit.py`,
+  `verify_stop.py`).
+- `plugin/statusline/auditor_status.py` replicates the root walk and the repo-dir hash in stdlib
+  only, then reads the `scan` block of `$AUDITOR_HOME/repos/<key>/status.json`.
 
 ## Cross-cutting behavior
 
 - Incremental index: `--incremental` opens the shared db and caches per file. A file's cached
   findings for one rule stay valid while both the file's sha256 and that rule's fingerprint are
-  unchanged. `fingerprints.rule_fingerprint` folds in the detector's `version` and the rule's
-  effective config, so editing one threshold invalidates exactly that rule instead of the whole
-  cache.
-- Index location: one SQLite database at `$AUDITOR_HOME/index.db`, partitioned by `paths.repo_key`
-  rather than scattered one file per repo. `database/base.py` holds `SCHEMA_VERSION`.
-- Two table classes, declared by `Table.cache`:
-  - `cache=True` (partition tables): dropped and rebuilt by the next scan on a version change.
-  - `cache=False` (identity tables): never dropped. `repos`, `ignores` and the `graph_*`
-    refinement tables. On every connect `IndexStore._migrate_identity_tables` reconciles their
-    declared columns against `PRAGMA table_info` and adds what is missing with `ALTER TABLE`.
-- A column added to an identity table after it ships must be nullable or carry a default, must
-  not be a `PRIMARY KEY`, and must not carry `REFERENCES`. `NOT NULL` with a default migrates.
-  SQLite refuses the other shapes, so the migrator raises `UnmigratableColumn` naming the table
-  and column, and the CLI turns that into a one-line repair instruction.
-- The bump is one `BEGIN IMMEDIATE` transaction in a fixed order: reconcile the identity tables,
-  drop the cache tables, create what is missing, stamp `user_version` last. A second connection
-  therefore never sees a dropped-and-not-yet-created table, and a declaration that cannot land
-  leaves the stored version and every cached row untouched.
-- A stored version of 0 on a database that already has cache tables is a lost stamp, not a fresh
-  database: it rebuilds like any other mismatch. Only an empty file skips the sweep.
-- A downgrade leaves identity tables intact but unreferenced; `graph build --rebuild` clears cached
-  facts and never touches them.
+  unchanged; `fingerprints.rule_fingerprint` folds in the detector's `version` and the rule's
+  effective config, so editing one threshold invalidates exactly that rule.
+- Index location: one SQLite database at `$AUDITOR_HOME/index.db`, partitioned by `paths.repo_key`.
+  `database/base.py` holds `SCHEMA_VERSION`.
+- Two table classes, declared by `Table.cache`. Partition tables (`cache=True`) are dropped and
+  rebuilt by the next scan on a version change. Identity tables (`cache=False`) are never dropped:
+  `repos`, `ignores` and the `graph_*` refinement tables, whose declared columns
+  `IndexStore._migrate_identity_tables` reconciles with `ALTER TABLE` on every connect.
+- A column added to an identity table after it ships must be nullable or carry a default, must not
+  be a `PRIMARY KEY`, and must not carry `REFERENCES`. SQLite refuses the other shapes, so the
+  migrator raises `UnmigratableColumn` and the CLI turns that into a one-line repair instruction.
+- The version bump is one `BEGIN IMMEDIATE` transaction in a fixed order: reconcile the identity
+  tables, drop the cache tables, create what is missing, stamp `user_version` last. A declaration
+  that cannot land leaves the stored version and every cached row untouched.
+- The identity tables key on `repo_identity` (the resolved git common dir), not on the partition,
+  so every worktree of a checkout shares them and `index forget` cannot cascade into them.
 - Repo-local state: `<repo>/.auditor/` holds authored input only (`config.toml`, `plugins/`, a
-  baseline file if you point `--baseline` there). Nothing is written into the repo: generated
-  state is the shared index plus `$AUDITOR_HOME/repos/<repo_dir_key>/`, which holds `status.json`,
-  its lock, and the user's per-repo settings.
-- Verdict kinds: a detector emits `auto` (the tool decided deterministically) or `candidate`
-  (evidence only, an agent must judge). `gate.gate_tripped` counts `auto` findings at or above
-  `--fail-on`, so a candidate never breaks CI on its own.
-- Suppression order: in-file `# auditor: skip` and `# auditor: skip-file` directives (`skips.py`)
-  apply inside the engine before anything is cached, persistent db-backed ignores (`ignores.py`)
-  apply after the scan, and a baseline snapshot (`baseline.py`) applies in the CLI before
-  `gate.gate_tripped`. See [ignore.md](references/ignore.md) and [scan.md](references/scan.md).
+  baseline file). Nothing is written into the repo: generated state is the shared index plus
+  `$AUDITOR_HOME/repos/<repo_dir_key>/`.
+- Verdict kinds: a detector emits `auto` (decided deterministically) or `candidate` (evidence only,
+  for an agent to judge). `gate.gate_tripped` counts `auto` findings at or above `--fail-on`, so a
+  candidate never breaks CI on its own.
+- Suppression order: in-file `# auditor: skip` directives apply inside the engine before anything is
+  cached, persistent db-backed ignores apply after the scan, and a baseline snapshot applies in the
+  CLI before the gate. See [ignore.md](references/ignore.md) and [scan.md](references/scan.md).
 - Machine versus human output: `scan` prints the summary from `cli/summary.py` unless `-f` or `-o`
-  asks for `json`, `sarif`, `md` or `html`; `report` defaults to json. The inspection commands go
-  through `helpers.present`, which renders pretty output at a TTY and raw JSON when piped or given
-  `--json`. All logging and spinners go to stderr, so stdout stays parseable.
+  asks for a format; `report` defaults to json. The inspection commands go through
+  `helpers.present`, which renders pretty at a TTY and raw JSON when piped or given `--json`. All
+  logging and spinners go to stderr, so stdout stays parseable.
