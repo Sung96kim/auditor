@@ -155,21 +155,25 @@ class Readers:
         """This repo's own `UserSettings`, loaded once and kept.
 
         The daemon serves many repos and :attr:`settings` is its home-level layer, so a per-repo
-        answer resolves the overlay here; a repo whose settings will not load falls back to it.
+        answer resolves the overlay here; a repo that will not load falls back to it uncached.
         """
         with self._lock:
             known = self._users.get(root)
-        if known is None:
-            try:
-                known = load_user_settings(root)
-            except Exception:  # a repo whose overlay will not load still gets an answer
-                _LOG.exception(
-                    "could not read %s's user settings; using the daemon's", root
-                )
-                known = self.settings
-            with self._lock:
-                self._users[root] = known
-        return known
+        if known is not None:
+            return known
+        try:
+            loaded = load_user_settings(root)
+        except (
+            OSError,
+            ValidationError,
+        ):  # uncached, so a torn write is retried, not permanent
+            _LOG.exception(
+                "could not read %s's user settings; using the daemon's", root
+            )
+            return self.settings
+        with self._lock:
+            self._users[root] = loaded
+        return loaded
 
     def close(self) -> None:
         """Release every handle on shutdown, so the worker threads end with the process."""

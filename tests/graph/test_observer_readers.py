@@ -92,6 +92,30 @@ def test_the_runs_tag_moves_when_a_run_lands(refine_repo: Path):
         readers.close()
 
 
+def test_a_settings_overlay_that_will_not_load_is_retried_rather_than_cached(
+    refine_repo: Path, monkeypatch
+):
+    """Caching the fallback made one torn write permanent for the daemon's whole lifetime."""
+    healthy = UserSettings()
+    failures = {"left": 1}
+
+    def torn(root: Path, **kw: object) -> UserSettings:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise OSError("the overlay was half written")
+        return healthy
+
+    monkeypatch.setattr(routes_module, "load_user_settings", torn)
+    readers = Readers(settings=UserSettings())
+    try:
+        assert readers.user(refine_repo) is readers.settings
+        assert (
+            readers.user(refine_repo) is healthy
+        )  # the failure was never written down
+    finally:
+        readers.close()
+
+
 def test_two_repos_with_the_same_empty_ledger_do_not_share_a_tag(
     refine_repo: Path, git_repo: Path
 ):

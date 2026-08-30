@@ -27,8 +27,14 @@ from auditor.observer.daemon import (
 )
 from auditor.observer.events import Event, EventQueue, Spool
 from auditor.observer.payloads import DaemonStatus
+from auditor.observer.routes import Readers
 from auditor.observer.sessions import Session, SessionBook
-from auditor.paths import auditor_home, daemon_json_path, write_json_dict
+from auditor.paths import (
+    auditor_home,
+    daemon_json_path,
+    observer_port,
+    write_json_dict,
+)
 from auditor.user_settings import SchedulingConfig
 
 
@@ -320,8 +326,11 @@ def test_the_daemon_starts_publishes_answers_and_stops_on_its_own_idle_window(
     root the daemon does not have, so every start died with a `TypeError` before it bound a port.
     """
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.delenv("AUDITOR_OBSERVER_PORT", raising=False)
+    hashed = observer_port()
     # an ephemeral port, because the hashed one collides with a real daemon on a colliding home
     monkeypatch.setenv("AUDITOR_OBSERVER_PORT", "0")
+
     monkeypatch.setenv(
         "AUDITOR_USER_OBSERVER__SCHEDULING__IDLE_SHUTDOWN_MINUTES", "0.02"
     )
@@ -336,7 +345,9 @@ def test_the_daemon_starts_publishes_answers_and_stops_on_its_own_idle_window(
         record = read_daemon_record()
         assert record is not None
         assert record.pid == os.getpid()
+        assert record.port not in (0, hashed)  # the kernel chose it, not the port rule
         assert set(record.model_dump()) == {"pid", "port", "home", "version", "compat"}
+
         conn = http.client.HTTPConnection("127.0.0.1", record.port, timeout=5)
         conn.request("GET", "/health")
         health = json.loads(conn.getresponse().read())
@@ -364,17 +375,25 @@ def test_a_second_serve_returns_at_once_because_the_lock_is_held(tmp_path, monke
         lock.release()
 
 
-def test_a_port_collision_ends_the_start_and_gives_the_lock_back(
+def test_a_port_collision_ends_the_start_and_gives_back_the_lock_and_the_handles(
     tmp_path, monkeypatch, restored_logging
 ):
-    """The bind sat outside the try/finally, so a taken port escaped with the lock still held."""
+    """The bind sat outside the try/finally, so a taken port escaped holding lock and readers.
+
+    The stub stands in for the real `close`, which has nothing to release this early; what is
+    asserted is that the failure path calls it at all, the way the success path does.
+    """
+    closed: list[str] = []
+    monkeypatch.setattr(Readers, "close", lambda self: closed.append("readers"))
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
         taken.listen()
         monkeypatch.setenv("AUDITOR_OBSERVER_PORT", str(taken.getsockname()[1]))
         assert serve() == 1
+    assert closed == ["readers"]
     assert not daemon_json_path().exists()
+
     lock = DaemonLock(tmp_path / "observer" / "lock")
     assert lock.acquire() is True
     lock.release()

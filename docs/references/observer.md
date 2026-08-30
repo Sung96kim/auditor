@@ -53,7 +53,9 @@ $AUDITOR_HOME/
 
 ## The port
 
-- `AUDITOR_OBSERVER_PORT` wins if it is set to an integer.
+- `AUDITOR_OBSERVER_PORT` wins if it is set to an integer in `0..65535`; `0` asks the kernel for
+  any free port, and anything else falls back to the hash rather than raising.
+
 - Otherwise the port is `7490 + crc32(resolved $AUDITOR_HOME) % 500`, so one home is always one
   port and two homes almost never collide.
 - The home is resolved first, so `~/.auditor` and `/home/you/.auditor` are one daemon rather than

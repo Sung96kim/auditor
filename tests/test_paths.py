@@ -222,6 +222,13 @@ def test_the_port_env_var_wins_over_the_rule(tmp_path, monkeypatch):
     assert observer_port() == 7777
 
 
+def test_the_port_zero_asks_the_kernel_for_any_free_port(tmp_path, monkeypatch):
+    """`0 < configured` clamped the one value a caller sets to avoid colliding with a real daemon."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.setenv("AUDITOR_OBSERVER_PORT", "0")
+    assert observer_port() == 0
+
+
 def test_the_daemon_files_sit_beside_the_rebuild_lock_and_never_replace_it(
     tmp_path, monkeypatch
 ):
@@ -270,7 +277,7 @@ def test_a_spool_key_resolves_back_to_the_repo_it_belongs_to(tmp_path, monkeypat
         ("maybe", "abc", True),
         ("", "", True),
         ("f", " ", False),
-        ("OFF", "0", False),
+        ("OFF", "1e5", False),
         ("", "-1", True),
         ("", "99999", True),
         ("", "65536", True),
@@ -281,9 +288,11 @@ def test_a_junk_env_value_is_ignored_rather_than_fatal(
 ):
     """Every `auditr` command builds `GlobalPaths`, so a typo here must not take the CLI down.
 
-    An out-of-range number is as unreadable as `abc`: `bind` raises `OverflowError` on it, and
-    the fall back to the home's own hashed port is what the docstring promises.
+    An out-of-range number is as unreadable as `abc`: `bind` raises `OverflowError` on it. `0` is
+    not junk and has its own test: it is the legal bind that asks the kernel for any free port.
+
     """
+
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
     monkeypatch.setenv("AUDITOR_OBSERVER", value)
     monkeypatch.setenv("AUDITOR_OBSERVER_PORT", port)

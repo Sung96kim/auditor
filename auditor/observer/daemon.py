@@ -398,8 +398,10 @@ def serve(settings: UserSettings | None = None) -> int:
         OSError
     ):  # the port rule is a hash over 500 slots, so a collision is not exotic
         _LOG.exception("observer could not bind its port; not starting")
+        readers.close()
         lock.release()
         return 1
+
     router.url = server.url
     server.start()
     write_json_dict(
