@@ -1,16 +1,264 @@
 """How many refinement runs the daemon lets happen at once (spec 8.4).
 
-S8c seam 6: S8b constructs one `RunSlots` per daemon and opens no run, so nothing takes a slot
-until the repo loop lands.
+Everything here decides *when* the loop may act. What it does when it may is `loop.py`, and every
+value below is computed from an injected clock, so a day boundary and a rate-limit deadline are
+testable without sleeping.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+import logging
+from abc import ABC, abstractmethod
+from collections import deque
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
+from enum import StrEnum
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
+from auditor.discovery import FileDiscovery, git_head, git_status_paths
+from auditor.graph.refine.models import Checkout, NodePair
+from auditor.observer.budget import BudgetState
+from auditor.observer.events import Event
+
+logger = logging.getLogger(__name__)
 
 #: spec 8.4's ceiling: one run per repo, two across every repo in one daemon
 DEFAULT_PER_REPO = 1
 DEFAULT_GLOBAL = 2
+MINUTE = 60.0
+#: how long a rate limit holds when the SDK named no reset instant
+DEFAULT_RATELIMIT_MINUTES = 5.0
+#: how long an auth refusal holds before the loop re-asks the runner (H-3)
+DEFAULT_AUTH_MINUTES = 15.0
+#: the quiet window may restart at most this many times, so a flood cannot starve the ladder (H-4)
+DEBOUNCE_WINDOW_CAP = 5.0
+
+
+class LoopState(StrEnum):
+    """Spec 8.3's state machine, as the page's badge and the statusline segment read it."""
+
+    BUILDING = "building"
+    OBSERVING = "observing"
+    RUNNING = "running"
+    PAUSED_BUDGET = "paused:budget"
+    PAUSED_RATELIMIT = "paused:ratelimit"
+    PAUSED_AUTH = "paused:auth"
+    DETACHED = "detached"
+
+
+class Pause(BaseModel):
+    """Why the loop stopped opening runs, and when it may start again (spec 8.4)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    state: LoopState
+    resumes_at: float | None = None
+
+
+#: the words `sdk_runner.ASSISTANT_ERRORS` writes into a stopped run's ``error`` column
+_PAUSE_WORDS: dict[str, LoopState] = {
+    "paused:auth": LoopState.PAUSED_AUTH,
+    "paused:ratelimit": LoopState.PAUSED_RATELIMIT,
+    "paused:billing": LoopState.PAUSED_BUDGET,
+}
+
+
+def _resets_at(error: str) -> float | None:
+    """The epoch in ``paused:ratelimit until <epoch>``, or ``None`` when the SDK named none."""
+    _, _, tail = error.partition(" until ")
+    try:
+        return float(tail)
+    except ValueError:
+        return None
+
+
+def pause_of(
+    error: str | None,
+    *,
+    now: float,
+    minutes: float = DEFAULT_RATELIMIT_MINUTES,
+    auth_minutes: float = DEFAULT_AUTH_MINUTES,
+) -> Pause | None:
+    """The pause a stopped run's ``error`` asks for, or ``None`` when it asks for none.
+
+    The runner writes a sentence because a run row has one error column; the loop wants the
+    deadline, so the epoch is read back off it and anything unreadable falls back to a window.
+    """
+    if not error:
+        return None
+    state = _PAUSE_WORDS.get(error.split(" ", 1)[0])
+    if state is None:
+        return None
+    if state is LoopState.PAUSED_AUTH:
+        return Pause(state=state, resumes_at=now + auth_minutes * MINUTE)
+    if state is not LoopState.PAUSED_RATELIMIT:
+        return Pause(state=state)
+    return Pause(state=state, resumes_at=_resets_at(error) or now + minutes * MINUTE)
+
+
+class Pauses:
+    """The pauses in force for one repo. Nothing here is persisted (recon Q4).
+
+    A budget pause is recomputed from `spend_since` on every tick, so only the two the runner
+    reports need holding, and both hold a deadline: nothing else could ever clear them, because
+    nothing runs while they are in force.
+    """
+
+    def __init__(self) -> None:
+        self.resumes_at: float | None = None
+        self.auth: str = ""
+        self.auth_until: float | None = None
+
+    def apply(self, pause: Pause | None) -> None:
+        """Take on what a stopped run reported, if anything."""
+        if pause is None:
+            return
+        if pause.state is LoopState.PAUSED_AUTH:
+            self.auth = "the runner could not authenticate"
+            self.auth_until = pause.resumes_at
+        elif pause.state is LoopState.PAUSED_RATELIMIT:
+            self.resumes_at = pause.resumes_at
+
+    def authenticated(self) -> None:
+        """A run that reported no auth refusal proves the credentials work: drop the hold."""
+        self.auth = ""
+        self.auth_until = None
+
+    def cleared(self) -> None:
+        """Forget every held pause: an attach re-asks the runner and the budget re-reads itself."""
+        self.resumes_at = None
+        self.authenticated()
+
+    def state(self, *, budget: BudgetState, now: float) -> LoopState | None:
+        """The pause in force, or ``None`` when the loop may open a run.
+
+        Auth first: a loop that cannot authenticate would otherwise report a budget it can never
+        spend. Both held pauses clear themselves the moment their own deadline passes.
+        """
+        if self.auth:
+            if self.auth_until is None or now < self.auth_until:
+                return LoopState.PAUSED_AUTH
+            # the hold expired: the next run is the probe, and `authenticated` settles it
+            self.authenticated()
+        if self.resumes_at is not None:
+            if now < self.resumes_at:
+                return LoopState.PAUSED_RATELIMIT
+            self.resumes_at = None
+        return LoopState.PAUSED_BUDGET if budget.exhausted else None
+
+
+class EventFeed(ABC):
+    """Where a `RepoLoop` takes its edit events: the daemon's drain and a test harness."""
+
+    @abstractmethod
+    async def take(self, timeout: float) -> tuple[Event, ...]:
+        """Every event waiting now, or ``()`` when ``timeout`` passed with none."""
+
+
+class QueueFeed(EventFeed):
+    """An `asyncio.Queue` the daemon's drain thread hands batches to (spec 8.1).
+
+    The loop is bound on first use from the thread that runs it, so constructing this off a loop
+    is safe and an `offer` that arrives before the first `take` is held rather than dropped.
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._queue: asyncio.Queue[Event] = asyncio.Queue()
+        self._loop = loop
+        self._early: deque[Event] = deque()
+
+    def offer(self, events: Iterable[Event]) -> None:
+        """Hand a drained spool over, from the daemon's thread or from the loop's own."""
+        loop = self._loop
+        for event in events:
+            if loop is None:
+                self._early.append(event)  # deque append is atomic; no lock is needed
+            else:
+                loop.call_soon_threadsafe(self._queue.put_nowait, event)
+
+    async def take(self, timeout: float) -> tuple[Event, ...]:
+        self._loop = self._loop or asyncio.get_running_loop()
+        while self._early:
+            self._queue.put_nowait(self._early.popleft())
+        try:
+            first = await asyncio.wait_for(self._queue.get(), timeout)
+        except TimeoutError:
+            return ()
+        out = [first]
+        while not self._queue.empty():
+            out.append(self._queue.get_nowait())
+        return tuple(out)
+
+
+async def debounced(
+    feed: EventFeed, *, seconds: float, timeout: float, max_seconds: float | None = None
+) -> tuple[Event, ...]:
+    """One batch per quiet window (spec 8.3 item 2): the window restarts on every event.
+
+    Last event wins, so a burst of `PostToolUse` posts and the `Stop` path set behind them are one
+    batch. The restarts are bounded, so an edit stream faster than the window still yields.
+    """
+    batch = await feed.take(timeout)
+    if not batch:
+        return ()
+    collected = list(batch)
+    remaining = seconds * DEBOUNCE_WINDOW_CAP if max_seconds is None else max_seconds
+    while seconds > 0 and remaining > 0:
+        more = await feed.take(min(seconds, remaining))
+        if not more:
+            break
+        collected.extend(more)
+        remaining -= seconds
+    return tuple(collected)
+
+
+class Retries:
+    """Spec 8.5's "targets re-queued once": a loop-side budget, not a database write (recon Q11).
+
+    `graph_unresolved` is replaced by every build, so an aborted run loses no row; what it loses
+    is the loop's intent, and the spec grants that one more attempt.
+    """
+
+    def __init__(self, *, retries: int = 1) -> None:
+        self.retries = retries
+        self._spent: dict[NodePair, int] = {}
+
+    def aborted(self, pairs: Iterable[NodePair]) -> None:
+        for pair in pairs:
+            self._spent[pair] = self._spent.get(pair, 0) + 1
+
+    def allowed(self, pair: NodePair) -> bool:
+        return self._spent.get(pair, 0) <= self.retries
+
+    def keep(self, pairs: Iterable[NodePair]) -> tuple[NodePair, ...]:
+        return tuple(pair for pair in pairs if self.allowed(pair))
+
+
+class RunGuard(BaseModel):
+    """Spec 8.5's pre-run read: what a run is pinned to, and whether the tree was dirty."""
+
+    model_config = ConfigDict(frozen=True)
+
+    checkout: Checkout = Checkout()
+    dirty: bool = False
+
+
+async def read_guard(
+    root: Path, *, status: Callable[[Path], tuple[str, ...] | None] = git_status_paths
+) -> RunGuard:
+    """Branch, HEAD and dirtiness, all off the event loop (spec 8.5's 2 to 46 ms).
+
+    ``dirty`` counts only paths this auditor would audit, which is what ignoring ``.auditor/`` and
+    the discovery excludes amounts to: an uncommitted README cannot invalidate an anchor.
+    """
+    head, changed = await asyncio.gather(
+        git_head(root), asyncio.to_thread(status, root)
+    )
+    branch, commit = head
+    finder = FileDiscovery(root)
+    dirty = any(finder.auditable_shape(path) for path in changed or ())
+    return RunGuard(checkout=Checkout(branch=branch, commit_sha=commit), dirty=dirty)
 
 
 class RunSlots:

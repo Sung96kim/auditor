@@ -282,6 +282,36 @@ async def test_a_rejected_rate_limit_pauses_the_run(refine_service: RefinementSe
     assert row.error == "paused:ratelimit until 1788159600"
 
 
+async def test_a_warning_over_the_user_s_share_of_the_window_pauses_the_run(
+    refine_service: RefinementService,
+):
+    """C44: `budget.max_utilization` had no consumer anywhere before this slice."""
+    _product, row = await _drive(
+        refine_service,
+        [
+            Init(data=init_data()),
+            Limit(rate_limit_info=LimitInfo(utilization=0.9, resets_at=500)),
+            SUCCESS,
+        ],
+    )
+    assert (row.status, row.error) == (RunStatus.ABORTED, "paused:ratelimit until 500")
+
+
+async def test_a_warning_under_the_user_s_share_lets_the_run_finish(
+    refine_service: RefinementService,
+):
+    """The default share is half the window, so the rest is the human's (spec 8.4)."""
+    _product, row = await _drive(
+        refine_service,
+        [
+            Init(data=init_data()),
+            Limit(rate_limit_info=LimitInfo(utilization=0.1)),
+            SUCCESS,
+        ],
+    )
+    assert row.status is RunStatus.SUCCEEDED
+
+
 async def test_a_budget_stop_keeps_its_cost_and_loses_its_staging(
     refine_service: RefinementService,
 ):

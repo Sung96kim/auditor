@@ -216,6 +216,7 @@ class LimitInfo(BaseModel):
 
     status: str = "allowed_warning"
     resets_at: int | None = None
+    utilization: float | None = None
 
 
 class Limit(BaseModel):

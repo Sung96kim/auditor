@@ -120,6 +120,8 @@ class SdkOptions(BaseModel):
     system_prompt: str
     max_turns: int
     max_budget_usd: float
+    #: the share of the rate-limit window the observer may take; the rest is the human's (spec 8.4)
+    max_utilization: float = 1.0
     #: a field, not a constant: `None` reaching the SDK is a full-tool-surface run (spike A.10)
     tools: tuple[str, ...] = MODEL_TOOLS
 
@@ -140,6 +142,7 @@ class SdkOptions(BaseModel):
             system_prompt=SYSTEM_PROMPT,
             max_turns=user.observer.limits.max_turns,
             max_budget_usd=user.observer.budget.max_budget_usd_per_run,
+            max_utilization=user.observer.budget.max_utilization,
         )
 
     def refusal(self, data: Mapping[str, Any]) -> str | None:
@@ -286,12 +289,18 @@ def _is_rate_limit(message: Any) -> bool:
     return hasattr(message, "rate_limit_info")
 
 
-def rate_limited(message: Any) -> str | None:
-    """Why a rate limit stopped this run, or ``None`` when it did not."""
+def rate_limited(message: Any, *, max_utilization: float = 1.0) -> str | None:
+    """Why a rate limit stopped this run, or ``None`` when it did not.
+
+    Two arms, both spec 8.4's: a rejection, and a utilization over the share of the window this
+    user gave the observer. Both carry the instant the loop may resume at, when the SDK named one.
+    """
     if not _is_rate_limit(message):
         return None
     info = message.rate_limit_info
-    if getattr(info, "status", None) != "rejected":
+    used = getattr(info, "utilization", None)
+    rejected = getattr(info, "status", None) == "rejected"
+    if not rejected and (used is None or float(used) < max_utilization):
         return None
     return f"paused:ratelimit until {getattr(info, 'resets_at', None)}"
 
@@ -418,7 +427,7 @@ class Conversation(BaseModel):
             return from_result(
                 message, session_id=self.session_id, trace=self.tools.trace
             )
-        paused = rate_limited(message)
+        paused = rate_limited(message, max_utilization=self.options.max_utilization)
         if paused is not None:
             return self.stopped(RunStatus.ABORTED, paused)
         if _is_assistant(message):
