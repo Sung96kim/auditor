@@ -62,3 +62,24 @@ def test_the_mount_is_declared_but_not_resolved_at_import():
 def test_the_console_script_and_the_mount_declare_the_same_verbs():
     """One command surface with two front doors; a verb added to one has to reach the other."""
     assert set(auditr_observer._LIFECYCLE) == set(_OBSERVER_SUBCOMMANDS)
+
+
+@pytest.mark.parametrize("name", _OBSERVER_SUBCOMMANDS)
+def test_the_kill_switch_makes_every_mount_verb_a_no_op(name, tmp_path, monkeypatch):
+    """Spec 8.1 and 14 disable everything, and P19 makes the two front doors one surface.
+
+    Regression: only `start` and `ensure` read the switch, so `auditr observer status` still
+    reported a live daemon while `auditr-observer status` refused to look at one.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.setenv("AUDITOR_OBSERVER", "0")
+    monkeypatch.setattr(
+        cli_observer,
+        "_running",
+        lambda: pytest.fail("the switch is off; nothing may be probed"),
+    )
+    result = invoke("observer", name, "--json")
+    assert result.exit_code == 0
+    payload = DaemonStatus.model_validate(json.loads(result.stdout))
+    assert payload.running is False
+    assert payload.action == "disabled by AUDITOR_OBSERVER=0"

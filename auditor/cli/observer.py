@@ -54,6 +54,15 @@ def _fields(action: str, record: DaemonRecord | None) -> dict:
     }
 
 
+def _off() -> tuple[str, DaemonRecord | None]:
+    """What every verb answers when `AUDITOR_OBSERVER` turns the observer off.
+
+    All five, not just the two that start something: `auditr-observer` disables all five, and P19
+    makes the two front doors one command surface.
+    """
+    return "disabled by AUDITOR_OBSERVER=0", None
+
+
 def _launched() -> tuple[str, DaemonRecord | None]:
     """Start a daemon unless one already holds the lock, and wait for it to publish itself."""
     running = _running()
@@ -76,18 +85,20 @@ def start(
     json_: bool = _JSON,
 ) -> None:
     """Start the observer daemon for this home."""
+    if not observer_enabled():
+        present(DaemonStatus(**_fields(*_off())), render_observer, as_json=json_)
+        return
     if foreground:
         raise typer.Exit(serve())
-    if observer_enabled():
-        action, record = _launched()
-    else:
-        action, record = "not started; AUDITOR_OBSERVER=0", None
-    present(DaemonStatus(**_fields(action, record)), render_observer, as_json=json_)
+    present(DaemonStatus(**_fields(*_launched())), render_observer, as_json=json_)
 
 
 @observer_app.command("stop")
 def stop(json_: bool = _JSON) -> None:
     """Stop this home's observer daemon."""
+    if not observer_enabled():
+        present(DaemonStatus(**_fields(*_off())), render_observer, as_json=json_)
+        return
     record = _running()
     if record is None:
         action = "not running"
@@ -102,6 +113,9 @@ def stop(json_: bool = _JSON) -> None:
 @observer_app.command("status")
 def status(json_: bool = _JSON) -> None:
     """Report where this home's daemon is, if it is anywhere."""
+    if not observer_enabled():
+        present(DaemonStatus(**_fields(*_off())), render_observer, as_json=json_)
+        return
     record = _running()
     present(
         DaemonStatus(**_fields("running" if record else "not running", record)),
@@ -113,6 +127,9 @@ def status(json_: bool = _JSON) -> None:
 @observer_app.command("open")
 def open_page(json_: bool = _JSON) -> None:
     """Open the live page of this home's daemon in a browser."""
+    if not observer_enabled():
+        present(DaemonStatus(**_fields(*_off())), render_observer, as_json=json_)
+        return
     record = _running()
     if record is not None:
         open_url(f"http://127.0.0.1:{record.port}/")
@@ -127,13 +144,13 @@ def open_page(json_: bool = _JSON) -> None:
 def ensure(json_: bool = _JSON) -> None:
     """Make sure a compatible daemon is running, starting one if there is none."""
     if not observer_enabled():
-        action, record = "not ensured; AUDITOR_OBSERVER=0", None
+        present(DaemonStatus(**_fields(*_off())), render_observer, as_json=json_)
+        return
+    record = _running()
+    if record is None:
+        action, record = _launched()
+    elif record.compat != OBSERVER_API_VERSION:
+        action = "wire compat mismatch"
     else:
-        record = _running()
-        if record is None:
-            action, record = _launched()
-        elif record.compat != OBSERVER_API_VERSION:
-            action = "wire compat mismatch"
-        else:
-            action = "already running"
+        action = "already running"
     present(DaemonStatus(**_fields(action, record)), render_observer, as_json=json_)
