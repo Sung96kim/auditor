@@ -149,14 +149,15 @@ def render_app_or_status(payload: dict) -> str:
     """The built UI with ``payload`` injected, or a plain status document when no bundle exists.
 
     `graph serve` keeps :func:`render_app`, which raises: its user can run `pnpm build` and the
-    daemon's user is a hook that cannot (spec 8.1).
+    daemon's user is a hook that cannot (spec 8.1). A document missing a key counts it as zero,
+    because the caller that passes an empty one is the page with no repo named.
     """
     if _APP_HTML.exists():
         return render_app(payload)
     return _STATUS_DOC.format(
-        nodes=len(payload["nodes"]),
-        edges=len(payload["edges"]),
-        clusters=len(payload["clusters"]),
+        nodes=len(payload.get("nodes", ())),
+        edges=len(payload.get("edges", ())),
+        clusters=len(payload.get("clusters", ())),
     )
 
 

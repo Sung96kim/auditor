@@ -34,3 +34,10 @@ async def test_graph_serve_still_refuses_to_serve_a_page_it_cannot_build(
     monkeypatch.setattr("auditor.graph.viz._APP_HTML", Path("/nonexistent/index.html"))
     with pytest.raises(FileNotFoundError):
         render_app(await build_payload(viz_store))
+
+
+def test_a_document_missing_its_keys_is_a_status_page_not_a_key_error(monkeypatch):
+    """`GraphView.graph` defaults to `{}` and the page at `/` passes it straight through."""
+    monkeypatch.setattr("auditor.graph.viz._APP_HTML", Path("/nonexistent/index.html"))
+    document = render_app_or_status({})
+    assert "0 nodes, 0 edges and 0 clusters" in document

@@ -13,8 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from auditor.graph.refine.models import ClientKind
 from auditor.paths import REPO_KEY_PATTERN, spool_path
 
-#: one Stop event carries a whole dirty tree; past this the body is a mistake, not a batch
-MAX_EVENT_PATHS = 10_000
+#: one Stop event carries a whole dirty tree; past this the body is a mistake, not a batch.
+#: `auditable_shape` runs once per path on the request thread at about 42 us each, so this is
+#: also the ceiling on how long one hook waits: about 84 ms measured, against 456 ms at 10,000
+MAX_EVENT_PATHS = 2_000
 
 
 class EventKind(StrEnum):

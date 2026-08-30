@@ -36,7 +36,17 @@ _HEAVY = (
     "networkx",
     "sklearn",
 )
+#: the observer modules that are deliberately on the fast path: `cli/render.py` imports the
+#: wire payloads to render them, so the pin says which ones may cost, not only which may not
+_EAGER = (
+    "auditor.observer.payloads",
+    "auditor.observer.budget",
+)
 _LOADED = f"print([m for m in {_HEAVY!r} if m in sys.modules], file=sys.stderr)"
+_EAGER_PROBE = (
+    "import sys, auditor.cli\n"
+    f"print([m for m in {_EAGER!r} if m not in sys.modules], file=sys.stderr)\n"
+)
 _IMPORT_PROBE = f"import sys, auditor.cli\n{_LOADED}\n"
 _HELP_PROBE = f"import sys\nfrom auditor.cli import app\napp(['--help'], standalone_mode=False)\n{_LOADED}\n"
 _SUBCOMMANDS = (
@@ -110,6 +120,15 @@ def test_root_help_lists_graph_with_its_help_text():
 def test_importing_the_cli_does_not_import_the_graph_stack():
     """A fresh interpreter: nothing under auditor.cli may pull numpy/scipy/scikit-learn/networkx in."""
     assert _probe(_IMPORT_PROBE) == "[]"
+
+
+def test_the_eager_observer_modules_are_named_as_such():
+    """`_HEAVY` says what may not load; without a companion nothing says what deliberately does.
+
+    `auditor/cli/render.py` imports `DaemonStatus` and the budget payload to render them, so both
+    modules are on every fast command's path and their cost is a decision, not an accident.
+    """
+    assert _probe(_EAGER_PROBE) == "[]"
 
 
 def test_rendering_the_root_help_does_not_import_the_graph_stack():

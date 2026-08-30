@@ -877,6 +877,6 @@ def render_observer(out: Console, payload: DaemonStatus) -> None:
     where = (
         f"{payload.home} on port {payload.port}" if payload.running else payload.home
     )
-    out.print(f"[{_ACCENT}]{payload.action}[/] {escape(where)}")
+    out.print(f"[{_ACCENT}]{escape(payload.action)}[/] {escape(where)}")
     if payload.page_url:
         out.print(f"[dim]{payload.page_url}[/dim]")

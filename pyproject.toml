@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = { file = "LICENSE" }
 dependencies = [
-    "pydantic>=2.6",
+    # Floor: `tests/observer/schemas/` are pydantic's own JSON-schema output, and 2.13 is what
+    # generated the committed ones. Ceiling: 3.0 will move them again.
+    "pydantic>=2.13,<3",
     "pydantic-settings>=2.2",
     # Ceiling: the lazy graph mount rides typer.main.get_group and TyperGroup internals.
     "typer>=0.26,<0.27",

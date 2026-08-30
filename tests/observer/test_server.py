@@ -237,17 +237,28 @@ def test_the_status_tag_does_not_survive_a_restart(daemon_server, daemon_router)
     assert headers["ETag"] != tag
 
 
-def test_the_status_body_names_only_what_this_slice_fills(daemon_server):
-    """S10 is written against these shapes, so a default must be distinguishable from a value."""
+def test_the_status_body_names_only_what_this_slice_fills(daemon_server, tmp_path):
+    """S10 is written against these shapes, so a default must be distinguishable from a value.
+
+    The three counters are asserted with something in them, because on an empty daemon they are
+    the model's own defaults and a field that stopped being filled would read the same.
+    """
+    (tmp_path / "src").mkdir()
     _, call = daemon_server
+    call.request("POST", "/sessions/attach", {"repo": "/r", "session_id": "s1"})
+    call.request(
+        "POST",
+        "/events",
+        {"repo": str(tmp_path / "src"), "key": _KEY, "paths": ["a.py"]},
+    )
     _, _, body = call.request("GET", "/api/status")
     defaults = json.loads(
         StatusPayload(home="", version="", compat=0).model_dump_json()
     )
     moved = {key for key, value in body.items() if value != defaults[key]}
-    assert moved <= _FILLED
-    assert body["queued_repos"] == 0
-    assert body["sessions"] == []
+    assert moved == _FILLED
+    assert body["queued_repos"] == 1
+    assert len(body["sessions"]) == 1
     assert body["budget"] is None
 
 

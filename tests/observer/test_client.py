@@ -23,7 +23,7 @@ def test_api_version_literals_match():
 
 
 def test_client_imports_no_auditor_module():
-    """The hook client runs on every session event; importing auditor would cost ~0.23 s."""
+    """The hook client runs on every session event; importing auditor would cost ~0.17 s."""
     probe = subprocess.run(
         [sys.executable, "-c", _PROBE],
         cwd=_ROOT,

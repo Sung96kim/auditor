@@ -1,13 +1,16 @@
 """The second lazy mount: full help without the daemon, real verbs on dispatch (P18)."""
 
+import io
 import json
 
 import pytest
 from _support import invoke
+from rich.console import Console
 
 import auditr_observer
 from auditor.cli import observer as cli_observer
 from auditor.cli.lazy import LazyObserverGroup, lazy_observer_app
+from auditor.cli.render import render_observer
 from auditor.observer.daemon import DaemonRecord
 from auditor.observer.payloads import DaemonStatus
 
@@ -126,3 +129,12 @@ def test_foreground_and_json_are_refused_together(tmp_path, monkeypatch):
     result = invoke("observer", "start", "--foreground", "--json")
     assert result.exit_code == 2  # a usage error, before anything is started
     assert not (tmp_path / "observer" / "daemon.json").exists()
+
+
+def test_the_render_escapes_a_payload_that_carries_markup():
+    """`action` is a refusal reason today and a loop state in S8c; both can carry brackets."""
+    out = Console(file=io.StringIO(), width=200, no_color=True)
+    render_observer(out, DaemonStatus(action="[bold]nope[/]", home="/h/[x]"))
+    printed = out.file.getvalue()
+    assert "[bold]nope[/]" in printed
+    assert "/h/[x]" in printed
