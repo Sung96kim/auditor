@@ -454,6 +454,21 @@ class Router:
             )
         )
 
+    def _metered(self, row: RepoPayload) -> RepoPayload:
+        """One switcher row with the three columns only a daemon behind the router can fill.
+
+        The two meters are assigned as the models they are declared as: ``model_copy`` does not
+        validate, so splatting a dump would leave the frozen payload holding raw dicts (M1).
+        """
+        drawn = self.deps.meters(row.repo_dir_key)
+        return row.model_copy(
+            update={
+                "state": self.deps.loop_state(row.repo_dir_key),
+                "budget": drawn.budget,
+                "limits": drawn.limits,
+            }
+        )
+
     def api_status(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
         payload = StatusPayload(
             home=str(self.deps.identity.home),
@@ -464,13 +479,7 @@ class Router:
             queued_repos=self.deps.queue.pending_keys,
             drained_events=self.deps.drained(),
             repos=tuple(
-                repo.model_copy(
-                    update={
-                        "state": self.deps.loop_state(repo.repo_dir_key),
-                        **self.deps.meters(repo.repo_dir_key).model_dump(),
-                    }
-                )
-                for repo in self.deps.readers.repos().repos
+                self._metered(repo) for repo in self.deps.readers.repos().repos
             ),
             sessions=tuple(
                 SessionPayload(
@@ -488,18 +497,17 @@ class Router:
         )  # the tag was already computed and is attached by `dispatch`
 
     def api_repos(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
-        """The switcher's list, with the session and queue columns only the router can fill."""
+        """The switcher's list, with the session, queue and meter columns the router fills."""
         live = self.deps.sessions.live(now=time.time())
         pending = set(self.deps.queue.keys())
         return Reply.json(
             ReposPayload(
                 repos=tuple(
-                    row.model_copy(
+                    self._metered(row).model_copy(
                         update={
                             "attached": any(s.repo == row.repo for s in live),
                             "sessions": sum(1 for s in live if s.repo == row.repo),
                             "queued": row.repo_dir_key in pending,
-                            "state": self.deps.loop_state(row.repo_dir_key),
                         }
                     )
                     for row in self.deps.readers.repos().repos

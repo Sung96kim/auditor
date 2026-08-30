@@ -773,3 +773,48 @@ def test_bumping_the_revision_moves_the_status_etag(daemon_router, daemon_server
     daemon_router.bump()
     _status, headers, _body = caller.request("GET", "/api/status")
     assert headers["ETag"] != tag
+
+
+@pytest.mark.filterwarnings("error")
+def test_the_status_route_puts_its_meters_on_the_wire_as_the_models_they_are_declared_as(
+    daemon_router, readers
+):
+    """M1: `model_copy(update=)` never validates, so a splatted dump reaches the wire as dicts.
+
+    Called on this thread rather than through the server, because a warning raised inside the
+    handler thread is nobody's failure. `filterwarnings` is what makes the splat fatal here.
+    """
+    readers.repos = lambda: ReposPayload(
+        repos=(RepoPayload(repo="/one", identity="/one/.git", repo_dir_key="one"),)
+    )
+    drawn = Metered(
+        budget=BudgetPayload(spent_usd=0.5, max_cost_usd_per_day=2.0),
+        limits=RateLimitPayload(max_utilization=0.5, paused=True, resumes_at=500.0),
+    )
+    daemon_router.deps = daemon_router.deps.model_copy(
+        update={"meters": lambda key: drawn, "loop_state": lambda key: "observing"}
+    )
+    row = json.loads(daemon_router.api_status("/api/status", {}, b"").body)["repos"][0]
+    assert row["budget"]["spent_usd"] == 0.5
+    assert row["limits"]["paused"] is True
+    assert row["state"] == "observing"
+
+
+def test_the_repos_route_draws_the_same_per_repo_meters_the_status_route_does(
+    daemon_router, daemon_server, readers
+):
+    """L6: `RepoPayload` carries the two meter fields, so `/api/repos` reported null for ever."""
+    readers.repos = lambda: ReposPayload(
+        repos=(RepoPayload(repo="/one", identity="/one/.git", repo_dir_key="one"),)
+    )
+    drawn = Metered(
+        budget=BudgetPayload(spent_usd=0.25, max_cost_usd_per_day=2.0),
+        limits=RateLimitPayload(max_utilization=0.5),
+    )
+    daemon_router.deps = daemon_router.deps.model_copy(
+        update={"meters": lambda key: drawn}
+    )
+    _server, caller = daemon_server
+    _status, _headers, body = caller.request("GET", "/api/repos")
+    assert body["repos"][0]["budget"]["spent_usd"] == 0.25
+    assert body["repos"][0]["limits"]["max_utilization"] == 0.5
