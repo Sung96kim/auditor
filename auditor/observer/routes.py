@@ -185,6 +185,12 @@ class Readers:
         )
         return RunsView(repo=str(root), identity=identity, log=report)
 
+    async def _ledger(self, index: IndexStore) -> tuple[int, float]:
+        """The run count and the newest start, on one event loop rather than one apiece."""
+        count = await index.runs.count()
+        newest = await index.runs.runs(limit=1)
+        return count, newest[0].started_at if newest else 0.0
+
     def runs_tag(self, root: Path, *, identity: str | None = None) -> str:
         """`(repo, count, newest started_at)`: two shipped readers, one decoded row, no new SQL.
 
@@ -192,10 +198,7 @@ class Readers:
         would otherwise share a tag and the second would 304 on the first one's rows (P14).
         """
         identity = self.identity(root, identity=identity)
-        index = self.index(root, identity=identity)
-        count = asyncio.run(index.runs.count())
-        newest = asyncio.run(index.runs.runs(limit=1))
-        started = newest[0].started_at if newest else 0
+        count, started = asyncio.run(self._ledger(self.index(root, identity=identity)))
         return f'W/"{identity_key(identity)}-{count}-{started}"'
 
     def graph(self, root: Path, *, identity: str | None = None) -> GraphView:

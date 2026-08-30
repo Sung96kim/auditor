@@ -87,9 +87,6 @@ class Spool:
                 continue
         return tuple(out)
 
-    def clear(self) -> None:
-        self.path.unlink(missing_ok=True)
-
 
 class EventQueue:
     """What the daemon has accepted and not yet consumed, keyed by ``repo_dir_key``.
@@ -105,6 +102,7 @@ class EventQueue:
         self._signal = threading.Event()
         self._lock = threading.Lock()
         self._keyed: dict[str, threading.Lock] = {}
+        #: every event this daemon has taken; no S8b reader, because `/api/status` counts repos
         self.accepted = 0
 
     def spool(self, key: str) -> Spool:

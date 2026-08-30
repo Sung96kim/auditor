@@ -1,4 +1,8 @@
-"""How many refinement runs the daemon lets happen at once (spec 8.4)."""
+"""How many refinement runs the daemon lets happen at once (spec 8.4).
+
+S8c seam 6: S8b constructs one `RunSlots` per daemon and opens no run, so nothing takes a slot
+until the repo loop lands.
+"""
 
 import asyncio
 from collections.abc import AsyncIterator

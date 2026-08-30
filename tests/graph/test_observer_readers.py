@@ -19,7 +19,7 @@ def test_the_runs_reader_answers_an_empty_page_and_a_stable_tag(refine_repo: Pat
         assert view.log.runs == ()
         assert view.log.run_count == 0
         first = readers.runs_tag(refine_repo)
-        assert first.endswith('-0-0"')
+        assert first.endswith('-0-0.0"')  # an empty ledger: no runs, no newest start
         assert readers.runs_tag(refine_repo) == first
     finally:
         readers.close()
