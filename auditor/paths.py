@@ -257,9 +257,8 @@ def observer_port() -> int:
     raw = GlobalPaths().observer_port.strip()
     try:
         configured = int(raw)
-    except (
-        ValueError
-    ):  # the unset case lands here too, and its empty string names no port
+    # the unset case lands here too, and its empty string names no port
+    except ValueError:
         configured = -1
     if 0 <= configured < 65536:  # out of range is unreadable: `bind` would raise on it
         return configured

@@ -49,8 +49,7 @@ from auditor.serve import open_url
 from auditor.user_settings import UserSettings, load_home_settings, load_user_settings
 
 _LOG = logging.getLogger("auditor.observer")
-#: a transport fact rather than a lifecycle setting: the daemon is answering or gone, so no
-#: caller waits on this and `SchedulingConfig` does not hold it
+#: Transport fact, not `SchedulingConfig` setting: daemon is answering or gone, no caller waits
 _ASK_TIMEOUT = 2.0
 _P = TypeVar("_P", bound=WirePayload)
 

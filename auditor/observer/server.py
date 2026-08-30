@@ -10,8 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from auditor.payload import WirePayload
 
-#: the three below are transport facts rather than lifecycle settings: no user waits on one and
-#: none is a policy, so `SchedulingConfig` holds none of them
+#: Transport facts, not `SchedulingConfig` settings; no user waits on them, none is policy
 MAX_BODY_BYTES = 1 << 20
 #: `shutdown()` waits one poll interval, and the stdlib default of 0.5 s is paid by every test
 _POLL_SECONDS = 0.05
