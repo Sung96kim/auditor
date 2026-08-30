@@ -42,6 +42,19 @@ class RebuildLockTimeout(RuntimeError):
         )
 
 
+def flock_nb(fd: int) -> bool:
+    """Take an exclusive lock without waiting. The one spelling of the non-blocking attempt.
+
+    This module polls it in a loop for the rebuild lock; the observer daemon asks once, because
+    "someone else is the daemon" is an answer and not a wait.
+    """
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
 def rebuild_lock_path(identity: str) -> Path:
     """The lock every rebuild of one checkout takes. Under the home, so no repo is written to."""
     return auditor_home() / "observer" / "locks" / f"{identity_key(identity)}.lock"
@@ -58,16 +71,14 @@ async def _acquire(
     started = time.monotonic()
     said = False
     while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if flock_nb(fd):
             return
-        except OSError:
-            if waiting is not None and not said:
-                waiting()
-                said = True
-            if timeout is not None and time.monotonic() - started >= timeout:
-                raise RebuildLockTimeout(path, timeout) from None
-            await asyncio.sleep(poll)
+        if waiting is not None and not said:
+            waiting()
+            said = True
+        if timeout is not None and time.monotonic() - started >= timeout:
+            raise RebuildLockTimeout(path, timeout)
+        await asyncio.sleep(poll)
 
 
 @asynccontextmanager

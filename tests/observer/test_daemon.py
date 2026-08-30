@@ -3,6 +3,7 @@
 import http.client
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -26,6 +27,7 @@ from auditor.observer.events import Event, EventQueue, Spool
 from auditor.observer.payloads import DaemonStatus
 from auditor.observer.sessions import Session, SessionBook
 from auditor.paths import auditor_home, daemon_json_path, write_json_dict
+from auditor.user_settings import SchedulingConfig
 
 
 @pytest.fixture
@@ -135,14 +137,24 @@ def test_the_install_spec_is_resolved_fresh_and_falls_back_to_the_interpreter():
     ]
 
 
-def test_the_daemon_adopts_a_spool_a_killed_predecessor_left(queue, tmp_path):
-    """Spec 8.1's start-time drain is the same code path as a live one, so it is exercised."""
-    Spool(tmp_path / "repos" / "k" / "spool.jsonl").append(
+def test_the_daemon_adopts_a_spool_a_killed_predecessor_left(
+    queue, tmp_path, monkeypatch
+):
+    """Spec 8.1's start-time drain is the same code path as a live one, so it is exercised.
+
+    A `repos/` entry whose name is not a `repo_dir_key` is not one of this daemon's spools and
+    is not adopted, because `spool_path` refuses to resolve it at all.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    key = "a" * 40
+    Spool(tmp_path / "repos" / key / "spool.jsonl").append(
         Event(repo="/r", paths=("a.py",), at=1.0)
     )
+    (tmp_path / "repos" / "not-a-key").mkdir()
+    (tmp_path / "repos" / ("b" * 40)).mkdir()  # a repo dir with no spool left behind
     daemon = _daemon(queue)
-    assert daemon.adopt(["k", "never-seen"]) == 1
-    assert queue.keys() == ("k",)
+    assert daemon.adopt_home() == 1
+    assert queue.keys() == (key,)
 
 
 def test_one_tick_hands_the_drained_batch_to_the_consumer(queue):
@@ -276,7 +288,10 @@ def test_the_client_resolves_the_same_home_as_the_package(tmp_path, monkeypatch)
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path / "elsewhere"))
     assert auditr_observer.home() == auditor_home()
     monkeypatch.delenv("AUDITOR_HOME")
-    assert auditr_observer.home() == auditor_home()
+    monkeypatch.setenv(
+        "HOME", str(tmp_path)
+    )  # both sides fall back, and not to the developer's
+    assert auditr_observer.home() == auditor_home() == tmp_path / ".auditor"
 
 
 @pytest.mark.parametrize(
@@ -295,7 +310,7 @@ def test_the_client_and_the_model_name_the_same_status_keys():
 
 
 def test_the_daemon_starts_publishes_answers_and_stops_on_its_own_idle_window(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, restored_logging
 ):
     """The whole process end to end, which is the only thing that catches a broken `serve` (P25).
 
@@ -303,6 +318,8 @@ def test_the_daemon_starts_publishes_answers_and_stops_on_its_own_idle_window(
     root the daemon does not have, so every start died with a `TypeError` before it bound a port.
     """
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    # an ephemeral port, because the hashed one collides with a real daemon on a colliding home
+    monkeypatch.setenv("AUDITOR_OBSERVER_PORT", "0")
     monkeypatch.setenv(
         "AUDITOR_USER_OBSERVER__SCHEDULING__IDLE_SHUTDOWN_MINUTES", "0.02"
     )
@@ -343,3 +360,26 @@ def test_a_second_serve_returns_at_once_because_the_lock_is_held(tmp_path, monke
         assert not daemon_json_path().exists()
     finally:
         lock.release()
+
+
+def test_a_port_collision_ends_the_start_and_gives_the_lock_back(
+    tmp_path, monkeypatch, restored_logging
+):
+    """The bind sat outside the try/finally, so a taken port escaped with the lock still held."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        monkeypatch.setenv("AUDITOR_OBSERVER_PORT", str(taken.getsockname()[1]))
+        assert serve() == 1
+    assert not daemon_json_path().exists()
+    lock = DaemonLock(tmp_path / "observer" / "lock")
+    assert lock.acquire() is True
+    lock.release()
+
+
+def test_the_client_and_the_settings_name_the_same_lifecycle_timeouts():
+    """The client may not import `auditor`, so its two literals are pinned like `_OFF` is (E6)."""
+    scheduling = SchedulingConfig()
+    assert scheduling.start_timeout_seconds == auditr_observer._START_TIMEOUT
+    assert scheduling.stop_timeout_seconds == auditr_observer._STOP_TIMEOUT

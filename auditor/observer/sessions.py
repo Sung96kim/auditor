@@ -6,8 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from auditor.graph.refine.models import ClientKind
-
-MINUTE = 60.0
+from auditor.observer import MINUTE
 
 
 class AttachRequest(BaseModel):

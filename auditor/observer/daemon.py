@@ -1,6 +1,5 @@
 """Spec 8.1's process: the singleton lock, `daemon.json`, the idle timer and the restart exec."""
 
-import fcntl
 import logging
 import os
 import shutil
@@ -8,7 +7,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -17,8 +16,9 @@ from pydantic import BaseModel, ConfigDict
 
 from auditor import __version__
 from auditor.config import is_configured, load_config
+from auditor.graph.refine.lock import flock_nb
 from auditor.graph.viz import render_app_or_status
-from auditor.observer import OBSERVER_API_VERSION
+from auditor.observer import MINUTE, OBSERVER_API_VERSION
 from auditor.observer.events import Event, EventQueue
 from auditor.observer.routes import DaemonIdentity, Readers, Router, RouterDeps
 from auditor.observer.scheduling import RunSlots
@@ -39,12 +39,7 @@ from auditor.paths import (
 from auditor.serve import open_url
 from auditor.user_settings import UserSettings, load_home_settings, load_user_settings
 
-MINUTE = 60.0
 _LOG = logging.getLogger("auditor.observer")
-#: how long the drain thread blocks on the queue before it looks at the clock again
-TICK_SECONDS = 1.0
-#: what the page renders for a caller that named no repo and has no session to fall back on
-_EMPTY_GRAPH: dict = {"nodes": [], "edges": [], "clusters": []}
 
 
 class DaemonRecord(BaseModel):
@@ -57,19 +52,6 @@ class DaemonRecord(BaseModel):
     home: str
     version: str
     compat: int
-
-
-def flock_nb(fd: int) -> bool:
-    """Take an exclusive lock without waiting. The one spelling of the non-blocking attempt.
-
-    `auditor/graph/refine/lock.py` polls this in a loop for the rebuild lock; the daemon asks once,
-    because "someone else is the daemon" is an answer and not a wait.
-    """
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
 
 
 class DaemonLock:
@@ -229,8 +211,10 @@ class Daemon:
         self.consume = consume or self._count
         #: what a state change the page can see calls; `serve` passes the router's tag counter
         self.on_change = on_change or (lambda: None)
-        #: spec 8.4's "two globally" is across every loop in one daemon, so the daemon owns it
+        #: spec 8.4's "two globally" is across every loop in one daemon, so the daemon owns it;
+        #: no S8b reader, because S8b opens no run (S8c seam 6)
         self.slots = slots or RunSlots()
+        #: what `consume` counted; S8c is what fills `StatusPayload.drained_events` from it
         self.drained = 0
         self.stopping = False
 
@@ -238,16 +222,16 @@ class Daemon:
         """S8b's consumer: count the batch and acknowledge it. S8c replaces this (P29)."""
         self.drained += len(events)
 
-    def adopt(self, keys: Iterable[str]) -> int:
-        """Spec 8.1's start-time drain: every spool left on disk becomes a pending key."""
-        return self.queue.adopt(keys)
-
     def adopt_home(self) -> int:
-        """Every spool under this home, named by the `repos/<key>` directories themselves."""
+        """Spec 8.1's start-time drain: every spool under this home becomes a pending key.
+
+        The `repos/<key>` directories name themselves, and a directory whose name is not a key
+        cannot hold one of this daemon's spools.
+        """
         repos = auditor_home() / "repos"
         if not repos.is_dir():
             return 0
-        return self.adopt(
+        return self.queue.adopt(
             sorted(
                 e.name
                 for e in repos.iterdir()
@@ -268,12 +252,6 @@ class Daemon:
             self.on_change()  # an expired session is a badge change the page has to see
         if self.idle.due(now) and not self.sessions.live(now=now):
             self.stopping = True
-
-    def run(self, tick_seconds: float = TICK_SECONDS) -> None:
-        """Wait on the queue and tick until something says to stop."""
-        while not self.stopping:
-            self.queue.wait(tick_seconds)
-            self.tick()
 
 
 def repo_gate(
@@ -314,10 +292,9 @@ def repo_page(readers: Readers) -> Callable[[str | None], str]:
     """The page at `/`: the built UI for one repo, or the status document with no bundle (P16)."""
 
     def page(repo: str | None) -> str:
-        document = _EMPTY_GRAPH
-        if repo:
-            document = readers.graph(Path(repo)).graph
-        return render_app_or_status(document)
+        """What a caller that named no repo, and has no session to fall back on, still gets."""
+        empty: dict[str, list] = {"nodes": [], "edges": [], "clusters": []}
+        return render_app_or_status(readers.graph(Path(repo)).graph if repo else empty)
 
     return page
 
@@ -358,7 +335,14 @@ def serve(settings: UserSettings | None = None) -> int:
     )
     daemon = Daemon(queue=queue, sessions=sessions, idle=idle, on_change=router.bump)
     daemon.adopt_home()
-    server = ObserverServer(router.dispatch, port=observer_port())
+    try:
+        server = ObserverServer(router.dispatch, port=observer_port())
+    except (
+        OSError
+    ):  # the port rule is a hash over 500 slots, so a collision is not exotic
+        _LOG.exception("observer could not bind its port; not starting")
+        lock.release()
+        return 1
     router.url = server.url
     server.start()
     write_json_dict(
@@ -383,7 +367,7 @@ def serve(settings: UserSettings | None = None) -> int:
         pass
     try:
         while not daemon.stopping and not router.restarting:
-            queue.wait(TICK_SECONDS)
+            queue.wait(scheduling.tick_seconds)
             if router.last_request > idle.last:
                 idle.touch(router.last_request)
             daemon.tick()

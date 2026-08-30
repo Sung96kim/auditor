@@ -133,6 +133,19 @@ class SchedulingConfig(BaseModel):
     idle_shutdown_minutes: float = Field(
         30.0, ge=0.0, description="Idle minutes before the daemon exits; 0 never exits."
     )
+    tick_seconds: float = Field(
+        1.0,
+        gt=0.0,
+        description="Seconds the daemon blocks on its queue before looking at the clock.",
+    )
+    start_timeout_seconds: float = Field(
+        10.0,
+        gt=0.0,
+        description="Seconds `observer start` waits for the daemon to publish itself.",
+    )
+    stop_timeout_seconds: float = Field(
+        10.0, gt=0.0, description="Seconds `observer stop` waits for the daemon to go."
+    )
     run_on_stale: bool = Field(
         True, description="Re-run when an edit stales an existing refinement."
     )
@@ -276,17 +289,25 @@ def _read_layer(path: Path) -> dict[str, object]:
     }
 
 
-def user_json_layers(root: Path, *, directory: Path | None = None) -> dict[str, object]:
+def user_json_layers(
+    root: Path | None = None, *, directory: Path | None = None
+) -> dict[str, object]:
     """The global settings file deep-merged with this repo's overlay (repo wins), before env.
 
+    ``root`` is None for a process serving many repos at once, which has no one overlay to apply.
     Pass ``directory`` when the caller already resolved the repo's state dir: deriving it costs a
     ``git rev-parse``.
     """
-    overlay = (repo_dir(root) if directory is None else directory) / "config.json"
-    return deep_merge(_read_layer(user_config_path()), _read_layer(overlay))
+    layers = _read_layer(user_config_path())
+    if root is None and directory is None:
+        return layers
+    overlay = (repo_dir(root) if directory is None else directory) / "config.json"  # type: ignore[arg-type]
+    return deep_merge(layers, _read_layer(overlay))
 
 
-def load_user_settings(root: Path, *, directory: Path | None = None) -> UserSettings:
+def load_user_settings(
+    root: Path | None, *, directory: Path | None = None
+) -> UserSettings:
     """Resolve the user's settings for one repo: defaults, then the global file, then the
     per-repo file, then ``AUDITOR_USER_*`` (later wins). The layering is hand-built because the
     settings-source pipeline puts env below init values, and env has to win here.
@@ -306,10 +327,7 @@ def load_home_settings() -> UserSettings:
     What a process serving many repos at once reads for its own lifecycle, where there is no one
     repo to overlay; a per-repo answer still goes through :func:`load_user_settings`.
     """
-    merged = deep_merge(
-        _read_layer(user_config_path()), EnvSettingsSource(UserSettings)()
-    )
-    return UserSettings.model_validate(merged)
+    return load_user_settings(None)
 
 
 class UserKeyReport(BaseModel):

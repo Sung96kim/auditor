@@ -251,15 +251,17 @@ def spool_path(key: str) -> Path:
 def observer_port() -> int:
     """The loopback port this home's daemon binds: ``AUDITOR_OBSERVER_PORT``, else the home's hash.
 
-    An unreadable value is ignored rather than fatal, because every ``auditr`` command builds
-    ``GlobalPaths`` and a typo here must not take the CLI down.
+    An unreadable or out-of-range value is ignored rather than fatal, because every ``auditr``
+    command builds ``GlobalPaths`` and a typo here must not take the CLI down.
     """
     raw = GlobalPaths().observer_port.strip()
     try:
         configured = int(raw)
     except ValueError:
         configured = 0
-    if configured:
+    if (
+        0 < configured < 65536
+    ):  # out of range is unreadable too: `bind` would raise on it
         return configured
     return _PORT_BASE + zlib.crc32(str(auditor_home().resolve()).encode()) % _PORT_SPAN
 

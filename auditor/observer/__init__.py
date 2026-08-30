@@ -6,5 +6,7 @@ duplicated there and ``tests/observer/test_client.py`` asserts the two agree.
 """
 
 OBSERVER_API_VERSION = 1
+#: seconds in a minute, so the idle window and the session expiry read one spelling of it
+MINUTE = 60.0
 
-__all__ = ["OBSERVER_API_VERSION"]
+__all__ = ["MINUTE", "OBSERVER_API_VERSION"]

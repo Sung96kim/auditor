@@ -271,12 +271,19 @@ def test_a_spool_key_resolves_back_to_the_repo_it_belongs_to(tmp_path, monkeypat
         ("", "", True),
         ("f", " ", False),
         ("OFF", "0", False),
+        ("", "-1", True),
+        ("", "99999", True),
+        ("", "65536", True),
     ],
 )
 def test_a_junk_env_value_is_ignored_rather_than_fatal(
     value, port, enabled, tmp_path, monkeypatch
 ):
-    """Every `auditr` command builds `GlobalPaths`, so a typo here must not take the CLI down."""
+    """Every `auditr` command builds `GlobalPaths`, so a typo here must not take the CLI down.
+
+    An out-of-range number is as unreadable as `abc`: `bind` raises `OverflowError` on it, and
+    the fall back to the home's own hashed port is what the docstring promises.
+    """
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
     monkeypatch.setenv("AUDITOR_OBSERVER", value)
     monkeypatch.setenv("AUDITOR_OBSERVER_PORT", port)

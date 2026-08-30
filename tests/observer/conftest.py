@@ -2,11 +2,13 @@
 
 import http.client
 import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from auditor.graph.payloads import LogReport, RefinementsReport
 from auditor.observer.events import EventQueue
@@ -137,3 +139,30 @@ def daemon_server(daemon_router: Router) -> Iterator[tuple[ObserverServer, Calle
         yield server, Caller(server.port)
     finally:
         server.stop()
+
+
+@pytest.fixture
+def restored_logging(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Undo what `install_logging` does, which is otherwise permanent for the whole session.
+
+    It adds a stdlib handler to the `auditor` logger, adds a loguru file sink and enables loguru
+    for the package; a later test reading either stack would see all three.
+    """
+    stdlib = logging.getLogger("auditor")
+    handlers, level = list(stdlib.handlers), stdlib.level
+    sinks: list[int] = []
+    add = logger.add
+
+    def recorded(*args: Any, **kwargs: Any) -> int:
+        sink = add(*args, **kwargs)
+        sinks.append(sink)
+        return sink
+
+    monkeypatch.setattr(logger, "add", recorded)
+    yield
+    monkeypatch.undo()
+    for sink in sinks:
+        logger.remove(sink)
+    logger.disable("auditor")
+    stdlib.handlers[:] = handlers
+    stdlib.setLevel(level)

@@ -391,7 +391,17 @@ so setting one has no effect today.
 no reader today. `session_expiry_minutes` (default `45`) is how long after its last heartbeat a
 session still counts, and `idle_shutdown_minutes` (default `30.0`, a float) is how long the daemon
 goes without a request before exiting; `0` never exits, and the window is only consulted when no
-session is attached. The two the assessment gate reads:
+session is attached. Three more are the daemon's own clocks:
+
+- `tick_seconds` (default `1.0`): how long the daemon blocks on its queue before looking at the
+  clock again.
+- `start_timeout_seconds` (default `10.0`): how long `auditr observer start` waits for the child
+  to publish `daemon.json`.
+- `stop_timeout_seconds` (default `10.0`): how long `auditr observer stop` waits for it to go.
+  `auditr-observer` cannot read settings at all, so it carries both numbers as literals and a
+  test pins them against these defaults.
+
+The two the assessment gate reads:
 
 - `run_on_stale` (default `true`): re-run when an edit stales an existing refinement. Only a
   refinement anchored on a node the batch itself touched counts, so drift and no-op builds
