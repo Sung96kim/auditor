@@ -541,6 +541,23 @@ def test_an_unknown_method_is_a_json_404_not_stdlib_html(daemon_server, method):
     assert ("no route for" in answer) is (method != "HEAD")
 
 
+def test_a_head_carries_no_body_so_the_connection_stays_in_step(daemon_server):
+    """A body on a HEAD answer is read as the next request line, and every later answer slides."""
+    server, _ = daemon_server
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=2)
+    try:
+        conn.request("HEAD", "/")
+        head = conn.getresponse()
+        assert head.status == 404
+        assert head.read() == b""
+        conn.request("GET", "/health")
+        answer = conn.getresponse()
+        assert answer.status == 200
+        assert json.loads(answer.read())["compat"] == 1
+    finally:
+        conn.close()
+
+
 def test_a_spool_key_cannot_escape_the_home(daemon_server, tmp_path):
     """`key` reached `spool_path` verbatim, so a traversal wrote a spool wherever it named."""
     _, call = daemon_server
