@@ -52,8 +52,7 @@ auditr index list --json
   in, so they do not show up in `list` yet.
 - `list` returns one row per scanned file: path, content hash, line count, language, role, last
   scan time, per-severity finding counts, and the doc path when one is recorded.
-- The pretty table's `findings` column is the total across every severity for that file. It was
-  blank before 0.11: the renderer read a key the row has never carried.
+- The pretty table's `findings` column is the total across every severity for that file.
 - `repos` lists each registered repo with its name and last-scan time.
 - `forget` deletes this repo's registry row. Everything that references it cascades with it: the
   cached files, findings, shapes, and graph rows, and the repo's persistent ignores

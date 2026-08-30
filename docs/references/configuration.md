@@ -63,10 +63,8 @@ security = { min_severity = "high" }
   reference plugin-contributed rules. No trust gate ([plugins.md](plugins.md)).
 - `trust_local_plugins` (default `false`): load `.auditor/plugins/*.py`, which execute code.
 - `respect_skips` (default `true`): honor in-file `auditor: skip` directives.
-- `observer_allowed` (default `true`): the repo's hard opt-out for the graph observer. Set `false`
-  and no observer attaches to this checkout, whatever the user's own settings say. Today it is
-  only a field: the gate that ANDs it with the user's `observer.enabled` ships with the observer
-  daemon, so setting it now has no effect until then.
+- `observer_allowed` (default `true`): the repo's hard opt-out for the graph observer. Nothing
+  reads it in this release; the observer daemon is not part of it.
 - `settings_modules` (default `["config", "settings"]`): module stems or directory names that are a
   blessed home for `BaseSettings` subclasses (`PY-CONFIG-SCATTERED-SETTINGS`).
 - `settings_cohesion` (default `true`): also bless the de-facto home, the module where settings
@@ -313,9 +311,8 @@ $AUDITOR_HOME/
     status.lock
 ```
 
-- The layout grows with the tool. Later releases add `repos/<repo_dir_key>/spool.jsonl` and an
-  `observer/` directory for the background observer's lock, logs and state. Nothing above is
-  created before `auditr init` or a scan needs it.
+- Nothing above is created before `auditr init` or a scan needs it. `observer/locks/` appears
+  alongside it the first time a graph build takes its rebuild lock.
 - `repo_dir_key` is the sha1 of `git rev-parse --path-format=absolute --git-common-dir`, resolved,
   falling back to the resolved root outside git. Every worktree of one checkout shares the
   directory, and a symlinked path does not mint a second one.
@@ -334,12 +331,14 @@ $AUDITOR_HOME/
 
 ### `observer` (`ObserverConfig`)
 
-Five keys sit at the top of the table; the rest live in five sub-tables.
+Five keys sit at the top of the table; the rest live in five sub-tables. `auditr graph refine`,
+`auditr graph eval` and `auditr graph refinements prune` read the budget, limits and tuning keys
+called out below. The rest of the table is for the observer daemon, which is not in this release,
+so setting one has no effect today.
 
-- `enabled` (default `true`): attach the observer to auditor-configured repos.
-- `worktrees` (default `"main"`): `main` or `all`.
-- `suspects` (default `true`): queue suspect nodes found during a build.
-- `open_browser` (default `true`): open the live page when the daemon starts.
+- `enabled` (default `true`), `worktrees` (default `"main"`), `suspects` (default `true`) and
+  `open_browser` (default `true`) are daemon knobs with no reader today.
+
 - `skipped_retention_days` (default `7`): days of assessment-row history kept. Only the gate's
   own rows are swept; an evicted or stranded run is `skipped` too and is kept whatever its age.
   `0` is legal and means the next sweep reaps every assessment row, including one written a
@@ -348,13 +347,12 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 
 `observer.budget` (`BudgetConfig`):
 
-- `max_cost_usd_per_day` (default `2.0`): hard ceiling on spend per day, per repository. The
-  window is `RunsDB.spend_since`, a rolling 24 hours scoped to one `repo_identity`, so ten repos
-  under the observer have ten of these ceilings. Assessment rows spent nothing and do not count
-  against it. No reader yet; `decide` takes the state a caller built.
-- `max_runs_per_day` (default `40`): hard ceiling on runs per day, per repository. It is what
-  bounds a model with no entry in the price table, and every fraction rule then reads remaining
-  runs.
+- `max_cost_usd_per_day` (default `2.0`): ceiling on spend per day, per repository, over a rolling
+  24 hours scoped to one checkout identity. Assessment rows spent nothing and do not count against
+  it. Read by the assessment gate, which no shipped command calls yet.
+- `max_runs_per_day` (default `40`): ceiling on runs per day, per repository. It is what bounds a
+  model with no entry in the price table, and every fraction rule then reads remaining runs. Same
+  reader.
 - `max_budget_usd_per_run` (default `0.25`): ceiling handed to one run.
 - `max_budget_usd_per_eval` (default `12.00`): ceiling on one `auditr graph eval` invocation,
   across every suite. The eval stops before opening a run that would cross it. A default
@@ -362,14 +360,13 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
   covers that plan with headroom. The plan line and `--dry-run` show the worst case before any
   run opens.
 - `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
-  high-value runs proceed. Strictly below: at exactly the fraction the bar has not been
-  crossed. Under it, an edit batch counts only its `bare` and `self` new questions, and with
-  no eval row for the runner about to be used, edit-triggered runs stop outright. Both rules are
-  the edit batch's alone: a suspect or verify batch keeps draining idle capacity. `0` is the
-  documented opt-out and means the low budget rule never fires; a spent ceiling still stops every
-  batch, whatever this is set to.
-- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may
-  take. No reader yet; the rate-limit pause is the loop's.
+  high-value runs proceed. Strictly below: at exactly the fraction the bar has not been crossed.
+  Under it, an edit batch counts only its `bare` and `self` new questions, and with no eval row for
+  the runner about to be used, edit-triggered runs stop outright. `0` is the opt-out and means the
+  rule never fires; a spent ceiling still stops every batch whatever this is set to. Read by the
+  assessment gate.
+- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
+  No reader today.
 
 `observer.limits` (`LimitsConfig`):
 
@@ -383,11 +380,10 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
   `auditr graph refinements prune` finishes those as `skipped` with a reason, because a run whose
   process died can be closed by nothing else.
 
-`observer.scheduling` (`SchedulingConfig`):
+`observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`),
+`session_expiry_minutes` (default `45`) and `idle_shutdown_minutes` (default `30`) are daemon
+knobs with no reader today. The two the assessment gate reads:
 
-- `debounce_seconds` (default `20`): quiet period after an edit before assessing it.
-- `session_expiry_minutes` (default `45`): idle minutes before a session is considered gone.
-- `idle_shutdown_minutes` (default `30`): idle minutes before the daemon exits.
 - `run_on_stale` (default `true`): re-run when an edit stales an existing refinement. Only a
   refinement anchored on a node the batch itself touched counts, so drift and no-op builds
   cannot trigger a run. The low budget bar does not narrow this arm, but the two rules that stop
@@ -398,16 +394,16 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 
 `observer.runner` (`RunnerConfig`):
 
-- `agent` (default `"auto"`): `auto`, `claude` or `codex`.
-- `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses.
-- `codex_model` (default `""`): Codex model override; empty uses the user's Codex default.
-- `codex_prices` (default `{}`): model to `{input, output}` in USD per million tokens. Empty uses
-  the shipped table.
+- `agent` (default `"auto"`): `auto`, `claude` or `codex`. The default for `graph refine --runner`
+  and `graph eval --runner`; `codex` is refused today.
+- `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses and the
+  default for `--model`.
+- `codex_model` (default `""`) and `codex_prices` (default `{}`): the Codex model override and its
+  price table. No reader today, since the Codex runner is refused.
 
-`observer.tuning` (`TuningConfig`):
+`observer.tuning` (`TuningConfig`). `mode` (default `"propose"`) and `stopwords_max` (default `20`)
+govern knob-tuning proposals and have no reader today. The one the tier gate reads:
 
-- `mode` (default `"propose"`): `propose` or `off`.
-- `stopwords_max` (default `20`): most repo-specific stopwords a tuning proposal may add.
 - `min_precision` (default `0.95`, 0 to just under 1): the Wilson 95 per cent lower bound a
   stratum's measured precision has to reach before that shape may go active. Read off the latest
   `graph eval` row per suite and stratum, so a later failing eval takes activation back. At 0.95 a
@@ -428,9 +424,6 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 | A top-level field | `AUDITOR_USER_CONFIG_VERSION=1` | Field name uppercased. |
 
 - Both forms deep-merge over the two JSON files, so setting one field leaves its siblings alone.
-- `AUDITOR_OBSERVER=0` is not a settings field. It is the kill switch the plugin hooks and the
-  daemon read straight from the environment, which is why user settings use their own
-  `AUDITOR_USER_` prefix.
 
 ## Environment variables
 
@@ -440,6 +433,7 @@ Five keys sit at the top of the table; the rest live in five sub-tables.
 | --- | --- | --- |
 | `AUDITOR_HOME` | `~/.auditor` | Root of all generated global state: `index.db` (the shared index, partitioned by repo, holding cached findings, persistent ignores and graph facts), `bin/` (the checksum-verified osv-scanner download), `osv-db/` (the OSV database). |
 | `AUDITOR_CODE_MODE` | unset (`false`) | Enables the experimental Code Mode transform on the MCP server. A no-op unless the `code-mode` extra is installed ([auditr-mcp.md](auditr-mcp.md)). |
+| `AUDITOR_REFINE_RUN` | unset | Pre-binds the MCP refinement tools to one run id, so a runner-spawned server needs no `run_id` per call ([auditr-mcp.md](auditr-mcp.md)). |
 
 ### Repo settings (`AuditorSettings`)
 

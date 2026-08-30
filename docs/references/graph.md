@@ -2,13 +2,8 @@
 
 `auditr graph` builds and queries a semantic graph of a repo: nodes are modules, classes and
 functions, edges are structural relations (calls, overrides, imports) and semantic ones (name and
-usage similarity). `auditr graph <subcommand> --help` lists every flag.
-
-- Nothing extra to install: `numpy`, `scikit-learn`, `snowballstemmer` and `networkx` are core
-  dependencies.
-- The sub-app is imported on the first `graph` subcommand, so the rest of the CLI never pays its
-  ~0.65 s import. The first graph command in a process is that much slower; the ones after it
-  are not.
+usage similarity). `auditr graph <subcommand> --help` lists every flag. Nothing extra to install
+for the graph itself; `refine` and `eval` drive a model and need the `observer-claude` extra.
 
 ## Common invocations
 
@@ -19,48 +14,34 @@ auditr graph build .
 # who uses a symbol and what it depends on, with full counts
 auditr graph usages ComponentBlueprint .
 
-# structural neighbors two hops out
-auditr graph neighbors get_user . --depth 2
-
 # read the code path out of an entry point, four hops deep
 auditr graph flow auditor/cli/scan.py::scan .
 
-# who reaches a symbol, instead of what it reaches
-auditr graph flow audit_target . --in
-
-# nearest semantic neighbors (name and usage similarity)
+# find the exact symbol id by substring, then its structural and semantic neighbors
+auditr graph search Blueprint .
+auditr graph neighbors get_user . --depth 2
 auditr graph related get_user .
 
-# find the exact symbol id by substring, highest rank first
-auditr graph search Blueprint .
-
-# the concept cluster matching a term
+# the concept cluster matching a term, and every cluster with its size
 auditr graph concept tenant .
-
-# every concept cluster with its label and size
 auditr graph clusters .
 
 # what the deterministic resolver could not place, worst first
 auditr graph unresolved .
 
-# let a model work the queue under a directory
+# let a model work the queue under a directory, then see what changed
 auditr graph refine auditor/cli
-
-# see the brief a run would send, without opening one
-auditr graph refine . --brief
-
-# who changed the graph and what they changed
 auditr graph log .
 
-# interactive UI on a local port
+# interactive UI on a local port, and Graphviz DOT on stdout
 auditr graph serve .
-
-# Graphviz DOT on stdout
 auditr graph export . --format dot > graph.dot
 ```
 
-- `TARGET` defaults to `.` on every subcommand and is resolved to the repo root.
+- `TARGET` defaults to `.` on every subcommand and resolves to the repo root.
 - Every query subcommand takes `--json` for the raw payload. `serve` and `export` do not.
+- The sub-app is imported on the first `graph` subcommand, so the rest of the CLI never pays its
+  numpy and scikit-learn import cost.
 
 ## Building
 
@@ -71,27 +52,21 @@ auditr graph export . --format dot > graph.dot
   content, so an extractor change does not invalidate facts already cached under the same hash; run
   `--rebuild` after upgrading auditor. It is refused with `--no-scan`, which would leave nothing to
   build from.
-- `--rebuild` holds the rebuild lock across the clear, the rescan and the build, so no other build
-  can see the half-rescanned graph.
 - Routine staleness needs neither flag: the default auto-scan already picks up edited files.
 - Setting `enabled = true` under `[tool.auditor.graph]` also makes a plain `auditr scan -i` populate
   graph facts. See [configuration.md](configuration.md).
-- The build runs the `GRAPH-*` detectors, described below.
 - The build reports `nodes`, `edges`, `clusters`, `unresolved`, `findings`, `refined` (the
   refinements it applied) and `expired` (the ones it wrote a new status for).
-- A build takes a lock at `$AUDITOR_HOME/observer/locks/<key>.lock`, one per checkout, so two
-  builds of the same repo never interleave and builds of different repos never wait on each other.
-  If another process is mid-build, `graph build` prints `waiting for the observer's rebuild` and
-  then proceeds.
-- The lock is released when the holding process exits, so a crashed build never leaves one behind
-  and no lock file ever needs deleting.
+- A build takes a lock under `$AUDITOR_HOME/observer/locks/`, one per checkout, so two builds of
+  the same repo never interleave and builds of different repos never wait on each other. While
+  another process holds it, `graph build` prints that it is waiting and then proceeds. The lock is
+  released when the holding process exits, so no lock file ever needs deleting.
 
 ## Querying
 
-- `usages` groups a symbol's edges by kind into `used_by` (incoming: who depends on it) and
-  `depends_on` (outgoing: what it needs). Each group carries a full `count` and a rank-ordered
-  `sample`; `total_in` and `total_out` are the true totals. `--sample` sets the sample size (default
-  5).
+- `usages` groups a symbol's edges by kind into `used_by` (incoming) and `depends_on` (outgoing).
+  Each group carries a full `count` and a rank-ordered `sample`; `total_in` and `total_out` are the
+  true totals. `--sample` sets the sample size (default 5).
 - Reach for `usages` as the find-references and blast-radius query. `neighbors` truncates without
   reporting totals.
 - An empty `used_by` with `total_in` of 0 makes a symbol a dead-code candidate, not a confirmed one.
@@ -100,17 +75,14 @@ auditr graph export . --format dot > graph.dot
 - Bare names resolve fuzzily: the highest-rank match becomes `resolved`, the rest are listed under
   `ambiguous`. Run `search` first when a short name could match several nodes.
 - `neighbors` walks structural edges (`calls`, `overrides`, `inherits`, `references_type`,
-  `callback_arg`, `registered_in`, `contains`, `imports`) out to `--depth` hops, tagging each hit
-  with its edge kind, direction and hop count.
+  `callback_arg`, `registered_in`, `contains`, `imports`) out to `--depth` hops (default 1),
+  tagging each hit with its edge kind, direction and hop count.
 - `related` walks semantic edges (`name_similar`, `usage_similar`) instead, so it answers "what is
   conceptually near this", not "what calls this". `--limit` defaults to 10.
 - `search` matches a substring against node ids, highest rank first. `--limit` defaults to 20.
 - `concept` returns the whole membership of the cluster a term belongs to, matching the cluster
-  label first and member names second.
-- `graph concept` prints the cluster's label, its member count and every member's symbol id. The
-  count and the ids were both broken before 0.11: the renderer read keys the query never returned.
-  The MCP `graph_concept` tool still caps its member list at `limit` and reports `member_count` and
-  `shown` alongside.
+  label first and member names second, and prints the label, the member count and every member id.
+  The MCP `graph_concept` tool caps its member list and reports `member_count` and `shown`.
 - `clusters` lists every concept cluster with its id, label and member count.
 - Worked recipes with real command output live in the plugin's
   [explore-graph recipes](../../plugin/skills/explore-graph/references/recipes.md).
@@ -120,43 +92,6 @@ auditr graph export . --format dot > graph.dot
 `graph flow` answers "what does this code path do" in one call, instead of a chain of `neighbors`
 queries. It walks the graph breadth-first from one symbol and prints a tree.
 
-- Outward it follows `calls` and `callback_arg`. `--in` reverses that: what reaches the symbol.
-- The start symbol always expands, however wide it is. Hub collapsing applies to what it reaches.
-- A reached method with overriders expands each overrider as `dispatches_to`, so a call to a base
-  method shows the implementations it can land in. `--in` walks the other way, from an overrider
-  to its base.
-- A symbol registered in a registry module shows that module as a leaf. `--in` on the registry
-  module expands every symbol registered there, which is how decorator-driven dispatch reads.
-- The `modules` line above the tree is the ordered list of modules the path touches. That line,
-  not the tree, is usually the architecture answer.
-- Flags: `--depth` (default 4, 0 to 64), `--limit` (default 200 nodes, 1 to 1000, shallow levels
-  finish first), `--kinds a,b` to follow extra edge kinds on top of the two defaults,
-  `--include-tests` to keep test symbols, `--stop-at GLOB` (repeatable) to stop expanding inside a
-  module, `--expand-hubs` to open a node the hub rule elided, `--json` for the raw payload.
-- `--kinds` is validated against the edge kinds, so a typo is an error rather than a tree that
-  silently omits the relation you asked for. `--stop-at` stays a free glob: a glob that matches
-  nothing is a legitimate query.
-- Markers in the tree:
-  - `⊕ N elided` is a hub the walk refused to expand. A node is a hub when either count reaches
-    `graph.flow_hub_fan_in` (default 40): the symbols that reach it, dispatch children included,
-    or the children it would emit. `⊕ N hub` is the same fan on a node that expanded anyway: the
-    start symbol, any node under `--expand-hubs`, and a hub on the last level `--depth` reached.
-    Both counts are over production symbols only, whatever `--include-tests` says, so the mark
-    describes the symbol and not the query: `--include-tests` can only widen the tree.
-  - In the JSON payload that pair is one `hub` object, `{"count": N, "kind": "fan_in", "collapsed":
-    true}`, or `null` on a node whose fan stayed under the floor.
-  - `↺ seen` is a node already shown elsewhere in the tree, `↺ cycle` a node that is its own
-    ancestor. Both are shown once and not expanded again.
-  - `⊣ stop` is a node a `--stop-at` glob matched: the path reached it, the tree does not go in.
-  - `? name` is a call the resolver could not place, dimmed when the name is bound from outside
-    the repo.
-- Bare names resolve the same way `usages` does: the highest-rank match becomes `resolved` and the
-  rest are listed under `ambiguous`.
-- `graph export --flow <symbol>` renders the same walk as Graphviz DOT, and takes the same knobs:
-  `--in`, `--depth`, `--limit`, `--kinds`, `--include-tests`, `--expand-hubs` and `--stop-at`. All
-  but `--depth` are errors without `--flow`, since the overview and ego modes do not walk;
-  `--depth` also sets the ego export's hop count.
-
 ```bash
 # stop at the database layer and keep the tree readable
 auditr graph flow auditor/engine.py::audit_target . --stop-at 'auditor/database/*'
@@ -165,13 +100,42 @@ auditr graph flow auditor/engine.py::audit_target . --stop-at 'auditor/database/
 auditr graph flow auditor/models.py::Finding . --kinds inherits --expand-hubs
 ```
 
+- Outward it follows `calls` and `callback_arg`. `--in` reverses that: what reaches the symbol.
+- The start symbol always expands, however wide it is. Hub collapsing applies to what it reaches.
+- A reached method with overriders expands each overrider as `dispatches_to`, so a call to a base
+  method shows the implementations it can land in. `--in` walks the other way.
+- A symbol registered in a registry module shows that module as a leaf. `--in` on the registry
+  module expands every symbol registered there, which is how decorator-driven dispatch reads.
+- The `modules` line above the tree is the ordered list of modules the path touches. That line,
+  not the tree, is usually the architecture answer.
+- Flags: `--depth` (default 4, 0 to 64), `--limit` (default 200 nodes, 1 to 1000, shallow levels
+  finish first), `--kinds a,b` to follow extra edge kinds, `--include-tests` to keep test symbols,
+  `--stop-at GLOB` (repeatable) to stop expanding inside a module, `--expand-hubs` to open a node
+  the hub rule elided.
+- `--kinds` is validated against the edge kinds, so a typo is an error rather than a tree that
+  silently omits the relation you asked for. `--stop-at` stays a free glob: a glob that matches
+  nothing is a legitimate query.
+- Markers in the tree:
+  - `⊕ N elided` is a hub the walk refused to expand. A node is a hub when either count reaches
+    `graph.flow_hub_fan_in`: the symbols that reach it, dispatch children included, or the children
+    it would emit. `⊕ N hub` is the same fan on a node that expanded anyway. Both counts are over
+    production symbols only, whatever `--include-tests` says.
+  - In the JSON payload that pair is one `hub` object, `{"count": N, "kind": "fan_in", "collapsed":
+    true}`, or `null` on a node whose fan stayed under the floor.
+  - `↺ seen` is a node already shown elsewhere in the tree, `↺ cycle` a node that is its own
+    ancestor. Both are shown once and not expanded again.
+  - `⊣ stop` is a node a `--stop-at` glob matched: the path reached it, the tree does not go in.
+  - `? name` is a call the resolver could not place, dimmed when the name is bound from outside
+    the repo.
+- `graph export --flow <symbol>` renders the same walk as Graphviz DOT and takes the same knobs.
+
 ## The unresolved queue
 
 `graph unresolved` lists the facts the deterministic resolver could not place. Every build rebuilds
 the whole queue, and `graph build` reports its size as `unresolved`.
 
 ```bash
-# the whole queue, worst first (the default limit is in `graph unresolved --help`)
+# the whole queue, worst first
 auditr graph unresolved .
 
 # only the names with a real candidate set
@@ -190,52 +154,77 @@ auditr graph unresolved . --json --limit 500
 - Rows are ordered worst first: ambiguous names, then `self`/bare calls, then attribute calls, then
   the label and cluster reasons. Externally bound rows sink below equal-priority real ones.
 - `--reason` and `--call-form` are repeatable and combine. Both are validated against their value
-  lists, so a typo is an error, not an empty queue. `--limit` must be at least 1.
+  lists, so a typo is an error, not an empty queue. `--limit` defaults to 50 and must be at least 1.
 - An empty result names its cause: a filter that matched nothing says so, and only a queue that was
   never built points at `graph build`.
 - Reasons:
-  - `ambiguous_name`: two or more repo definitions are reachable from the call site, so the
-    resolver refused to pick one.
+  - `ambiguous_name`: two or more repo definitions are reachable from the call site.
   - `unimportable_name`: the repo defines the name, but the calling module cannot import it.
   - `text_sparse`: the symbol has fewer than four distinct concept tokens, so it gets no
     similarity edges.
-  - `generic_label`: a cluster whose label fell back to `cluster-N` because no member contributed
-    a token.
+  - `generic_label`: a cluster whose label fell back to `cluster-N`.
   - `singleton_cluster`: a cluster with one member.
-- A resolver row only exists when the name has at least one repo definition that the caller's role
-  can see. Test-only definitions are invisible to production callers, which is what keeps the queue
-  small. The build-pass rows (`text_sparse`, `generic_label`, `singleton_cluster`) are about a
-  symbol or a cluster rather than a name, so they carry no definers.
-- Test code never queues anything, on either side. Only production and script callers produce
-  resolver rows, and a test-role symbol never produces a `text_sparse` row.
-- A row is dropped when the node already has an edge of that kind to a symbol of the same short
-  name, so a call resolved through the typed-receiver path is never queued twice.
-- `typed_call` rows survive only when the receiver's declared type is a repo class whose whole base
-  chain resolves in-repo, so `str.lower`, `Path.mkdir` and pydantic receivers never appear. A
-  receiver known not to be a repo class also removes the plain attribute row for that call: the
-  call is settled, the same-named repo function is simply not what it calls.
+- What keeps the queue small: a resolver row only exists when the name has at least one repo
+  definition the caller's role can see, test code never queues anything on either side, a row is
+  dropped when the node already has an edge of that kind to the same short name, and a name the
+  function itself binds (any parameter form, a nested `def`/`class`/lambda, an `except ... as`
+  target, a local import, an assignment) never produces a bare row.
 - `call_form` is `self` only for a direct `self.method()` or `cls.method()`. A chained
-  `self.dep.method()` is `attr` with a receiver root of `self`.
-- A name called both bare and through a receiver in the same function gets one row, in the bare
-  form, because that is the form a reader can settle from one file. When the function itself binds
-  the bare name, the attribute form wins instead, so the real miss still surfaces.
-- A bare row is never emitted for a name the function itself binds. That covers every parameter
-  form (including keyword-only, `*args` and `**kwargs`), nested `def`/`class`/lambda names and
-  their parameters, `except ... as` targets, function-local imports, and every name it assigns.
-- A receiver whose declared type is settled outside the repo silences only the calls on that
-  receiver. `p.run()` on a `p: Path` does not hide a `job.run()` in the same function.
+  `self.dep.method()` is `attr` with a receiver root of `self`. A name called both bare and through
+  a receiver in the same function gets one row, in whichever form a reader can settle from one file.
 - `ext-bound` (`externally_bound` in JSON) marks a row whose bare name or receiver root the calling
-  module imports from outside the repo, such as `re.search` or `subprocess.run`, including through
-  a module-level alias like `_RX = re.compile(...)`. Those rows are kept for display, sort last and
-  are not worth chasing; `--no-external` drops them. A bare source that names a sibling module of
-  the caller's own package (`from _common import x` inside `plugin/hooks/`) is a repo import, not
-  an external one.
+  module imports from outside the repo, such as `re.search` or `subprocess.run`. Those rows sort
+  last and are not worth chasing; `--no-external` drops them.
 - `definers` and `candidates` render as counts in the table. In `--json` and through the MCP tool
   they are node-id lists capped at the same limit, with the true totals in `definers_count` and
-  `candidates_count`, so both surfaces carry the same keys.
-- The queue is empty until `graph build` has run. This release bumps the index schema, so the
-  cached facts are dropped on first use and the next `graph build` re-extracts every file. No
-  `--rebuild` is needed.
+  `candidates_count`.
+
+## Refine
+
+```bash
+# let a model work the unresolved queue under a path
+auditr graph refine auditor/cli
+# the whole repo, on a named model
+auditr graph refine "" --model sonnet
+# what a run would be asked, with no run opened
+auditr graph refine auditor/cli --brief
+```
+
+- One run is: open a row, render the brief for the queue rows under the scope, hand it to a model
+  that reads the checkout with `Read`/`Grep`/`Glob` and proposes through an in-process `propose`
+  tool, then commit under the rebuild lock. Every proposal goes through the same verifier an
+  agent's does, so a runner cannot write a correction the tools would refuse.
+- `SCOPE` comes before `TARGET`, and it is the one graph command whose first positional is
+  optional, so a lone path binds to `SCOPE`. Point at another checkout with
+  `auditr graph refine . /other/repo`. The scope is a repo-relative path prefix; `.`, `./` and `""`
+  all mean the whole repo. A run may only propose corrections whose every endpoint is under its
+  scope, so a cross-directory edge needs a wider run.
+- `--runner` takes `auto`, `claude` or `codex`; `auto` and `claude` both resolve to the Claude
+  runner and `codex` is refused, naming the release it lands in. `--model` takes `haiku` or
+  `sonnet`. An unknown value for either exits 2 naming the valid set.
+- Three refusals, all exit 1 with one line: the extra is not installed
+  (`pip install 'auditr[observer-claude]'`), no Claude credentials were found, or the Codex runner
+  was asked for.
+- The SDK ships its own `claude` binary. The runner uses the `claude` on your PATH when there is
+  one and falls back to that bundle otherwise.
+- The run is bounded by `observer.limits.max_nodes_per_run` (queue rows in the brief),
+  `max_changes_per_run` (corrections staged), `max_turns` (the conversation) and
+  `observer.budget.max_budget_usd_per_run`. All four are in [configuration.md](configuration.md).
+- A target costs about two turns and the structured answer costs one more, so a run that works
+  every target it is given wants `max_turns >= 2 * max_nodes_per_run + 1`. Nothing enforces it and
+  the shipped defaults are deliberately below it: a run that runs out of turns is `aborted` with
+  its cost kept, not an error. The budget is an advisory post-turn stop, not a hard cap, so
+  `max_turns` is the only hard bound on the conversation.
+- An aborted run keeps its cost but loses its staging. Only the proposals the verifier refused
+  survive, because those are written the moment they are made.
+- The run row records the brief it was first handed, the sha of the rules it was written under, the
+  tool trace, the usage, the SDK session id, the model, the runner, the branch and the commit.
+  `input_tokens` counts cached tokens too, and `cost_estimated` travels with `cost_usd`: a run that
+  stopped before its result reports `$0.0000` with `cost_estimated` true.
+- Exit codes: 0 when the run succeeded, 1 when no runner could run or the run did not succeed (the
+  payload is still printed), 2 for a bad `--runner` or `--model` value.
+- `--brief` renders the brief for a scope and stops. It opens no run and records nothing, so it is
+  the way to see what a run would be asked before spending anything.
 
 ## Refinements
 
@@ -254,96 +243,49 @@ auditr graph refinements pin 12
 auditr graph refinements prune
 ```
 
-- A correction is proposed through the `graph_refine_*` MCP tools, never by hand: every one is
-  checked against the source file's own AST facts before it is stored. See
+- A correction is proposed by `graph refine` or through the `graph_refine_*` MCP tools, never by
+  hand: every one is checked against the source file's own AST facts before it is stored. See
   [auditr-mcp](auditr-mcp.md).
 - `status` is one of `pending`, `active`, `stale`, `redundant`, `reverted`, `pinned`, `superseded`,
   `rejected`. An unknown value is an error naming the set.
 - The page is the newest rows, capped by `--limit` (default 50, at most 500). `--json` carries
   `refinement_count`, the number matching the same filters, and `truncated`; the table says
   "showing N of T" when there is more.
-- Until `auditr graph eval` has produced numbers for this repo, every `add_edge`, `retarget_edge`,
-  `resolve_ambiguous` and `move_node` lands `pending` and needs an explicit `accept`.
-  `confirm_edge`, `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately.
-  Tier B and `resolve_ambiguous` become active once `graph eval` has proven them, and a later
-  failing eval takes it back.
 - `accept`, `revert` and `pin` are deliberately CLI-only. An agent may propose and commit; deciding
-  that a pending correction is right is a human step, and no MCP tool can take it.
-- They change a status and nothing else. The build is the only place a refinement reaches the graph,
-  so run `auditr graph build` afterwards.
+  that a pending correction is right is a human step, and no MCP tool can take it. They change a
+  status and nothing else, so run `auditr graph build` afterwards.
 - `prune` does two things, and reports both. It finishes runs left `queued` by a process that died
-  (`observer.limits.stranded_run_seconds`, default an hour) as `skipped`, because nothing else can
-  reach them. It then deletes assessment-only runs (`skipped`) past `observer.skipped_retention_days`
-  together with the `rejected` refinements they own, and never a run that owns a live refinement or
-  a tuning row. Nothing live is ever deleted.
+  (`observer.limits.stranded_run_seconds`) as `skipped`, because nothing else can reach them. It
+  then deletes assessment-only runs past `observer.skipped_retention_days` together with the
+  `rejected` refinements they own, and never a run that owns a live refinement or a tuning row.
 
-## Refine
+## What a correction has to clear
 
-```bash
-# let a model work the unresolved queue under a path
-auditr graph refine auditor/cli
-# the whole repo, on a named model
-auditr graph refine "" --model sonnet
-# what a run would be asked, with no run opened
-auditr graph refine auditor/cli --brief
-```
-
-- One run is: open a row, render the brief for the queue rows under the scope, hand it to a model
-  that reads the checkout with `Read`/`Grep`/`Glob` and proposes through an in-process `propose`
-  tool, then commit under the rebuild lock. Every proposal goes through the same verifier an agent's
-  does, so the runner has no way to write a correction the tools would refuse.
-- `TARGET` is the last positional, as in every other graph command, and `SCOPE` comes before it.
-  Unlike the others the first positional is optional here, so a lone path binds to `SCOPE`: point at
-  another checkout with `auditr graph refine . /other/repo`. The scope is a repo-relative path
-  prefix; `.`, `./` and `""` all mean the whole repo, and a leading `./` is dropped. A run may only
-  propose corrections whose every endpoint is under its scope, so a cross-directory edge needs a
-  wider run.
-- `--runner` takes `auto`, `claude` or `codex`. `auto` and `claude` both resolve to the Claude
-  runner today; `codex` is refused, naming the slice it lands in. `--model` takes `haiku` or
-  `sonnet`. An unknown value for either exits 2 naming the valid set.
-- Three refusals, all exit 1 with one line: the extra is not installed
-  (`pip install 'auditr[observer-claude]'`), no Claude credentials were found, or the Codex runner
-  was asked for.
-- The SDK ships its own `claude` binary (342 MB). The runner uses the `claude` on your PATH when
-  there is one and falls back to that bundle otherwise.
-- Limits live in `config.json` under `observer`:
-  - `limits.max_nodes_per_run` caps how many queue rows one brief carries.
-  - `limits.max_changes_per_run` caps how many corrections one run may stage.
-  - `limits.max_turns` caps the conversation.
-  - `budget.max_budget_usd_per_run` stops the run after a turn that crosses it.
-- Rule of thumb: a target costs about two turns and the structured answer costs one more, so a run
-  that works every target it is given wants `max_turns >= 2 * max_nodes_per_run + 1`. Nothing
-  enforces it, and the shipped defaults (20 turns, 12 targets) are deliberately below it: a run
-  that runs out of turns is `aborted` with its cost kept, not an error.
-- The budget is an advisory post-turn stop, not a hard cap: the turn in flight runs to completion,
-  so a small budget can overshoot. `max_turns` is the only hard bound on the conversation, and the
-  cost recorded on the run is the one actually spent.
-- A run that stops at its turn or budget cap is `aborted`, and an aborted run keeps its cost but
-  loses its staging: nothing it proposed is stored. Only the proposals the verifier refused survive,
-  because those are written the moment they are made.
-- What a correction needs from a human depends on its kind, not on who proposed it. `add_edge`,
-  `retarget_edge`, `resolve_ambiguous` and `move_node` land `pending` and wait for
-  `auditr graph refinements accept <id>` until the eval suite lands.
-- `annotate_node` and `unresolvable` go active immediately (spec 10.3: neither can add an edge),
-  and the brief offers both on every target, so a run can land corrections no human accepted. An
-  active `unresolvable` also retires that queue row at the next build, which takes it out of
-  `graph unresolved` and out of every later brief.
-- The run row records the verbatim brief it was first handed, the sha of the rules it was written
-  under, the tool trace, the usage, the SDK session id, the model, the runner, the branch and the
-  commit. `graph log --json` carries `system_prompt_sha`, `prompt_chars` and `tool_calls`; the brief
-  itself stays on the row, where it cannot fight the log's row cap.
-- `input_tokens` counts the cached tokens too (`cacheCreationInputTokens` and
-  `cacheReadInputTokens`): a run that read its context from cache was charged for it.
-- `cost_estimated` travels with `cost_usd`. A run that stopped before its result reports
-  `$0.0000` with `cost_estimated` true, which means the client never reported a cost, not that the
-  run was free.
-- `summary` is the model's own one-line answer when it gave one, and this run's rows counted
-  ("3 committed, 0 rejected") when it did not.
-- The log shows `queued` until the run finishes. Nothing writes `running` yet.
-- Exit codes: 0 when the run succeeded, 1 when no runner could run or the run did not succeed
-  (the payload is still printed, `--json` included), 2 for a bad `--runner` or `--model` value.
-- `--brief` renders the brief for a scope and stops. It opens no run and records nothing, so it is
-  the way to see what a run would be asked before spending anything.
+- The fact check answers one of:
+  - `ok`: the src node's own facts back an edge of this shape. With more than one definer that is
+    not a claim that this destination is the right one.
+  - `unverified`: a kind with no verifier (`confirm_edge`, `relabel_cluster`, `annotate_node`,
+    `unresolvable`, `move_node`). Accepted, tiered on shape.
+  - `no_such_path`, `not_loaded`, `stale_file`: the path is not a file here, the caller never
+    handed the file in, or the file no longer hashes to what the build cached. Only the last is
+    fixed by rebuilding the graph.
+  - `no_src_node`, `no_fact`: the src node is not in its file, or the fact tuple for that edge kind
+    and call form does not name the destination.
+  - `externally_bound`, `not_a_definer`, `bad_node_kind`: the caller's module imports the name from
+    outside the repo, the destination does not define it, or the endpoints are node kinds the
+    resolver never pairs.
+- The tier is the proposal's shape. Tier A is the kinds that cannot add an edge plus a verified
+  `resolve_ambiguous`; tier B is a verified `add_edge` on a bare or `self` call with one definer
+  and no external binding; everything else is tier C.
+- Whether a tier activates is measured by `graph eval` below, not assumed. With no eval rows,
+  `confirm_edge`, `relabel_cluster`, `annotate_node` and `unresolvable` go active immediately and
+  every other kind lands `pending` awaiting `auditr graph refinements accept <id>`. A later failing
+  eval takes an activation back.
+- At commit a proposal is checked against prior work: `redundant` (the resolver now produces this
+  edge; terminal), `already_resolved` (the source already has a deterministic edge of the same kind
+  for the same short name, which only `add_edge` trips), `duplicate` (an active refinement already
+  adds this edge, so it is stored as a `confirm_edge`) and `contradicts` (an active refinement
+  points the same source at another destination for this name).
 
 ## Eval
 
@@ -360,81 +302,44 @@ auditr graph eval --dry-run
 
 - An eval masks known-true edges of this repo's own deterministic graph, presents them to a runner
   as unresolved rows, and judges every proposal against the ground truth.
-- Four suites ship. `add` masks a resolved `calls` edge whose call site is bare or `self`, whose
-  name this repo defines exactly once, at that destination, and whose caller's module does not bind
-  that name from a non-repo import: tier B's own shape. `decoy` presents the same truths as
-  `ambiguous_name` rows offering the true destination among up to three wrong ones. `collision`
-  presents the queue's externally bound rows, where the only right answer is `unresolvable` or
-  silence. `negative` presents names this repo defines nowhere.
+- Four suites ship. `add` masks a resolved `calls` edge of tier B's own shape. `decoy` presents the
+  same truths as `ambiguous_name` rows offering the true destination among up to three wrong ones.
+  `collision` presents the queue's externally bound rows, where the only right answer is
+  `unresolvable` or silence. `negative` presents names this repo defines nowhere. `--suite
+  fixtures` is refused, naming what it still needs.
 - `add` is stratified by how far the destination is from the source: `same-module`,
-  `direct-import`, `neither`. On this repo those hold 883 / 1,321 / 38 tier-B-shaped truths out
-  of 5,590 resolved `calls` edges, which split 49 / 46 / 5 per cent.
-- The `same-module` figure is 883 and not 1,021 because a truth's role-filtered definers must be
-  the destination itself: 138 same-module edges resolve to a test-role node whose short name has
-  an unrelated production definer, and a real queue row would carry that definer, never the
-  test-role destination.
-- Three rules leave a resolved `calls` edge out of the ground truth, one per tier B condition.
-  `not-bounded-form`: the site is an attribute call, or the node binds the name itself.
-  `not-sole-definer`: the role-filtered definers are not this destination alone.
-  `externally-bound`: the caller's module binds the name from a non-repo import, applied through
-  the queue writer's own call (the called name as well as the receiver), so a site the real queue
-  would mark externally bound is left out and a masked add row carries `externally_bound=False`
-  by construction. It removes 0 edges on this repo, so the counts above are the same either way.
-- `--sample` is per stratum. A stratum draws `min(sample, available)`, and the report names:
-  - `short`: strata that drew fewer trials than asked for.
-  - `empty`: strata with nothing to draw.
-  - `stopped`: strata no row was written for, with the reason.
-  - `off_target`: proposals about a node and name no trial asked about.
-  - `unprovable_drawn`: strata whose draw cannot clear the bar however flawless.
-  - `unprovable_judged`: strata whose judged trials cannot, which a full draw can still hit.
+  `direct-import`, `neither`.
+- `--sample` is per stratum (default 80, at most 500). A stratum draws `min(sample, available)`,
+  and the report names `short`, `empty`, `stopped`, `off_target`, `unprovable_drawn` and
+  `unprovable_judged` strata.
 - `add` and `decoy` clear on the Wilson 95 per cent lower bound of their precision reaching
-  `observer.tuning.min_precision`. `collision` and `negative` clear on having produced no false
-  add over at least one trial.
-- 73 flawless trials are the smallest run that clears 0.95; 80 give 0.954. A stratum with fewer
-  truths than that on a repo cannot be proven there, so `neither` is unprovable here at 0.95 and
-  proposals of that shape keep landing `pending`.
-- A Wilson bound reads `correct + wrong`, not `n`, so a stratum a runner mostly ignored is
-  unprovable however large its draw was.
-- An off-target `add_edge` or `resolve_ambiguous` is scored against the stratum it was proposed
-  under, in whichever counter that suite's gate reads: `wrong` for `add` and `decoy`, so it enters
-  the Wilson denominator, and a false add for the two controls. A real run would have refused it,
-  and a suite that ignored it could clear its gate over proposals nobody asked for.
-- A stratum whose planned runs did not all complete writes no row. An abort is not a measurement,
-  so the last complete measurement stands rather than being overwritten by a smaller one.
-- A run whose brief did not carry every trial of its batch is `unbriefed`: it measures nothing and
-  writes no row, because the model was never asked the question.
-- The rows live in `graph_evals`, one per `(runner, model, suite, stratum)`. Controls are stored
-  under one stratum, `all`. The latest row per key governs: an older passing row does not survive
-  a newer failing one.
-- Each control measures something the add suite cannot. A `collision` row shows its definers, so
-  the model has somewhere wrong to point. A `negative` row offers no `add_edge` at all, so the
-  control catches a model proposing a kind the brief never offered.
-- Eval runs appear in `auditr graph log` with `trigger_kind` `eval` and never in
-  `auditr graph refinements`: the proposals go to a judge, not to the ledger.
-- Cost: one run per twelve trials (`observer.limits.max_nodes_per_run`), each bounded by
+  `observer.tuning.min_precision`; `collision` and `negative` clear on having produced no false add
+  over at least one trial. The bound reads `correct + wrong`, not `n`, so a stratum a runner mostly
+  ignored is unprovable however large its draw was. The smallest flawless run that clears the bar
+  is in [configuration.md](configuration.md); a stratum with fewer truths than that on a repo
+  cannot be proven there. An off-target proposal is scored against the stratum it was proposed
+  under, so a suite cannot clear its gate over proposals nobody asked for.
+- A stratum whose planned runs did not all complete writes no row, and a run whose brief did not
+  carry every trial of its batch is `unbriefed` and measures nothing. An abort is not a
+  measurement, so the last complete measurement stands.
+- The rows live in `graph_evals`, one per `(runner, model, suite, stratum)`, with the controls
+  under one stratum, `all`. The latest row per key governs. Eval runs appear in `auditr graph log`
+  with `trigger_kind` `eval` and never in `auditr graph refinements`: the proposals go to a judge,
+  not to the ledger.
+- Cost: one run per `observer.limits.max_nodes_per_run` trials, each bounded by
   `observer.budget.max_budget_usd_per_run`, and the whole invocation by
-  `observer.budget.max_budget_usd_per_eval` (default `12.00`, which covers the roughly 40 runs a
-  default `--suite all --sample 80` plans). On the human path the plan (runs, both ceilings) prints
-  on stderr before the first run opens. Under `--json` nothing precedes the document, which carries
-  `runs_planned` and both ceilings itself, so `--dry-run --json` reads the plan without spending.
-- The eval stops before opening a run that would cross the eval ceiling, and the report says
-  `stopped: budget`. A run that exceeds its own budget is aborted, which stops its suite; the
-  reported `cost_usd` counts that run too, because the money is spent either way, while `runs`
-  counts only the runs that produced measurements.
+  `observer.budget.max_budget_usd_per_eval`. The eval stops before opening a run that would cross
+  the eval ceiling, and the report says `stopped: budget`. On the human path the plan prints on
+  stderr before the first run opens; under `--json` nothing precedes the document, so
+  `--dry-run --json` reads the plan without spending.
 - `--json` carries one document: `plan` (`sample`, `seed`, `suites`, `strata`, `runs_planned`, the
   two ceilings), `suites` (one tally per measured stratum, each with a nested `spend` and an
   `off_target` count), `notes` (the six lists above), `activation` (`proven`, `tier_b`,
   `resolve_ambiguous`), `cost_usd` and `runs`.
-- `activation` is read off the same `TierPolicy` the ledger reads. Tier B needs its own add
-  stratum and the `collision` control, so `--suite add` alone proves strata and activates nothing.
-- The `false_removal_rate` column is 0 in every row this command writes: no removal kind is
-  evaluated yet.
-- Follow-ups: the `fixtures` suite (`--suite fixtures` is refused naming it) and the
-  `references_type` half of the add suite, which needs an answer to what a class reference's call
-  form means before the tier B gate can judge it.
+- Tier B needs its own add stratum and the `collision` control, so `--suite add` alone proves
+  strata and activates nothing.
 - Exit codes: 0 when every planned run closed or `--dry-run` was given, 1 when no runner could run
-  or a run did not close (the partial payload is still printed, `--json` included), 2 for a bad
-  option value.
+  or a run did not close (the partial payload is still printed), 2 for a bad option value.
 
 ## Provenance log
 
@@ -445,181 +350,104 @@ auditr graph log
 auditr graph log --refinements
 # only the runs that failed, in the last two hours
 auditr graph log --status failed --since 2h
-# what the observer looked at and chose not to run
+# include the runs that never reached a runner
 auditr graph log --skipped
 ```
 
-- `graph log` has two views. `--runs` (the default) shows one row per decision, with `n`, the number
-  of refinement rows that run owns; `--refinements` shows the corrections themselves. Both are
-  newest first, which is the opposite of the order a build applies them in.
+- `--runs` (the default) shows one row per decision, with `n`, the number of refinement rows that
+  run owns; `--refinements` shows the corrections themselves. Both are newest first, which is the
+  opposite of the order a build applies them in.
 - The `summary` column splits that count for a finished run ("1 committed, 0 rejected"), because a
   run is not credited with the proposals it refused. An aborted run shows its reason there instead.
-- `--status` is validated against whichever view is showing, so a run status in the refinements view
-  is an error naming the valid set, not an empty page.
+- `--status` is validated against whichever view is showing, so a run status in the refinements
+  view is an error naming the valid set, not an empty page.
 - `--since` takes a duration (`90s`, `45m`, `2h`, `7d`) or an ISO date (`2026-08-20`,
-  `2026-08-20T14:00:00`). It is not a git ref: `scan --since` scopes files, and a log is scoped by
-  time.
-- Assessment-only runs, the ones the observer records when it decides an edit is not worth a
-  refinement, are hidden by default. `--skipped` or `--status skipped` shows them.
-- `--skipped` is a runs-view filter. Pairing it with `--refinements` is an error naming the filters
-  that view does take, the way a run status in that view already is.
+  `2026-08-20T14:00:00`). It is not a git ref: `scan --since` scopes files, a log is scoped by time.
+- `--skipped` adds the runs that never reached a runner, hidden by default. It is a runs-view
+  filter; pairing it with `--refinements` is an error naming the filters that view does take.
+  Three kinds of row show up under it, told apart by whether they carry an assessment: runs evicted
+  from the open-run registry and stranded runs the sweep closed both put their reason in `error`,
+  while an assessment row carries `trigger_detail.assessment` and puts its reason there.
+- An assessment row carries a second line: `looked at <paths>: <reason>, <status>`. It names at
+  most 3 paths and counts the rest, and the status is the row's own rather than a stored word, so a
+  row whose status later changed still reads true.
 - An empty page names the cause it can prove, in this order: the filter you set, the rows the view
   hid on its own (with the count), then nothing recorded at all. `--json` carries the same three as
-  `narrowed_by`, `hidden_statuses` and `hidden_count`, and `filtered` is true only when you
-  narrowed the page yourself.
-- The `when` column is local time as `MM-DD HH:MM` and carries no year, because it is for scanning
-  recent rows; `--json` carries the epoch.
+  `narrowed_by`, `hidden_statuses` and `hidden_count`.
+- The `when` column is local time as `MM-DD HH:MM` and carries no year; `--json` carries the epoch.
 - The page is capped by `--limit` (default 50, at most 500). `--json` carries `run_count` and
   `refinement_count`, the number matching the same filters, and `truncated`.
-- A model-driven run adds three keys to the runs view under `--json`: `system_prompt_sha`,
-  `prompt_chars` and `tool_calls`. The human table does not show them; they are there so a reader
-  can tell a run that was given a brief from one that was not.
-- An assessment row carries a second line under it: `looked at <paths>: <reason>, <status>`. It
-  names at most 3 paths and counts the rest (`+2 more`), the reason is the gate's own clause
-  (`no structural change`, `2 new questions`, `1 stale refinement, run_on_stale is off`), and the
-  status is the row's rather than a stored word, so a row whose status later changed still reads
-  true. A batch that named no paths reads `looked at nothing: <reason>, <status>`: the reason is
-  the whole point of the line and is never suppressed.
-- `--skipped` mixes three kinds of `skipped` row, and the assessment is what tells them apart:
-  - the gate's own decisions, which carry `trigger_detail.assessment` and put their reason there;
-  - runs evicted from the open-run registry, which carry their reason in `error`;
-  - stranded runs the sweep closed, which also carry their reason in `error`.
-- Under `--json` every run row carries `trigger_detail`, and it has exactly three keys: `files`
-  (capped at 10), `file_count`, and `assessment` when there is one. The assessment travels as
-  counts, never as node ids, so a fifty row page cannot carry thousands of them: `added_nodes`,
-  `removed_nodes`, `facts_changed_nodes`, `new_pairs`, `resolved_pairs`, `stale_refinements`,
-  `affected_flow` and `deferred_pairs` are all integers, beside `verdict`, which is the
-  `{decision, reason}` pair the gate produced. The full object stays on the stored row.
-- An assessment row costs nothing: `runner` is `none`, `cost_usd` is `0.0`, and no refinement row
-  comes from one. They are swept after `observer.skipped_retention_days` (default 7), and they are
-  the only rows that sweep takes: an evicted or stranded run is a real run that reached a runner,
-  and it is kept whatever its age.
+- Under `--json` a model-driven run adds `system_prompt_sha`, `prompt_chars` and `tool_calls`, and
+  every run row carries `trigger_detail` with exactly three keys: `files` (capped at 10),
+  `file_count`, and `assessment` when there is one. The assessment travels as counts, never as node
+  ids, so a fifty row page cannot carry thousands of them.
 
 ## Refinement overlay
 
 - The graph the query commands read is the deterministic build plus an overlay of active
-  refinements. `auditr graph refinements` lists and steers them and the `graph_refine_*` MCP tools
-  are how an agent proposes one; this section describes what a build does with the rows once
-  something puts them there, and what the three judgement layers decide before a row is written at
-  all.
-- A refinement is recorded against a repo *identity* (the git common dir), not a scan partition, so
-  every worktree of one checkout shares them.
+  refinements, recorded against a repo identity (the git common dir), so every worktree of one
+  checkout shares them.
 - Every edge carries a provenance: `deterministic` when the resolver produced it, `refined` when an
-  active refinement did. The visualization payload and the flow tree carry it as a field, and both
+  active refinement did. The flow tree and the visualization payload carry it as a field, and both
   `graph export` DOT paths draw a `refined` edge dashed.
 - The deterministic edge set is never rewritten. An overlay edge is an addition, and a
-  `retarget_edge` is the only kind that moves one, by replacing it with a `refined` edge.
-- The `GRAPH-*` detectors run on a graph no refinement touched: the edge list captured before the
-  overlay, re-ranked and re-clustered over that list, and the nodes that second pass stamps rather
-  than the overlaid ones. A refinement can never create or silence a finding, and can never move
-  which symbol one is reported on. A build in which the overlay placed no edge and moved no node
-  skips the second pass, because it would reproduce the merged one exactly.
-- A refinement expires on its own:
-  - `stale` when a node it is anchored to is gone or its structural facts changed, or when it had
-    no effect for `refine_max_noop_builds` consecutive builds.
-  - `redundant` when the resolver starts producing the same edge. That is the success case, and it
-    is decided against the resolver's own edges only: an edge another refinement placed in the same
-    build makes this one applied with nothing to add, so reverting the first cannot lose the second.
-  - `pinned` refinements are never auto-staled by any path; a moved anchor marks them `drifted`
-    instead, and the no-op counter still advances so a long-dead pin stays visible.
-  - `drifted` is rewritten on every build, so a restored anchor clears it.
-- A refinement whose ids belong to a different partition of the same checkout is skipped in
-  silence: not applied there, and not staled there either.
-- A build that holds no cached facts for a file the refinement names gives it no verdict at all:
-  not applied, not staled, not counted. A rescan in flight is not a deleted symbol.
+  `retarget_edge` is the only kind that moves one. The `GRAPH-*` detectors run on a graph no
+  refinement touched, so a refinement can never create or silence a finding.
+- A refinement expires on its own. It goes `stale` when a node it is anchored to is gone or its
+  structural facts changed, or when it had no effect for `graph.refine_max_noop_builds` consecutive
+  builds; `redundant` when the resolver starts producing the same edge, which is the success case.
+  A `pinned` refinement is never auto-staled: a moved anchor marks it `drifted` instead, rewritten
+  on every build so a restored anchor clears it.
 - Cluster refinements record the member set they were made against and re-attach to whichever
-  cluster still overlaps it by at least `refine_cluster_jaccard`. Below that they go `stale`. A
-  member another partition owns lowers the overlap rather than putting the whole refinement out of
-  scope, and a cluster a `move_node` empties is dropped rather than shipped with no members.
-- Queue rows retire two ways. A refinement the build applied removes exactly its own
-  `(node_id, name)` row, as does an `unresolvable`, which answers by declaring the pair
-  unanswerable; a refinement the build staled or scored a no-op leaves its row, so the fact stays
-  briefable until something replaces it. The build-pass rows (`generic_label`,
-  `singleton_cluster`, `text_sparse`) are rebuilt from the overlaid clustering instead, so a
-  `relabel_cluster` or a `move_node` stops producing them without any retirement step.
-
-## Refinement verdicts
-
-- A proposal names one of five edge kinds (`calls`, `references_type`, `callback_arg`, `inherits`,
-  `overrides`) and carries a reason. The fact check answers one of:
-  - `ok`: the src node's own facts back an edge of this shape. With more than one definer that is
-    not a claim that this destination is the right one.
-  - `unverified`: a kind with no verifier (`confirm_edge`, `relabel_cluster`, `annotate_node`,
-    `unresolvable`, `move_node`). Accepted, tiered on shape.
-  - `no_such_path`, `not_loaded`, `stale_file`: the path is not a file here, the caller never
-    handed the file in, or the file no longer hashes to what the build cached. Only the last one is
-    fixed by rebuilding the graph.
-  - `no_src_node`, `no_fact`: the src node is not in its file, or the fact tuple for that edge kind
-    and call form does not name the destination. A bare name the src binds itself is no fact, which
-    is the rule the unresolved queue applies to the same call.
-  - `externally_bound`, `not_a_definer`, `bad_node_kind`: the caller's module imports the name from
-    outside the repo, the destination does not define it (or is outside the gated candidates for
-    `resolve_ambiguous`), or the endpoints are node kinds the resolver never pairs.
-- The tier is the proposal's shape (spec 9.2). Tier A is the kinds that cannot add an edge plus a
-  verified `resolve_ambiguous`; tier B is a verified `add_edge` on a bare or `self` call with one
-  definer and no external binding; everything else is tier C.
-- Whether a tier activates is measured, not assumed. Tier A's `resolve_ambiguous` waits for the
-  decoy suite, tier B waits for the add suite's stratum matching the proposal (same module, direct
-  import, or neither) plus a collision control with no false adds. A suite stratum that ran no
-  trials proves nothing. With no eval rows every tier but the four safe kinds starts `pending`.
-- At commit a proposal is checked against prior work:
-  - `redundant`: the resolver now produces this edge. Terminal, never re-briefed.
-  - `already_resolved`: the source already has a deterministic edge of the same kind for the same
-    short name, pointing elsewhere. Only `add_edge` trips this, because `retarget_edge` names that
-    edge on purpose.
-  - `duplicate`: an active refinement already adds this edge, so the proposal is stored as a
-    `confirm_edge`.
-  - `contradicts`: an active refinement already points the same source at another destination for
-    this name.
+  cluster still overlaps it by at least `graph.refine_cluster_jaccard`. Below that they go `stale`.
+- A build holding no cached facts for a file the refinement names gives it no verdict at all: a
+  rescan in flight is not a deleted symbol. A refinement whose ids belong to another partition of
+  the same checkout is skipped in silence.
+- A refinement the build applied retires exactly its own `(node_id, name)` queue row, as does an
+  `unresolvable`; one the build staled or scored a no-op leaves its row, so the fact stays
+  briefable.
 
 ## Graph findings
 
 - The three `GRAPH-*` detectors run during `graph build`. Their findings are `suggestion` severity
-  with a `candidate` verdict, and they surface in the normal finding stream
-  (`auditr scan`, `auditr aggregate`), not in a graph subcommand.
-- `GRAPH-GOD-CONCEPT`: a concept hub. High fan-out means too many responsibilities and suggests
-  decomposing; high fan-in means a bottleneck whose changes have wide blast radius.
-- Which of the two fired is stored on the finding as `subkind`, `fan_out` or `bottleneck`. It is a
-  field, not a second rule id, so a baseline entry and an `auditor: skip` directive keep resolving
-  by `GRAPH-GOD-CONCEPT`. The MCP `graph_overview` tool splits its two hub lists on it.
-- `subkind` is null on every other rule. It is stored in the index, read by `graph_overview`, and
-  included in the full record `finding_detail` returns. It is not part of the `-f json` finding
-  shape.
+  with a `candidate` verdict, and they surface in the normal finding stream (`auditr scan`,
+  `auditr aggregate`), not in a graph subcommand.
+- `GRAPH-GOD-CONCEPT`: a concept hub. High fan-out means too many responsibilities; high fan-in
+  means a bottleneck whose changes have wide blast radius. Which of the two fired is stored on the
+  finding as `subkind`, `fan_out` or `bottleneck`. It is a field, not a second rule id, so a
+  baseline entry and an `auditor: skip` directive keep resolving by `GRAPH-GOD-CONCEPT`.
+- `subkind` is null on every other rule. It is stored in the index, read by the MCP
+  `graph_overview` tool, and included in the record `finding_detail` returns. It is not part of the
+  `-f json` finding shape.
 - `GRAPH-SCATTERED-CONCEPT`: one concept cluster's members spread across many modules instead of
   living together.
 - `GRAPH-NAMING-INCONSISTENCY`: two same-shaped functions in one cluster naming the same concept
   with synonymous verbs.
-- Scope a scan to them by rule id, repeating `--rule` per id:
+- Thresholds for all three live under `[tool.auditor.graph]`. See
+  [configuration.md](configuration.md). Scope a scan to them by rule id, repeating `--rule`:
 
 ```bash
-# pull just the graph findings out of a scan
 auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json
 ```
-
-- Thresholds for all three live under `[tool.auditor.graph]`. See
-  [configuration.md](configuration.md).
 
 ## Serving and exporting
 
 - `graph serve` renders the UI and serves it on an ephemeral `127.0.0.1` port until Ctrl-C, opening
-  a browser tab.
-- It reuses the already-built graph when one exists, and only pays the scan plus build cost when the
-  graph is missing or `--rebuild` is passed. `--no-open` skips the browser tab.
-- On WSL the tab opens Windows-side (`wslview`, else `explorer.exe`, else `cmd.exe /c start`), which
-  reaches `127.0.0.1` through WSL2 localhost forwarding.
+  a browser tab. It reuses the already-built graph when one exists and only pays the scan plus
+  build cost when the graph is missing or `--rebuild` is passed. `--no-open` skips the tab.
+- On WSL the tab opens Windows-side (`wslview`, else `explorer.exe`, else `cmd.exe /c start`),
+  which reaches `127.0.0.1` through WSL2 localhost forwarding.
 - `graph export` writes Graphviz DOT to stdout. `--format svg` pipes that through the system `dot`
   binary; without graphviz installed it fails and tells you to use `--format dot`.
-- `--cluster <id>` exports one cluster and `--symbol <name>` with `--depth` exports a symbol's
-  ego-graph. With neither, it exports the whole graph.
-- `--flow <symbol>` exports the flow tree instead: `rankdir=LR` with one `rank=same` row per depth,
-  so the picture reads left to right as the call path. `--in` reverses it and `--depth` sets the
-  hops (4 by default in flow mode, 1 in `--symbol` ego mode).
+- `--cluster <id>` exports one cluster, `--symbol <name>` with `--depth` exports a symbol's
+  ego-graph, `--flow <symbol>` exports the flow tree (`rankdir=LR`, one `rank=same` row per depth).
+  With none of them it exports the whole graph. `--depth` defaults to 4 in flow mode and 1 in ego
+  mode.
 - The DOT carries the same marks the tree shows: a hub is doubled and magenta, a `--stop-at` node
   is dashed, a cycle is orange, an already-shown node is dotted, and a node with unplaced calls
   gets a `? N` second line in its label.
 - The modes pick different node sets, so combining them is an error rather than a silent
   preference: `--flow` with `--symbol` or `--cluster`, `--symbol` with `--cluster`, and any
-  walk-only knob without `--flow` (see the flow section above for the list). A `--flow` symbol
-  the graph does not hold is an error too, not an empty DOT.
+  walk-only knob without `--flow`. A `--flow` symbol the graph does not hold is an error too.
 - `--limit` caps the flow walk (default 200 nodes, 1 to 1000) and the DOT records the cap in a
   comment on the second line, with `truncated` when it was hit.

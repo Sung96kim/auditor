@@ -106,13 +106,22 @@ docker compose run --rm auditor scan . --format sarif
 
 ## Tests
 
+### Local
+
 ```bash
 uv run pytest -q                                                     # full suite, as CI runs it
 uv run ruff check auditor plugin auditr_observer.py tests            # lint, as CI runs it
 uv run ruff format --check auditor plugin auditr_observer.py tests   # format check, as CI runs it
 ```
 
-- `tests/malware/test_integration.py` needs `clamscan` on PATH; CI runs it as a second job.
+### CI
+
+```bash
+uv run pytest tests/malware/test_integration.py -v   # the second CI job; needs clamscan on PATH
+```
+
+- `.github/workflows/ci.yml` runs the three local commands above on every pull request, then the
+  integration job against a real `clamscan`.
 
 ## Docs
 
