@@ -20,6 +20,13 @@ from auditor.discovery import FileDiscovery, git_head, git_status_paths
 from auditor.graph.refine.models import Checkout, NodePair
 from auditor.observer.budget import BudgetState
 from auditor.observer.events import Event
+from auditor.user_settings import (
+    DEBOUNCE_WINDOW_CAP,
+    DEFAULT_AUTH_MINUTES,
+    DEFAULT_ERROR_SECONDS,
+    DEFAULT_RATELIMIT_MINUTES,
+    MAX_ERROR_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +34,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_PER_REPO = 1
 DEFAULT_GLOBAL = 2
 MINUTE = 60.0
-#: how long a rate limit holds when the SDK named no reset instant
-DEFAULT_RATELIMIT_MINUTES = 5.0
-#: how long an auth refusal holds before the loop re-asks the runner (H-3)
-DEFAULT_AUTH_MINUTES = 15.0
-#: the quiet window may restart at most this many times, so a flood cannot starve the ladder (H-4)
-DEBOUNCE_WINDOW_CAP = 5.0
+#: how many events a feed nobody is draining holds before the oldest are dropped (H2)
+FEED_CAP = 2000
 
 
 class LoopState(StrEnum):
@@ -44,6 +47,7 @@ class LoopState(StrEnum):
     PAUSED_BUDGET = "paused:budget"
     PAUSED_RATELIMIT = "paused:ratelimit"
     PAUSED_AUTH = "paused:auth"
+    PAUSED_ERROR = "paused:error"
     DETACHED = "detached"
 
 
@@ -97,6 +101,41 @@ def pause_of(
     return Pause(state=state, resumes_at=_resets_at(error) or now + minutes * MINUTE)
 
 
+class Backoff:
+    """A doubling wait with a ceiling, reset by whatever counts as success.
+
+    One implementation for the two places a repeated failure has to stop costing: a loop whose
+    pass raised, and a repo whose loop will not build at all.
+    """
+
+    def __init__(
+        self,
+        *,
+        first: float = DEFAULT_ERROR_SECONDS,
+        ceiling: float = MAX_ERROR_SECONDS,
+    ) -> None:
+        self.first = first
+        self.ceiling = ceiling
+        self.failures = 0
+        self.until: float | None = None
+
+    def failed(self, *, now: float) -> float:
+        """Record one more failure and answer the seconds to wait before trying again."""
+        self.failures += 1
+        wait = min(self.first * 2.0 ** (self.failures - 1), self.ceiling)
+        self.until = now + wait
+        return wait
+
+    def ready(self, *, now: float) -> bool:
+        """Whether the next attempt may happen yet."""
+        return self.until is None or now >= self.until
+
+    def cleared(self) -> None:
+        """Success: the next failure starts the doubling over."""
+        self.failures = 0
+        self.until = None
+
+
 class Pauses:
     """The pauses in force for one repo. Nothing here is persisted (recon Q4).
 
@@ -105,10 +144,12 @@ class Pauses:
     nothing runs while they are in force.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, errors: Backoff | None = None) -> None:
         self.resumes_at: float | None = None
         self.auth: str = ""
         self.auth_until: float | None = None
+        self.error: str = ""
+        self.errors = errors or Backoff()
 
     def apply(self, pause: Pause | None) -> None:
         """Take on what a stopped run reported, if anything."""
@@ -125,17 +166,35 @@ class Pauses:
         self.auth = ""
         self.auth_until = None
 
+    def failed(self, reason: str, *, now: float) -> float:
+        """Hold this repo after a pass raised, and answer the seconds its driver should wait."""
+        self.error = reason
+        return self.errors.failed(now=now)
+
+    def recovered(self) -> None:
+        """A pass that finished: drop the error hold so the next failure waits the first window."""
+        self.error = ""
+        self.errors.cleared()
+
     def cleared(self) -> None:
         """Forget every held pause: an attach re-asks the runner and the budget re-reads itself."""
         self.resumes_at = None
         self.authenticated()
+        self.recovered()
 
     def state(self, *, budget: BudgetState, now: float) -> LoopState | None:
         """The pause in force, or ``None`` when the loop may open a run.
 
-        Auth first: a loop that cannot authenticate would otherwise report a budget it can never
-        spend. Both held pauses clear themselves the moment their own deadline passes.
+        The error hold first: a loop whose last pass raised has no answer about anything else.
+        Auth next: a loop that cannot authenticate would otherwise report a budget it can never
+        spend. Every held pause clears itself the moment its own deadline passes.
         """
+        if self.error:
+            if self.errors.ready(now=now):
+                # the backoff expired: the next pass is the retry, and `recovered` settles it
+                self.error = ""
+            else:
+                return LoopState.PAUSED_ERROR
         if self.auth:
             if self.auth_until is None or now < self.auth_until:
                 return LoopState.PAUSED_AUTH
@@ -160,22 +219,34 @@ class QueueFeed(EventFeed):
     """An `asyncio.Queue` the daemon's drain thread hands batches to (spec 8.1).
 
     The loop is bound on first use from the thread that runs it, so constructing this off a loop
-    is safe and an `offer` that arrives before the first `take` is held rather than dropped.
+    is safe and an `offer` that arrives before the first `take` is held rather than dropped. It is
+    bounded both sides, so a loop that stopped taking cannot grow the daemon without end (H2).
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    def __init__(
+        self, loop: asyncio.AbstractEventLoop | None = None, *, cap: int = FEED_CAP
+    ) -> None:
         self._queue: asyncio.Queue[Event] = asyncio.Queue()
         self._loop = loop
-        self._early: deque[Event] = deque()
+        self.cap = cap
+        self._early: deque[Event] = deque(maxlen=cap)
 
     def offer(self, events: Iterable[Event]) -> None:
         """Hand a drained spool over, from the daemon's thread or from the loop's own."""
         loop = self._loop
         for event in events:
             if loop is None:
-                self._early.append(event)  # deque append is atomic; no lock is needed
+                self._early.append(
+                    event
+                )  # a bounded deque drops the oldest, atomically
             else:
-                loop.call_soon_threadsafe(self._queue.put_nowait, event)
+                loop.call_soon_threadsafe(self._put, event)
+
+    def _put(self, event: Event) -> None:
+        """Take one event onto the loop's own thread, dropping the oldest once the cap is full."""
+        while self._queue.qsize() >= self.cap:
+            self._queue.get_nowait()
+        self._queue.put_nowait(event)
 
     async def take(self, timeout: float) -> tuple[Event, ...]:
         self._loop = self._loop or asyncio.get_running_loop()
@@ -192,7 +263,12 @@ class QueueFeed(EventFeed):
 
 
 async def debounced(
-    feed: EventFeed, *, seconds: float, timeout: float, max_seconds: float | None = None
+    feed: EventFeed,
+    *,
+    seconds: float,
+    timeout: float,
+    restarts: float = DEBOUNCE_WINDOW_CAP,
+    max_seconds: float | None = None,
 ) -> tuple[Event, ...]:
     """One batch per quiet window (spec 8.3 item 2): the window restarts on every event.
 
@@ -203,7 +279,7 @@ async def debounced(
     if not batch:
         return ()
     collected = list(batch)
-    remaining = seconds * DEBOUNCE_WINDOW_CAP if max_seconds is None else max_seconds
+    remaining = seconds * restarts if max_seconds is None else max_seconds
     while seconds > 0 and remaining > 0:
         more = await feed.take(min(seconds, remaining))
         if not more:

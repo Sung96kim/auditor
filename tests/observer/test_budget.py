@@ -2,9 +2,16 @@
 
 import pytest
 
-from auditor.graph.refine.models import Spend
-from auditor.observer.budget import DAY_SECONDS, budget_state, window_start
-from auditor.user_settings import BudgetConfig
+from auditor.graph.refine.models import RunnerKind, Spend
+from auditor.observer.budget import (
+    DAY_SECONDS,
+    budget_state,
+    priced_runner,
+    window_start,
+)
+from auditor.user_settings import BudgetConfig, CodexPrice, RunnerConfig
+
+_PRICE = CodexPrice(input=1.0, output=2.0)
 
 
 def _config(**over) -> BudgetConfig:
@@ -56,3 +63,30 @@ def test_the_window_is_a_rolling_day_ending_at_the_injected_now():
 def test_the_day_the_window_rolls_is_the_day_retention_counts():
     """Two homes differing in type is how a rolling window and a cutoff drift apart."""
     assert DAY_SECONDS == 86_400.0
+
+
+@pytest.mark.parametrize(
+    ("kind", "codex_model", "prices", "priced"),
+    [
+        (RunnerKind.CLAUDE, "", {}, True),
+        (RunnerKind.FAKE, "", {}, False),
+        (RunnerKind.NONE, "", {}, False),
+        (RunnerKind.CODEX, "gpt-5", {}, False),
+        (RunnerKind.CODEX, "", {"gpt-5": _PRICE}, False),
+        (RunnerKind.CODEX, "gpt-5", {"gpt-5": _PRICE}, True),
+    ],
+    ids=[
+        "claude",
+        "fake",
+        "none",
+        "codex-unpriced",
+        "codex-other-model",
+        "codex-priced",
+    ],
+)
+def test_only_a_runner_that_reports_a_cost_is_bounded_in_dollars(
+    kind, codex_model, prices, priced
+):
+    """M2: `max_runs_per_day` is the ceiling for a run that costs nothing the ledger can see."""
+    runner = RunnerConfig(codex_model=codex_model, codex_prices=prices)
+    assert priced_runner(kind, runner) is priced

@@ -22,6 +22,7 @@ from auditor.observer.events import MAX_EVENT_PATHS
 from auditor.observer.payloads import (
     ROUTES,
     BudgetPayload,
+    Metered,
     RateLimitPayload,
     RepoPayload,
     ReposPayload,
@@ -39,7 +40,7 @@ from auditor.observer.server import (
 #: one legal `repo_dir_key`: `EventRequest.key` names a directory, so its shape is constrained
 _KEY = "a" * 40
 
-#: what S8b actually fills on `/api/status`; everything else stays at its default until S8c
+#: what a daemon with no attached repo fills on `/api/status`; the rest stays at its default
 _FILLED = {
     "home",
     "version",
@@ -272,7 +273,7 @@ def test_the_status_body_names_only_what_this_slice_fills(daemon_server, tmp_pat
     assert moved == _FILLED
     assert body["queued_repos"] == 1
     assert len(body["sessions"]) == 1
-    assert body["budget"] is None
+    assert all(repo["budget"] is None for repo in body["repos"])
 
 
 def test_a_reader_that_raises_is_a_json_500_not_a_dropped_connection(
@@ -726,20 +727,32 @@ def test_the_status_route_reports_the_loop_state_per_repo(
     assert all(repo["state"] == "observing" for repo in body["repos"])
 
 
-def test_the_status_route_draws_both_meters(daemon_router, daemon_server):
-    """S8b declared `budget` and `limits` and left them empty; this slice fills them (Seam 3)."""
+def test_the_status_route_draws_each_repo_s_own_meters(
+    daemon_router, daemon_server, readers
+):
+    """H-9: the ceilings are per repository, so two repos cannot share one budget badge."""
+    readers.repos = lambda: ReposPayload(
+        repos=(
+            RepoPayload(repo="/one", identity="/one/.git", repo_dir_key="one"),
+            RepoPayload(repo="/two", identity="/two/.git", repo_dir_key="two"),
+        )
+    )
+    drawn = {
+        "one": Metered(
+            budget=BudgetPayload(spent_usd=0.5, max_cost_usd_per_day=2.0),
+            limits=RateLimitPayload(max_utilization=0.5, paused=True, resumes_at=500.0),
+        )
+    }
     daemon_router.deps = daemon_router.deps.model_copy(
-        update={
-            "meters": lambda: (
-                BudgetPayload(spent_usd=0.5, max_cost_usd_per_day=2.0),
-                RateLimitPayload(max_utilization=0.5, paused=True, resumes_at=500.0),
-            )
-        }
+        update={"meters": lambda key: drawn.get(key, Metered())}
     )
     _server, caller = daemon_server
     _status, _headers, body = caller.request("GET", "/api/status")
-    assert body["budget"]["spent_usd"] == 0.5
-    assert (body["limits"]["paused"], body["limits"]["resumes_at"]) == (True, 500.0)
+    drawn_by_key = {repo["repo_dir_key"]: repo for repo in body["repos"]}
+    assert drawn_by_key["one"]["budget"]["spent_usd"] == 0.5
+    assert drawn_by_key["one"]["limits"]["resumes_at"] == 500.0
+    assert drawn_by_key["two"]["budget"] is None
+    assert drawn_by_key["two"]["limits"]["resumes_at"] is None
 
 
 def test_the_status_page_counts_the_events_the_daemon_drained(
@@ -752,8 +765,8 @@ def test_the_status_page_counts_the_events_the_daemon_drained(
     assert body["drained_events"] == 7
 
 
-def test_a_loop_transition_moves_the_status_etag(daemon_router, daemon_server):
-    """P14 of S8b: the counter is the tag, and S8c is what moves it most."""
+def test_bumping_the_revision_moves_the_status_etag(daemon_router, daemon_server):
+    """P14: the counter is the tag. What bumps it is `RepoLoop._moved`, pinned by its own test."""
     _server, caller = daemon_server
     _status, headers, _body = caller.request("GET", "/api/status")
     tag = headers["ETag"]

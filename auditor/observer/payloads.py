@@ -63,7 +63,7 @@ class BudgetPayload(WirePayload):
 
 
 class RateLimitPayload(WirePayload):
-    """The rate limit meter. S8c writes `paused` and `resumes_at`; S8b reports the ceiling."""
+    """The rate limit meter: the share the observer may take, and whether it is holding."""
 
     max_utilization: float = 0.0
     paused: bool = False
@@ -109,8 +109,19 @@ class SessionPayload(WirePayload):
     last_seen: float = 0.0
 
 
-class RepoPayload(WirePayload):
-    """One repo in the switcher."""
+class Metered(WirePayload):
+    """The two meters spec 12.1 draws beside the repo switcher, so they are named as a pair.
+
+    Per repo, not per daemon: `max_cost_usd_per_day` is a per-repository ceiling, so one daemon
+    serving two repos has two answers and no daemon-wide one (H-9).
+    """
+
+    budget: BudgetPayload | None = None
+    limits: RateLimitPayload = Field(default_factory=RateLimitPayload)
+
+
+class RepoPayload(Metered):
+    """One repo in the switcher, with the meters that belong to it."""
 
     repo: str
     identity: str
@@ -120,7 +131,7 @@ class RepoPayload(WirePayload):
     #: whether this one repo has an unconsumed spool; the counts of repos live on the two payloads
     #: that really count repos, `StatusPayload` and `EventAck`
     queued: bool = False
-    #: spec 8.3's per-repo state machine; S8b has no loop, so it stays empty until S8c fills it
+    #: spec 8.3's per-repo state machine, empty for a repo whose loop the daemon has not built
     state: str = ""
 
 
@@ -144,8 +155,6 @@ class StatusPayload(WirePayload):
     sessions: tuple[SessionPayload, ...] = ()
     queued_repos: int = 0
     drained_events: int = 0
-    budget: BudgetPayload | None = None
-    limits: RateLimitPayload = Field(default_factory=RateLimitPayload)
     evals: tuple[RunnerEvalPayload, ...] = ()
     vectors: VectorStatusPayload = Field(default_factory=VectorStatusPayload)
 

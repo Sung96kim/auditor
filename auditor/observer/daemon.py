@@ -23,7 +23,8 @@ from auditor.config import AuditorSettings, is_configured, load_config
 from auditor.database import IndexStore
 from auditor.graph.refine.drive import build_runner, select_runner
 from auditor.graph.refine.lock import flock_nb
-from auditor.graph.refine.models import RunnerKind
+from auditor.graph.refine.models import Proposer, RunnerKind
+from auditor.graph.refine.runner import RefinementRunner
 from auditor.graph.refine.service import RefinementService
 from auditor.graph.viz import render_app_or_status
 from auditor.observer import MINUTE, OBSERVER_API_VERSION
@@ -32,13 +33,14 @@ from auditor.observer.loop import RepoLoop
 from auditor.observer.payloads import (
     BudgetPayload,
     HealthPayload,
+    Metered,
     RateLimitPayload,
     RestartAck,
     RestartRequest,
     StatusPayload,
 )
 from auditor.observer.routes import DaemonIdentity, Readers, Router, RouterDeps
-from auditor.observer.scheduling import LoopState, QueueFeed, RunSlots
+from auditor.observer.scheduling import Backoff, LoopState, QueueFeed, RunSlots
 from auditor.observer.server import ObserverServer
 from auditor.observer.sessions import AttachRequest, SessionBook, attach_refusal
 from auditor.paths import (
@@ -64,6 +66,8 @@ _LOG = logging.getLogger("auditor.observer")
 _ASK_TIMEOUT = 2.0
 #: how long a cancelled loop task gets to unwind before the host thread stops
 _CANCEL_GRACE = 0.25
+#: how long `stop` waits for the host thread; a thread stuck in a subprocess outlives it
+_JOIN_TIMEOUT = 5.0
 _P = TypeVar("_P", bound=WirePayload)
 _T = TypeVar("_T")
 
@@ -303,24 +307,39 @@ class LoopHost:
         if loop is not None:
             loop.call_soon_threadsafe(self._cancel_all, loop)
         if thread is not None:
-            thread.join(timeout=5.0)
+            thread.join(timeout=_JOIN_TIMEOUT)
+            if thread.is_alive():
+                _LOG.warning("observer loop thread did not stop; leaving it behind")
         self._thread = None
         self._ready.clear()
 
     @staticmethod
     def _cancel_all(loop: asyncio.AbstractEventLoop) -> None:
-        """Cancel every task, then stop once they have all had a turn to unwind."""
+        """Cancel every task, wait for them to unwind, then stop.
+
+        A task blocked in `to_thread` cannot be cancelled at all, so the grace is a ceiling on
+        the wait rather than the wait itself: the loop stops either way and the join reports it.
+        """
         pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
         for task in pending:
             task.cancel()
-        loop.call_later(_CANCEL_GRACE, loop.stop)
+
+        async def drain() -> None:
+            await asyncio.wait(pending, timeout=_CANCEL_GRACE)
+            loop.stop()
+
+        if not pending:
+            loop.call_later(_CANCEL_GRACE, loop.stop)
+            return
+        loop.create_task(drain())
 
 
 class Daemon:
     """The one background process per home: it drains, sweeps and decides when to stop.
 
     Takes its parts so a test can drive it with no port, no lock and no process. `consume` is the
-    one attribute S8c replaces, and the daemon's own thread calls it rather than S8c polling (P29).
+    seam the drain hands a batch to, and the daemon's own thread calls it rather than the loop
+    polling for it (P29).
     """
 
     def __init__(
@@ -351,16 +370,15 @@ class Daemon:
         self.settings = settings or UserSettings()
         #: one `RepoLoop` per attached repo, keyed by the spool key `consume` is handed (C-2)
         self.loops: dict[str, RepoLoop] = {}
-        #: what `/api/status` draws, pushed by the loops rather than pulled across threads (H-9)
-        self.meters: tuple[BudgetPayload | None, RateLimitPayload] = (
-            None,
-            RateLimitPayload(),
-        )
-        #: what `consume` counted, and what `/api/status` reports as `drained_events`
+        #: each repo's own meters, pushed by its loop rather than pulled across threads (H-9)
+        self.meters: dict[str, Metered] = {}
+        #: repos whose loop would not build, and when each may be tried again
+        self.unbuildable: dict[str, Backoff] = {}
+        #: what the daemon drained from the spools, delivered to a loop or not
         self.drained = 0
         self.stopping = False
 
-    def offer(self, key: str, events: tuple[Event, ...]) -> int:
+    def offer(self, key: str, events: tuple[Event, ...]) -> None:
         """Hand one drained spool to its repo's loop, or drop it when no loop owns the key.
 
         A lookup, never a constructor: this runs on the drain thread, which has no event loop, and
@@ -369,100 +387,170 @@ class Daemon:
         held = self.loops.get(key)
         if held is None:
             _LOG.warning("dropped %d events for unattached repo %s", len(events), key)
-            return 0
+            return
         held.feed.offer(events)
-        return len(events)
 
     def loop_state(self, key: str) -> str:
-        """What one repo's loop is doing, or "" for a key no loop owns yet (seam 2)."""
+        """What one repo's loop is doing, or "" for a key no loop owns yet."""
         held = self.loops.get(key)
         return held.state.value if held is not None else ""
 
+    def repo_meters(self, key: str) -> Metered:
+        """One repo's own budget and rate limit meters, empty until its loop has published."""
+        return self.meters.get(key, Metered())
+
     def reconcile(self) -> None:
-        """Give every live session's repo, and every adopted spool, a loop on the host thread.
+        """Give every live session's repo, and every adopted spool, a loop; retire the rest.
 
         Before the drain rather than after, so the first batch a newly attached repo posts finds
-        a feed waiting for it instead of being dropped.
+        a feed waiting for it instead of being dropped. A repo whose session expired and whose
+        spool is gone is retired here, which is the one path to `detached` (M5).
         """
         if self.readers is None:
             return
         roots = {Path(s.repo) for s in self.sessions.live(now=self.now())}
         for key in self.queue.keys():  # noqa: SIM118 - EventQueue, not a dict
-            if key not in self.loops:
-                adopted = repo_root_from_key(key)
-                if adopted is not None:
-                    roots.add(adopted)
+            adopted = repo_root_from_key(key)
+            if adopted is not None:
+                roots.add(adopted)
+        wanted = {repo_dir_key(root) for root in roots}
+        for key in [k for k in self.loops if k not in wanted]:
+            self.retire(key)
         for root in sorted(roots, key=str):
             self.ensure_loop(root)
+
+    def retire(self, key: str) -> None:
+        """Let this repo's driver finish: it stops as soon as its key is no longer claimed."""
+        held = self.loops.pop(key, None)
+        if held is not None:
+            _LOG.info("retiring the loop for %s", held.root)
 
     def ensure_loop(self, root: Path) -> str:
         """Build this repo's loop if it has none, and answer its spool key.
 
         The two handles are resolved here, on the drain thread: `Readers.index` opens its store
-        through `asyncio.run`, which raises on a thread that is already running a loop.
+        through `asyncio.run`, which raises on a thread that is already running a loop. A repo
+        that will not build backs off rather than writing a traceback every tick (M9).
         """
         key = repo_dir_key(root)
-        if key in self.loops:
-            return key
         readers = self.readers
-        if readers is None:
+        if key in self.loops or readers is None:
+            return key
+        held = self.unbuildable.get(key)
+        if held is not None and not held.ready(now=self.now()):
             return key
         try:
             settings = readers.config(root)
+            user = readers.user(root)
             index = readers.index(root)
-            self.loops[key] = self.host.run(self._build(root, index, settings))
+            self.loops[key] = self.host.run(self._build(root, index, settings, user))
         except Exception:
-            _LOG.exception("could not start a loop for %s", root)
+            wait = (held or self.unbuildable.setdefault(key, self._backoff())).failed(
+                now=self.now()
+            )
+            _LOG.exception(
+                "could not start a loop for %s; retrying in %.0fs", root, wait
+            )
             return key
+        self.unbuildable.pop(key, None)
         self.host.spawn(self._drive(self.loops[key]))
         return key
 
+    def _backoff(self) -> Backoff:
+        """One doubling wait, built from this daemon's own settings."""
+        scheduling = self.settings.observer.scheduling
+        return Backoff(
+            first=scheduling.error_backoff_seconds,
+            ceiling=scheduling.max_error_backoff_seconds,
+        )
+
     async def _build(
-        self, root: Path, index: IndexStore, settings: AuditorSettings
+        self,
+        root: Path,
+        index: IndexStore,
+        settings: AuditorSettings,
+        user: UserSettings,
     ) -> RepoLoop:
-        """One `RepoLoop`, constructed on the host thread that will own every await it makes."""
-        service = RefinementService(index, root, settings, self.settings)
+        """One `RepoLoop`, constructed on the host thread that will own every await it makes.
+
+        ``user`` is this repo's own overlay rather than the daemon's home layer, so a repo that
+        set its own budget or cooldown is observed by its own numbers (M1).
+        """
+        service = RefinementService(index, root, settings, user)
         return RepoLoop(
             root=root,
             index=index,
             settings=settings,
-            user=self.settings,
+            service=service,
             feed=QueueFeed(),
             runner_for=self._runner_for,
-            service=service,
             slots=self.slots,
             on_change=self.on_change,
         )
 
-    def _runner_for(self, service: RefinementService):
+    def _runner_for(
+        self, service: RefinementService, proposer: Proposer | None = None
+    ) -> RefinementRunner:
         """The runner this daemon opens observer runs with, or the fake when none is available."""
-        choice = select_runner(self.settings.observer.runner)
-        return build_runner(choice.kind or RunnerKind.FAKE, service)
+        choice = select_runner(service.user.observer.runner)
+        return build_runner(choice.kind or RunnerKind.FAKE, service, proposer=proposer)
 
     async def _drive(self, loop: RepoLoop) -> None:
-        """Spec 8.3's ladder for one repo: attach once, then tick until the daemon stops."""
+        """Spec 8.3's ladder for one repo: attach, then tick while the daemon still claims it.
+
+        One bad pass pauses this repo with a doubling backoff rather than ending its driver, and
+        a driver that does end unclaims its key, so `reconcile` builds the loop again (H2).
+        """
+        key = repo_dir_key(loop.root)
+        attached = False
         try:
-            await loop.attach()
-            await self._publish(loop)
-            while not self.stopping:
-                await loop.tick(poll=self.settings.observer.scheduling.tick_seconds)
-                await self._publish(loop)
+            while not self.stopping and self.loops.get(key) is loop:
+                try:
+                    if attached:
+                        await loop.tick(
+                            poll=self.settings.observer.scheduling.tick_seconds
+                        )
+                    else:
+                        await loop.attach()
+                        attached = True
+                    loop.recovered()
+                    await self._publish(loop)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as failure:
+                    # `attached` is untouched: a tick that raised is not a repo to rebuild, and
+                    # an attach that raised left it False, so the retry is the attach again
+                    wait = loop.failed(failure)
+                    _LOG.exception("loop for %s stopped; retrying in %.0fs", key, wait)
+                    await self._publish(loop)
+                    await asyncio.sleep(wait)
         except asyncio.CancelledError:
             _LOG.info("loop for %s cancelled at shutdown", loop.root)
         finally:
+            if self.loops.get(key) is loop:
+                del self.loops[key]
             loop.detach()
 
     async def _publish(self, loop: RepoLoop) -> None:
-        """Push this loop's two meters onto the daemon, which is what `/api/status` reads (H-9)."""
-        self.meters = (
-            BudgetPayload.of(await loop.budget()),
-            RateLimitPayload(
-                max_utilization=self.settings.observer.budget.max_utilization,
+        """Push this loop's two meters onto the daemon, which is what `/api/status` reads (H-9).
+
+        The tick's own budget rather than a second read of it, so the page draws the number the
+        loop acted on; a meter that moved is a page change, so the ETag moves with it (M8, M10).
+        """
+        key = repo_dir_key(loop.root)
+        budget = loop.last_budget or await loop.budget()
+        drawn = Metered(
+            budget=BudgetPayload.of(budget),
+            limits=RateLimitPayload(
+                max_utilization=loop.user.observer.budget.max_utilization,
                 paused=loop.state
                 in {LoopState.PAUSED_RATELIMIT, LoopState.PAUSED_AUTH},
-                resumes_at=loop.pauses.resumes_at,
+                resumes_at=loop.pauses.auth_until or loop.pauses.resumes_at,
             ),
         )
+        if self.meters.get(key) != drawn:
+            self.meters[key] = drawn
+            self.on_change()
 
     def adopt_home(self) -> int:
         """Spec 8.1's start-time drain: every spool under this home becomes a pending key.
@@ -484,6 +572,7 @@ class Daemon:
     def tick(self) -> None:
         """Drain every pending key into `consume`, sweep expired sessions, decide about stopping."""
         self.reconcile()
+        before = self.drained
         for key in self.queue.keys():  # noqa: SIM118 - EventQueue, not a dict
             events = self.queue.drain(key)
             if events:
@@ -491,6 +580,8 @@ class Daemon:
                 self.consume(key, events)
             # the staged batch is dropped only once its consumer has returned (P26)
             self.queue.consumed(key)
+        if self.drained != before:
+            self.on_change()  # `drained_events` is on the page, so its ETag has to move (M10)
         now = self.now()
         if self.sessions.sweep(now=now):
             self.on_change()  # an expired session is a badge change the page has to see
@@ -582,7 +673,7 @@ def serve(settings: UserSettings | None = None) -> int:
             gate=repo_gate(home, settings),
             open_page=open_url if settings.observer.open_browser else lambda url: None,
             loop_state=daemon.loop_state,
-            meters=lambda: daemon.meters,
+            meters=daemon.repo_meters,
             drained=lambda: daemon.drained,
         ),
         started_at=time.time(),

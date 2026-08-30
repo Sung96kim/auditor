@@ -39,10 +39,13 @@ from auditor.observer.sessions import Session, SessionBook
 from auditor.paths import (
     auditor_home,
     daemon_json_path,
+    ensure_repo_dir,
     observer_port,
+    repo_dir_from_key,
+    repo_dir_key,
     write_json_dict,
 )
-from auditor.user_settings import SchedulingConfig
+from auditor.user_settings import SchedulingConfig, UserSettings
 
 
 @pytest.fixture
@@ -599,6 +602,69 @@ def test_a_drained_batch_is_offered_to_the_repo_s_loop_and_a_keyless_one_is_drop
     assert daemon.drained == 2
 
 
+def test_reconcile_gives_a_live_session_and_an_adopted_spool_a_loop(
+    queue, tmp_path, monkeypatch
+):
+    """Its two jobs, which the `offer` tests reach past by seeding `daemon.loops` themselves."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    adopted = tmp_path / "elsewhere"
+    adopted.mkdir()
+    key = repo_dir_key(adopted)
+    ensure_repo_dir(adopted)
+    write_json_dict(repo_dir_from_key(key) / "root.json", {"root": str(adopted)})
+    daemon = _daemon(queue)
+    daemon.readers = SimpleNamespace()
+    built: list[Path] = []
+    daemon.ensure_loop = built.append
+    daemon.sessions.attach(_session())
+    queue.put(key, Event(repo=str(adopted), paths=("a.py",), at=1.0))
+    daemon.reconcile()
+    assert set(built) == {Path("/r"), adopted}
+
+
+def test_reconcile_retires_the_loop_of_a_repo_that_is_neither_live_nor_queued(queue):
+    """M5: nothing else unclaims a key, so an expired repo would keep spending for ever."""
+    daemon = _daemon(queue)
+    daemon.readers = SimpleNamespace()
+    daemon.ensure_loop = lambda root: None
+    daemon.loops["gone"] = SimpleNamespace(root=Path("/gone"))
+    daemon.reconcile()
+    assert daemon.loops == {}
+
+
+def test_a_repo_whose_loop_will_not_build_backs_off_instead_of_retrying_every_tick(
+    queue,
+):
+    """M9: `reconcile` runs once a tick, so a broken repo would write a traceback that often."""
+    tries: list[float] = []
+
+    class _Broken:
+        def config(self, root: Path):
+            tries.append(0.0)
+            raise RuntimeError("this repo's config will not load")
+
+    daemon = _daemon(queue)
+    daemon.readers = _Broken()
+    for _ in range(3):
+        daemon.ensure_loop(Path("/r"))
+    assert len(tries) == 1
+    daemon.clock["now"] = 10_000.0
+    daemon.ensure_loop(Path("/r"))
+    assert len(tries) == 2
+
+
+def test_a_drain_that_moved_the_counter_moves_the_status_etag(queue):
+    """M10: `drained_events` is on the page, and a 304 would freeze it at whatever it was."""
+    bumps: list[int] = []
+    daemon = _daemon(queue)
+    daemon.on_change = lambda: bumps.append(1)
+    daemon.tick()
+    assert bumps == []
+    queue.put("k", Event(repo="/r", paths=("a.py",), at=1.0))
+    daemon.tick()
+    assert bumps == [1]
+
+
 def test_the_loop_state_lookup_answers_empty_for_a_key_with_no_loop(queue):
     """`/api/status` and `/api/repos` both read this, and a repo may have no loop yet."""
     daemon = _daemon(queue)
@@ -658,6 +724,11 @@ class _RunningReaders:
     def config(self, root: Path) -> AuditorSettings:
         return AuditorSettings()
 
+    def user(self, root: Path) -> UserSettings:
+        """This repo's own overlay, which the loop takes in place of the daemon's home layer."""
+        self.threads.append(threading.current_thread().name)
+        return UserSettings()
+
 
 def test_a_loop_is_built_with_the_index_resolved_off_the_host_thread(queue, tmp_path):
     """The reader uses `asyncio.run`, so resolving it on the host thread cannot work (dogfood)."""
@@ -673,4 +744,4 @@ def test_a_loop_is_built_with_the_index_resolved_off_the_host_thread(queue, tmp_
         daemon.host.stop()
         asyncio.run(store.aclose())
     assert key in daemon.loops
-    assert readers.threads == [threading.current_thread().name]
+    assert readers.threads == [threading.current_thread().name] * 2

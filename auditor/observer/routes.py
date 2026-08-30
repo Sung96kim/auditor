@@ -27,14 +27,13 @@ from auditor.observer.events import Event, EventQueue, EventRequest
 from auditor.observer.payloads import (
     ROUTES,
     AttachOutcome,
-    BudgetPayload,
     EvalStratumPayload,
     EvalsView,
     EventAck,
     FlowView,
     GraphView,
     HealthPayload,
-    RateLimitPayload,
+    Metered,
     RefinementsView,
     RepoPayload,
     ReposPayload,
@@ -55,7 +54,7 @@ from auditor.user_settings import UserSettings, load_user_settings
 
 Handler = Callable[["Router", str, Mapping[str, str], bytes], Reply]
 Tag = Callable[["Router", Mapping[str, str]], str]
-Meters = Callable[[], tuple[BudgetPayload | None, RateLimitPayload]]
+Meters = Callable[[str], Metered]
 Read = Callable[[Path], WirePayload]
 
 _LOG = logging.getLogger("auditor.observer")
@@ -69,13 +68,13 @@ def _no_drop(made: object) -> None:
     """What `Readers._cached` does with a build that lost the race and owns nothing to release."""
 
 
-def _no_meters() -> tuple[BudgetPayload | None, RateLimitPayload]:
-    """S8b holds neither number; S8c injects the callable that does (S8c seam 3)."""
-    return None, RateLimitPayload()
+def _no_meters(key: str) -> Metered:
+    """A router with no daemon behind it meters nothing; `serve` passes the daemon's own reader."""
+    return Metered()
 
 
 def _no_loop_state(key: str) -> str:
-    """S8b runs no loop, so every repo's state is empty until S8c fills it (S8c seam 2)."""
+    """A router with no daemon behind it runs no loop, so every repo's state is empty."""
     return ""
 
 
@@ -166,10 +165,10 @@ class Readers:
         )
 
     def config(self, root: Path) -> AuditorSettings:
-        """This repo's own `AuditorSettings`, loaded once and kept (S8c seam 4).
+        """This repo's own `AuditorSettings`, loaded once and kept.
 
         Named `config` rather than `settings` because :attr:`settings` is the user's own layer,
-        which P31 put on this object first. No S8b caller: S8c's `RepoLoop` is the one.
+        which P31 put on this object first. The `RepoLoop` the daemon builds is its one caller.
         """
         return self._cached(self._configs, root, lambda: load_config(root))
 
@@ -348,9 +347,9 @@ class Readers:
 
 
 class RouterDeps(BaseModel):
-    """Everything one `Router` is built from, in the groups S8c widens (item 3a).
+    """Everything one `Router` is built from, in groups (item 3a).
 
-    A model rather than eleven keywords: a seam S8c adds is a field here and a line in `serve`,
+    A model rather than eleven keywords: a new seam is a field here and a line in `serve`,
     not a new positional threaded through a procedural assembly.
     """
 
@@ -367,9 +366,9 @@ class RouterDeps(BaseModel):
     #: policy: spec 8.2's attach gate, and how a browser is opened on the page
     gate: Callable[[AttachRequest], str]
     open_page: Callable[[str], object]
-    #: what one repo's `RepoLoop` is doing; S8b has no loop, so it answers "" (S8c seam 2)
+    #: what one repo's `RepoLoop` is doing, keyed by its spool key
     loop_state: Callable[[str], str] = _no_loop_state
-    #: the budget and rate limit meters `/api/status` draws; S8c owns both (S8c seam 3)
+    #: one repo's budget and rate limit meters, which are per repo and never daemon-wide (H-9)
     meters: Meters = _no_meters
     #: how many events have been drained: the daemon counts, the router is what puts it on the wire
     drained: Callable[[], int] = _no_drained
@@ -391,7 +390,7 @@ class Router:
         self.last_request = 0.0
 
     def bump(self) -> int:
-        """One state change. `/api/status`'s tag carries this counter; S8c moves it most."""
+        """One state change. `/api/status`'s tag carries this counter, and the loops move it."""
         self.revision += 1
         return self.revision
 
@@ -456,7 +455,6 @@ class Router:
         )
 
     def api_status(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
-        budget, limits = self.deps.meters()
         payload = StatusPayload(
             home=str(self.deps.identity.home),
             version=self.deps.identity.version,
@@ -467,7 +465,10 @@ class Router:
             drained_events=self.deps.drained(),
             repos=tuple(
                 repo.model_copy(
-                    update={"state": self.deps.loop_state(repo.repo_dir_key)}
+                    update={
+                        "state": self.deps.loop_state(repo.repo_dir_key),
+                        **self.deps.meters(repo.repo_dir_key).model_dump(),
+                    }
                 )
                 for repo in self.deps.readers.repos().repos
             ),
@@ -481,8 +482,6 @@ class Router:
                 )
                 for s in self.deps.sessions.live(now=time.time())
             ),
-            budget=budget,
-            limits=limits,
         )
         return Reply.json(
             payload

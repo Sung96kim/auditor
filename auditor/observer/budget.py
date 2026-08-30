@@ -7,10 +7,16 @@ at 00:01 are gated identically and a laptop that changed timezone does not chang
 from pydantic import BaseModel, ConfigDict
 
 from auditor.graph.model import DAY_SECONDS
-from auditor.graph.refine.models import Spend
-from auditor.user_settings import BudgetConfig
+from auditor.graph.refine.models import RunnerKind, Spend
+from auditor.user_settings import BudgetConfig, RunnerConfig
 
-__all__ = ["DAY_SECONDS", "BudgetState", "budget_state", "window_start"]
+__all__ = [
+    "DAY_SECONDS",
+    "BudgetState",
+    "budget_state",
+    "priced_runner",
+    "window_start",
+]
 
 
 def window_start(now: float) -> float:
@@ -19,6 +25,19 @@ def window_start(now: float) -> float:
     Spec 8.4's per-repo-per-day window, as a rolling span rather than a calendar day.
     """
     return now - DAY_SECONDS
+
+
+def priced_runner(kind: RunnerKind, runner: RunnerConfig) -> bool:
+    """Whether this runner reports what a run cost, so the day is bounded in dollars.
+
+    Only the Claude SDK reports a cost per run; Codex needs a price for the model it will use,
+    and the fake and the no-runner rows cost nothing at all (spec 8.4).
+    """
+    if kind is RunnerKind.CLAUDE:
+        return True
+    if kind is RunnerKind.CODEX:
+        return runner.codex_model in runner.codex_prices
+    return False
 
 
 class BudgetState(BaseModel):

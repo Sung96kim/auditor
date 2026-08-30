@@ -106,7 +106,7 @@
       "type": "object"
     },
     "RateLimitPayload": {
-      "description": "The rate limit meter. S8c writes `paused` and `resumes_at`; S8b reports the ceiling.",
+      "description": "The rate limit meter: the share the observer may take, and whether it is holding.",
       "properties": {
         "max_utilization": {
           "default": 0.0,
@@ -135,16 +135,30 @@
       "type": "object"
     },
     "RepoPayload": {
-      "description": "One repo in the switcher.",
+      "description": "One repo in the switcher, with the meters that belong to it.",
       "properties": {
         "attached": {
           "default": false,
           "title": "Attached",
           "type": "boolean"
         },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetPayload"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "identity": {
           "title": "Identity",
           "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/RateLimitPayload"
         },
         "queued": {
           "default": false,
@@ -282,17 +296,6 @@
   },
   "description": "The state badge, the meters and the counters the page polls every 3 s.",
   "properties": {
-    "budget": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/BudgetPayload"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
     "compat": {
       "title": "Compat",
       "type": "integer"
@@ -318,9 +321,6 @@
       "default": 0.0,
       "title": "Idle Seconds",
       "type": "number"
-    },
-    "limits": {
-      "$ref": "#/$defs/RateLimitPayload"
     },
     "queued_repos": {
       "default": 0,

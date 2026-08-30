@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from auditor.graph.refine.models import NodePair
+from auditor.graph.refine.models import Checkout, NodePair
 from auditor.observer.budget import BudgetState
 from auditor.observer.events import Event
 from auditor.observer.scheduling import (
@@ -17,6 +17,7 @@ from auditor.observer.scheduling import (
     RunSlots,
     debounced,
     pause_of,
+    read_guard,
 )
 
 
@@ -218,3 +219,17 @@ def test_a_target_is_re_queued_once_and_then_dropped():
     assert retries.keep((pair, other)) == (pair, other)
     retries.aborted((pair,))
     assert retries.keep((pair, other)) == (other,)
+
+
+@pytest.mark.parametrize(
+    ("changed", "dirty"),
+    [(("impl.py",), True), (("README.md",), False), ((), False), (None, False)],
+    ids=["auditable", "not-auditable", "clean", "no-checkout"],
+)
+async def test_the_pre_run_guard_counts_only_the_paths_this_auditor_would_audit(
+    tmp_path, changed, dirty
+):
+    """Spec 8.5: an uncommitted README cannot invalidate an anchor, so it cannot mark a run dirty."""
+    guard = await read_guard(tmp_path, status=lambda _root: changed)
+    assert guard.dirty is dirty
+    assert guard.checkout == Checkout(branch=None, commit_sha=None)
