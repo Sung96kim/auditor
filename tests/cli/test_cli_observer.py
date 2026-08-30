@@ -6,6 +6,7 @@ import pytest
 from _support import invoke
 
 import auditr_observer
+from auditor.cli import observer as cli_observer
 from auditor.cli.lazy import LazyObserverGroup, lazy_observer_app
 from auditor.observer.payloads import DaemonStatus
 
@@ -30,8 +31,14 @@ def test_every_observer_verb_is_reachable_through_the_mount(name):
 def test_every_verb_answers_a_daemon_status_with_no_daemon_running(
     name, tmp_path, monkeypatch
 ):
-    """Five verbs, one shape: with nothing running each still answers, and none exits non-zero."""
+    """Five verbs, one shape: with nothing running each still answers, and none exits non-zero.
+
+    `start` and `ensure` really do launch a daemon, so the spawn is stubbed: a unit test may not
+    leave a background process behind.
+    """
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.setattr(cli_observer, "detach", lambda argv, log: 0)
+    monkeypatch.setattr(cli_observer, "_START_TIMEOUT", 0.05)
     result = invoke("observer", name, "--json")
     assert result.exit_code == 0
     payload = DaemonStatus.model_validate(json.loads(result.stdout))

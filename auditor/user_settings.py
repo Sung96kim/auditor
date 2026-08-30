@@ -300,6 +300,18 @@ def load_user_settings(root: Path, *, directory: Path | None = None) -> UserSett
     return UserSettings.model_validate(merged)
 
 
+def load_home_settings() -> UserSettings:
+    """The user's settings with no repo overlay: the global file, then ``AUDITOR_USER_*``.
+
+    What a process serving many repos at once reads for its own lifecycle, where there is no one
+    repo to overlay; a per-repo answer still goes through :func:`load_user_settings`.
+    """
+    merged = deep_merge(
+        _read_layer(user_config_path()), EnvSettingsSource(UserSettings)()
+    )
+    return UserSettings.model_validate(merged)
+
+
 class UserKeyReport(BaseModel):
     """What the two JSON layers hold that the model does not: typos, and settings that moved."""
 

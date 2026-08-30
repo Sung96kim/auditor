@@ -1,9 +1,11 @@
 """Spec 8.1's process: the singleton, `daemon.json`, the idle window and the install spec."""
 
+import http.client
 import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,8 @@ from auditor.observer.daemon import (
     IdleTimer,
     daemon_argv,
     detach,
+    read_daemon_record,
+    serve,
     wait_for,
 )
 from auditor.observer.events import Event, EventQueue, Spool
@@ -267,3 +271,54 @@ def test_the_kill_switch_makes_every_verb_a_no_op(argv, monkeypatch, capsys):
 def test_the_client_and_the_model_name_the_same_status_keys():
     """`auditr-observer status --json` and `auditr observer status --json` are one shape (P19)."""
     assert set(auditr_observer.STATUS_KEYS) == set(DaemonStatus.model_fields)
+
+
+def test_the_daemon_starts_publishes_answers_and_stops_on_its_own_idle_window(
+    tmp_path, monkeypatch
+):
+    """The whole process end to end, which is the only thing that catches a broken `serve` (P25).
+
+    Regression: `serve` resolved its own settings through `load_user_settings`, which takes a repo
+    root the daemon does not have, so every start died with a `TypeError` before it bound a port.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "AUDITOR_USER_OBSERVER__SCHEDULING__IDLE_SHUTDOWN_MINUTES", "0.02"
+    )
+    monkeypatch.setenv("AUDITOR_USER_OBSERVER__OPEN_BROWSER", "false")
+    exit_code: dict[str, int] = {}
+    worker = threading.Thread(
+        target=lambda: exit_code.update(code=serve()), daemon=True
+    )
+    worker.start()
+    try:
+        assert wait_for(daemon_json_path().exists, timeout=15.0)
+        record = read_daemon_record()
+        assert record is not None
+        assert record.pid == os.getpid()
+        assert set(record.model_dump()) == {"pid", "port", "home", "version", "compat"}
+        conn = http.client.HTTPConnection("127.0.0.1", record.port, timeout=5)
+        conn.request("GET", "/health")
+        health = json.loads(conn.getresponse().read())
+        conn.close()
+        assert health["home"] == str(tmp_path)
+        assert health["compat"] == record.compat
+    finally:
+        worker.join(timeout=30.0)
+    assert (
+        not worker.is_alive()
+    )  # the idle window is what ended it, with nothing attached
+    assert exit_code["code"] == 0
+    assert not daemon_json_path().exists()  # and it cleaned up after itself
+
+
+def test_a_second_serve_returns_at_once_because_the_lock_is_held(tmp_path, monkeypatch):
+    """The singleton: a second start reports the running daemon rather than binding a port."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    lock = DaemonLock(tmp_path / "observer" / "lock")
+    assert lock.acquire() is True
+    try:
+        assert serve() == 0
+        assert not daemon_json_path().exists()
+    finally:
+        lock.release()

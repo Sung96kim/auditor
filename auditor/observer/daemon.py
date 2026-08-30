@@ -36,7 +36,7 @@ from auditor.paths import (
     write_json_dict,
 )
 from auditor.serve import open_url
-from auditor.user_settings import UserSettings, load_user_settings
+from auditor.user_settings import UserSettings, load_home_settings, load_user_settings
 
 MINUTE = 60.0
 _LOG = logging.getLogger("auditor.observer")
@@ -277,13 +277,20 @@ def repo_gate(
         ):  # a repo whose config will not load cannot consent to being observed
             _LOG.exception("could not read %s's config; refusing the attach", root)
             allowed = False
+        try:  # this repo's own overlay wins over the daemon's home-level answer
+            personal = load_user_settings(root)
+        except Exception:
+            _LOG.exception(
+                "could not read %s's user settings; using the daemon's", root
+            )
+            personal = settings
         return attach_refusal(
             home=Path(request.home) if request.home else None,
             daemon_home=daemon_home,
             configured=is_configured(root),
             observer_allowed=allowed,
-            enabled=settings.observer.enabled,
-            worktrees=settings.observer.worktrees,
+            enabled=personal.observer.enabled,
+            worktrees=personal.observer.worktrees,
             main_worktree=is_main_worktree(root),
         )
 
@@ -312,7 +319,7 @@ def serve(settings: UserSettings | None = None) -> int:
     if not lock.acquire():
         return 0
     install_logging(observer_log_dir() / "observer.log")
-    settings = settings or load_user_settings()
+    settings = settings or load_home_settings()
     home = auditor_home()
     scheduling = settings.observer.scheduling
     readers = Readers(settings=settings)
@@ -354,8 +361,11 @@ def serve(settings: UserSettings | None = None) -> int:
     def stop(signum: int, frame: object) -> None:
         daemon.stopping = True
 
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
+    try:
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+    except ValueError:  # not the main thread, so whoever started us owns the signals
+        pass
     try:
         while not daemon.stopping and not router.restarting:
             queue.wait(TICK_SECONDS)
