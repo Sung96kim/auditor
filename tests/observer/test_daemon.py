@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from auditor.observer.daemon import (
     DaemonLock,
     DaemonRecord,
     IdleTimer,
+    LoopHost,
     daemon_argv,
     daemon_started_at,
     detach,
@@ -29,6 +31,7 @@ from auditor.observer.daemon import (
 from auditor.observer.events import Event, EventQueue, Spool
 from auditor.observer.payloads import DaemonStatus
 from auditor.observer.routes import Readers
+from auditor.observer.scheduling import LoopState
 from auditor.observer.sessions import Session, SessionBook
 from auditor.paths import (
     auditor_home,
@@ -529,3 +532,55 @@ def test_a_non_http_listener_on_the_recorded_port_still_exits_zero(
     payload = json.loads(capsys.readouterr().out)
     assert payload["running"] is False
     assert payload["action"] == "not running"
+
+
+def test_a_drained_batch_is_offered_to_the_repo_s_loop_and_a_keyless_one_is_dropped(
+    queue,
+):
+    """S8b's `consume` counted; this slice hands the batch to the loop that decides (P1, C-2)."""
+    offered: list[tuple[Event, ...]] = []
+    daemon = _daemon(queue)
+    daemon.loops["k"] = SimpleNamespace(feed=SimpleNamespace(offer=offered.append))
+    queue.put("k", Event(repo="/r", paths=("a.py",), at=1.0))
+    queue.put("gone", Event(repo="/elsewhere", paths=("b.py",), at=2.0))
+    daemon.tick()
+    assert [e.paths[0] for batch in offered for e in batch] == ["a.py"]
+    assert daemon.drained == 2
+
+
+def test_the_loop_state_lookup_answers_empty_for_a_key_with_no_loop(queue):
+    """`/api/status` and `/api/repos` both read this, and a repo may have no loop yet."""
+    daemon = _daemon(queue)
+    daemon.loops["k"] = SimpleNamespace(state=LoopState.OBSERVING)
+    assert daemon.loop_state("k") == "observing"
+    assert daemon.loop_state("nothing-here") == ""
+
+
+def test_the_loop_host_runs_a_coroutine_on_its_own_thread_and_stops(queue):
+    """Seam 1: every `RepoLoop` is built and ticked off the drain thread (P27)."""
+    host = LoopHost()
+    host.start()
+    try:
+        where = host.run(_thread_name())
+        assert where != threading.current_thread().name
+        assert host.loop is not None
+    finally:
+        host.stop()
+    assert host.loop is None
+
+
+async def _thread_name() -> str:
+    return threading.current_thread().name
+
+
+def test_a_host_that_never_started_refuses_to_run(queue):
+    """A caller that submits before `start` gets a refusal, not a silent no-op."""
+    host = LoopHost()
+    with pytest.raises(RuntimeError, match="loop host is not running"):
+        host.run(_thread_name())
+
+
+def test_stopping_a_host_that_never_started_is_a_no_op(queue):
+    host = LoopHost()
+    host.stop()
+    assert host.loop is None

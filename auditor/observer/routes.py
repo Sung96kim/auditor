@@ -457,6 +457,12 @@ class Router:
             started_at=self.started_at,
             uptime_seconds=time.time() - self.started_at,
             queued_repos=self.deps.queue.pending_keys,
+            repos=tuple(
+                repo.model_copy(
+                    update={"state": self.deps.loop_state(repo.repo_dir_key)}
+                )
+                for repo in self.deps.readers.repos().repos
+            ),
             sessions=tuple(
                 SessionPayload(
                     session_id=s.session_id,

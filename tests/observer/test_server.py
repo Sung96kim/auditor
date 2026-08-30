@@ -19,7 +19,15 @@ from auditor.graph.refine.models import (
     TriggerKind,
 )
 from auditor.observer.events import MAX_EVENT_PATHS
-from auditor.observer.payloads import ROUTES, RunDetailView, StatusPayload
+from auditor.observer.payloads import (
+    ROUTES,
+    BudgetPayload,
+    RateLimitPayload,
+    RepoPayload,
+    ReposPayload,
+    RunDetailView,
+    StatusPayload,
+)
 from auditor.observer.routes import HANDLERS, TAGS
 from auditor.observer.server import (
     MAX_BODY_BYTES,
@@ -699,3 +707,46 @@ def test_a_re_attach_keeps_the_session_it_already_had(daemon_server, daemon_rout
     again = daemon_router.deps.sessions.live(now=time.time())[0]
     assert again.started_at == first.started_at
     assert again.last_seen >= first.last_seen
+
+
+def test_the_status_route_reports_the_loop_state_per_repo(
+    daemon_router, daemon_server, readers
+):
+    """Spec 12.1's badge is per repo, because the page has a switcher (Seam 2)."""
+    readers.repos = lambda: ReposPayload(
+        repos=(RepoPayload(repo="/r", identity="/r/.git", repo_dir_key="k"),)
+    )
+    daemon_router.deps = daemon_router.deps.model_copy(
+        update={"loop_state": lambda key: "observing"}
+    )
+    _server, caller = daemon_server
+    status, _headers, body = caller.request("GET", "/api/status")
+    assert status == 200
+    assert body["repos"]
+    assert all(repo["state"] == "observing" for repo in body["repos"])
+
+
+def test_the_status_route_draws_both_meters(daemon_router, daemon_server):
+    """S8b declared `budget` and `limits` and left them empty; this slice fills them (Seam 3)."""
+    daemon_router.deps = daemon_router.deps.model_copy(
+        update={
+            "meters": lambda: (
+                BudgetPayload(spent_usd=0.5, max_cost_usd_per_day=2.0),
+                RateLimitPayload(max_utilization=0.5, paused=True, resumes_at=500.0),
+            )
+        }
+    )
+    _server, caller = daemon_server
+    _status, _headers, body = caller.request("GET", "/api/status")
+    assert body["budget"]["spent_usd"] == 0.5
+    assert (body["limits"]["paused"], body["limits"]["resumes_at"]) == (True, 500.0)
+
+
+def test_a_loop_transition_moves_the_status_etag(daemon_router, daemon_server):
+    """P14 of S8b: the counter is the tag, and S8c is what moves it most."""
+    _server, caller = daemon_server
+    _status, headers, _body = caller.request("GET", "/api/status")
+    tag = headers["ETag"]
+    daemon_router.bump()
+    _status, headers, _body = caller.request("GET", "/api/status")
+    assert headers["ETag"] != tag

@@ -144,6 +144,47 @@ thread rather than pinning one.
   lands; `home`, `version`, `compat`, `started_at`, `uptime_seconds`, `queued_repos` and
   `sessions` are the seven that are real.
 
+## What the loop does
+
+One `RepoLoop` per attached repo works spec 8.3's five items in order, highest first:
+
+1. **Session-start build.** An incremental scan with extraction forced on, then a rebuild. A busy
+   rebuild lock is logged and the attach still ends `observing`. Writes one `session_start` run
+   row: `skipped`, no runner, zero cost.
+2. **Edit batches.** Events collected per quiet window (`debounce_seconds`, last event wins), then
+   spec 8.6's gate. A batch the gate passes opens a run over the pairs it chose; a batch it
+   declines is still a run row. A batch whose every path stage 0 dropped writes nothing.
+3. **Suspect drain.** `graph_unresolved` in the store's own priority order, minus the pairs on
+   cooldown and the pairs an `unresolvable` or `redundant` refinement already answers. Item 2's
+   deferred pairs are drained first.
+4. **Verify runs.** A second opinion on `pending` refinements, shown the pairs and not the pending
+   correction. It judges and stores nothing: agreement activates, a named different destination
+   rejects, and silence leaves the row `pending`.
+5. **Tuning trials.** The slot exists and returns 0; S11 fills it.
+
+A run takes **pairs**, never a path prefix. `trigger_detail.targets` carries them, so `graph log
+--json` and `GET /api/runs/<id>` both show what a run was asked about.
+
+### The cooldown knob
+
+- `observer.scheduling.cooldown_minutes` (default `60`): minutes a pair a run already named is
+  skipped by the suspect drain.
+- `0` opts out, which is what a repo whose whole queue fits in one run wants.
+- Derived from `graph_runs`, not from a column on the queue: `graph_unresolved` is replaced
+  wholesale by every build.
+
+### The three pauses
+
+- `paused:budget` while the day's cost or run ceiling is spent. Clears when the day window rolls.
+- `paused:ratelimit` when a run reported one. Clears at the instant the SDK named, or five minutes
+  on if it named none.
+- `paused:auth` when a run could not authenticate. Clears after 15 minutes, or the moment any run
+  reaches the model.
+
+None of the three is written to disk. Auth outranks the other two, so a loop that cannot log in
+never reports a budget it can never spend. A batch drained while paused is held and assessed when
+the pause lifts.
+
 ## Stopping
 
 - `auditr observer stop` sends SIGTERM. The daemon releases the lock, removes `daemon.json` and

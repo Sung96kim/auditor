@@ -1,5 +1,6 @@
 """Spec 8.1's process: the singleton lock, `daemon.json`, the idle timer and the restart exec."""
 
+import asyncio
 import http.client
 import logging
 import os
@@ -7,29 +8,36 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from auditor import __version__
 from auditor.config import is_configured, load_config
+from auditor.graph.refine.drive import build_runner, select_runner
 from auditor.graph.refine.lock import flock_nb
+from auditor.graph.refine.models import RunnerKind
+from auditor.graph.refine.service import RefinementService
 from auditor.graph.viz import render_app_or_status
 from auditor.observer import MINUTE, OBSERVER_API_VERSION
 from auditor.observer.events import Event, EventQueue
+from auditor.observer.loop import RepoLoop
 from auditor.observer.payloads import (
+    BudgetPayload,
     HealthPayload,
+    RateLimitPayload,
     RestartAck,
     RestartRequest,
     StatusPayload,
 )
 from auditor.observer.routes import DaemonIdentity, Readers, Router, RouterDeps
-from auditor.observer.scheduling import RunSlots
+from auditor.observer.scheduling import LoopState, QueueFeed, RunSlots
 from auditor.observer.server import ObserverServer
 from auditor.observer.sessions import AttachRequest, SessionBook, attach_refusal
 from auditor.paths import (
@@ -42,6 +50,8 @@ from auditor.paths import (
     observer_log_dir,
     observer_port,
     read_json_dict,
+    repo_dir_key,
+    repo_root_from_key,
     write_json_dict,
 )
 from auditor.payload import WirePayload
@@ -52,6 +62,7 @@ _LOG = logging.getLogger("auditor.observer")
 #: Transport fact, not `SchedulingConfig` setting: daemon is answering or gone, no caller waits
 _ASK_TIMEOUT = 2.0
 _P = TypeVar("_P", bound=WirePayload)
+_T = TypeVar("_T")
 
 
 class DaemonRecord(BaseModel):
@@ -233,6 +244,63 @@ def read_daemon_record() -> DaemonRecord | None:
         return None
 
 
+class LoopHost:
+    """The asyncio thread every `RepoLoop` is built and ticked on (spec 8.1, seam 1).
+
+    The daemon's own thread drains and looks a loop up; it never constructs one and never awaits,
+    because `IndexStore` is bound to one event loop and that loop is this thread's.
+    """
+
+    def __init__(self) -> None:
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+
+    def start(self) -> None:
+        """Bring the thread up and wait until its loop is running."""
+        self._thread = threading.Thread(target=self._run, name="observer-loops")
+        self._thread.daemon = True
+        self._thread.start()
+        self._ready.wait(timeout=5.0)
+
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self.loop = loop
+        self._ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
+            self.loop = None
+
+    def run(self, coro: Coroutine[Any, Any, _T], *, timeout: float = 60.0) -> _T:
+        """Run one coroutine on the host thread and wait for its answer."""
+        loop = self.loop
+        if loop is None:
+            coro.close()
+            raise RuntimeError("loop host is not running")
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
+
+    def spawn(self, coro: Coroutine[Any, Any, object]) -> None:
+        """Start one coroutine on the host thread and do not wait for it."""
+        loop = self.loop
+        if loop is None:
+            coro.close()
+            raise RuntimeError("loop host is not running")
+        asyncio.run_coroutine_threadsafe(coro, loop)
+
+    def stop(self) -> None:
+        """Stop the loop and join the thread. Stopping a host that never started is a no-op."""
+        loop, thread = self.loop, self._thread
+        if loop is not None:
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=5.0)
+        self._thread = None
+        self._ready.clear()
+
+
 class Daemon:
     """The one background process per home: it drains, sweeps and decides when to stop.
 
@@ -249,25 +317,125 @@ class Daemon:
         now: Callable[[], float] = time.time,
         consume: Callable[[str, tuple[Event, ...]], object] | None = None,
         slots: RunSlots | None = None,
+        host: LoopHost | None = None,
+        readers: Readers | None = None,
+        settings: UserSettings | None = None,
         on_change: Callable[[], object] | None = None,
     ) -> None:
         self.queue = queue
         self.sessions = sessions
         self.idle = idle
         self.now = now
-        self.consume = consume or self._count
+        self.consume = consume or self.offer
         #: what a state change the page can see calls; `serve` passes the router's tag counter
         self.on_change = on_change or (lambda: None)
-        #: spec 8.4's "two globally" is across every loop in one daemon, so the daemon owns it;
-        #: no S8b reader, because S8b opens no run (S8c seam 6)
+        #: spec 8.4's "two globally" is across every loop in one daemon, so the daemon owns it
         self.slots = slots or RunSlots()
+        self.host = host or LoopHost()
+        self.readers = readers
+        self.settings = settings or UserSettings()
+        #: one `RepoLoop` per attached repo, keyed by the spool key `consume` is handed (C-2)
+        self.loops: dict[str, RepoLoop] = {}
+        #: what `/api/status` draws, pushed by the loops rather than pulled across threads (H-9)
+        self.meters: tuple[BudgetPayload | None, RateLimitPayload] = (
+            None,
+            RateLimitPayload(),
+        )
         #: what `consume` counted; S8c is what fills `StatusPayload.drained_events` from it
         self.drained = 0
         self.stopping = False
 
-    def _count(self, key: str, events: tuple[Event, ...]) -> None:
-        """S8b's consumer: count the batch and acknowledge it. S8c replaces this (P29)."""
-        self.drained += len(events)
+    def offer(self, key: str, events: tuple[Event, ...]) -> int:
+        """Hand one drained spool to its repo's loop, or drop it when no loop owns the key.
+
+        A lookup, never a constructor: this runs on the drain thread, which has no event loop, and
+        every `RepoLoop` was built on the asyncio thread when its repo attached.
+        """
+        held = self.loops.get(key)
+        if held is None:
+            _LOG.warning("dropped %d events for unattached repo %s", len(events), key)
+            return 0
+        held.feed.offer(events)
+        return len(events)
+
+    def loop_state(self, key: str) -> str:
+        """What one repo's loop is doing, or "" for a key no loop owns yet (seam 2)."""
+        held = self.loops.get(key)
+        return held.state.value if held is not None else ""
+
+    def reconcile(self) -> None:
+        """Give every live session's repo, and every adopted spool, a loop on the host thread.
+
+        Before the drain rather than after, so the first batch a newly attached repo posts finds
+        a feed waiting for it instead of being dropped.
+        """
+        if self.readers is None:
+            return
+        roots = {Path(s.repo) for s in self.sessions.live(now=self.now())}
+        for key in self.queue.keys():  # noqa: SIM118 - EventQueue, not a dict
+            if key not in self.loops:
+                adopted = repo_root_from_key(key)
+                if adopted is not None:
+                    roots.add(adopted)
+        for root in sorted(roots, key=str):
+            self.ensure_loop(root)
+
+    def ensure_loop(self, root: Path) -> str:
+        """Build this repo's loop on the host thread if it has none, and answer its spool key."""
+        key = repo_dir_key(root)
+        if key in self.loops:
+            return key
+        try:
+            self.loops[key] = self.host.run(self._build(root))
+        except Exception:
+            _LOG.exception("could not start a loop for %s", root)
+            return key
+        self.host.spawn(self._drive(self.loops[key]))
+        return key
+
+    async def _build(self, root: Path) -> RepoLoop:
+        """One `RepoLoop` over this repo's cached handles, on the thread that owns its store."""
+        readers = self.readers
+        assert readers is not None  # `reconcile` is the only caller and guards this
+        settings = readers.config(root)
+        service = RefinementService(readers.index(root), root, settings, self.settings)
+        return RepoLoop(
+            root=root,
+            index=service.index,
+            settings=settings,
+            user=self.settings,
+            feed=QueueFeed(),
+            runner_for=self._runner_for,
+            service=service,
+            slots=self.slots,
+            on_change=self.on_change,
+        )
+
+    def _runner_for(self, service: RefinementService):
+        """The runner this daemon opens observer runs with, or the fake when none is available."""
+        choice = select_runner(self.settings.observer.runner)
+        return build_runner(choice.kind or RunnerKind.FAKE, service)
+
+    async def _drive(self, loop: RepoLoop) -> None:
+        """Spec 8.3's ladder for one repo: attach once, then tick until the daemon stops."""
+        await loop.attach()
+        await self._publish(loop)
+        while not self.stopping:
+            await loop.tick(poll=self.settings.observer.scheduling.tick_seconds)
+            await self._publish(loop)
+        loop.detach()
+
+    async def _publish(self, loop: RepoLoop) -> None:
+        """Push this loop's two meters onto the daemon, which is what `/api/status` reads (H-9)."""
+        self.meters = (
+            BudgetPayload.of(await loop.budget()),
+            RateLimitPayload(
+                max_utilization=self.settings.observer.budget.max_utilization,
+                paused=loop.state
+                in {LoopState.PAUSED_RATELIMIT, LoopState.PAUSED_AUTH},
+                resumes_at=loop.pauses.resumes_at,
+            ),
+        )
 
     def adopt_home(self) -> int:
         """Spec 8.1's start-time drain: every spool under this home becomes a pending key.
@@ -288,9 +456,11 @@ class Daemon:
 
     def tick(self) -> None:
         """Drain every pending key into `consume`, sweep expired sessions, decide about stopping."""
+        self.reconcile()
         for key in self.queue.keys():  # noqa: SIM118 - EventQueue, not a dict
             events = self.queue.drain(key)
             if events:
+                self.drained += len(events)
                 self.consume(key, events)
             # the staged batch is dropped only once its consumer has returned (P26)
             self.queue.consumed(key)
@@ -363,6 +533,13 @@ def serve(settings: UserSettings | None = None) -> int:
     queue = EventQueue()
     sessions = SessionBook(expiry_minutes=scheduling.session_expiry_minutes)
     idle = IdleTimer(minutes=scheduling.idle_shutdown_minutes, now=time.time())
+    daemon = Daemon(
+        queue=queue,
+        sessions=sessions,
+        idle=idle,
+        readers=readers,
+        settings=settings,
+    )
     router = Router(
         RouterDeps(
             identity=DaemonIdentity(
@@ -377,10 +554,14 @@ def serve(settings: UserSettings | None = None) -> int:
             page=repo_page(readers),
             gate=repo_gate(home, settings),
             open_page=open_url if settings.observer.open_browser else lambda url: None,
+            loop_state=daemon.loop_state,
+            meters=lambda: daemon.meters,
         ),
         started_at=time.time(),
     )
-    daemon = Daemon(queue=queue, sessions=sessions, idle=idle, on_change=router.bump)
+    # late-bound like `router.url`: `RouterDeps` is frozen, so the daemon is built first and
+    # takes the router's tag counter once there is a router to take it from
+    daemon.on_change = router.bump
     daemon.adopt_home()
     try:
         server = ObserverServer(router.dispatch, port=observer_port())
@@ -394,6 +575,7 @@ def serve(settings: UserSettings | None = None) -> int:
 
     router.url = server.url
     server.start()
+    daemon.host.start()
     write_json_dict(
         daemon_json_path(),
         DaemonRecord(
@@ -421,6 +603,8 @@ def serve(settings: UserSettings | None = None) -> int:
                 idle.touch(router.last_request)
             daemon.tick()
     finally:
+        daemon.stopping = True
+        daemon.host.stop()
         server.stop()
         readers.close()
         daemon_json_path().unlink(missing_ok=True)

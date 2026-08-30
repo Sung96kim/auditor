@@ -29,8 +29,11 @@ _HEAVY = (
     # the observer mount is the second lazy mount; its daemon and transport must stay off too
     "auditor.cli.observer",
     "auditor.observer.daemon",
+    "auditor.observer.loop",
     "auditor.observer.routes",
+    "auditor.observer.scheduling",
     "auditor.observer.server",
+    "auditor.graph.scan",
     "numpy",
     "scipy",
     "networkx",

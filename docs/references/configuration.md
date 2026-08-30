@@ -387,11 +387,12 @@ so setting one has no effect today.
   `auditr graph refinements prune` finishes those as `skipped` with a reason, because a run whose
   process died can be closed by nothing else.
 
-`observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`) is a daemon knob with
-no reader today. `session_expiry_minutes` (default `45`) is how long after its last heartbeat a
-session still counts, and `idle_shutdown_minutes` (default `30.0`, a float) is how long the daemon
-goes without a request before exiting; `0` never exits, and the window is only consulted when no
-session is attached. Three more are the daemon's own clocks:
+`observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`) is the quiet window
+the loop collects an edit batch over; the window restarts on every event and the last one wins.
+`session_expiry_minutes` (default `45`) is how long after its last heartbeat a session still
+counts, and `idle_shutdown_minutes` (default `30.0`, a float) is how long the daemon goes without a
+request before exiting; `0` never exits, and the window is only consulted when no session is
+attached. Both of those are the daemon's, and three more are its own clocks:
 
 - `tick_seconds` (default `1.0`): how long the daemon blocks on its queue before looking at the
   clock again.
@@ -401,7 +402,11 @@ session is attached. Three more are the daemon's own clocks:
   `auditr-observer` cannot read settings at all, so it carries both numbers as literals and a
   test pins them against these defaults.
 
-The two the assessment gate reads:
+The three the loop reads:
+
+- `cooldown_minutes` (default `60`): minutes a pair a run already named is skipped by the suspect
+  drain. `0` opts out, so every pair is drainable on every pass. Derived from `graph_runs`, because
+  `graph_unresolved` is replaced wholesale by every build.
 
 - `run_on_stale` (default `true`): re-run when an edit stales an existing refinement. Only a
   refinement anchored on a node the batch itself touched counts, so drift and no-op builds
