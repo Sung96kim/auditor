@@ -309,9 +309,9 @@ class Router:
         parsed = urlparse(target)
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         self.last_request = time.time()
-        if (
-            parsed.path == "/"
-        ):  # answered before the table, because it names no payload (P13)
+        # answered before the table, because it names no payload (P13); GET alone, so that
+        # every other method falls through to the table's JSON 404 rather than the page
+        if method == "GET" and parsed.path == "/":
             return Reply.html(self.page(query.get("repo")))
         key = (method, self._pattern(parsed.path))
         handler = HANDLERS.get(key)

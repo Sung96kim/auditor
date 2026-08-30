@@ -3,14 +3,17 @@
 import asyncio
 import http.client
 import json
+import socket
 import threading
 import time
+
+import pytest
 
 from auditor.graph.refine.lock import rebuild_lock
 from auditor.observer.events import MAX_EVENT_PATHS
 from auditor.observer.payloads import ROUTES, StatusPayload
 from auditor.observer.routes import HANDLERS, TAGS
-from auditor.observer.server import MAX_BODY_BYTES
+from auditor.observer.server import MAX_BODY_BYTES, _Handler, loopback_host
 
 #: what S8b actually fills on `/api/status`; everything else stays at its default until S8c
 _FILLED = {
@@ -22,6 +25,43 @@ _FILLED = {
     "queued_repos",
     "sessions",
 }
+
+
+def _raw(port: int, request: str, *, timeout: float = 5.0) -> str:
+    """One hand-written request over a raw socket, for headers `http.client` will not send.
+
+    Reads the headers, then exactly the body they declare, so a keep-alive answer does not
+    block until the deadline.
+    """
+    with socket.create_connection(("127.0.0.1", port), timeout=timeout) as sock:
+        sock.sendall(request.encode())
+        seen = b""
+        while b"\r\n\r\n" not in seen:
+            got = sock.recv(4096)
+            if not got:
+                return seen.decode(errors="replace")
+            seen += got
+        head, _, body = seen.partition(b"\r\n\r\n")
+        declared = (
+            0
+            if request.startswith("HEAD ")
+            else int(
+                next(
+                    (
+                        line.split(b":", 1)[1]
+                        for line in head.split(b"\r\n")
+                        if line.lower().startswith(b"content-length:")
+                    ),
+                    b"0",
+                )
+            )
+        )
+        while len(body) < declared:
+            got = sock.recv(4096)
+            if not got:
+                break
+            body += got
+    return (head + b"\r\n\r\n" + body).decode(errors="replace")
 
 
 def test_every_route_in_the_table_has_exactly_one_handler():
@@ -197,7 +237,7 @@ def test_a_reader_that_raises_is_a_json_500_not_a_dropped_connection(
 def test_an_over_long_body_is_refused_rather_than_truncated(daemon_server):
     """A truncated read leaves the rest of the body to be parsed as the next request line."""
     server, _ = daemon_server
-    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=1)
     conn.putrequest("POST", "/events")
     conn.putheader("Content-Length", str(MAX_BODY_BYTES + 1))
     conn.endheaders()  # the declared length is refused before a byte of body is read
@@ -315,3 +355,115 @@ def test_an_unusable_event_body_is_a_400_not_a_500(daemon_server):
     status, _, body = call.request("POST", "/events", {"paths": ["a.py"]})
     assert status == 400
     assert "unusable event body" in body["error"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("127.0.0.1", True),
+        ("127.0.0.1:7682", True),
+        ("localhost:7682", True),
+        ("[::1]:7682", True),
+        ("", True),
+        (None, True),
+        ("evil.example", False),
+        ("evil.example:7682", False),
+        ("10.0.0.5:7682", False),
+    ],
+)
+def test_only_a_loopback_host_passes_the_header_check(raw, expected):
+    """DNS rebinding answers on a name that resolves here, so the name is what has to be read."""
+    assert loopback_host(raw) is expected
+
+
+def test_a_request_carrying_an_origin_is_refused_before_any_side_effect(
+    daemon_server, daemon_router
+):
+    """A `text/plain` POST is a CORS simple request, so any page could otherwise restart us."""
+    _, call = daemon_server
+    status, _, body = call.request(
+        "POST", "/admin/restart", {}, {"Origin": "https://evil.example"}
+    )
+    assert status == 403
+    assert body == {"error": "cross-origin requests are refused"}
+    assert daemon_router.restarting is False
+
+
+def test_a_non_loopback_host_is_refused(daemon_server):
+    """Binding to 127.0.0.1 stops other hosts; only the Host header stops a rebinding page."""
+    server, _ = daemon_server
+    answer = _raw(server.port, "GET /api/status HTTP/1.1\r\nHost: evil.example\r\n\r\n")
+    assert "403" in answer.splitlines()[0]
+    assert "only a loopback Host is answered" in answer
+
+
+def test_the_same_origin_page_still_loads_under_both_checks(daemon_server):
+    """The bundle at `/` makes no cross-origin request, so neither check may reach it (E2)."""
+    server, call = daemon_server
+    status, headers, body = call.request("GET", "/")
+    assert status == 200
+    assert headers["Content-Type"] == "text/html; charset=utf-8"
+    assert "observer" in body
+    answer = _raw(
+        server.port, f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{server.port}\r\n\r\n"
+    )
+    assert "200" in answer.splitlines()[0]
+
+
+@pytest.mark.parametrize(
+    ("declared", "status", "reason"),
+    [
+        ("abc", 400, "unreadable Content-Length"),
+        ("-1", 400, "negative Content-Length"),
+    ],
+)
+def test_an_unusable_content_length_is_answered_not_dropped(
+    daemon_server, declared, status, reason
+):
+    """Parsed outside the handler's `try`, `abc` dropped the connection and `-1` read to EOF."""
+    server, _ = daemon_server
+    answer = _raw(
+        server.port,
+        f"POST /events HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        f"Content-Length: {declared}\r\n\r\n",
+    )
+    assert str(status) in answer.splitlines()[0]
+    assert reason in answer
+
+
+def test_a_short_body_frees_its_thread_on_the_deadline(daemon_server, monkeypatch):
+    """No read deadline meant N half-open connections cost N pinned threads forever."""
+    monkeypatch.setattr(_Handler, "timeout", 0.3)
+    server, _ = daemon_server
+    started = time.monotonic()
+    with socket.create_connection(("127.0.0.1", server.port), timeout=5.0) as sock:
+        sock.sendall(
+            b"POST /events HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Content-Length: 100\r\n\r\nshort"
+        )
+        assert (
+            sock.recv(4096) == b""
+        )  # the daemon gave up and closed, rather than waiting
+    assert time.monotonic() - started < 4.0
+
+
+def test_a_chunked_body_is_refused_rather_than_desyncing_the_connection(daemon_server):
+    """With no Content-Length the chunks stay in the socket and parse as the next request."""
+    server, _ = daemon_server
+    answer = _raw(
+        server.port,
+        "POST /events HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+    )
+    assert "411" in answer.splitlines()[0]
+    assert "a Content-Length is required" in answer
+
+
+@pytest.mark.parametrize("method", ["HEAD", "PUT", "DELETE"])
+def test_an_unknown_method_is_a_json_404_not_stdlib_html(daemon_server, method):
+    """`HEAD /` from a browser or a proxy is ordinary traffic and got a 501 HTML banner."""
+    server, _ = daemon_server
+    answer = _raw(server.port, f"{method} / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    assert "404" in answer.splitlines()[0]
+    assert "application/json" in answer
+    assert ("no route for" in answer) is (method != "HEAD")
