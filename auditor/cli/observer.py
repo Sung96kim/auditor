@@ -18,7 +18,7 @@ from auditor.observer.daemon import (
     wait_for,
 )
 from auditor.observer.payloads import DaemonStatus, HealthPayload
-from auditor.paths import observer_enabled, observer_log_dir
+from auditor.paths import auditor_home, observer_enabled, observer_log_dir
 from auditor.serve import open_url
 from auditor.user_settings import SchedulingConfig, load_home_settings
 
@@ -107,21 +107,23 @@ def start(
     json_: bool = _JSON,
 ) -> None:
     """Start the observer daemon for this home."""
+    home = auditor_home()
     if foreground and json_:
         raise typer.BadParameter("--foreground is the daemon itself; it emits no JSON")
     if not observer_enabled():
-        present(DaemonStatus.of(*_off()), render_observer, as_json=json_)
+        present(DaemonStatus.of(*_off(), home=home), render_observer, as_json=json_)
         return
     if foreground:
         raise typer.Exit(serve())
-    present(DaemonStatus.of(*_launched()), render_observer, as_json=json_)
+    present(DaemonStatus.of(*_launched(), home=home), render_observer, as_json=json_)
 
 
 @observer_app.command("stop")
 def stop(json_: bool = _JSON) -> None:
     """Stop this home's observer daemon."""
+    home = auditor_home()
     if not observer_enabled():
-        present(DaemonStatus.of(*_off()), render_observer, as_json=json_)
+        present(DaemonStatus.of(*_off(), home=home), render_observer, as_json=json_)
         return
     record = _running()
     reported: DaemonRecord | None = None
@@ -133,18 +135,21 @@ def stop(json_: bool = _JSON) -> None:
         action = "stopped" if reported is None else "still stopping"
     else:
         action = "already gone"
-    present(DaemonStatus.of(action, reported), render_observer, as_json=json_)
+    present(
+        DaemonStatus.of(action, reported, home=home), render_observer, as_json=json_
+    )
 
 
 @observer_app.command("status")
 def status(json_: bool = _JSON) -> None:
     """Report where this home's daemon is, if it is anywhere."""
+    home = auditor_home()
     if not observer_enabled():
-        present(DaemonStatus.of(*_off()), render_observer, as_json=json_)
+        present(DaemonStatus.of(*_off(), home=home), render_observer, as_json=json_)
         return
     record = _running()
     present(
-        DaemonStatus.of("running" if record else "not running", record),
+        DaemonStatus.of("running" if record else "not running", record, home=home),
         render_observer,
         as_json=json_,
     )
@@ -153,14 +158,15 @@ def status(json_: bool = _JSON) -> None:
 @observer_app.command("open")
 def open_page(json_: bool = _JSON) -> None:
     """Open the live page of this home's daemon in a browser."""
+    home = auditor_home()
     if not observer_enabled():
-        present(DaemonStatus.of(*_off()), render_observer, as_json=json_)
+        present(DaemonStatus.of(*_off(), home=home), render_observer, as_json=json_)
         return
     record = _running()
     if record is not None:
         open_url(f"http://127.0.0.1:{record.port}/")
     present(
-        DaemonStatus.of("opened" if record else "not running", record),
+        DaemonStatus.of("opened" if record else "not running", record, home=home),
         render_observer,
         as_json=json_,
     )
@@ -169,8 +175,9 @@ def open_page(json_: bool = _JSON) -> None:
 @observer_app.command("ensure")
 def ensure(json_: bool = _JSON) -> None:
     """Make sure a compatible daemon is running, starting or restarting one if it is not."""
+    home = auditor_home()
     if not observer_enabled():
-        present(DaemonStatus.of(*_off()), render_observer, as_json=json_)
+        present(DaemonStatus.of(*_off(), home=home), render_observer, as_json=json_)
         return
     record, health = _live()
     if health is None:
@@ -179,4 +186,4 @@ def ensure(json_: bool = _JSON) -> None:
         action, record = _restarted(record)  # type: ignore[arg-type]
     else:
         action = "already running"
-    present(DaemonStatus.of(action, record), render_observer, as_json=json_)
+    present(DaemonStatus.of(action, record, home=home), render_observer, as_json=json_)

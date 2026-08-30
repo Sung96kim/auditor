@@ -74,6 +74,16 @@ def test_a_session_expires_on_read_with_nothing_ticking():
     assert book.live(now=45 * 60 + 1) == ()
 
 
+def test_one_session_is_looked_up_by_id_without_building_a_map_of_them_all():
+    """`sessions_attach` built a dict of every live session to read one id out of it (L-8)."""
+    book = SessionBook(expiry_minutes=45)
+    book.attach(_session())
+    book.attach(_session(session_id="s2", started_at=1.0))
+    assert book.get("s1", now=100.0) == book.attach(_session())
+    assert book.get("nobody", now=100.0) is None
+    assert book.get("s1", now=45 * 60 + 1) is None  # expiry is decided here too
+
+
 def test_a_heartbeat_moves_last_seen_and_an_unknown_one_is_refused():
     book = SessionBook(expiry_minutes=45)
     book.attach(_session())

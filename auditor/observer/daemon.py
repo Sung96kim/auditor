@@ -88,16 +88,6 @@ class DaemonLock:
         self._fd = fd
         return True
 
-    def held_elsewhere(self) -> bool:
-        """Whether some other process is the daemon for this home right now."""
-        if self._fd is not None:
-            return False
-        probe = DaemonLock(self.path)
-        if not probe.acquire():
-            return True
-        probe.release()
-        return False
-
     def release(self) -> None:
         if self._fd is not None:
             os.close(self._fd)

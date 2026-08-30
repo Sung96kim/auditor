@@ -1,6 +1,7 @@
 """Every JSON shape the daemon puts on the wire, and the route each one answers (spec 12.1)."""
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,12 +21,10 @@ from auditor.graph.refine.models import (
     TuningRow,
 )
 from auditor.observer.budget import BudgetState
-from auditor.paths import auditor_home
 from auditor.payload import WirePayload
 
-if (
-    TYPE_CHECKING
-):  # `daemon.py` reaches this module through `routes.py`, so the import is one way
+# `daemon.py` reaches this module through `routes.py`, so the import is one way
+if TYPE_CHECKING:
     from auditor.observer.daemon import DaemonRecord
 
 
@@ -268,10 +267,12 @@ class DaemonStatus(WirePayload):
     page_url: str = ""
 
     @classmethod
-    def of(cls, action: str, record: "DaemonRecord | None") -> "DaemonStatus":
-        """What just changed, and where the daemon is. None for a home with nothing running."""
+    def of(
+        cls, action: str, record: "DaemonRecord | None", *, home: Path
+    ) -> "DaemonStatus":
+        """What just changed, and where the daemon is. ``home`` answers when nothing is running."""
         if record is None:
-            return cls(action=action, home=str(auditor_home()))
+            return cls(action=action, home=str(home))
         return cls(
             running=True,
             action=action,

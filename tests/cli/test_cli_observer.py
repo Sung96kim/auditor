@@ -11,8 +11,9 @@ import auditr_observer
 from auditor.cli import observer as cli_observer
 from auditor.cli.lazy import LazyObserverGroup, lazy_observer_app
 from auditor.cli.render import render_observer
-from auditor.observer.daemon import DaemonRecord
+from auditor.observer.daemon import DaemonLock, DaemonRecord
 from auditor.observer.payloads import DaemonStatus
+from auditor.paths import observer_lock_path
 
 #: the observer mount's own pin. `_SUBCOMMANDS` is the graph sub-app's list and must not grow.
 _OBSERVER_SUBCOMMANDS = ("start", "stop", "status", "open", "ensure")
@@ -63,6 +64,36 @@ def test_every_verb_answers_a_daemon_status_with_no_daemon_running(
     assert payload.running is False
     assert payload.home == str(tmp_path)
     assert payload.action == action
+
+
+def test_the_status_payload_is_handed_its_home_rather_than_reading_the_process_env(
+    tmp_path, monkeypatch
+):
+    """A wire model that called `auditor_home()` answered for whatever home the process had."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path / "process"))
+    asked = tmp_path / "asked"
+    assert DaemonStatus.of("not running", None, home=asked).home == str(asked)
+
+
+@pytest.mark.parametrize("name", ["status", "stop", "open"])
+def test_a_probe_never_takes_the_lock_from_a_daemon_that_is_still_starting(
+    name, tmp_path, monkeypatch
+):
+    """Liveness was "can I acquire the flock", which took it from a daemon mid-start (E5).
+
+    Two arms, because either would let the old probe back in: with no daemon the verb must
+    create no lock at all, and with one held the verb must leave the holder holding it.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    assert invoke("observer", name, "--json").exit_code == 0
+    assert not observer_lock_path().exists()
+    holder = DaemonLock(observer_lock_path())
+    assert holder.acquire() is True
+    try:
+        assert invoke("observer", name, "--json").exit_code == 0
+        assert DaemonLock(observer_lock_path()).acquire() is False
+    finally:
+        holder.release()
 
 
 def test_the_mount_adopts_the_sub_app_only_when_a_verb_is_dispatched():

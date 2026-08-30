@@ -18,6 +18,7 @@ from auditor.user_settings import (
     TuningConfig,
     UserSettings,
     VectorsConfig,
+    load_home_settings,
     load_user_settings,
     user_key_report,
 )
@@ -93,6 +94,23 @@ def test_every_observer_field_lives_in_exactly_one_group():
     ]
     assert len(nested) == len(set(nested))  # no field name repeats across two groups
     assert set(nested).isdisjoint(loose)
+
+
+def test_the_home_settings_read_the_global_file_and_no_repo_overlay(
+    project, monkeypatch
+):
+    """The daemon serves many repos, so no one repo's overlay may answer for its lifecycle.
+
+    The cwd is that repo, because the working directory is the only overlay a no-argument loader
+    could reach for and the daemon inherits whichever one launched it.
+    """
+    _write_global({"observer": {"limits": {"max_turns": 7}}})
+    _write_repo(project, {"observer": {"limits": {"max_turns": 9}}})
+    monkeypatch.chdir(project)
+    assert load_user_settings(project).observer.limits.max_turns == 9
+    assert load_home_settings().observer.limits.max_turns == 7
+    monkeypatch.setenv("AUDITOR_USER_OBSERVER__LIMITS__MAX_TURNS", "11")
+    assert load_home_settings().observer.limits.max_turns == 11  # env still wins
 
 
 def test_per_field_env_reaches_a_nested_group(project, monkeypatch):

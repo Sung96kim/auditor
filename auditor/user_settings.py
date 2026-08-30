@@ -289,45 +289,48 @@ def _read_layer(path: Path) -> dict[str, object]:
     }
 
 
-def user_json_layers(
-    root: Path | None = None, *, directory: Path | None = None
-) -> dict[str, object]:
+def home_json_layers() -> dict[str, object]:
+    """The global settings file alone, before env: what a process serving many repos reads."""
+    return _read_layer(user_config_path())
+
+
+def user_json_layers(root: Path, *, directory: Path | None = None) -> dict[str, object]:
     """The global settings file deep-merged with this repo's overlay (repo wins), before env.
 
-    ``root`` is None for a process serving many repos at once, which has no one overlay to apply.
     Pass ``directory`` when the caller already resolved the repo's state dir: deriving it costs a
     ``git rev-parse``.
     """
-    layers = _read_layer(user_config_path())
-    if root is None and directory is None:
-        return layers
-    overlay = (repo_dir(root) if directory is None else directory) / "config.json"  # type: ignore[arg-type]
-    return deep_merge(layers, _read_layer(overlay))
+    overlay = (directory if directory is not None else repo_dir(root)) / "config.json"
+    return deep_merge(home_json_layers(), _read_layer(overlay))
 
 
-def load_user_settings(
-    root: Path | None, *, directory: Path | None = None
-) -> UserSettings:
-    """Resolve the user's settings for one repo: defaults, then the global file, then the
-    per-repo file, then ``AUDITOR_USER_*`` (later wins). The layering is hand-built because the
-    settings-source pipeline puts env below init values, and env has to win here.
+def _resolved(layers: dict[str, object]) -> UserSettings:
+    """``AUDITOR_USER_*`` over the JSON layers, which is the one thing both entry points share.
+
+    Hand-built because the settings-source pipeline puts env below init values, and env has to
+    win here.
+    """
+    return UserSettings.model_validate(
+        deep_merge(layers, EnvSettingsSource(UserSettings)())
+    )
+
+
+def load_user_settings(root: Path, *, directory: Path | None = None) -> UserSettings:
+    """The user's settings for one repo: defaults, the global file, the repo file, then env.
 
     Pass ``directory`` when the caller already resolved the repo's state dir, as
     :func:`user_json_layers` describes: deriving it costs a ``git rev-parse``.
     """
-    merged = deep_merge(
-        user_json_layers(root, directory=directory), EnvSettingsSource(UserSettings)()
-    )
-    return UserSettings.model_validate(merged)
+    return _resolved(user_json_layers(root, directory=directory))
 
 
 def load_home_settings() -> UserSettings:
     """The user's settings with no repo overlay: the global file, then ``AUDITOR_USER_*``.
 
     What a process serving many repos at once reads for its own lifecycle, where there is no one
-    repo to overlay; a per-repo answer still goes through :func:`load_user_settings`.
+    repo to overlay; a per-repo answer goes through :func:`load_user_settings`.
     """
-    return load_user_settings(None)
+    return _resolved(home_json_layers())
 
 
 class UserKeyReport(BaseModel):

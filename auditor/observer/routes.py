@@ -579,8 +579,7 @@ class Router:
         if reason:
             return Reply.json(AttachOutcome(attached=False, reason=reason))
         now = time.time()
-        held = {s.session_id: s for s in self.deps.sessions.live(now=now)}
-        earlier = held.get(request.session_id)
+        earlier = self.deps.sessions.get(request.session_id, now=now)
         self.deps.sessions.attach(
             Session(
                 session_id=request.session_id,

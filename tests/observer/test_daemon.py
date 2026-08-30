@@ -73,7 +73,6 @@ def test_a_second_daemon_cannot_take_the_lock(tmp_path):
     first, second = DaemonLock(tmp_path / "lock"), DaemonLock(tmp_path / "lock")
     assert first.acquire() is True
     assert second.acquire() is False
-    assert second.held_elsewhere() is True
     first.release()
     assert second.acquire() is True
     second.release()

@@ -113,6 +113,12 @@ class SessionBook:
         with self._lock:
             return self._sessions.pop(session_id, None) is not None
 
+    def get(self, session_id: str, *, now: float) -> Session | None:
+        """One unexpired session by id, so a caller after one need not build a map of them all."""
+        with self._lock:
+            held = self._sessions.get(session_id)
+        return None if held is None or self.expired(held, now=now) else held
+
     def live(self, *, now: float) -> tuple[Session, ...]:
         """Every unexpired session, oldest first. Expiry is decided here, not by a timer."""
         with self._lock:
