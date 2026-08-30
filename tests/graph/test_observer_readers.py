@@ -92,6 +92,24 @@ def test_the_runs_tag_moves_when_a_run_lands(refine_repo: Path):
         readers.close()
 
 
+def test_a_build_that_lost_the_race_is_disposed_of_rather_than_leaked():
+    """Two threads opening one repo would otherwise orphan an `IndexStore` and its worker thread."""
+    readers = Readers(settings=UserSettings())
+    root = Path("/a")
+    dropped: list[str] = []
+
+    def make() -> str:
+        readers._identities[root] = (
+            "winner"  # another thread landed while this one built
+        )
+        return "loser"
+
+    assert readers._cached(readers._identities, root, make, dropped.append) == "winner"
+    assert dropped == ["loser"]
+    assert readers._cached(readers._identities, root, make, dropped.append) == "winner"
+    assert dropped == ["loser"]  # the second call never built, so it dropped nothing
+
+
 def test_a_settings_overlay_that_will_not_load_is_retried_rather_than_cached(
     refine_repo: Path, monkeypatch
 ):

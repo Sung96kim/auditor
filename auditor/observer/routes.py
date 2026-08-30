@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -60,6 +61,12 @@ Read = Callable[[Path], WirePayload]
 _LOG = logging.getLogger("auditor.observer")
 #: what a repo-scoped route answers when the query named no repo, or named a path that is not one
 _NO_REPO = "a repo=<absolute path> naming a directory is required"
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+
+def _no_drop(made: object) -> None:
+    """What `Readers._cached` does with a build that lost the race and owns nothing to release."""
 
 
 def _no_meters() -> tuple[BudgetPayload | None, RateLimitPayload]:
@@ -111,6 +118,29 @@ class Readers:
         self._users: dict[Path, UserSettings] = {}
         self._lock = threading.Lock()
 
+    def _cached(
+        self,
+        store: dict[_K, _V],
+        key: _K,
+        make: Callable[[], _V],
+        drop: Callable[[_V], None] = _no_drop,
+    ) -> _V:
+        """The one cache idiom: read under the lock, build outside it, keep the first to land.
+
+        Building outside the lock keeps one slow open from serialising every other reader; ``drop``
+        disposes of a build that lost the race, which only the index handle has to close.
+        """
+        with self._lock:
+            known = store.get(key)
+        if known is not None:
+            return known
+        made = make()
+        with self._lock:
+            kept = store.setdefault(key, made)
+        if kept is not made:
+            drop(made)
+        return kept
+
     def identity(self, root: Path, *, identity: str | None = None) -> str:
         """This repo's checkout identity, resolved once and kept (P15, M-10).
 
@@ -119,23 +149,16 @@ class Readers:
         """
         if identity is not None:
             return identity
-        with self._lock:
-            known = self._identities.get(root)
-        if known is None:
-            known = repo_identity(root)
-            with self._lock:
-                self._identities[root] = known
-        return known
+        return self._cached(self._identities, root, lambda: repo_identity(root))
 
     def index(self, root: Path, *, identity: str | None = None) -> IndexStore:
         """This repo's handle, opened once and kept. Bound to the identity, never the repo key."""
-        identity = self.identity(root, identity=identity)
-        with self._lock:
-            handle = self._handles.get(identity)
-            if handle is None:
-                handle = asyncio.run(open_repo_index(root))
-                self._handles[identity] = handle
-            return handle
+        return self._cached(
+            self._handles,
+            self.identity(root, identity=identity),
+            lambda: asyncio.run(open_repo_index(root)),
+            lambda handle: asyncio.run(handle.aclose()),
+        )
 
     def config(self, root: Path) -> AuditorSettings:
         """This repo's own `AuditorSettings`, loaded once and kept (S8c seam 4).
@@ -143,13 +166,7 @@ class Readers:
         Named `config` rather than `settings` because :attr:`settings` is the user's own layer,
         which P31 put on this object first. No S8b caller: S8c's `RepoLoop` is the one.
         """
-        with self._lock:
-            known = self._configs.get(root)
-        if known is None:
-            known = load_config(root)
-            with self._lock:
-                self._configs[root] = known
-        return known
+        return self._cached(self._configs, root, lambda: load_config(root))
 
     def user(self, root: Path) -> UserSettings:
         """This repo's own `UserSettings`, loaded once and kept.
@@ -157,23 +174,14 @@ class Readers:
         The daemon serves many repos and :attr:`settings` is its home-level layer, so a per-repo
         answer resolves the overlay here; a repo that will not load falls back to it uncached.
         """
-        with self._lock:
-            known = self._users.get(root)
-        if known is not None:
-            return known
         try:
-            loaded = load_user_settings(root)
-        except (
-            OSError,
-            ValidationError,
-        ):  # uncached, so a torn write is retried, not permanent
+            return self._cached(self._users, root, lambda: load_user_settings(root))
+        # not cached, so one torn write is retried on the next poll rather than kept forever
+        except (OSError, ValidationError):
             _LOG.exception(
                 "could not read %s's user settings; using the daemon's", root
             )
             return self.settings
-        with self._lock:
-            self._users[root] = loaded
-        return loaded
 
     def close(self) -> None:
         """Release every handle on shutdown, so the worker threads end with the process."""

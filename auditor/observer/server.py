@@ -84,42 +84,34 @@ class _Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         self._answer("DELETE")
 
-    def _refused(self) -> Reply | None:
-        """Why this request is answered without being dispatched at all, or None to go on.
+    def _gate(self) -> tuple[int, Reply | None]:
+        """How many body bytes to read, and the refusal this request earns instead, or None.
 
         Loopback binding stops other hosts, never other origins: a `text/plain` POST is a CORS
         simple request, so a page the user visits could otherwise reach the side-effecting routes.
         """
         if "Origin" in self.headers:
-            return Reply.error(403, "cross-origin requests are refused", close=True)
+            return 0, Reply.error(403, "cross-origin requests are refused", close=True)
         if not loopback_host(self.headers.get("Host")):
-            return Reply.error(403, "only a loopback Host is answered", close=True)
+            return 0, Reply.error(403, "only a loopback Host is answered", close=True)
         if "Transfer-Encoding" in self.headers:
             # the chunks would stay in the socket to be parsed as the next request line
-            return Reply.error(411, "a Content-Length is required", close=True)
-        return None
-
-    def _length(self) -> int | Reply:
-        """How many body bytes were declared, or the refusal an unusable declaration earns."""
+            return 0, Reply.error(411, "a Content-Length is required", close=True)
         try:
             declared = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            return Reply.error(400, "unreadable Content-Length", close=True)
+            return 0, Reply.error(400, "unreadable Content-Length", close=True)
         if declared < 0:
-            return Reply.error(400, "negative Content-Length", close=True)
+            return 0, Reply.error(400, "negative Content-Length", close=True)
         if declared > MAX_BODY_BYTES:
             # reading a prefix would leave the rest to be parsed as the next request line
-            return Reply.error(413, f"body over {MAX_BODY_BYTES} bytes", close=True)
-        return declared
+            return 0, Reply.error(413, f"body over {MAX_BODY_BYTES} bytes", close=True)
+        return declared, None
 
     def _answer(self, method: str) -> None:
-        refused = self._refused()
+        declared, refused = self._gate()
         if refused is not None:
             self._write(refused)
-            return
-        declared = self._length()
-        if isinstance(declared, Reply):
-            self._write(declared)
             return
         try:
             body = self.rfile.read(declared) if declared else b""

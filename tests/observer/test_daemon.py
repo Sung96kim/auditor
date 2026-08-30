@@ -20,6 +20,7 @@ from auditor.observer.daemon import (
     DaemonRecord,
     IdleTimer,
     daemon_argv,
+    daemon_started_at,
     detach,
     read_daemon_record,
     serve,
@@ -404,6 +405,27 @@ def test_the_client_and_the_settings_name_the_same_lifecycle_timeouts():
     scheduling = SchedulingConfig()
     assert scheduling.start_timeout_seconds == auditr_observer._START_TIMEOUT
     assert scheduling.stop_timeout_seconds == auditr_observer._STOP_TIMEOUT
+
+
+def test_the_started_at_probe_reads_the_live_clock_and_not_a_default(
+    daemon_server, daemon_router, tmp_path
+):
+    """`_restarted` waits on this number, so a constant would end the wait before the exec ran."""
+    server, _ = daemon_server
+    record = DaemonRecord(
+        pid=os.getpid(),
+        port=server.port,
+        home=str(tmp_path),
+        version="0.10.5",
+        compat=1,
+    )
+    assert daemon_started_at(record) == daemon_router.started_at
+    daemon_router.started_at += 1.0
+    assert daemon_started_at(record) == daemon_router.started_at
+    with socket.socket() as free:
+        free.bind(("127.0.0.1", 0))
+        gone = free.getsockname()[1]
+    assert daemon_started_at(record.model_copy(update={"port": gone})) == 0.0
 
 
 def _replace_when_restarting(router, port: int, home: Path) -> None:
