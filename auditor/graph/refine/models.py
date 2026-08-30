@@ -276,15 +276,13 @@ class Assessment(BaseModel):
     new_pairs: tuple[NodePair, ...] = ()
     resolved_pairs: tuple[NodePair, ...] = ()
     stale_refinements: tuple[int, ...] = ()
-    #: always `()` on an observer assessment: nothing records a flow query yet, so the loop hands
-    #: `assess(flow_nodes=)` an empty set and only an eval fixture fills this (S8c follow-up 3)
+    #: always `()` on an observer assessment
     affected_flow: tuple[str, ...] = ()
     targets: tuple[NodePair, ...] = ()
     deferred: tuple[NodePair, ...] = ()
     verdict: Decision
 
     #: an S8a row stored `deferred_pairs` as a count and named nothing, so the count is kept here
-    #: rather than as placeholder pairs: `deferred` only ever holds pairs that name something (L8)
     _legacy_deferred: int = PrivateAttr(default=0)
 
     @model_validator(mode="wrap")

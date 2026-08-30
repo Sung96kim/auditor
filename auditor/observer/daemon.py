@@ -70,7 +70,7 @@ from auditor.user_settings import (
 _LOG = logging.getLogger("auditor.observer")
 #: Transport fact, not `SchedulingConfig` setting: daemon is answering or gone, no caller waits
 _ASK_TIMEOUT = 2.0
-#: how long a cancelled loop task gets to unwind before the host thread stops
+#: unwind budget, not a policy someone retunes: too short to matter and too load-bearing to expose
 _CANCEL_GRACE = 0.25
 _P = TypeVar("_P", bound=WirePayload)
 _T = TypeVar("_T")
@@ -381,8 +381,7 @@ class Daemon:
         self.meters: dict[str, Metered] = {}
         #: repos whose loop would not build, and when each may be tried again
         self.unbuildable: dict[str, Backoff] = {}
-        #: drivers that ended, handed over for `reconcile` to unclaim: a `deque` because the host
-        #: thread appends to it and only the daemon's own thread may write `loops` (L4)
+        #: drivers that ended, handed over for `reconcile` to unclaim: a `deque`
         self.ended: deque[tuple[str, RepoLoop]] = deque()
         #: what the daemon drained from the spools, delivered to a loop or not
         self.drained = 0
