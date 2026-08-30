@@ -1,0 +1,537 @@
+"""Spec 8.3's RepoLoop: what the observer does with one repo, in priority order.
+
+The loop owns every side effect the assessment refuses to have (spec 8.6): it reads the cached
+facts, extracts, persists, rebuilds with the two snapshots, gates, then opens or declines a run.
+Its events arrive through an injected feed, so a spool drain and a test harness are one seam.
+"""
+
+import asyncio
+import logging
+import time
+from collections.abc import Callable, Sequence
+from pathlib import Path
+
+from auditor.config import AuditorSettings
+from auditor.database import IndexStore
+from auditor.discovery import FileDiscovery, git_status_paths
+from auditor.fingerprints import content_hash
+from auditor.graph.build import GraphBuilder
+from auditor.graph.extract import extract_file_facts
+from auditor.graph.hashes import file_hashes
+from auditor.graph.model import FileGraphFacts, UnresolvedRow
+from auditor.graph.refine.lock import RebuildLockTimeout
+from auditor.graph.refine.models import (
+    ACTIVE_STATUSES,
+    Assessment,
+    AssessmentDecision,
+    BatchKind,
+    ClientKind,
+    Decision,
+    NodePair,
+    ProducerKind,
+    Proposer,
+    RefinementKind,
+    RefinementStatus,
+    RunnerKind,
+    RunStatus,
+    SnapshotPhase,
+    TriggerDetail,
+    TriggerKind,
+)
+from auditor.graph.refine.runner import RefinementJob, RefinementRunner
+from auditor.graph.refine.service import RefinementRefused, RefinementService
+from auditor.graph.refine.tiers import TierPolicy
+from auditor.graph.scan import autoscan
+from auditor.observer.assess import (
+    CachedFile,
+    EditedFile,
+    GraphSnapshot,
+    NodeDigest,
+    PathOutcome,
+    QueuePair,
+    RefinementState,
+    Stage1,
+    assess,
+    assess_unchanged,
+    decide,
+    stage_one,
+)
+from auditor.observer.budget import BudgetState, budget_state, window_start
+from auditor.observer.events import Event
+from auditor.observer.scheduling import (
+    MINUTE,
+    EventFeed,
+    LoopState,
+    Pauses,
+    Retries,
+    RunGuard,
+    RunSlots,
+    debounced,
+    pause_of,
+    read_guard,
+)
+from auditor.roles import RoleClassifier
+from auditor.user_settings import UserSettings
+
+logger = logging.getLogger(__name__)
+
+#: how many events a paused loop holds before the oldest are dropped (H-5)
+HELD_EVENT_CAP = 500
+#: how many deferred pairs the loop carries between passes (M-4)
+DEFERRED_CAP = 200
+
+
+class RepoLoop:
+    """One attached repo's work, in spec 8.3's priority order.
+
+    Every collaborator is injected: the feed so the daemon's drain and a test harness are one
+    seam, the runner factory so `FakeRunner` drives the whole path at $0, and the clock so the
+    day window and the rate-limit deadline are decided without sleeping.
+    """
+
+    def __init__(
+        self,
+        *,
+        root: Path,
+        index: IndexStore,
+        settings: AuditorSettings,
+        user: UserSettings,
+        feed: EventFeed,
+        runner_for: Callable[[RefinementService], RefinementRunner],
+        service: RefinementService | None = None,
+        slots: RunSlots | None = None,
+        now: Callable[[], float] = time.time,
+        on_change: Callable[[], object] = lambda: None,
+        status: Callable[[Path], tuple[str, ...] | None] = git_status_paths,
+    ) -> None:
+        self.root = root
+        self.index = index
+        self.settings = settings
+        self.feed = feed
+        self.service = service or RefinementService(index, root, settings, user)
+        self.runner_for = runner_for
+        self.slots = slots or RunSlots()
+        self.now = now
+        self.on_change = on_change
+        self.status = status
+        self.pauses = Pauses()
+        self.retries = Retries()
+        self.flow_nodes: frozenset[str] = frozenset()
+        self.deferred: tuple[NodePair, ...] = ()
+        self.state = LoopState.DETACHED
+        self._held: tuple[Event, ...] = ()
+        self._kind: RunnerKind | None = None
+        self._roles = RoleClassifier(settings.role_globs)
+
+    @property
+    def user(self) -> UserSettings:
+        """The one settings object: the service holds it, so the two can never disagree (M-6)."""
+        return self.service.user
+
+    # --- state ---------------------------------------------------------------
+
+    def _moved(self, state: LoopState) -> LoopState:
+        """Record a state change and tell the daemon, whose `/api/status` ETag is that counter."""
+        if state is not self.state:
+            self.state = state
+            self.on_change()
+        return state
+
+    @property
+    def runner_kind(self) -> RunnerKind:
+        """Which runner this loop opens runs with, resolved once: a factory re-reads credentials."""
+        if self._kind is None:
+            self._kind = self.runner_for(self.service).kind
+        return self._kind
+
+    async def budget(self) -> BudgetState:
+        """This repo's day, and whether this runner and model have ever been measured here."""
+        spend = await self.index.runs.spend_since(window_start(self.now()))
+        runner = self.user.observer.runner
+        policy = TierPolicy.of(
+            await self.index.evals.latest(self.runner_kind, runner.model),
+            min_precision=self.user.observer.tuning.min_precision,
+            runner=self.runner_kind,
+            model=runner.model,
+        )
+        return budget_state(
+            spend,
+            config=self.user.observer.budget,
+            evaluated=bool(policy.measured),
+        )
+
+    async def _guard(self) -> RunGuard:
+        """Spec 8.5's pre-run read, taken as late as possible so HEAD is what the run will use."""
+        return await read_guard(self.root, status=self.status)
+
+    # --- work item 1: the session-start build --------------------------------
+
+    async def attach(self) -> LoopState:
+        """Spec 8.3 item 1: an incremental scan with extraction forced on, then a rebuild.
+
+        The scan is forced independently of ``graph.enabled`` (D2), and the rebuild is the one
+        that marks refinements stale and redundant; the loop only has to let it run.
+        """
+        self._moved(LoopState.BUILDING)
+        self.pauses.cleared()
+        await autoscan(self.root)
+        reason = "session-start build"
+        try:
+            await GraphBuilder().rebuild(
+                self.index,
+                self.settings,
+                timeout=self.settings.graph.rebuild_lock_timeout_seconds,
+            )
+        except RebuildLockTimeout as timeout:
+            logger.warning("session-start build skipped: %s", timeout.advice)
+            reason = "session-start build skipped: the rebuild lock was held"
+        guard = await self._guard()
+        # spec 5.3's `session_start` trigger: the one row that says the observer attached here
+        await self.service.decline(
+            Assessment(verdict=_reason(reason)),
+            checkout=guard.checkout,
+            dirty=guard.dirty,
+            client=ClientKind.CLAUDE_CODE,
+            trigger=TriggerKind.SESSION_START,
+        )
+        return self._moved(LoopState.OBSERVING)
+
+    def detach(self) -> LoopState:
+        return self._moved(LoopState.DETACHED)
+
+    # --- the ladder ----------------------------------------------------------
+
+    async def tick(self, *, poll: float = 1.0) -> LoopState:
+        """One pass of spec 8.3's ladder: the highest item with work to do wins.
+
+        The feed is drained before the pause is read, so a repo that cannot spend still empties
+        its spool; a batch drained while paused is held and assessed when the pause lifts.
+        """
+        batch = (
+            *self._held,
+            *await debounced(
+                self.feed,
+                seconds=float(self.user.observer.scheduling.debounce_seconds),
+                timeout=poll,
+            ),
+        )
+        budget = await self.budget()
+        pause = self.pauses.state(budget=budget, now=self.now())
+        if pause is not None:
+            self._held = batch[-HELD_EVENT_CAP:]
+            return self._moved(pause)
+        self._held = ()
+        self._moved(LoopState.OBSERVING)
+        if batch:
+            await self.edit_batch(batch, budget=budget)
+            return self.state
+        if self.user.observer.suspects and await self.suspects(budget=budget):
+            return self.state
+        await self.tuning()
+        return self.state
+
+    # --- work item 2: edit batches -------------------------------------------
+
+    def _paths(self, events: Sequence[Event]) -> tuple[str, ...]:
+        """The batch's auditable paths, first appearance first (stage 0 already ran on them)."""
+        finder = FileDiscovery(self.root)
+        seen: dict[str, None] = {}
+        for event in events:
+            for path in event.paths:
+                if finder.auditable_shape(path):
+                    seen.setdefault(path, None)
+        return tuple(seen)
+
+    async def _read(self, path: str) -> EditedFile:
+        """One edited path as stage 1 needs it: the cache read *before* anything is written."""
+        graph = self.index.graph
+        blob, cached_hash, hashes = await asyncio.gather(
+            graph.facts(path), graph.facts_hash(path), graph.hashes(path)
+        )
+        cached = None
+        if blob is not None:
+            nodes = FileGraphFacts.model_validate_json(blob).nodes
+            cached = CachedFile(
+                content_hash=cached_hash,
+                hashes=hashes,
+                node_hashes=tuple(NodeDigest.of(node) for node in nodes),
+            )
+        source = await asyncio.to_thread(_read_text, self.root / path)
+        if source is None:
+            return EditedFile(path=path, cached=cached)
+        extracted = await asyncio.to_thread(
+            extract_file_facts, path, source, self._roles.classify(path, source).value
+        )
+        return EditedFile(
+            path=path,
+            cached=cached,
+            content_hash=content_hash(source),
+            extracted=extracted,
+        )
+
+    async def _persist(self, stage1: Stage1, edited: dict[str, EditedFile]) -> None:
+        """Write what stage 1 chose to keep, as one commit, so the rebuild reads this edit whole."""
+        gone = [
+            v.path
+            for v in stage1.verdicts
+            if v.persist and v.outcome is PathOutcome.REMOVED
+        ]
+        written = [
+            (
+                verdict.path,
+                edited[verdict.path].extracted.model_dump_json(),
+                edited[verdict.path].content_hash or "",
+                file_hashes(edited[verdict.path].extracted.nodes),
+            )
+            for verdict in stage1.verdicts
+            if verdict.persist and verdict.outcome is not PathOutcome.REMOVED
+        ]
+        await self.index.graph.replace_facts(removed=gone, written=written)
+
+    async def snapshot(self) -> GraphSnapshot:
+        """The queue and the refinement statuses at one side of the rebuild's persist (spec 6)."""
+        # `external=True` is the store's default and the assessment's own filter drops the rest
+        rows, refinements = await asyncio.gather(
+            self.index.graph.unresolved(),
+            self.index.refinements.refinements(),
+        )
+        return GraphSnapshot(
+            pairs=tuple(QueuePair.of(UnresolvedRow.model_validate(r)) for r in rows),
+            refinements=tuple(RefinementState.of(r) for r in refinements),
+        )
+
+    async def edit_batch(
+        self, events: Sequence[Event], *, budget: BudgetState | None = None
+    ) -> Assessment | None:
+        """Spec 8.6 end to end: stage 1, the persist, the rebuild, stage 2, then run or decline."""
+        paths = self._paths(events)
+        if not paths:
+            return None
+        edited = {path: await self._read(path) for path in paths}
+        stage1 = stage_one(tuple(edited.values()))
+        if not stage1.needs_rebuild:
+            return await self._declined(assess_unchanged(stage1))
+        await self._persist(stage1, edited)
+        sides: dict[SnapshotPhase, GraphSnapshot] = {}
+
+        async def capture(phase: SnapshotPhase) -> None:
+            sides[phase] = await self.snapshot()
+
+        try:
+            await GraphBuilder().rebuild(
+                self.index,
+                self.settings,
+                snapshot=capture,
+                timeout=self.settings.graph.rebuild_lock_timeout_seconds,
+            )
+        except RebuildLockTimeout:
+            return await self._declined(_no_rebuild(stage1))
+        if not {SnapshotPhase.BEFORE, SnapshotPhase.AFTER} <= set(sides):
+            return await self._declined(_no_rebuild(stage1))
+        spend = budget if budget is not None else await self.budget()
+        assessment = assess(
+            stage1,
+            before=sides[SnapshotPhase.BEFORE],
+            after=sides[SnapshotPhase.AFTER],
+            scheduling=self.user.observer.scheduling,
+            budget=spend,
+            max_nodes_per_run=self.user.observer.limits.max_nodes_per_run,
+            flow_nodes=self.flow_nodes,
+        )
+        self._defer(assessment.deferred)
+        if not assessment.decided_to_run:
+            return await self._declined(assessment)
+        targets = self.retries.keep(assessment.targets)
+        if not targets:
+            return await self._declined(
+                assessment.model_copy(
+                    update={
+                        "verdict": _reason("every target had spent its one retry"),
+                        "targets": (),
+                    }
+                )
+            )
+        await self._run(
+            targets=targets,
+            trigger=TriggerKind.EDIT,
+            files=stage1.files,
+            assessment=assessment,
+        )
+        return assessment
+
+    def _defer(self, pairs: Sequence[NodePair]) -> None:
+        """Item 2's leftovers, newest last and capped: intent, not a fact about the repo (P18)."""
+        held = dict.fromkeys((*self.deferred, *pairs))
+        self.deferred = tuple(held)[-DEFERRED_CAP:]
+
+    async def _declined(self, assessment: Assessment) -> Assessment:
+        """Invariant 2: a batch that reached stage 1 is a run row, whatever the gate said."""
+        guard = await self._guard()
+        await self.service.decline(
+            assessment,
+            checkout=guard.checkout,
+            dirty=guard.dirty,
+            client=ClientKind.CLAUDE_CODE,
+        )
+        return assessment
+
+    # --- work item 3: suspect runs -------------------------------------------
+
+    async def cooldown(self) -> frozenset[NodePair]:
+        """The pairs a recent run already looked at (spec 8.3 item 3; recon Q8)."""
+        minutes = self.user.observer.scheduling.cooldown_minutes
+        if minutes <= 0:
+            return frozenset()
+        return await self.index.runs.targeted_since(self.now() - minutes * MINUTE)
+
+    async def suppressed(self) -> frozenset[NodePair]:
+        """Pairs an in-force `unresolvable` or a `redundant` refinement answers (spec 8.3, 5.7).
+
+        Two filtered reads rather than the whole ledger: a reverted `unresolvable` is not a marker
+        in force, and a suspect pass must not decode every refinement ever written.
+        """
+        ledger = self.index.refinements
+        settled, redundant = await asyncio.gather(
+            ledger.refinements(
+                kinds=[RefinementKind.UNRESOLVABLE], statuses=sorted(ACTIVE_STATUSES)
+            ),
+            ledger.refinements(statuses=[RefinementStatus.REDUNDANT]),
+        )
+        out: set[NodePair] = set()
+        for row in (*settled, *redundant):
+            node_id = row.target.node_id or row.target.src
+            if node_id and row.target.name:
+                out.add(NodePair(node_id=node_id, name=row.target.name))
+        return frozenset(out)
+
+    async def suspects(self, *, budget: BudgetState | None = None) -> bool:
+        """Spec 8.3 item 3: drain `graph_unresolved` in the store's own priority order.
+
+        Item 2's deferred pairs are drained here, ahead of the queue's own order, because the
+        assessment that deferred them already judged them worth a run.
+        """
+        queue = await self._queue_pairs()
+        live = frozenset(queue)
+        # a rebuild replaces the queue wholesale (spec 5.6), so a deferred pair can stop existing
+        self.deferred = tuple(p for p in self.deferred if p in live)
+        skip = (await self.cooldown()) | (await self.suppressed())
+        cap = self.user.observer.limits.max_nodes_per_run
+        chosen: list[NodePair] = []
+        nodes: set[str] = set()
+        for pair in [*self.deferred, *queue]:
+            if pair in skip or pair in chosen or not self.retries.allowed(pair):
+                continue
+            if pair.node_id not in nodes and len(nodes) >= cap:
+                break
+            nodes.add(pair.node_id)
+            chosen.append(pair)
+        if not chosen:
+            return False
+        verdict, _pairs = decide(
+            new_pairs=tuple(chosen),
+            bounded_pairs=tuple(chosen),
+            stale_refinements=(),
+            scheduling=self.user.observer.scheduling,
+            budget=budget if budget is not None else await self.budget(),
+            kind=BatchKind.SUSPECT,
+        )
+        if verdict.decision is not AssessmentDecision.RUN:
+            return False
+        opened = await self._run(
+            targets=tuple(chosen), trigger=TriggerKind.SUSPECT, files=()
+        )
+        if opened:
+            self.deferred = tuple(p for p in self.deferred if p not in chosen)
+        return opened
+
+    async def _queue_pairs(self) -> tuple[NodePair, ...]:
+        """The queue in its stored drain order, which already encodes spec 8.3's priorities."""
+        # `external=False` hides the rows a brief hides, so the drain cannot pick one it cannot ask
+        rows = await self.index.graph.unresolved(external=False)
+        return tuple(NodePair(node_id=row["node_id"], name=row["name"]) for row in rows)
+
+    # --- work item 5: tuning trials ------------------------------------------
+
+    async def tuning(self) -> int:
+        """Spec 8.3 item 5's slot, which S11 fills: the ladder reaches it and finds no proposal.
+
+        Nothing tuning-shaped is written anywhere yet, so a trial harness here would be S11's
+        whole slice arriving early (recon Q6).
+        """
+        return 0
+
+    # --- opening a run -------------------------------------------------------
+
+    async def _run(
+        self,
+        *,
+        targets: Sequence[NodePair],
+        trigger: TriggerKind,
+        files: Sequence[str],
+        assessment: Assessment | None = None,
+        proposer: Proposer | None = None,
+    ) -> bool:
+        """Open one target-driven run under the concurrency gate, and read what stopped it.
+
+        The gate waits rather than refusing: a repo already running, or two runs already in flight
+        anywhere, holds this coroutine until a slot frees (spec 8.4), so a run always opens.
+        """
+        async with self.slots.slot(self.service.identity):
+            self._moved(LoopState.RUNNING)
+            guard = await self._guard()
+            runner = self.runner_for(self.service)
+            if proposer is not None:
+                runner.proposer = proposer
+            job = RefinementJob(
+                trigger=trigger,
+                producer=ProducerKind.OBSERVER,
+                client=ClientKind.CLAUDE_CODE,
+                detail=TriggerDetail(
+                    files=tuple(files), targets=tuple(targets), assessment=assessment
+                ),
+                checkout=guard.checkout,
+                dirty=guard.dirty,
+            )
+            try:
+                product = await runner.run(job)
+            except RefinementRefused as refused:
+                logger.warning("observer run refused: %s", refused)
+                self.retries.aborted(targets)
+                self._moved(LoopState.OBSERVING)
+                return True
+            stored = await self.index.runs.run(product.run.run_id)
+            if stored is not None and stored.status in _UNLANDED:
+                self.retries.aborted(targets)
+            pause = pause_of(stored.error if stored else None, now=self.now())
+            if pause is None or pause.state is not LoopState.PAUSED_AUTH:
+                # the run reached the model, so the credentials work: drop any auth hold (H-3)
+                self.pauses.authenticated()
+            self.pauses.apply(pause)
+            self._moved(LoopState.OBSERVING)
+            return True
+
+
+#: the terminal statuses that mean this run's targets were not answered (spec 8.5)
+_UNLANDED = frozenset(
+    {RunStatus.ABORTED, RunStatus.FAILED, RunStatus.REJECTED, RunStatus.SKIPPED}
+)
+
+
+def _reason(text: str) -> Decision:
+    """One skip verdict, so the three places that write one share its shape."""
+    return Decision(decision=AssessmentDecision.SKIP, reason=text)
+
+
+def _no_rebuild(stage1: Stage1) -> Assessment:
+    """The assessment for a batch whose rebuild did not run, so no snapshot pair exists."""
+    return assess_unchanged(stage1).model_copy(
+        update={"verdict": _reason("the rebuild did not run")}
+    )
+
+
+def _read_text(path: Path) -> str | None:
+    """One edited file's bytes, or ``None`` for a path the edit deleted (spec 8.6 stage 1)."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None

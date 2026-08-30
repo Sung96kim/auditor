@@ -11,6 +11,7 @@ from auditor.database.base import (
     BaseDB,
     SqliteWorker,
     UnmigratableColumn,
+    immediate,
     retry_on_locked,
 )
 
@@ -228,16 +229,4 @@ class IndexStore(BaseDB):
         """Run ``fn`` against the live connection as one commit: everything it writes lands, or
         nothing does. The transaction is IMMEDIATE, so a ``fn`` that reads before it writes holds
         the write lock from that first read. ``fn`` must not commit; any exception rolls back."""
-
-        def op(conn: sqlite3.Connection) -> _T:
-            # IMMEDIATE, not the DEFERRED begin pysqlite would take at ``fn``'s first write
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                result = fn(conn)
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
-            return result
-
-        return await self._worker.run(op)
+        return await self._worker.run(immediate(fn))

@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
@@ -21,6 +21,31 @@ from auditor.models import Partition
 
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05
+
+_T = TypeVar("_T")
+
+
+def immediate(
+    fn: Callable[[sqlite3.Connection], _T],
+) -> Callable[[sqlite3.Connection], _T]:
+    """Wrap one worker op so everything it writes lands as a single IMMEDIATE commit.
+
+    IMMEDIATE rather than the DEFERRED begin pysqlite would take at the first write, so an ``fn``
+    that reads before it writes holds the write lock from that first read. ``fn`` must not commit.
+    """
+
+    @functools.wraps(fn)
+    def op(conn: sqlite3.Connection) -> _T:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            result = fn(conn)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        return result
+
+    return op
 
 
 class Column(BaseModel):

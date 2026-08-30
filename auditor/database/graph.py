@@ -10,7 +10,7 @@ import sqlite3
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB, Column, Index, Table
+from auditor.database.base import BaseDB, Column, Index, Table, immediate
 from auditor.graph.hashes import FileHashes
 from auditor.graph.model import (
     TEST_ROLES,
@@ -20,6 +20,33 @@ from auditor.graph.model import (
     NodeKind,
     UnresolvedRow,
 )
+
+_SET_FACTS_SQL = (
+    "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
+    "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
+    "facts_json=excluded.facts_json, content_hash=excluded.content_hash, "
+    "truth_sha=COALESCE(excluded.truth_sha, graph_facts.truth_sha), "
+    "facts_sha=COALESCE(excluded.facts_sha, graph_facts.facts_sha)"
+)
+_FORGET_FACTS_SQL = "DELETE FROM graph_facts WHERE repo = ? AND path = ?"
+
+
+def _facts_bind(
+    repo: str,
+    path: str,
+    facts_json: str,
+    content_hash: str,
+    hashes: FileHashes | None,
+) -> tuple[Any, ...]:
+    """One row's binds for ``_SET_FACTS_SQL``, so the single and the batched writer share them."""
+    return (
+        repo,
+        path,
+        facts_json,
+        content_hash,
+        hashes.truth if hashes else None,
+        hashes.facts if hashes else None,
+    )
 
 
 def _decode_unresolved(row: sqlite3.Row) -> dict[str, Any]:
@@ -149,27 +176,39 @@ class GraphDB(BaseDB):
         """Cache one file's facts. ``hashes`` is the spec 5.5 pair, which the assessment compares
         against a re-extraction; a caller without parsed facts leaves it out, which keeps whatever
         pair is already stored rather than erasing it."""
+        binds = _facts_bind(self.repo, path, facts_json, content_hash, hashes)
 
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
-            conn.execute(
-                "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
-                "facts_json=excluded.facts_json, content_hash=excluded.content_hash, "
-                "truth_sha=COALESCE(excluded.truth_sha, graph_facts.truth_sha), "
-                "facts_sha=COALESCE(excluded.facts_sha, graph_facts.facts_sha)",
-                (
-                    self.repo,
-                    path,
-                    facts_json,
-                    content_hash,
-                    hashes.truth if hashes else None,
-                    hashes.facts if hashes else None,
-                ),
-            )
+            conn.execute(_SET_FACTS_SQL, binds)
             conn.commit()
 
         await self._worker.run(op)
+
+    async def replace_facts(
+        self,
+        *,
+        removed: Sequence[str],
+        written: Sequence[tuple[str, str, str, FileHashes | None]],
+    ) -> None:
+        """Forget the paths one edit batch removed and cache the rest, as a single commit.
+
+        One transaction because stage 1's short circuit compares against what this wrote: a crash
+        between the delete and the writes leaves the next rebuild reading two different edits.
+        """
+        if not removed and not written:
+            return
+        drops = [(self.repo, path) for path in removed]
+        rows = [_facts_bind(self.repo, *one) for one in written]
+
+        def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
+            if drops:
+                conn.executemany(_FORGET_FACTS_SQL, drops)
+            if rows:
+                conn.executemany(_SET_FACTS_SQL, rows)
+
+        await self._worker.run(immediate(op))
 
     async def clear_facts(self) -> None:
         """Drop all cached per-file facts for this repo, forcing re-extraction on the next scan
@@ -194,9 +233,7 @@ class GraphDB(BaseDB):
         binds = [(self.repo, p) for p in paths]
 
         def op(conn: sqlite3.Connection) -> None:
-            conn.executemany(
-                "DELETE FROM graph_facts WHERE repo = ? AND path = ?", binds
-            )
+            conn.executemany(_FORGET_FACTS_SQL, binds)
             conn.commit()
 
         await self._worker.run(op)
