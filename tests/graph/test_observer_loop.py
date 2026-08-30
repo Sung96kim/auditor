@@ -321,3 +321,107 @@ async def test_the_drain_skips_a_pair_a_refinement_already_answers(
     assert NodePair(node_id="impl.py::Impl.run", name="load_user") in (
         await loop.suppressed()
     )
+
+
+_PENDING_EDGE = {
+    "src": "impl.py::Impl.run",
+    "dst": "svc.py::load_user",
+    "edge_kind": "calls",
+    "name": "load_user",
+}
+
+
+async def _pending(service: RefinementService, dst: str = "svc.py::load_user") -> int:
+    """One `pending` tier C add_edge, which is what a verify run exists to settle (spec 10.3)."""
+    run_id = await service.index.runs.add_run(
+        Run(repo_identity=service.identity, started_at=1.0)
+    )
+    return await service.index.refinements.add_refinement(
+        Refinement(
+            run_id=run_id,
+            repo_identity=service.identity,
+            kind=RefinementKind.ADD_EDGE,
+            reason="the call resolves there",
+            target=RefinementTarget(**{**_PENDING_EDGE, "dst": dst}),
+            status=RefinementStatus.PENDING,
+        )
+    )
+
+
+async def test_a_verify_run_that_agrees_promotes_the_pending_refinement(
+    refine_service: RefinementService,
+):
+    """Spec 10.3: agreement activates, and the second opinion stores nothing of its own."""
+    rid = await _pending(refine_service)
+    loop = _loop(
+        refine_service,
+        script=({"kind": "add_edge", "reason": "same call", "target": _PENDING_EDGE},),
+    )
+    assert await loop.verify() is True
+    stored = await refine_service.index.refinements.refinement(rid)
+    assert stored.status is RefinementStatus.ACTIVE
+    assert await refine_service.index.refinements.count() == 1
+    assert TriggerKind.VERIFY in {r.trigger_kind for r in await _rows(refine_service)}
+
+
+async def test_a_verify_run_that_names_another_destination_rejects_it(
+    refine_service: RefinementService,
+):
+    """ "Disagreement stamps `rejected`" (spec 10.3), which is a status move, not a new row."""
+    rid = await _pending(refine_service)
+    loop = _loop(
+        refine_service,
+        script=(
+            {
+                "kind": "add_edge",
+                "reason": "somewhere else",
+                "target": {**_PENDING_EDGE, "dst": "base.py::Base.run"},
+            },
+        ),
+    )
+    assert await loop.verify() is True
+    stored = await refine_service.index.refinements.refinement(rid)
+    assert stored.status is RefinementStatus.REJECTED
+
+
+async def test_a_verify_run_that_says_nothing_leaves_the_row_pending(
+    refine_service: RefinementService,
+):
+    """Silence is not disagreement: a run that proposed nothing has judged nothing."""
+    rid = await _pending(refine_service)
+    assert await _loop(refine_service).verify() is True
+    stored = await refine_service.index.refinements.refinement(rid)
+    assert stored.status is RefinementStatus.PENDING
+
+
+async def test_a_verify_run_leaves_a_row_a_human_moved_where_the_human_put_it(
+    refine_service: RefinementService,
+):
+    """The one guarded door out of `pending`, so agreement cannot re-activate a reverted row."""
+    rid = await _pending(refine_service)
+    await refine_service.ledger.revert(rid)
+    loop = _loop(
+        refine_service,
+        script=({"kind": "add_edge", "reason": "same call", "target": _PENDING_EDGE},),
+    )
+    assert await loop.verify() is False
+    await loop._judge_pending(
+        [await refine_service.index.refinements.refinement(rid)],
+        [("impl.py::Impl.run", "load_user", "svc.py::load_user")],
+    )
+    stored = await refine_service.index.refinements.refinement(rid)
+    assert stored.status is RefinementStatus.REVERTED
+
+
+async def test_verify_finds_nothing_to_do_on_a_repo_with_no_pending_rows(
+    refine_service: RefinementService,
+):
+    """Recon 4.4: a fresh home holds zero refinements, so item 4 has to fall through."""
+    assert await _loop(refine_service).verify() is False
+
+
+async def test_the_tuning_slot_is_reached_and_does_nothing(
+    refine_service: RefinementService,
+):
+    """C39: spec 8.3 item 5 is S11's; the ladder knows the slot exists and finds no proposal."""
+    assert await _loop(refine_service).tuning() == 0

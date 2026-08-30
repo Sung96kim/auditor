@@ -8,8 +8,9 @@ Its events arrive through an injected feed, so a spool drain and a test harness 
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
@@ -29,7 +30,10 @@ from auditor.graph.refine.models import (
     Decision,
     NodePair,
     ProducerKind,
+    Proposal,
+    ProposalOutcome,
     Proposer,
+    Refinement,
     RefinementKind,
     RefinementStatus,
     RunnerKind,
@@ -37,6 +41,7 @@ from auditor.graph.refine.models import (
     SnapshotPhase,
     TriggerDetail,
     TriggerKind,
+    Verdict,
 )
 from auditor.graph.refine.runner import RefinementJob, RefinementRunner
 from auditor.graph.refine.service import RefinementRefused, RefinementService
@@ -226,6 +231,8 @@ class RepoLoop:
             await self.edit_batch(batch, budget=budget)
             return self.state
         if self.user.observer.suspects and await self.suspects(budget=budget):
+            return self.state
+        if await self.verify(budget=budget):
             return self.state
         await self.tuning()
         return self.state
@@ -449,6 +456,77 @@ class RepoLoop:
         # `external=False` hides the rows a brief hides, so the drain cannot pick one it cannot ask
         rows = await self.index.graph.unresolved(external=False)
         return tuple(NodePair(node_id=row["node_id"], name=row["name"]) for row in rows)
+
+    # --- work item 4: verify runs --------------------------------------------
+
+    async def verify(self, *, budget: BudgetState | None = None) -> bool:
+        """Spec 10.3's second opinion for `pending` refinements, shown no first pick.
+
+        The verify run's proposals are judged and never stored: the injected proposer is the seam
+        an eval already uses, so a second opinion cannot insert a second copy of the correction.
+        """
+        pending = await self.index.refinements.refinements(
+            statuses=[RefinementStatus.PENDING],
+            limit=self.user.observer.limits.max_nodes_per_run,
+        )
+        if not pending:
+            return False
+        verdict, _pairs = decide(
+            new_pairs=(),
+            bounded_pairs=(),
+            stale_refinements=tuple(r.refinement_id for r in pending),
+            scheduling=self.user.observer.scheduling,
+            budget=budget if budget is not None else await self.budget(),
+            kind=BatchKind.VERIFY,
+        )
+        if verdict.decision is not AssessmentDecision.RUN:
+            return False
+        seen: list[tuple[str, str, str]] = []
+
+        async def judging(run_id: str, proposal: Mapping[str, Any]) -> Verdict:
+            read = Proposal.model_validate(proposal)
+            edge = read.edge()
+            if edge is not None:
+                seen.append((edge.src, read.target.name or "", edge.dst))
+            return Verdict(outcome=ProposalOutcome.STAGED, kind=read.kind)
+
+        targets = tuple(
+            NodePair(
+                node_id=row.target.node_id or row.target.src or "",
+                name=row.target.name or "",
+            )
+            for row in pending
+            if (row.target.node_id or row.target.src) and row.target.name
+        )
+        opened = await self._run(
+            targets=targets,
+            trigger=TriggerKind.VERIFY,
+            files=(),
+            proposer=judging,
+        )
+        if opened:
+            await self._judge_pending(pending, seen)
+        return opened
+
+    async def _judge_pending(
+        self, pending: Sequence[Refinement], seen: Sequence[tuple[str, str, str]]
+    ) -> None:
+        """Agreement promotes to `active`, a contradiction rejects, silence leaves it pending."""
+        agreed: list[int] = []
+        rejected: list[int] = []
+        for row in pending:
+            edge = row.target
+            src, name = edge.src or edge.node_id or "", edge.name or ""
+            answers = [dst for s, n, dst in seen if s == src and n == name]
+            if not answers:
+                continue
+            if edge.dst in answers:
+                agreed.append(row.refinement_id)
+            else:
+                rejected.append(row.refinement_id)
+        # through the guarded transition, so a row a human moved meanwhile keeps its status (M-2)
+        await self.service.ledger.accept_all(agreed)
+        await self.index.refinements.set_statuses(rejected, RefinementStatus.REJECTED)
 
     # --- work item 5: tuning trials ------------------------------------------
 
