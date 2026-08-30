@@ -19,7 +19,8 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from auditor import __version__
-from auditor.config import is_configured, load_config
+from auditor.config import AuditorSettings, is_configured, load_config
+from auditor.database import IndexStore
 from auditor.graph.refine.drive import build_runner, select_runner
 from auditor.graph.refine.lock import flock_nb
 from auditor.graph.refine.models import RunnerKind
@@ -61,6 +62,8 @@ from auditor.user_settings import UserSettings, load_home_settings, load_user_se
 _LOG = logging.getLogger("auditor.observer")
 #: Transport fact, not `SchedulingConfig` setting: daemon is answering or gone, no caller waits
 _ASK_TIMEOUT = 2.0
+#: how long a cancelled loop task gets to unwind before the host thread stops
+_CANCEL_GRACE = 0.25
 _P = TypeVar("_P", bound=WirePayload)
 _T = TypeVar("_T")
 
@@ -291,14 +294,26 @@ class LoopHost:
         asyncio.run_coroutine_threadsafe(coro, loop)
 
     def stop(self) -> None:
-        """Stop the loop and join the thread. Stopping a host that never started is a no-op."""
+        """Cancel what is running, stop the loop and join the thread.
+
+        The cancel is what turns a tick killed mid-await into an ordinary `CancelledError` the
+        driver unwinds through; stopping a host that never started is a no-op.
+        """
         loop, thread = self.loop, self._thread
         if loop is not None:
-            loop.call_soon_threadsafe(loop.stop)
+            loop.call_soon_threadsafe(self._cancel_all, loop)
         if thread is not None:
             thread.join(timeout=5.0)
         self._thread = None
         self._ready.clear()
+
+    @staticmethod
+    def _cancel_all(loop: asyncio.AbstractEventLoop) -> None:
+        """Cancel every task, then stop once they have all had a turn to unwind."""
+        pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+        for task in pending:
+            task.cancel()
+        loop.call_later(_CANCEL_GRACE, loop.stop)
 
 
 class Daemon:
@@ -381,27 +396,35 @@ class Daemon:
             self.ensure_loop(root)
 
     def ensure_loop(self, root: Path) -> str:
-        """Build this repo's loop on the host thread if it has none, and answer its spool key."""
+        """Build this repo's loop if it has none, and answer its spool key.
+
+        The two handles are resolved here, on the drain thread: `Readers.index` opens its store
+        through `asyncio.run`, which raises on a thread that is already running a loop.
+        """
         key = repo_dir_key(root)
         if key in self.loops:
             return key
+        readers = self.readers
+        if readers is None:
+            return key
         try:
-            self.loops[key] = self.host.run(self._build(root))
+            settings = readers.config(root)
+            index = readers.index(root)
+            self.loops[key] = self.host.run(self._build(root, index, settings))
         except Exception:
             _LOG.exception("could not start a loop for %s", root)
             return key
         self.host.spawn(self._drive(self.loops[key]))
         return key
 
-    async def _build(self, root: Path) -> RepoLoop:
-        """One `RepoLoop` over this repo's cached handles, on the thread that owns its store."""
-        readers = self.readers
-        assert readers is not None  # `reconcile` is the only caller and guards this
-        settings = readers.config(root)
-        service = RefinementService(readers.index(root), root, settings, self.settings)
+    async def _build(
+        self, root: Path, index: IndexStore, settings: AuditorSettings
+    ) -> RepoLoop:
+        """One `RepoLoop`, constructed on the host thread that will own every await it makes."""
+        service = RefinementService(index, root, settings, self.settings)
         return RepoLoop(
             root=root,
-            index=service.index,
+            index=index,
             settings=settings,
             user=self.settings,
             feed=QueueFeed(),
@@ -418,12 +441,16 @@ class Daemon:
 
     async def _drive(self, loop: RepoLoop) -> None:
         """Spec 8.3's ladder for one repo: attach once, then tick until the daemon stops."""
-        await loop.attach()
-        await self._publish(loop)
-        while not self.stopping:
-            await loop.tick(poll=self.settings.observer.scheduling.tick_seconds)
+        try:
+            await loop.attach()
             await self._publish(loop)
-        loop.detach()
+            while not self.stopping:
+                await loop.tick(poll=self.settings.observer.scheduling.tick_seconds)
+                await self._publish(loop)
+        except asyncio.CancelledError:
+            _LOG.info("loop for %s cancelled at shutdown", loop.root)
+        finally:
+            loop.detach()
 
     async def _publish(self, loop: RepoLoop) -> None:
         """Push this loop's two meters onto the daemon, which is what `/api/status` reads (H-9)."""

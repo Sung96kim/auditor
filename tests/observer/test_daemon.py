@@ -1,5 +1,6 @@
 """Spec 8.1's process: the singleton, `daemon.json`, the idle window and the install spec."""
 
+import asyncio
 import http.client
 import json
 import os
@@ -15,6 +16,8 @@ import pytest
 
 import auditr_observer
 from auditor.cli import observer as cli_observer
+from auditor.config import AuditorSettings
+from auditor.database import open_repo_index
 from auditor.observer.daemon import (
     Daemon,
     DaemonLock,
@@ -584,3 +587,42 @@ def test_stopping_a_host_that_never_started_is_a_no_op(queue):
     host = LoopHost()
     host.stop()
     assert host.loop is None
+
+
+class _RunningReaders:
+    """A `Readers` stand-in whose `index` opens its handle the way the real one does.
+
+    `Readers.index` calls `asyncio.run`, which raises on a thread that already runs a loop, so a
+    daemon that resolved the index on its host thread could never build a loop at all.
+    """
+
+    def __init__(self, store) -> None:
+        self.store = store
+        self.threads: list[str] = []
+
+    def index(self, root: Path, *, identity: str | None = None):
+        self.threads.append(threading.current_thread().name)
+        return asyncio.run(self._open())
+
+    async def _open(self):
+        return self.store
+
+    def config(self, root: Path) -> AuditorSettings:
+        return AuditorSettings()
+
+
+def test_a_loop_is_built_with_the_index_resolved_off_the_host_thread(queue, tmp_path):
+    """The reader uses `asyncio.run`, so resolving it on the host thread cannot work (dogfood)."""
+    store = asyncio.run(open_repo_index(tmp_path))
+    readers = _RunningReaders(store)
+    daemon = _daemon(queue)
+    daemon.readers = readers
+    daemon.host.start()
+    try:
+        key = daemon.ensure_loop(tmp_path)
+    finally:
+        daemon.stopping = True
+        daemon.host.stop()
+        asyncio.run(store.aclose())
+    assert key in daemon.loops
+    assert readers.threads == [threading.current_thread().name]
