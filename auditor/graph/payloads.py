@@ -346,6 +346,7 @@ class AssessmentPayload(WirePayload):
     new_pairs: int = 0
     resolved_pairs: int = 0
     stale_refinements: int = 0
+    #: always 0 on an observer assessment: nothing records a flow query yet (S8c follow-up 3)
     affected_flow: int = 0
     deferred_pairs: int = 0
 

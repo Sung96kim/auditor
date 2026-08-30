@@ -395,7 +395,9 @@ auditr graph log --skipped
   trigger named and the node pairs the run was asked about, each capped at 10; `file_count` and
   `target_count`, the full sizes behind those caps; and `assessment` when there is one. The
   assessment travels as counts, never as node ids, so a fifty row page cannot carry thousands of
-  them.
+  them. One of those counts, `affected_flow`, is `0` on every run the observer opens: nothing
+  records a flow query yet, so the loop hands the assessment an empty set and only an eval
+  fixture fills it.
 
 ## Refinement overlay
 

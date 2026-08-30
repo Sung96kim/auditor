@@ -13,8 +13,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     ValidationError,
     ValidationInfo,
+    ValidatorFunctionWrapHandler,
     computed_field,
     model_validator,
 )
@@ -274,34 +276,40 @@ class Assessment(BaseModel):
     new_pairs: tuple[NodePair, ...] = ()
     resolved_pairs: tuple[NodePair, ...] = ()
     stale_refinements: tuple[int, ...] = ()
+    #: always `()` on an observer assessment: nothing records a flow query yet, so the loop hands
+    #: `assess(flow_nodes=)` an empty set and only an eval fixture fills this (S8c follow-up 3)
     affected_flow: tuple[str, ...] = ()
     targets: tuple[NodePair, ...] = ()
     deferred: tuple[NodePair, ...] = ()
     verdict: Decision
 
-    @model_validator(mode="before")
-    @classmethod
-    def _lift_legacy_count(cls, data: Any) -> Any:
-        """Read an S8a row, which stored `deferred_pairs` as a count and named no pairs.
+    #: an S8a row stored `deferred_pairs` as a count and named nothing, so the count is kept here
+    #: rather than as placeholder pairs: `deferred` only ever holds pairs that name something (L8)
+    _legacy_deferred: int = PrivateAttr(default=0)
 
-        The count is what the log and the page show, so it is kept as that many placeholder
-        pairs rather than decoding to zero and reporting a batch that deferred nothing.
+    @model_validator(mode="wrap")
+    @classmethod
+    def _lift_legacy_count(
+        cls, data: Any, handler: ValidatorFunctionWrapHandler
+    ) -> "Assessment":
+        """Read an S8a row, whose `deferred_pairs` was a count with no pairs behind it.
+
+        The count is what the log and the page show, so it survives as a private number rather
+        than decoding to zero and reporting a batch that deferred nothing.
         """
-        if not isinstance(data, dict) or not isinstance(
-            data.get("deferred_pairs"), int
-        ):
-            return data
-        data = dict(data)
-        count = data.pop("deferred_pairs")
-        data.setdefault(
-            "deferred", tuple(NodePair(node_id="", name="") for _ in range(count))
-        )
-        return data
+        count = 0
+        if isinstance(data, dict) and isinstance(data.get("deferred_pairs"), int):
+            data = dict(data)
+            count = data.pop("deferred_pairs")
+        assessed = handler(data)
+        if count:
+            assessed._legacy_deferred = count
+        return assessed
 
     @property
     def deferred_pairs(self) -> int:
         """How many pairs the cap left behind, which is what the log and the page show."""
-        return len(self.deferred)
+        return self._legacy_deferred or len(self.deferred)
 
     @property
     def decided_to_run(self) -> bool:

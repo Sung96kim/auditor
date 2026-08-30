@@ -628,8 +628,7 @@ def choose_targets(
     """
     rows = _rows_by_pair(after.pairs)
     newest = _stale_anchor_times(after, stale_refinements)
-    # a dict, not a set: the sort is stable, so its input order has to be the caller's and not
-    # a hash order that changes between processes
+    # a dict, not a set: a stable sort takes its input order, which must not be a hash order
     wanted = dict.fromkeys(pair for pair in pairs if pair in rows)
     wanted.update(
         dict.fromkeys(pair for pair, row in rows.items() if row.node_id in newest)

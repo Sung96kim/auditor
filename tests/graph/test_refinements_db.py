@@ -1024,6 +1024,9 @@ def test_an_older_assessment_row_keeps_the_count_it_stored_as_an_integer():
     }
     assessment = Assessment.model_validate(stored)
     assert assessment.deferred_pairs == 5
+    assert (
+        assessment.deferred == ()
+    )  # and the count is not five pairs that name nothing (L8)
     assert dict(stored)["deferred_pairs"] == 5  # the caller's payload was not popped
 
 
@@ -1131,3 +1134,23 @@ def test_the_cooldown_knob_defaults_to_an_hour_and_zero_opts_out():
     assert SchedulingConfig(cooldown_minutes=0).cooldown_minutes == 0
     with pytest.raises(ValueError):
         SchedulingConfig(cooldown_minutes=-1)
+
+
+@pytest.mark.parametrize(
+    ("factor", "swept"), [(1.0, 2), (2.0, 1)], ids=["one-window", "two-windows"]
+)
+async def test_the_running_window_is_the_factor_its_caller_hands_over(
+    graph_store: IndexStore, factor, swept
+):
+    """L11's sixth constant is a setting now, so the store takes the multiplier as a number."""
+    now = time.time()
+    queued = await _add(graph_store, started_at=now - 7200)
+    running = await _add(graph_store, started_at=now - 7200)
+    await graph_store.runs.set_running(running)
+    assert (
+        await graph_store.runs.finish_stranded_runs(
+            older_than=3600.0, running_factor=factor, now=now
+        )
+        == swept
+    )
+    assert (await graph_store.runs.run(queued)).status is RunStatus.SKIPPED

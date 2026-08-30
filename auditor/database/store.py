@@ -191,8 +191,7 @@ class IndexStore(BaseDB):
         that is no longer in ``keep_paths`` — i.e. deleted or newly excluded. Scoped to this repo
         and ``prefix`` so a subdirectory scan never evicts files outside it. Returns pruned paths."""
 
-        # IMMEDIATE before the read: in autocommit the file list is one snapshot and the deletes
-        # are another, so a scan that rewrites a file in between loses that row.
+        # IMMEDIATE before the read: two snapshots would lose a file rewritten between them
         def op(conn: sqlite3.Connection) -> list[str]:
             indexed = [
                 r["path"]
