@@ -29,6 +29,7 @@ from auditor.paths import (
     daemon_json_path,
     index_db_path,
     is_main_worktree,
+    is_repo_dir_key,
     observer_lock_path,
     observer_log_dir,
     observer_port,
@@ -243,7 +244,13 @@ class Daemon:
         repos = auditor_home() / "repos"
         if not repos.is_dir():
             return 0
-        return self.adopt(sorted(e.name for e in repos.iterdir() if e.is_dir()))
+        return self.adopt(
+            sorted(
+                e.name
+                for e in repos.iterdir()
+                if e.is_dir() and is_repo_dir_key(e.name)
+            )
+        )
 
     def tick(self) -> None:
         """Drain every pending key into `consume`, sweep expired sessions, decide about stopping."""

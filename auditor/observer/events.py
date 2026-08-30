@@ -10,7 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from auditor.graph.refine.models import ClientKind
-from auditor.paths import spool_path
+from auditor.paths import REPO_KEY_PATTERN, spool_path
 
 #: one Stop event carries a whole dirty tree; past this the body is a mistake, not a batch
 MAX_EVENT_PATHS = 10_000
@@ -40,13 +40,14 @@ class EventRequest(BaseModel):
     """``POST /events``' body: what the hook posts, before Stage 0 narrows it to an `Event`.
 
     ``key`` is the caller's own ``repo_dir_key``, which the hook computed anyway; deriving it here
-    would be one ``git rev-parse`` per edit event.
+    would be one ``git rev-parse`` per edit event. It is constrained to that hash's own shape,
+    because it names the directory the spool is written to.
     """
 
     model_config = ConfigDict(frozen=True)
 
     repo: str
-    key: str
+    key: str = Field(pattern=REPO_KEY_PATTERN)
     paths: tuple[str, ...] = Field(default=(), max_length=MAX_EVENT_PATHS)
     kind: EventKind = EventKind.EDIT
     client: ClientKind = ClientKind.CLAUDE_CODE

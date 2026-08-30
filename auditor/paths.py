@@ -11,6 +11,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import time
 import zlib
 from pathlib import Path, PurePosixPath
@@ -143,6 +144,16 @@ def identity_key(identity: str) -> str:
     return hashlib.sha1(identity.encode(), usedforsecurity=False).hexdigest()
 
 
+#: the shape of every ``repos/<key>`` name, and of the ``key`` a hook posts to ``POST /events``
+REPO_KEY_PATTERN = r"^[0-9a-f]{40}$"
+_REPO_KEY = re.compile(REPO_KEY_PATTERN)
+
+
+def is_repo_dir_key(key: str) -> bool:
+    """Whether ``key`` is a :func:`repo_dir_key`, which is the only name ``repos/`` ever holds."""
+    return _REPO_KEY.fullmatch(key) is not None
+
+
 def repo_dir_key(root: Path) -> str:
     """Directory name for this repo's user state: sha1 of :func:`repo_identity`. Keyed on the
     identity rather than the path so a symlink or a second worktree lands in the same place."""
@@ -152,8 +163,11 @@ def repo_dir_key(root: Path) -> str:
 def repo_dir_from_key(key: str) -> Path:
     """Where one already-hashed ``repo_dir_key`` keeps its per-user state.
 
-    The one owner of the ``repos/<key>`` layout; every other spelling of it goes through here.
+    The one owner of the ``repos/<key>`` layout; every other spelling of it goes through here,
+    so a key that is not one raises rather than resolving to a directory outside the home.
     """
+    if not is_repo_dir_key(key):
+        raise ValueError(f"{key!r} is not a repo dir key")
     return auditor_home() / "repos" / key
 
 

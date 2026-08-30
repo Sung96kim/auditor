@@ -15,6 +15,9 @@ from auditor.observer.payloads import ROUTES, StatusPayload
 from auditor.observer.routes import HANDLERS, TAGS
 from auditor.observer.server import MAX_BODY_BYTES, _Handler, loopback_host
 
+#: one legal `repo_dir_key`: `EventRequest.key` names a directory, so its shape is constrained
+_KEY = "a" * 40
+
 #: what S8b actually fills on `/api/status`; everything else stays at its default until S8c
 _FILLED = {
     "home",
@@ -132,7 +135,7 @@ def test_events_answers_202_while_a_rebuild_holds_the_identity_lock(
         status, _, body = call.request(
             "POST",
             "/events",
-            {"repo": str(tmp_path / "src"), "key": "k", "paths": ["a.py"]},
+            {"repo": str(tmp_path / "src"), "key": _KEY, "paths": ["a.py"]},
         )
         elapsed = time.monotonic() - started
         assert not release.is_set()  # the rebuild is still holding the lock
@@ -155,7 +158,7 @@ def test_events_mirrors_stage_0_and_still_admits_a_deleted_path(
         "/events",
         {
             "repo": str(tmp_path / "src"),
-            "key": "k",
+            "key": _KEY,
             "paths": ["gone.py", "notes.md", "node_modules/x/a.py"],
         },
     )
@@ -257,7 +260,7 @@ def test_a_path_set_over_the_cap_is_a_400(daemon_server, tmp_path):
         "/events",
         {
             "repo": str(tmp_path),
-            "key": "k",
+            "key": _KEY,
             "paths": [f"f{i}.py" for i in range(MAX_EVENT_PATHS + 1)],
         },
     )
@@ -467,3 +470,17 @@ def test_an_unknown_method_is_a_json_404_not_stdlib_html(daemon_server, method):
     assert "404" in answer.splitlines()[0]
     assert "application/json" in answer
     assert ("no route for" in answer) is (method != "HEAD")
+
+
+def test_a_spool_key_cannot_escape_the_home(daemon_server, tmp_path):
+    """`key` reached `spool_path` verbatim, so a traversal wrote a spool wherever it named."""
+    _, call = daemon_server
+    (tmp_path / "src").mkdir()
+    status, _, body = call.request(
+        "POST",
+        "/events",
+        {"repo": str(tmp_path / "src"), "key": "../PWNED", "paths": ["a.py"]},
+    )
+    assert status == 400
+    assert "unusable event body" in body["error"]
+    assert not (tmp_path / "PWNED").exists()

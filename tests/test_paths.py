@@ -17,6 +17,7 @@ from auditor.paths import (
     identity_key,
     index_db_path,
     is_main_worktree,
+    is_repo_dir_key,
     models_dir,
     observer_dir,
     observer_enabled,
@@ -230,10 +231,26 @@ def test_the_daemon_files_sit_beside_the_rebuild_lock_and_never_replace_it(
     assert observer_lock_path() == tmp_path / "observer" / "lock"
     assert daemon_json_path() == tmp_path / "observer" / "daemon.json"
     assert observer_log_dir() == tmp_path / "observer" / "log"
-    assert spool_path("abc") == repo_dir_from_key("abc") / "spool.jsonl"
+    key = identity_key("/i/.git")
+    assert spool_path(key) == repo_dir_from_key(key) / "spool.jsonl"
     assert repo_dir_for_identity("/i/.git") == repo_dir_from_key(
         identity_key("/i/.git")
     )
+
+
+@pytest.mark.parametrize(
+    "key", ["", "abc", "../../etc", "A" * 40, "a" * 39, "a" * 41, "a" * 40 + "\n"]
+)
+def test_a_key_that_is_not_a_repo_dir_key_never_resolves_to_a_path(
+    key, monkeypatch, tmp_path
+):
+    """The owner of the `repos/<key>` layout is where a hostile key has to stop (E1)."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    assert is_repo_dir_key(key) is False
+    with pytest.raises(ValueError):
+        repo_dir_from_key(key)
+    with pytest.raises(ValueError):
+        spool_path(key)
 
 
 def test_a_spool_key_resolves_back_to_the_repo_it_belongs_to(tmp_path, monkeypatch):
