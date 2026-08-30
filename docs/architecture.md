@@ -25,10 +25,11 @@ Paths are relative to the repo root.
   batch against the graph and `budget.py` turns a window's spend into day-ceiling state; both are
   pure. The process is `daemon.py` (the singleton flock, `daemon.json`, the idle timer, the restart
   exec), `server.py` (stdlib `ThreadingHTTPServer` on loopback, transport only), `routes.py` (one
-  method and path to one `Reply`, routing only), `events.py`, `sessions.py` and `payloads.py`. One
-  rule holds the design together: the spool is the truth and the in-memory set is only the wakeup,
-  so `POST /events` writes `repos/<key>/spool.jsonl` before it answers 202 and a daemon killed
-  after that loses nothing. `auditr_observer.py` is the client, at the repo root outside the
+  method and path to one `Reply`, routing only), `events.py`, `sessions.py`, `scheduling.py` (spec
+  8.4's "one run per repo, two globally") and `payloads.py`. One rule holds the design together:
+  the spool is the truth and the in-memory set is only the wakeup, so `POST /events` writes
+  `repos/<key>/spool.jsonl` before it answers 202, the drain takes that file by rename and leaves
+  it staged until its consumer returns, and a daemon killed anywhere in between loses nothing. `auditr_observer.py` is the client, at the repo root outside the
   package so it never imports `auditor`; `auditr observer` is the same surface as a lazy CLI mount.
 - Everything else at `auditor/` top level is a shared seam, described next.
 - `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagent, hooks,
