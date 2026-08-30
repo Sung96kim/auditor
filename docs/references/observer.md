@@ -55,7 +55,6 @@ $AUDITOR_HOME/
 
 - `AUDITOR_OBSERVER_PORT` wins if it is set to an integer in `0..65535`; `0` asks the kernel for
   any free port, and anything else falls back to the hash rather than raising.
-
 - Otherwise the port is `7490 + crc32(resolved $AUDITOR_HOME) % 500`, so one home is always one
   port and two homes almost never collide.
 - The home is resolved first, so `~/.auditor` and `/home/you/.auditor` are one daemon rather than
@@ -126,19 +125,20 @@ thread rather than pinning one.
 - Every route with a `repo` in it answers `400` unless the query names an absolute directory. A
   relative name and no name at all both fall back to the daemon's own working directory, which is
   a repo the caller never asked about, so neither is answered.
-
 - `POST /events` takes the `key` a hook already computed, and it must be a `repo_dir_key`: 40 hex
   characters, because it names the directory the spool is written to. Up to 2,000 paths per body;
   the shape filter runs once per path on the request thread, which is about 84 ms at the cap.
 - `POST /admin/restart` takes `{compat, reason}`. A caller whose declared wire version this daemon
   already speaks is declined, so no local process can re-exec the daemon on its own say-so.
 - `GET`, `HEAD`, `POST`, `PUT` and `DELETE` all answer JSON; an unknown route or method is a JSON
-  404, never a stdlib HTML 501.
+  404, never a stdlib HTML 501. A 304 sends the tag and no `Content-Length`: the length it would
+  carry is zero, and a 304 names the cached body rather than describing its own.
 - Every JSON shape is pinned by a committed schema under `tests/observer/schemas/`.
-- The page is served at `GET /`, outside the API table. With no UI bundle built it degrades to a
-  plain status document naming the node, edge and cluster counts and how to run `pnpm build`,
-  rather than raising. The bundle shipped today makes no HTTP request of its own; the polling page
-  is a later slice.
+- The page is served at `GET /` and `HEAD /`, outside the API table. A HEAD answers the headers
+  the GET would, its length included; every other method on `/` falls through to the table's 404.
+  With no UI bundle built the page degrades to a plain status document naming the node, edge and
+  cluster counts and how to run `pnpm build`, rather than raising. The bundle shipped today makes
+  no HTTP request of its own; the polling page is a later slice.
 - `/api/status` declares more than this slice fills. `state`, `idle_seconds`, `repos`,
   `drained_events`, `evals`, `vectors` and both meters are at their defaults until the repo loop
   lands; `home`, `version`, `compat`, `started_at`, `uptime_seconds`, `queued_repos` and

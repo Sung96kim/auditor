@@ -143,7 +143,9 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             self.send_response(reply.status)
             self.send_header("Content-Type", f"{reply.content_type}; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
+            # a 304 names a cached body and carries none of its own
+            if reply.status != 304:
+                self.send_header("Content-Length", str(len(payload)))
             if reply.etag:
                 self.send_header("ETag", reply.etag)
             if reply.close:

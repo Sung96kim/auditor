@@ -387,10 +387,10 @@ class Router:
         parsed = urlparse(target)
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         self.last_request = time.time()
-        # answered before the table, because it names no payload (P13); GET alone, so that
-        # every other method falls through to the table's JSON 404 rather than the page
-        if method == "GET" and parsed.path == "/":
+        # the two read methods reach the page; it is answered before the table, naming no payload
+        if method in {"GET", "HEAD"} and parsed.path == "/":
             return Reply.html(self.deps.page(query.get("repo")))
+
         key = (method, route_pattern(parsed.path))
         handler = HANDLERS.get(key)
         if handler is None:

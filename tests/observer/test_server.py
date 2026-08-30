@@ -542,14 +542,45 @@ def test_a_chunked_body_is_refused_rather_than_desyncing_the_connection(daemon_s
     assert "a Content-Length is required" in answer
 
 
-@pytest.mark.parametrize("method", ["HEAD", "PUT", "DELETE"])
-def test_an_unknown_method_is_a_json_404_not_stdlib_html(daemon_server, method):
-    """`HEAD /` from a browser or a proxy is ordinary traffic and got a 501 HTML banner."""
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("HEAD", "/api/nope"), ("PUT", "/"), ("DELETE", "/"), ("PUT", "/api/nope")],
+)
+def test_an_unhandled_method_or_path_is_a_json_404_not_stdlib_html(
+    daemon_server, method, path
+):
+    """A stdlib handler answers 501 with an HTML banner; every miss here is JSON instead.
+
+    `PUT /` is in the list because the page is answered before the table: only the two read
+    methods reach it, and a write to `/` has to fall through to the table's own 404.
+    """
     server, _ = daemon_server
-    answer = _raw(server.port, f"{method} / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    answer = _raw(server.port, f"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
     assert "404" in answer.splitlines()[0]
     assert "application/json" in answer
     assert ("no route for" in answer) is (method != "HEAD")
+
+
+def test_head_on_the_page_answers_the_headers_a_get_would(daemon_server):
+    """A HEAD is a GET minus the body, so 404ing it hid the page from every proxy and probe."""
+    _, call = daemon_server
+    _, headers, body = call.request("GET", "/")
+    status, head_headers, head_body = call.request("HEAD", "/")
+    assert (status, head_body) == (200, "")
+    assert head_headers["Content-Type"] == headers["Content-Type"]
+    assert head_headers["Content-Length"] == str(len(body.encode()))
+
+
+def test_a_304_carries_no_content_length_of_its_own(daemon_server):
+    """`Content-Length: 0` on a 304 describes the cached body, which is not zero bytes long."""
+    server, call = daemon_server
+    tag = call.request("GET", "/api/status")[1]["ETag"]
+    answer = _raw(
+        server.port,
+        f"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nIf-None-Match: {tag}\r\n\r\n",
+    )
+    assert "304" in answer.splitlines()[0]
+    assert "content-length" not in answer.lower()
 
 
 def test_a_head_carries_no_body_so_the_connection_stays_in_step(daemon_server):
@@ -559,8 +590,12 @@ def test_a_head_carries_no_body_so_the_connection_stays_in_step(daemon_server):
     try:
         conn.request("HEAD", "/")
         head = conn.getresponse()
-        assert head.status == 404
+        assert head.status == 200
+        assert (
+            int(head.headers["Content-Length"]) > 0
+        )  # the page's length, with no page
         assert head.read() == b""
+
         conn.request("GET", "/health")
         answer = conn.getresponse()
         assert answer.status == 200

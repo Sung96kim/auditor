@@ -456,7 +456,6 @@ govern knob-tuning proposals and have no reader today. The one the tier gate rea
 | `AUDITOR_OBSERVER` | unset (on) | Set to `0`, `f`, `false`, `n`, `no` or `off` to disable the observer entirely: every verb prints a notice and exits 0. Read by `paths.observer_enabled`, which ignores a value it cannot read rather than failing the command. |
 | `AUDITOR_OBSERVER_PORT` | unset (hashed) | The loopback port the daemon binds. Unset, it is `7490 + crc32(resolved $AUDITOR_HOME) % 500`; `0` asks the kernel for any free port. There is no `observer.port` config key: this is env only ([observer.md](observer.md)). |
 
-
 ### Repo settings (`AuditorSettings`)
 
 The environment reaches one field, not the whole model.
