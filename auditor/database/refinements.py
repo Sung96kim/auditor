@@ -22,6 +22,7 @@ from auditor.graph.refine.models import (
     Anchor,
     EvalMetrics,
     EvalRow,
+    NodePair,
     ProducerKind,
     PruneOutcome,
     Refinement,
@@ -35,11 +36,15 @@ from auditor.graph.refine.models import (
     RunStatus,
     RunUsage,
     Spend,
+    TriggerDetail,
     TuningRow,
     TuningStatus,
 )
 
 logger = logging.getLogger(__name__)
+
+#: a `running` row is open for a whole model call, so it gets a longer stranded window (M-9)
+RUNNING_STRANDED_FACTOR = 2.0
 
 
 class NoSuchRun(RuntimeError):
@@ -253,6 +258,51 @@ class RunsDB(BaseDB):
         if await self._worker.run(op) == 0:
             raise NoSuchRun(f"no run {run_id} on this checkout")
 
+    async def set_running(self, run_id: str) -> None:
+        """Stamp a queued run `running`, so a row with a model burning turns says so (spec 5.3).
+
+        Silent for a run that is not queued: `terminate` and the registry's eviction both close a
+        row without asking, and a producer that lost the race must not raise over the status.
+        """
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE graph_runs SET status = ? WHERE run_id = ? AND repo_identity = ? "
+                "AND status = ?",
+                (
+                    RunStatus.RUNNING.value,
+                    run_id,
+                    self.partition.identity,
+                    RunStatus.QUEUED.value,
+                ),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+    async def targeted_since(self, since: float) -> frozenset[NodePair]:
+        """Every pair a run of this identity named since ``since``: spec 8.3's cooldown set.
+
+        Read off ``trigger_detail`` rather than a table of its own, because `graph_unresolved` is
+        replaced by every build and a column on it would be wiped with the rows.
+        """
+        rows = await self._fetch_by_identity(
+            "SELECT trigger_detail FROM graph_runs "
+            "WHERE repo_identity = ? AND started_at >= ?",
+            (since,),
+        )
+        out: set[NodePair] = set()
+        for row in rows:
+            raw = row["trigger_detail"]
+            if not raw:
+                continue
+            try:
+                detail = TriggerDetail.model_validate_json(raw)
+            except ValidationError:
+                continue
+            out.update(detail.targets)
+        return frozenset(out)
+
     async def record_prompt(
         self, run_id: str, *, prompt: str, system_prompt_sha: str
     ) -> None:
@@ -361,28 +411,37 @@ class RunsDB(BaseDB):
     async def finish_stranded_runs(
         self, *, older_than: float, now: float | None = None
     ) -> int:
-        """Finish this identity's runs still `queued` ``older_than`` seconds after they began.
+        """Finish this identity's runs still open after their own window (spec 5.3, 8.5).
 
-        A registry is process-local, so a run whose process died can be closed by nothing else and
-        would sit `queued` for ever, out of reach of every surface and of the retention sweep. The
-        window is what says how long an unfinished run is presumed alive.
+        Both open statuses, on two windows: a `queued` row is open for milliseconds, while a
+        `running` row is open for a whole model call, so it gets ``RUNNING_STRANDED_FACTOR`` times
+        as long before a live run is stamped under its own runner.
         """
         stamp = time.time() if now is None else now
-        binds = (
-            RunStatus.SKIPPED.value,
-            f"stranded: no commit within {int(older_than)} s",
-            stamp,
-            self.partition.identity,
-            RunStatus.QUEUED.value,
-            stamp - older_than,
-        )
+        running_than = older_than * RUNNING_STRANDED_FACTOR
         sql = (
             "UPDATE graph_runs SET status = ?, error = ?, finished_at = ? "
             "WHERE repo_identity = ? AND status = ? AND started_at < ?"
         )
+        windows = (
+            (RunStatus.QUEUED, older_than),
+            (RunStatus.RUNNING, running_than),
+        )
 
         def op(conn: sqlite3.Connection) -> int:
-            changed = conn.execute(sql, binds).rowcount
+            changed = 0
+            for status, window in windows:
+                changed += conn.execute(
+                    sql,
+                    (
+                        RunStatus.SKIPPED.value,
+                        f"stranded: no commit within {int(window)} s",
+                        stamp,
+                        self.partition.identity,
+                        status.value,
+                        stamp - window,
+                    ),
+                ).rowcount
             conn.commit()
             return max(changed, 0)
 

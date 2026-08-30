@@ -1,7 +1,7 @@
 {
   "$defs": {
     "Assessment": {
-      "description": "Why one edit batch did or did not earn a refinement run (spec 8.6).\n\n``files`` is attribution only: ``facts_changed_nodes`` can name nodes outside them when the\ntree moved. ``deferred_pairs`` is a count because the pairs themselves stay in the queue.",
+      "description": "Why one edit batch did or did not earn a refinement run (spec 8.6).\n\n``files`` is attribution only: ``facts_changed_nodes`` can name nodes outside them when the\ntree moved. ``targets`` is the ordered, node-capped set a run would take and ``deferred`` the\npairs the cap left behind, which stay in the queue for the suspect drain (spec 8.3).",
       "properties": {
         "added_nodes": {
           "default": [],
@@ -19,10 +19,13 @@
           "title": "Affected Flow",
           "type": "array"
         },
-        "deferred_pairs": {
-          "default": 0,
-          "title": "Deferred Pairs",
-          "type": "integer"
+        "deferred": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodePair"
+          },
+          "title": "Deferred",
+          "type": "array"
         },
         "facts_changed_nodes": {
           "default": [],
@@ -70,6 +73,14 @@
             "type": "integer"
           },
           "title": "Stale Refinements",
+          "type": "array"
+        },
+        "targets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodePair"
+          },
+          "title": "Targets",
           "type": "array"
         },
         "verdict": {
@@ -674,7 +685,9 @@
           "default": {
             "assessment": null,
             "file_count": 0,
-            "files": []
+            "files": [],
+            "target_count": 0,
+            "targets": []
           }
         },
         "trigger_kind": {
@@ -749,7 +762,7 @@
       "type": "object"
     },
     "TriggerDetailPayload": {
-      "description": "What a run's trigger carried: the paths it named, and the gate decision behind it.\n\n``files`` is capped for the same reason the counts replace the id tuples: a Stop path set can\nname hundreds of paths and a fifty row page would carry all of them.",
+      "description": "What a run's trigger carried: the paths it named, and the gate decision behind it.\n\n``files`` and ``targets`` are both capped for the same reason the counts replace the id\ntuples: a Stop path set names hundreds of paths and a suspect run names as many pairs.",
       "properties": {
         "assessment": {
           "anyOf": [
@@ -773,6 +786,19 @@
             "type": "string"
           },
           "title": "Files",
+          "type": "array"
+        },
+        "target_count": {
+          "default": 0,
+          "title": "Target Count",
+          "type": "integer"
+        },
+        "targets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodePair"
+          },
+          "title": "Targets",
           "type": "array"
         }
       },

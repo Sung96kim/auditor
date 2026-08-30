@@ -10,8 +10,6 @@ from fastmcp.exceptions import ToolError
 from loguru import logger
 
 from auditor.discovery import find_root
-from auditor.engine import audit_target
-from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.detectors import GodConceptKind
 from auditor.graph.flow import FlowDirection, FlowOptions
@@ -27,6 +25,7 @@ from auditor.graph.model import (
 from auditor.graph.payloads import NeighborsReport, QueueRowPayload
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine.lock import RebuildLockTimeout
+from auditor.graph.scan import autoscan
 from auditor.mcp.helpers import (
     MUTATING,
     READ_ONLY,
@@ -47,7 +46,7 @@ async def graph_build(path: str = ".", scan: bool = True) -> dict:
     # before the scan, which loads the config itself: a broken one is one line either way
     settings = tool_config(root)
     if scan:
-        await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
+        await autoscan(root)
     async with tool_repo_at(root) as repo:
         await repo.index.repos.register(time.time())
         try:

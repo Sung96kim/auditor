@@ -195,6 +195,25 @@
       "title": "LogView",
       "type": "string"
     },
+    "NodePair": {
+      "description": "One ``(node_id, name)`` the queue holds and a run can target (spec 5.6).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "node_id": {
+          "title": "Node Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "name"
+      ],
+      "title": "NodePair",
+      "type": "object"
+    },
     "ProducerKind": {
       "enum": [
         "observer",
@@ -654,7 +673,9 @@
           "default": {
             "assessment": null,
             "file_count": 0,
-            "files": []
+            "files": [],
+            "target_count": 0,
+            "targets": []
           }
         },
         "trigger_kind": {
@@ -705,7 +726,7 @@
       "type": "string"
     },
     "TriggerDetailPayload": {
-      "description": "What a run's trigger carried: the paths it named, and the gate decision behind it.\n\n``files`` is capped for the same reason the counts replace the id tuples: a Stop path set can\nname hundreds of paths and a fifty row page would carry all of them.",
+      "description": "What a run's trigger carried: the paths it named, and the gate decision behind it.\n\n``files`` and ``targets`` are both capped for the same reason the counts replace the id\ntuples: a Stop path set names hundreds of paths and a suspect run names as many pairs.",
       "properties": {
         "assessment": {
           "anyOf": [
@@ -729,6 +750,19 @@
             "type": "string"
           },
           "title": "Files",
+          "type": "array"
+        },
+        "target_count": {
+          "default": 0,
+          "title": "Target Count",
+          "type": "integer"
+        },
+        "targets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodePair"
+          },
+          "title": "Targets",
           "type": "array"
         }
       },

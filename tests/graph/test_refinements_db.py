@@ -3,6 +3,7 @@ writes, what the foreign keys refuse, and what another checkout's identity canno
 
 import json
 import sqlite3
+import time
 from collections.abc import Sequence
 
 import pytest
@@ -14,10 +15,12 @@ from auditor.graph.refine.models import (
     Anchor,
     Assessment,
     AssessmentDecision,
+    Checkout,
     ClientKind,
     Decision,
     EvalMetrics,
     EvalRow,
+    NodePair,
     ProducerKind,
     Refinement,
     RefinementKind,
@@ -40,6 +43,7 @@ from auditor.graph.refine.models import (
     TuningStatus,
 )
 from auditor.models import Partition
+from auditor.user_settings import SchedulingConfig
 
 IDENTITY = "/checkout/.git"
 OTHER = "/elsewhere/.git"
@@ -992,3 +996,122 @@ async def test_spend_since_sums_only_the_runs_that_called_a_model(graph_store):
 
 async def test_spend_since_on_an_empty_window_is_zero_not_none(graph_store):
     assert await graph_store.runs.spend_since(0.0) == Spend()
+
+
+def _skip(**kw) -> Assessment:
+    return Assessment(
+        verdict=Decision(decision=AssessmentDecision.SKIP, reason="no new questions"),
+        **kw,
+    )
+
+
+def test_deferred_pairs_counts_the_pairs_the_cap_left_behind():
+    """Spec 8.3 caps distinct nodes, so the count is read off the set, never off a subtraction."""
+    pair = NodePair(node_id="a.py::f", name="load")
+    assert _skip().deferred_pairs == 0
+    assert (
+        _skip(deferred=(pair, pair.model_copy(update={"name": "save"}))).deferred_pairs
+        == 2
+    )
+
+
+def test_an_older_assessment_row_with_an_integer_count_still_decodes():
+    """`deferred_pairs` was a stored int in S8a; a row that still carries one must not raise."""
+    stored = {
+        "files": ["a.py"],
+        "deferred_pairs": 5,
+        "verdict": {"decision": "skip", "reason": "no new questions"},
+    }
+    assessment = Assessment.model_validate(stored)
+    assert assessment.deferred == ()
+    assert assessment.deferred_pairs == 0
+
+
+def test_a_trigger_detail_carries_the_pairs_a_targeted_run_works_on():
+    """The brief reads one field whatever the trigger was, so a suspect run needs it too."""
+    detail = TriggerDetail(targets=(NodePair(node_id="a.py::f", name="load"),))
+    assert detail.targets[0].name == "load"
+    assert TriggerDetail().targets == ()
+
+
+def test_a_run_records_whether_the_tree_was_dirty_when_it_opened():
+    """Spec 8.5's third pre-run read; `Run.dirty` was stored and never set before this slice."""
+    run = Run.begin(
+        partition=("i", ""),
+        origin="i",
+        scope="",
+        checkout=Checkout(branch="main", commit_sha="abc"),
+        client=ClientKind.CLAUDE_CODE,
+        producer=ProducerKind.OBSERVER,
+        runner=RunnerKind.FAKE,
+        trigger=TriggerKind.EDIT,
+        dirty=True,
+    )
+    assert run.dirty is True
+    assert (run.branch, run.commit_sha) == ("main", "abc")
+
+
+async def _add(store: IndexStore, **kw) -> str:
+    return await store.runs.add_run(Run(repo_identity=store.partition.identity, **kw))
+
+
+async def test_a_queued_run_is_stamped_running_and_a_closed_one_is_left_alone(
+    graph_store: IndexStore,
+):
+    """Spec 5.3's missing writer: `running` is what a row says while a model is burning turns."""
+    live = await _add(graph_store)
+    done = await _add(graph_store, status=RunStatus.SUCCEEDED)
+    await graph_store.runs.set_running(live)
+    await graph_store.runs.set_running(done)
+    assert (await graph_store.runs.run(live)).status is RunStatus.RUNNING
+    assert (await graph_store.runs.run(done)).status is RunStatus.SUCCEEDED
+
+
+async def test_the_stranded_sweep_reaches_a_run_that_died_while_it_was_running(
+    graph_store: IndexStore,
+):
+    """A `running` row is open for a whole model call, so it gets the longer of the two windows."""
+    now = time.time()
+    old_queued = await _add(graph_store, started_at=now - 7200)
+    old_running = await _add(graph_store, started_at=now - 14400)
+    live_running = await _add(graph_store, started_at=now - 7200)
+    fresh = await _add(graph_store, started_at=now)
+    for run_id in (old_running, live_running, fresh):
+        await graph_store.runs.set_running(run_id)
+    assert await graph_store.runs.finish_stranded_runs(older_than=3600.0, now=now) == 2
+    assert (await graph_store.runs.run(old_queued)).status is RunStatus.SKIPPED
+    assert (await graph_store.runs.run(old_running)).status is RunStatus.SKIPPED
+    assert (await graph_store.runs.run(live_running)).status is RunStatus.RUNNING
+    assert (await graph_store.runs.run(fresh)).status is RunStatus.RUNNING
+
+
+async def test_the_cooldown_set_is_every_pair_a_recent_run_named(
+    graph_store: IndexStore,
+):
+    """Spec 8.3's cooldown, off `graph_runs`: `graph_unresolved` is replaced by every build."""
+    now = time.time()
+    recent = NodePair(node_id="a.py::f", name="load")
+    stale = NodePair(node_id="b.py::g", name="save")
+    await _add(
+        graph_store,
+        started_at=now - 60,
+        trigger_detail=TriggerDetail(targets=(recent,)),
+    )
+    await _add(
+        graph_store,
+        started_at=now - 7200,
+        trigger_detail=TriggerDetail(targets=(stale,)),
+    )
+    await _add(graph_store, started_at=now - 30)
+    assert await graph_store.runs.targeted_since(now - 3600) == frozenset({recent})
+    assert await graph_store.runs.targeted_since(now - 10_000) == frozenset(
+        {recent, stale}
+    )
+
+
+def test_the_cooldown_knob_defaults_to_an_hour_and_zero_opts_out():
+    """Q8's knob: a repo whose queue is smaller than one run's cap wants to opt out."""
+    assert SchedulingConfig().cooldown_minutes == 60
+    assert SchedulingConfig(cooldown_minutes=0).cooldown_minutes == 0
+    with pytest.raises(ValueError):
+        SchedulingConfig(cooldown_minutes=-1)

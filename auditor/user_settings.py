@@ -146,6 +146,14 @@ class SchedulingConfig(BaseModel):
     stop_timeout_seconds: float = Field(
         10.0, gt=0.0, description="Seconds `observer stop` waits for the daemon to go."
     )
+    cooldown_minutes: int = Field(
+        60,
+        ge=0,
+        description=(
+            "Minutes a pair a run already looked at is skipped by the suspect drain. "
+            "0 opts out: every pair is drainable on every pass."
+        ),
+    )
     run_on_stale: bool = Field(
         True, description="Re-run when an edit stales an existing refinement."
     )

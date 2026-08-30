@@ -49,8 +49,6 @@ from auditor.cli.render import (
     render_graph_usages,
 )
 from auditor.config import AuditorSettings
-from auditor.engine import audit_target
-from auditor.graph import GRAPH_OVERRIDE
 from auditor.graph.build import GraphBuilder
 from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
@@ -62,15 +60,11 @@ from auditor.graph.model import (
 from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine.lock import rebuild_lock
+from auditor.graph.scan import autoscan
 from auditor.graph.viz import build_payload, render_app, to_dot
 from auditor.serve import ReportServer
 
 graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
-
-
-async def _autoscan(root: Path) -> None:
-    """Incremental scan with graph extraction forced on."""
-    await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
 
 
 async def _build(
@@ -130,7 +124,7 @@ def graph_build(
                     await index.graph.clear_facts()
             if not no_scan:
                 report("scanning repository…")
-                await _autoscan(root)
+                await autoscan(root)
             report("building graph…")
             return await _build(root, settings, report, lock_held=True)
 
@@ -332,7 +326,7 @@ async def _serve_html(
         has_graph = bool(await index.graph.nodes())
     if rebuild or not has_graph:
         report("scanning repository…")
-        await _autoscan(root)
+        await autoscan(root)
         report("building graph…")
         await _build(root, load_settings(root), report)
     report("preparing UI…")

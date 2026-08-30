@@ -395,7 +395,10 @@ def test_an_assessment_on_the_wire_keeps_the_tuple_lengths_and_drops_their_conte
         facts_changed_nodes=("m.py::c",),
         new_pairs=(graph_refine_models.NodePair(node_id="m.py::c", name="widen"),),
         stale_refinements=(1, 2, 3),
-        deferred_pairs=4,
+        deferred=tuple(
+            graph_refine_models.NodePair(node_id=f"m.py::d{i}", name="w")
+            for i in range(4)
+        ),
         verdict=graph_refine_models.Decision(
             decision=graph_refine_models.AssessmentDecision.SKIP,
             reason="no new questions",

@@ -32,6 +32,7 @@ from auditor.graph.refine.models import (
     Refinement,
     RefinementStatus,
 )
+from auditor.graph.refine.namespace import file_of
 from auditor.observer.budget import BudgetState
 from auditor.user_settings import SchedulingConfig
 
@@ -250,6 +251,13 @@ class QueuePair(BaseModel):
     candidates: tuple[str, ...] = ()
     definers: tuple[str, ...] = ()
     externally_bound: bool = False
+    #: the stored drain order, which only the row knows (spec 8.3 item 3)
+    priority: int = 4
+
+    @property
+    def file(self) -> str:
+        """The file this question sits in, for proximity ordering; derived, never stored."""
+        return file_of(self.node_id)
 
     @property
     def key(self) -> tuple[str, str, UnresolvedReason]:
@@ -276,6 +284,7 @@ class QueuePair(BaseModel):
             candidates=row.candidates,
             definers=row.definers,
             externally_bound=row.externally_bound,
+            priority=row.priority,
         )
 
 
@@ -287,6 +296,8 @@ class RefinementState(BaseModel):
     refinement_id: int
     status: RefinementStatus
     anchor_nodes: tuple[str, ...] = ()
+    #: when the correction was made, which is the rank spec 8.3 orders stale targets by
+    created_at: float = 0.0
 
     @classmethod
     def of(cls, refinement: Refinement) -> "RefinementState":
@@ -295,6 +306,7 @@ class RefinementState(BaseModel):
             refinement_id=refinement.refinement_id,
             status=refinement.status,
             anchor_nodes=refinement.anchored_ids(),
+            created_at=refinement.created_at,
         )
 
 
@@ -515,6 +527,88 @@ def decide(
     )
 
 
+class Selection(BaseModel):
+    """What one run will take, and what the node cap left for the suspect drain (spec 8.3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    chosen: tuple[NodePair, ...] = ()
+    deferred: tuple[NodePair, ...] = ()
+
+
+def _dirname(path: str) -> str:
+    """The directory half of a repo-relative path, "" for a file at the root."""
+    return path.rsplit("/", 1)[0] if "/" in path else ""
+
+
+def _rows_by_pair(rows: Iterable[QueuePair]) -> dict[NodePair, QueuePair]:
+    """The best-ranked row per question, so a name asked for two reasons is ordered once."""
+    best: dict[NodePair, QueuePair] = {}
+    for row in rows:
+        held = best.get(row.pair)
+        if held is None or row.priority < held.priority:
+            best[row.pair] = row
+    return best
+
+
+def _stale_anchor_times(
+    after: GraphSnapshot, stale_refinements: Sequence[int]
+) -> dict[str, float]:
+    """When the newest staled refinement anchored to each node was made (spec 8.3's rank)."""
+    held = after.by_refinement
+    newest: dict[str, float] = {}
+    for refinement_id in stale_refinements:
+        state = held.get(refinement_id)
+        if state is None:
+            continue
+        for node_id in state.anchor_nodes:
+            newest[node_id] = max(newest.get(node_id, 0.0), state.created_at)
+    return newest
+
+
+def choose_targets(
+    *,
+    pairs: Iterable[NodePair],
+    after: GraphSnapshot,
+    stale_refinements: Sequence[int],
+    files: Sequence[str],
+    max_nodes: int,
+) -> Selection:
+    """Spec 8.3 item 2's target list: the questions a run takes, ordered and capped.
+
+    Proximity to the edited files first, then a bare or self call form, then rank, which is the
+    newest staled refinement anchored to the node and then the queue's own drain priority. The cap
+    counts distinct nodes, so a second question about a node already taken rides along free.
+    """
+    rows = _rows_by_pair(after.pairs)
+    newest = _stale_anchor_times(after, stale_refinements)
+    wanted = {pair for pair in pairs if pair in rows}
+    wanted.update(pair for pair, row in rows.items() if row.node_id in newest)
+    touched = frozenset(files)
+    dirs = frozenset(_dirname(name) for name in files)
+    ordered = sorted(
+        (rows[pair] for pair in wanted),
+        key=lambda row: (
+            0 if row.file in touched else (1 if _dirname(row.file) in dirs else 2),
+            0 if row.call_form in _BOUNDED_FORMS else 1,
+            -newest.get(row.node_id, 0.0),
+            row.priority,
+            row.node_id,
+            row.name,
+        ),
+    )
+    chosen: list[NodePair] = []
+    deferred: list[NodePair] = []
+    nodes: set[str] = set()
+    for row in ordered:
+        if row.node_id in nodes or len(nodes) < max_nodes:
+            nodes.add(row.node_id)
+            chosen.append(row.pair)
+        else:
+            deferred.append(row.pair)
+    return Selection(chosen=tuple(chosen), deferred=tuple(deferred))
+
+
 def assess_unchanged(stage1: Stage1) -> Assessment:
     """The assessment for a batch stage 1 dropped: no persist, no rebuild, no run (spec 8.6)."""
     return Assessment(
@@ -539,18 +633,29 @@ def assess(
 
     ``before`` and ``after`` are the snapshots the rebuild took around its one persist commit;
     ``flow_nodes`` is what a recent flow query asked about, which is recorded and decides nothing.
-    A suspect or verify batch gates through :func:`decide` directly, with its own ``kind``.
+    The targets are chosen only when the gate said yes, so a skipped batch defers nothing.
     """
     rows = new_rows(before, after)
     fresh = _distinct(rows)
     bounded = _distinct(p for p in rows if p.call_form in _BOUNDED_FORMS)
     staled = staled_refinements(before, after, changed_nodes=stage1.changed_nodes)
-    verdict, targets = decide(
+    verdict, counted = decide(
         new_pairs=fresh,
         bounded_pairs=bounded,
         stale_refinements=staled,
         scheduling=scheduling,
         budget=budget,
+    )
+    selection = (
+        choose_targets(
+            pairs=counted,
+            after=after,
+            stale_refinements=staled,
+            files=stage1.files,
+            max_nodes=max_nodes_per_run,
+        )
+        if verdict.decision is AssessmentDecision.RUN
+        else Selection()
     )
     return Assessment(
         files=stage1.files,
@@ -563,6 +668,7 @@ def assess(
         ),
         stale_refinements=staled,
         affected_flow=tuple(sorted(stage1.changed_nodes & flow_nodes)),
-        deferred_pairs=max(0, len(targets) - max_nodes_per_run),
+        targets=selection.chosen,
+        deferred=selection.deferred,
         verdict=verdict,
     )

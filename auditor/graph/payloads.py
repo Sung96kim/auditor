@@ -29,6 +29,7 @@ from auditor.graph.refine.models import (
     Assessment,
     ClientKind,
     Decision,
+    NodePair,
     ProducerKind,
     Refinement,
     RefinementCounts,
@@ -367,20 +368,24 @@ class AssessmentPayload(WirePayload):
 class TriggerDetailPayload(WirePayload):
     """What a run's trigger carried: the paths it named, and the gate decision behind it.
 
-    ``files`` is capped for the same reason the counts replace the id tuples: a Stop path set can
-    name hundreds of paths and a fifty row page would carry all of them.
+    ``files`` and ``targets`` are both capped for the same reason the counts replace the id
+    tuples: a Stop path set names hundreds of paths and a suspect run names as many pairs.
     """
 
     files: tuple[str, ...] = ()
     file_count: int = 0
+    targets: tuple[NodePair, ...] = ()
+    target_count: int = 0
     assessment: AssessmentPayload | None = None
 
     @classmethod
     def of(cls, detail: TriggerDetail) -> "TriggerDetailPayload":
-        """One stored detail on the wire; the paths cap and the assessment narrows to counts."""
+        """One stored detail on the wire; the tuples cap and the assessment narrows to counts."""
         return cls(
             files=detail.files[:LOG_FILE_CAP],
             file_count=len(detail.files),
+            targets=detail.targets[:LOG_FILE_CAP],
+            target_count=len(detail.targets),
             assessment=(
                 None
                 if detail.assessment is None

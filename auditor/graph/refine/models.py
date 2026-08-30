@@ -261,7 +261,8 @@ class Assessment(BaseModel):
     """Why one edit batch did or did not earn a refinement run (spec 8.6).
 
     ``files`` is attribution only: ``facts_changed_nodes`` can name nodes outside them when the
-    tree moved. ``deferred_pairs`` is a count because the pairs themselves stay in the queue.
+    tree moved. ``targets`` is the ordered, node-capped set a run would take and ``deferred`` the
+    pairs the cap left behind, which stay in the queue for the suspect drain (spec 8.3).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -274,8 +275,14 @@ class Assessment(BaseModel):
     resolved_pairs: tuple[NodePair, ...] = ()
     stale_refinements: tuple[int, ...] = ()
     affected_flow: tuple[str, ...] = ()
-    deferred_pairs: int = 0
+    targets: tuple[NodePair, ...] = ()
+    deferred: tuple[NodePair, ...] = ()
     verdict: Decision
+
+    @property
+    def deferred_pairs(self) -> int:
+        """How many pairs the cap left behind, which is what the log and the page show."""
+        return len(self.deferred)
 
     @property
     def decided_to_run(self) -> bool:
@@ -287,12 +294,14 @@ class TriggerDetail(BaseModel):
     """What the trigger carried: the files it named and the assessment that decided the batch.
 
     The assessment is spec 8.6's, present for an edit batch only, and its ``verdict`` is the one
-    "why" such a run row has.
+    "why" such a run row has. ``targets`` is what the brief is built from when the caller chose
+    pairs rather than a scope, which is every run the observer's loop opens (spec 8.3).
     """
 
     model_config = ConfigDict(frozen=True)
 
     files: tuple[str, ...] = ()
+    targets: tuple[NodePair, ...] = ()
     assessment: Assessment | None = None
 
 
@@ -426,6 +435,7 @@ class Run(BaseModel):
         producer: ProducerKind,
         runner: RunnerKind,
         trigger: TriggerKind,
+        dirty: bool = False,
         model: str | None = None,
         session_id: str | None = None,
         agent_name: str | None = None,
@@ -450,6 +460,7 @@ class Run(BaseModel):
             ),
             branch=checkout.branch,
             commit_sha=checkout.commit_sha,
+            dirty=dirty,
             client=client,
             producer=producer,
             runner=runner,

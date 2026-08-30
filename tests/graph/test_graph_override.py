@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from auditor.cli import graph as cli_graph
-from auditor.graph import GRAPH_OVERRIDE
+from auditor.graph import GRAPH_OVERRIDE, scan
 from auditor.mcp import graph_tools
 
 _PACKAGE = Path(__file__).resolve().parents[2] / "auditor"
@@ -15,9 +15,11 @@ def test_forces_graph_extraction_on():
     assert GRAPH_OVERRIDE == {"graph": {"enabled": True}}
 
 
-def test_both_call_sites_share_the_one_object():
-    assert cli_graph.GRAPH_OVERRIDE is GRAPH_OVERRIDE
-    assert graph_tools.GRAPH_OVERRIDE is GRAPH_OVERRIDE
+def test_every_call_site_shares_the_one_scan():
+    """One body, three callers: the CLI, the MCP tool and the observer's session-start build."""
+    assert scan.GRAPH_OVERRIDE is GRAPH_OVERRIDE
+    assert cli_graph.autoscan is scan.autoscan
+    assert graph_tools.autoscan is scan.autoscan
 
 
 def test_assigned_in_exactly_one_module():

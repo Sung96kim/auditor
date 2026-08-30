@@ -399,7 +399,7 @@ def test_rebuild_holds_the_lock_across_the_clear_and_the_scan(
         except RebuildLockTimeout:
             seen.append("blocked")
 
-    monkeypatch.setattr("auditor.cli.graph._autoscan", probing_scan)
+    monkeypatch.setattr("auditor.cli.graph.autoscan", probing_scan)
     result = runner.invoke(app, ["graph", "build", str(graph_repo), "--rebuild"])
     assert result.exit_code == 0, result.stdout
     assert seen == ["blocked"]
