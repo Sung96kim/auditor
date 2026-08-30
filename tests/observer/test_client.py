@@ -1,4 +1,4 @@
-"""``auditr-observer``: stdlib-only, auditor-free, and inert until the daemon slice lands."""
+"""``auditr-observer``: stdlib-only and auditor-free; the verbs themselves live in test_daemon."""
 
 import importlib.metadata
 import subprocess
@@ -32,25 +32,6 @@ def test_client_imports_no_auditor_module():
         check=True,
     )
     assert probe.stdout.strip() == "[]"
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        [],
-        ["ensure"],
-        ["start"],
-        ["stop"],
-        ["status"],
-        ["open"],
-        ["hook", "SessionStart", "--client", "claude"],
-    ],
-)
-def test_every_subcommand_reports_unavailable_and_exits_zero(
-    argv: list[str], capsys: pytest.CaptureFixture[str]
-):
-    assert auditr_observer.main(argv) == 0
-    assert _NOTICE in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

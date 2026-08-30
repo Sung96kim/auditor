@@ -62,6 +62,7 @@ from auditor.graph.refine.models import (
     wilson_lower,
 )
 from auditor.graph.refine.payloads import BriefPayload, EvalReport, RefinePayload
+from auditor.observer.payloads import DaemonStatus
 from auditor.user_settings import UserSettings
 
 _ACCENT = "#7C7CFF"
@@ -869,3 +870,13 @@ def render_init(out: Console, payload: InitReport) -> None:
             f"[yellow]leftover status file:[/yellow] {payload.legacy_status}; "
             "remove it with --clean-status"
         )
+
+
+def render_observer(out: Console, payload: DaemonStatus) -> None:
+    """One line for every observer verb: what changed, and where the daemon is."""
+    where = (
+        f"{payload.home} on port {payload.port}" if payload.running else payload.home
+    )
+    out.print(f"[{_ACCENT}]{payload.action}[/] {escape(where)}")
+    if payload.page_url:
+        out.print(f"[dim]{payload.page_url}[/dim]")

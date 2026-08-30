@@ -12,6 +12,7 @@ from typer.core import TyperCommand, TyperGroup
 from typer.main import get_group
 
 GRAPH_HELP = "Build + query the semantic code graph."
+OBSERVER_HELP = "Start, stop and inspect the background observer daemon."
 
 # Everything `typer.main.get_group` sets that belongs to the sub-app rather than to the mount.
 # Excluded on purpose: `name`, `help`, `hidden`, `deprecated`, `context_settings` and the rich
@@ -97,3 +98,13 @@ class LazyGraphGroup(LazyGroup):
 # `no_args_is_help` belongs to `graph_app` and is adopted on load; only `help` is the mount's own,
 # so the root help tree renders without paying for the graph import.
 lazy_graph_app = typer.Typer(help=GRAPH_HELP)
+
+
+class LazyObserverGroup(LazyGroup):
+    """The ``auditr observer`` mount; `auditor.cli.observer` reaches the daemon and the store."""
+
+    module: ClassVar[str] = "auditor.cli.observer"
+    attribute: ClassVar[str] = "observer_app"
+
+
+lazy_observer_app = typer.Typer(help=OBSERVER_HELP)

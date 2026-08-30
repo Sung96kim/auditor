@@ -30,6 +30,7 @@ from auditor.graph import model as graph_model
 from auditor.graph import payloads as graph_payloads
 from auditor.graph.query import GraphQuery
 from auditor.graph.refine import models as graph_refine_models
+from auditor.observer import payloads as observer_payloads
 
 
 @pytest.fixture
@@ -286,7 +287,7 @@ def test_each_graph_query_payload_matches_its_renderer(method):
 # every payload model a command can name at a `present` call site
 MODEL_NAMES = frozenset(
     name
-    for module in (cli_payloads, graph_payloads, flow)
+    for module in (cli_payloads, graph_payloads, flow, observer_payloads)
     for name, obj in vars(module).items()
     if isinstance(obj, type) and issubclass(obj, BaseModel)
 )
@@ -380,6 +381,7 @@ def test_the_pairing_sweep_finds_every_command_whose_payload_can_be_read():
         "index.py",
         "init.py",
         "manifest.py",
+        "observer.py",
         "plugins.py",
         "rules.py",
     }

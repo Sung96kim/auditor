@@ -65,6 +65,11 @@ SILENT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("malware", "install"),
         ("malware", "status"),
         ("malware", "update-dbs"),
+        ("observer", "ensure"),
+        ("observer", "open"),
+        ("observer", "start"),
+        ("observer", "status"),
+        ("observer", "stop"),
         ("self", "update"),
     }
 )
@@ -105,6 +110,11 @@ SILENT_ARGV: dict[tuple[str, ...], tuple[str, ...] | str] = {
     ("malware", "install"): "installs a system package",
     ("malware", "status"): ("malware", "status"),
     ("malware", "update-dbs"): "downloads virus databases",
+    ("observer", "ensure"): "starts a background process",
+    ("observer", "open"): "launches a browser",
+    ("observer", "start"): "starts a background process",
+    ("observer", "status"): ("observer", "status"),
+    ("observer", "stop"): ("observer", "stop"),
     ("self", "update"): "reaches PyPI and rewrites the installation",
 }
 

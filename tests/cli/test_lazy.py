@@ -26,6 +26,11 @@ _HEAVY = (
     "auditor.graph.refine.facts",
     "auditor.graph.refine.verify",
     "auditor.graph.resolve_edges",
+    # the observer mount is the second lazy mount; its daemon and transport must stay off too
+    "auditor.cli.observer",
+    "auditor.observer.daemon",
+    "auditor.observer.routes",
+    "auditor.observer.server",
     "numpy",
     "scipy",
     "networkx",

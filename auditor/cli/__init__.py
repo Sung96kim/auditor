@@ -21,7 +21,12 @@ from auditor.cli.apps import app
 from auditor.cli.config import config_app
 from auditor.cli.ignore import ignore_app
 from auditor.cli.index import index_app
-from auditor.cli.lazy import LazyGraphGroup, lazy_graph_app
+from auditor.cli.lazy import (
+    LazyGraphGroup,
+    LazyObserverGroup,
+    lazy_graph_app,
+    lazy_observer_app,
+)
 from auditor.cli.malware import malware_app
 from auditor.cli.plugins import plugins_app
 from auditor.cli.rules import rules_app
@@ -36,6 +41,7 @@ app.add_typer(plugins_app, name="plugins")
 app.add_typer(self_app, name="self")
 app.add_typer(malware_app, name="malware")
 app.add_typer(lazy_graph_app, name="graph", cls=LazyGraphGroup)
+app.add_typer(lazy_observer_app, name="observer", cls=LazyObserverGroup)
 
 # ensure all built-in languages register for discovery's suffix list
 _ = PythonAuditor

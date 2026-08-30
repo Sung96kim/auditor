@@ -40,8 +40,12 @@ pnpm --dir auditor/graph/ui run build       # rebuild the committed dist/index.h
 - Shared seams stay at the `auditor/` top level (`engine.py`, `config.py`, `models.py`,
   `registry.py`); never bury one inside a feature package.
 - `auditr_observer.py` sits outside the package and imports nothing from `auditor`, because hooks
-  run constantly and `import auditor` costs about 0.23 s. It shares only the
-  `OBSERVER_API_VERSION` literal with `auditor/observer/`, and a test pins the pair.
+  run constantly and `import auditor` costs about 0.17 s. The daemon it talks to lives in
+  `auditor/observer/`: `daemon.py` (the process, its lock and its restart), `server.py` (the
+  loopback transport), `routes.py` (the handlers), `events.py` (the spool), `sessions.py` (the
+  attach gate) and `payloads.py` (the wire shapes). The two sides share three things by
+  duplication, each pinned by a test: the `OBSERVER_API_VERSION` literal, `home()` against
+  `paths.auditor_home()`, and the `_OFF` set against `paths.OFF_VALUES`.
 - `plugin/` is stdlib-only and imports nothing from `auditor`; it drives the installed `auditr`.
   `plugin/statusline/auditor_status.py` hand-re-implements package helpers that
   `tests/plugin/test_statusline.py` pins; change one side and change the other.

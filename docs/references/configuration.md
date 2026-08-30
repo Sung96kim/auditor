@@ -304,15 +304,22 @@ $AUDITOR_HOME/
   config.schema.json       # generated from the models, for editor completion
   index.db                 # the shared index
   models/                  # cache for the optional vector layer
+  observer/                # the daemon's own state
+    lock                   # the singleton flock; whoever holds it is the daemon
+    daemon.json            # {pid, port, home, version, compat}
+    log/observer.log       # the daemon's rotating log
+    locks/                 # the graph rebuild lock's, not the daemon's
   repos/<repo_dir_key>/    # one dir per repo, keyed by sha1 of the resolved git common dir
     root.json              # breadcrumb {root, identity, created_at}
     config.json            # per-repo personal overrides
+    spool.jsonl            # the observer's accepted, unconsumed events for this repo
     status.json            # the status line's cache
     status.lock
 ```
 
-- Nothing above is created before `auditr init` or a scan needs it. `observer/locks/` appears
-  alongside it the first time a graph build takes its rebuild lock.
+- Nothing above is created before `auditr init` or a scan needs it. `observer/locks/` appears the
+  first time a graph build takes its rebuild lock, and the daemon adds only `lock`, `daemon.json`
+  and `log/` beside it; it never creates or clears `observer/` itself.
 - `repo_dir_key` is the sha1 of `git rev-parse --path-format=absolute --git-common-dir`, resolved,
   falling back to the resolved root outside git. Every worktree of one checkout shares the
   directory, and a symlinked path does not mint a second one.
@@ -380,9 +387,11 @@ so setting one has no effect today.
   `auditr graph refinements prune` finishes those as `skipped` with a reason, because a run whose
   process died can be closed by nothing else.
 
-`observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`),
-`session_expiry_minutes` (default `45`) and `idle_shutdown_minutes` (default `30`) are daemon
-knobs with no reader today. The two the assessment gate reads:
+`observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`) is a daemon knob with
+no reader today. `session_expiry_minutes` (default `45`) is how long after its last heartbeat a
+session still counts, and `idle_shutdown_minutes` (default `30.0`, a float) is how long the daemon
+goes without a request before exiting; `0` never exits, and the window is only consulted when no
+session is attached. The two the assessment gate reads:
 
 - `run_on_stale` (default `true`): re-run when an edit stales an existing refinement. Only a
   refinement anchored on a node the batch itself touched counts, so drift and no-op builds
@@ -434,6 +443,8 @@ govern knob-tuning proposals and have no reader today. The one the tier gate rea
 | `AUDITOR_HOME` | `~/.auditor` | Root of all generated global state: `index.db` (the shared index, partitioned by repo, holding cached findings, persistent ignores and graph facts), `bin/` (the checksum-verified osv-scanner download), `osv-db/` (the OSV database). |
 | `AUDITOR_CODE_MODE` | unset (`false`) | Enables the experimental Code Mode transform on the MCP server. A no-op unless the `code-mode` extra is installed ([auditr-mcp.md](auditr-mcp.md)). |
 | `AUDITOR_REFINE_RUN` | unset | Pre-binds the MCP refinement tools to one run id, so a runner-spawned server needs no `run_id` per call ([auditr-mcp.md](auditr-mcp.md)). |
+| `AUDITOR_OBSERVER` | unset (on) | Set to `0`, `f`, `false`, `n`, `no` or `off` to disable the observer entirely: every verb prints a notice and exits 0. Read by `paths.observer_enabled`, which ignores a value it cannot read rather than failing the command. |
+| `AUDITOR_OBSERVER_PORT` | unset (hashed) | The loopback port the daemon binds. Unset, it is `7490 + crc32(resolved $AUDITOR_HOME) % 500`. There is no `observer.port` config key: this is env only ([observer.md](observer.md)). |
 
 ### Repo settings (`AuditorSettings`)
 

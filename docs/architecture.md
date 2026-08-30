@@ -21,11 +21,15 @@ Paths are relative to the repo root.
 - `auditor/malware/` wraps the opt-in ClamAV and osv-scanner shell-outs, `auditor/reporters/` holds
   one module per output format, and `auditor/profiles/*.toml` the built-in config profiles
   (`base`, `strict`, `pydantic`, `all-strict`).
-- `auditor/observer/` holds the change assessment: `assess.py` classifies an edit batch against the
-  graph, `budget.py` turns a window's spend into day-ceiling state. Both are pure, and no shipped
-  command calls them yet. `auditr_observer.py` is the client, at the repo root outside the package
-  so it never imports `auditor`; every subcommand reports that the observer is not in this release
-  and exits 0.
+- `auditor/observer/` holds the daemon and the change assessment. `assess.py` classifies an edit
+  batch against the graph and `budget.py` turns a window's spend into day-ceiling state; both are
+  pure. The process is `daemon.py` (the singleton flock, `daemon.json`, the idle timer, the restart
+  exec), `server.py` (stdlib `ThreadingHTTPServer` on loopback, transport only), `routes.py` (one
+  method and path to one `Reply`, routing only), `events.py`, `sessions.py` and `payloads.py`. One
+  rule holds the design together: the spool is the truth and the in-memory set is only the wakeup,
+  so `POST /events` writes `repos/<key>/spool.jsonl` before it answers 202 and a daemon killed
+  after that loses nothing. `auditr_observer.py` is the client, at the repo root outside the
+  package so it never imports `auditor`; `auditr observer` is the same surface as a lazy CLI mount.
 - Everything else at `auditor/` top level is a shared seam, described next.
 - `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagent, hooks,
   statusline, bundled MCP config); `assets/` holds the project icon and the vendored runner marks
