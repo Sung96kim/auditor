@@ -21,8 +21,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.database.refinements import NoSuchRun
-from auditor.discovery import git_output
+from auditor.discovery import git_head
 from auditor.graph.build import GraphBuilder
+from auditor.graph.hashes import node_truth_sha
 from auditor.graph.model import EdgeKind, GraphEdge, UnresolvedRow
 from auditor.graph.payloads import CommitResult, GraphBuildReport
 from auditor.graph.refine.brief import Brief
@@ -34,6 +35,7 @@ from auditor.graph.refine.models import (
     Assessment,
     Checkout,
     ClientKind,
+    NodePair,
     ProducerKind,
     Proposal,
     ProposalOutcome,
@@ -64,7 +66,7 @@ from auditor.graph.refine.namespace import (
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA
 from auditor.graph.refine.tiers import TierPolicy
-from auditor.graph.refine.verify import FactVerifier, VerifyResult
+from auditor.graph.refine.verify import FactVerifier, FileFacts, VerifyResult
 from auditor.roles import RoleClassifier
 from auditor.user_settings import LimitsConfig, UserSettings
 
@@ -356,6 +358,22 @@ class RefinementLedger(BaseModel):
         """Activate a pending refinement. The next build applies it; this takes no lock."""
         return await self._moved(refinement_id, RefinementStatus.ACTIVE, _ACCEPT_FROM)
 
+    async def accept_all(self, refinement_ids: Sequence[int]) -> tuple[int, ...]:
+        """Activate every id that is still `pending`, and answer with the ones that moved.
+
+        The batched twin of :meth:`accept`, guarded the same way: a row a human reverted or pinned
+        between the caller's read and this write keeps the status the human gave it (spec 10.3).
+        """
+        held = [
+            row.refinement_id
+            for row in await self.index.refinements.refinements(
+                statuses=[RefinementStatus.PENDING]
+            )
+            if row.refinement_id in set(refinement_ids)
+        ]
+        await self.index.refinements.set_statuses(held, RefinementStatus.ACTIVE)
+        return tuple(held)
+
     async def revert(self, refinement_id: int) -> Refinement:
         return await self._moved(refinement_id, RefinementStatus.REVERTED, _REVERT_FROM)
 
@@ -398,6 +416,15 @@ class RefinementLedger(BaseModel):
             )
         await self.index.refinements.set_status(refinement_id, status)
         return await self.refinement(refinement_id)
+
+
+def _anchor_moved(anchor: Anchor, facts: FileFacts | None, prefix: str) -> bool:
+    """Whether one anchor's node no longer hashes to what the run pinned it to (spec 5.5)."""
+    node_id = to_partition(anchor.node_id, prefix)
+    if facts is None or node_id is None:
+        return True
+    node = facts.node(node_id)
+    return node is None or node_truth_sha(node) != anchor.truth_sha
 
 
 class RefinementService:
@@ -454,6 +481,7 @@ class RefinementService:
         agent_name: str | None = None,
         detail: TriggerDetail | None = None,
         checkout: Checkout | None = None,
+        dirty: bool = False,
     ) -> Run:
         """Write one queued ``graph_runs`` row: the half of :meth:`begin` that stages nothing.
 
@@ -466,6 +494,7 @@ class RefinementService:
             origin=self.index.repo,
             scope=scope,
             checkout=checkout or await self._head(),
+            dirty=dirty,
             client=client,
             producer=producer,
             runner=runner,
@@ -491,6 +520,7 @@ class RefinementService:
         agent_name: str | None = None,
         detail: TriggerDetail | None = None,
         checkout: Checkout | None = None,
+        dirty: bool = False,
     ) -> Run:
         """Open a run and record who asked and against which checkout state (Invariant 2).
 
@@ -520,17 +550,27 @@ class RefinementService:
             agent_name=agent_name,
             detail=detail,
             checkout=checkout,
+            dirty=dirty,
         )
         _staged, evicted = self.registry.opened(run, scope, self.partition)
         for gone in evicted:
             await self._evict(gone)
         return run
 
+    async def start(self, run_id: str) -> None:
+        """Stamp this run `running`: it has its brief and a model is about to be called.
+
+        Here rather than in `begin`, which runs before there is a brief, and beside it rather than
+        in each runner, so the CLI, the eval and the observer's loop all move the same row.
+        """
+        await self.index.runs.set_running(run_id)
+
     async def decline(
         self,
         assessment: Assessment,
         *,
         checkout: Checkout | None = None,
+        dirty: bool = False,
         client: ClientKind = ClientKind.CLI,
         trigger: TriggerKind = TriggerKind.EDIT,
         session_id: str | None = None,
@@ -557,6 +597,7 @@ class RefinementService:
             session_id=session_id,
             detail=TriggerDetail(files=assessment.files, assessment=assessment),
             checkout=checkout,
+            dirty=dirty,
         )
         await self._finish(run.run_id, RunStatus.SKIPPED)
         return await self._stored(run.run_id)
@@ -636,15 +677,21 @@ class RefinementService:
             ),
         )
 
-    async def build_brief(self, scope: str, *, commit_sha: str | None = None) -> Brief:
-        """The brief for one scope, off this checkout's queue under this user's limits.
+    async def build_brief(
+        self,
+        scope: str,
+        *,
+        commit_sha: str | None = None,
+        targets: Sequence[NodePair] = (),
+    ) -> Brief:
+        """The brief for one scope, or for exactly the pairs a caller chose (spec 8.3 item 2).
 
         The one construction: `brief`, `preview` and the bound `brief` tool all come through here
         rather than each assembling a builder of their own.
         """
         return await BriefBuilder(
             facts=self.facts, limits=self.user.observer.limits
-        ).build(scope, commit_sha=commit_sha)
+        ).build(scope, commit_sha=commit_sha, targets=targets)
 
     async def preview(self, scope: str) -> Brief:
         """The brief a run over ``scope`` would be given, opening no run and recording nothing.
@@ -663,7 +710,11 @@ class RefinementService:
         nothing, so the row keeps what the run was first asked rather than the last thing it read.
         """
         staged = self.registry.require(run_id)
-        built = await self.build_brief(staged.scope, commit_sha=staged.run.commit_sha)
+        built = await self.build_brief(
+            staged.scope,
+            commit_sha=staged.run.commit_sha,
+            targets=staged.run.trigger_detail.targets,
+        )
         brief = built.model_copy(
             update={"staged": tuple(item.verdict() for item in staged.staged)}
         )
@@ -710,7 +761,9 @@ class RefinementService:
         activate and no queue row retired by a build that never happened (spec 6).
         """
         run_id = staged.run.run_id
-        refused = await self._checkout_moved(staged.run)
+        refused = await self._checkout_moved(staged.run) or await self._anchors_moved(
+            staged
+        )
         if refused is not None:
             await self._finish(
                 run_id, RunStatus.REJECTED, error=refused, attribution=attribution
@@ -1090,18 +1143,36 @@ class RefinementService:
             await self._finish(gone.run.run_id, RunStatus.SKIPPED, error=detail)
 
     async def _head(self) -> Checkout:
-        """This checkout's branch and HEAD, read off the event loop.
-
-        `git_output` shells out with a 30 s timeout, and every other coroutine on the loop, which
-        for an MCP server is every other tool call, would wait behind it.
-        """
-        branch, commit = await asyncio.gather(
-            asyncio.to_thread(
-                git_output, self.root, "rev-parse", "--abbrev-ref", "HEAD"
-            ),
-            asyncio.to_thread(git_output, self.root, "rev-parse", "HEAD"),
-        )
+        """This checkout's branch and HEAD, through the one reader `read_guard` also calls."""
+        branch, commit = await git_head(self.root)
         return Checkout(branch=branch, commit_sha=commit)
+
+    async def _anchors_moved(self, staged: StagedRun) -> str | None:
+        """Whether any anchor's node facts moved since the proposal was staged (spec 8.5).
+
+        The verifier checked the src file when the proposal arrived; a run that stages twenty of
+        them over minutes has to be asked once more at the moment it lands. A file the index no
+        longer caches counts as moved, which is the safe direction.
+        """
+        anchors = tuple(item for one in staged.staged for item in one.anchors)
+        local = [(a, to_partition(a.path, self.prefix)) for a in anchors]
+        paths = tuple(dict.fromkeys(path for _a, path in local if path is not None))
+        if not paths:
+            return None
+        loaded, _missing = await self.facts.files(paths)
+        moved = sorted(
+            {
+                anchor.node_id
+                for anchor, path in local
+                if path is None or _anchor_moved(anchor, loaded.get(path), self.prefix)
+            }
+        )
+        if not moved:
+            return None
+        return (
+            f"the facts moved under this run since it opened ({', '.join(moved)}); "
+            "start a new run"
+        )
 
     async def _checkout_moved(self, run: Run) -> str | None:
         """Whether HEAD or the branch changed since `begin`, which invalidates every anchor.

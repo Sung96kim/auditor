@@ -6,6 +6,7 @@ walk otherwise. Tests are NOT dropped; they're classified by role and audited un
 relaxed policy.
 """
 
+import asyncio
 import subprocess
 from collections.abc import Sequence
 from fnmatch import fnmatch
@@ -134,6 +135,19 @@ def git_changed_files(root: Path, ref: str) -> set[str] | None:
         untracked.stdout.splitlines() if untracked else []
     )
     return {line for line in lines if line}
+
+
+async def git_head(root: Path) -> tuple[str | None, str | None]:
+    """The branch and the commit sha at ``root``, both read off the event loop (spec 5.5).
+
+    `git_output` shells out with a 30 s timeout, and every other coroutine on the loop, which for
+    an MCP server is every other tool call, would wait behind it.
+    """
+    branch, commit = await asyncio.gather(
+        asyncio.to_thread(git_output, root, "rev-parse", "--abbrev-ref", "HEAD"),
+        asyncio.to_thread(git_output, root, "rev-parse", "HEAD"),
+    )
+    return branch, commit
 
 
 _STATUS_ARGS = (

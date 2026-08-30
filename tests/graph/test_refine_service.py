@@ -541,7 +541,7 @@ async def test_begin_reads_git_off_the_event_loop(
         time.sleep(0.2)
         return "abc"
 
-    monkeypatch.setattr("auditor.graph.refine.service.git_output", slow)
+    monkeypatch.setattr("auditor.discovery.git_output", slow)
     ticks = 0
 
     async def tick():
@@ -965,14 +965,10 @@ async def test_a_commit_that_resolves_another_partition_is_refused(
 async def test_a_checkout_between_begin_and_commit_refuses_the_commit(
     refine_service: RefinementService, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(
-        "auditor.graph.refine.service.git_output", lambda root, *args: "before"
-    )
+    monkeypatch.setattr("auditor.discovery.git_output", lambda root, *args: "before")
     run = await refine_service.begin()
     await refine_service.propose(run.run_id, CALL_EDGE)
-    monkeypatch.setattr(
-        "auditor.graph.refine.service.git_output", lambda root, *args: "after"
-    )
+    monkeypatch.setattr("auditor.discovery.git_output", lambda root, *args: "after")
     with pytest.raises(RefinementRefused, match="moved"):
         await refine_service.commit(run.run_id)
     finished = await refine_service.index.runs.run(run.run_id)

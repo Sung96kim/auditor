@@ -20,7 +20,7 @@ from auditor.graph.refine.brief import (
     BriefTarget,
     StaleNote,
 )
-from auditor.graph.refine.models import Proposal, RefinementStatus
+from auditor.graph.refine.models import NodePair, Proposal, RefinementStatus
 from auditor.graph.refine.namespace import file_of, scope_path, under_scope
 from auditor.graph.refine.verify import FactVerifier, FileFacts
 from auditor.graph.resolve_edges import EDGE_KIND_BY_FACT, NameBindings
@@ -69,6 +69,29 @@ class FactReader(BaseModel):
                 prefix=prefix, external=external, limit=limit
             )
         ]
+
+    async def targeted(self, pairs: Sequence[NodePair]) -> list[UnresolvedRow]:
+        """The queue rows for exactly these questions, in the order the caller ranked them.
+
+        The loop ordered them under spec 8.3, so the store's own drain order must not re-sort
+        them; ``external`` does not narrow them, for the reason :meth:`queue` gives its synthetic
+        rows: a caller that chose these questions means them.
+        """
+        if not pairs:
+            return []
+        wanted = {(pair.node_id, pair.name) for pair in pairs}
+        if self.synthetic:
+            rows = [row for row in self.synthetic if (row.node_id, row.name) in wanted]
+        else:
+            rows = [
+                UnresolvedRow.model_validate(raw)
+                for raw in await self.index.graph.unresolved(
+                    node_ids=sorted({pair.node_id for pair in pairs})
+                )
+                if (raw["node_id"], raw["name"]) in wanted
+            ]
+        rank = {(pair.node_id, pair.name): i for i, pair in enumerate(pairs)}
+        return sorted(rows, key=lambda row: rank[(row.node_id, row.name)])
 
     async def count_queue(self, prefix: str | None, *, external: bool) -> int:
         """How many rows that scope holds, under the same synthetic-rows-only rule as `queue`."""
@@ -180,13 +203,27 @@ class BriefBuilder(BaseModel):
     facts: FactReader
     limits: LimitsConfig
 
-    async def build(self, scope: str, *, commit_sha: str | None = None) -> Brief:
-        """The brief for one scope. Only the rows the run may work on are decoded."""
+    async def build(
+        self,
+        scope: str,
+        *,
+        commit_sha: str | None = None,
+        targets: Sequence[NodePair] = (),
+    ) -> Brief:
+        """The brief for one scope, or for exactly the pairs a caller chose (spec 8.3 item 2).
+
+        A target list is not re-capped here: the loop already capped it on distinct nodes, and a
+        second cap on rows would drop the second question about a node it deliberately kept.
+        """
         scope = scope_path(scope)
         prefix = scope or None
         queue_total = await self.facts.count_queue(prefix, external=False)
-        rows = await self.facts.queue(
-            prefix, limit=self.limits.max_nodes_per_run, external=False
+        rows = (
+            await self.facts.targeted(targets)
+            if targets
+            else await self.facts.queue(
+                prefix, limit=self.limits.max_nodes_per_run, external=False
+            )
         )
         loaded, _missing = await self.facts.files(
             tuple(dict.fromkeys(file_of(row.node_id) for row in rows))

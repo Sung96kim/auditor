@@ -18,6 +18,7 @@ from auditor.graph.payloads import CommitResult
 from auditor.graph.refine.brief import Brief
 from auditor.graph.refine.client import ClientFactory
 from auditor.graph.refine.models import (
+    Checkout,
     ClientKind,
     ProducerKind,
     Proposer,
@@ -28,6 +29,7 @@ from auditor.graph.refine.models import (
     RunStatus,
     RunUsage,
     ToolCall,
+    TriggerDetail,
     TriggerKind,
 )
 from auditor.graph.refine.prompts import GRAPH_SERVER, RunAnswer
@@ -64,6 +66,12 @@ class RefinementJob(BaseModel):
     model: ClaudeModel | None = None
     #: ``None`` means the configured runner
     runner: Runner | None = None
+    #: the batch this run is for, targets included; a job carries a detail or a scope, never both
+    detail: TriggerDetail | None = None
+    #: the branch and HEAD the caller already read, so a guarded run does not re-shell for them
+    checkout: Checkout | None = None
+    #: whether an auditable path was uncommitted when the caller read the tree (spec 8.5)
+    dirty: bool = False
 
 
 class RunProduct(BaseModel):
@@ -110,7 +118,7 @@ class RefinementRunner(ABC):
         """Drive one run from `begin` to its terminal state, and report what it produced."""
 
     async def _open(self, job: RefinementJob) -> tuple[Run, Brief]:
-        """Open the run and record the brief on its row before any work happens."""
+        """Open the run, record its brief, and stamp it `running` before any work happens."""
         run = await self.service.begin(
             scope=job.scope,
             producer=job.producer,
@@ -120,8 +128,14 @@ class RefinementRunner(ABC):
             model=job.model or self.service.user.observer.runner.model,
             session_id=job.session_id,
             agent_name=job.agent_name,
+            detail=job.detail,
+            checkout=job.checkout,
+            dirty=job.dirty,
         )
-        return run, await self.service.brief(run.run_id)
+        brief = await self.service.brief(run.run_id)
+        # the last write before the model is called, so a row with turns burning says `running`
+        await self.service.start(run.run_id)
+        return run, brief
 
     async def _close(self, run: Run, brief: Brief, outcome: RunOutcome) -> RunProduct:
         """Land or abandon the run the way ``outcome`` says, and answer with what it produced.
