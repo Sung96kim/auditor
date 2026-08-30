@@ -356,7 +356,7 @@ class Daemon:
             None,
             RateLimitPayload(),
         )
-        #: what `consume` counted; S8c is what fills `StatusPayload.drained_events` from it
+        #: what `consume` counted, and what `/api/status` reports as `drained_events`
         self.drained = 0
         self.stopping = False
 
@@ -583,6 +583,7 @@ def serve(settings: UserSettings | None = None) -> int:
             open_page=open_url if settings.observer.open_browser else lambda url: None,
             loop_state=daemon.loop_state,
             meters=lambda: daemon.meters,
+            drained=lambda: daemon.drained,
         ),
         started_at=time.time(),
     )

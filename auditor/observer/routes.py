@@ -79,6 +79,11 @@ def _no_loop_state(key: str) -> str:
     return ""
 
 
+def _no_drained() -> int:
+    """A router with no daemon behind it has drained nothing; `serve` passes the real counter."""
+    return 0
+
+
 def route_pattern(path: str) -> str:
     """The one route with a variable segment, matched by shape rather than by regex.
 
@@ -366,6 +371,8 @@ class RouterDeps(BaseModel):
     loop_state: Callable[[str], str] = _no_loop_state
     #: the budget and rate limit meters `/api/status` draws; S8c owns both (S8c seam 3)
     meters: Meters = _no_meters
+    #: how many events have been drained: the daemon counts, the router is what puts it on the wire
+    drained: Callable[[], int] = _no_drained
 
 
 class Router:
@@ -457,6 +464,7 @@ class Router:
             started_at=self.started_at,
             uptime_seconds=time.time() - self.started_at,
             queued_repos=self.deps.queue.pending_keys,
+            drained_events=self.deps.drained(),
             repos=tuple(
                 repo.model_copy(
                     update={"state": self.deps.loop_state(repo.repo_dir_key)}

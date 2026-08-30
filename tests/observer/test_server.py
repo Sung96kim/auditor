@@ -742,6 +742,16 @@ def test_the_status_route_draws_both_meters(daemon_router, daemon_server):
     assert (body["limits"]["paused"], body["limits"]["resumes_at"]) == (True, 500.0)
 
 
+def test_the_status_page_counts_the_events_the_daemon_drained(
+    daemon_router, daemon_server
+):
+    """`drained_events` shipped declared and always 0: the daemon counts, the router reports."""
+    daemon_router.deps = daemon_router.deps.model_copy(update={"drained": lambda: 7})
+    _server, caller = daemon_server
+    _status, _headers, body = caller.request("GET", "/api/status")
+    assert body["drained_events"] == 7
+
+
 def test_a_loop_transition_moves_the_status_etag(daemon_router, daemon_server):
     """P14 of S8b: the counter is the tag, and S8c is what moves it most."""
     _server, caller = daemon_server

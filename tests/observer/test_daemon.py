@@ -369,6 +369,54 @@ def test_the_daemon_starts_publishes_answers_and_stops_on_its_own_idle_window(
     assert not daemon_json_path().exists()  # and it cleaned up after itself
 
 
+def _ask(port: int, method: str, path: str, body: object = None) -> dict:
+    """One request against a live daemon, answered as the JSON document it sent."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    payload = None if body is None else json.dumps(body)
+    conn.request(method, path, payload)
+    answer = json.loads(conn.getresponse().read())
+    conn.close()
+    return answer
+
+
+def test_a_running_daemon_reports_the_events_it_drained(
+    tmp_path, monkeypatch, restored_logging
+):
+    """`drained_events` shipped declared and always 0, because only `serve` joins its two halves.
+
+    The counter is the daemon's, on the drain thread; the wire is the router's, on a request
+    thread. A test on either side alone passes with `serve` never handing one to the other.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.setenv("AUDITOR_OBSERVER_PORT", "0")
+    monkeypatch.setenv(
+        "AUDITOR_USER_OBSERVER__SCHEDULING__IDLE_SHUTDOWN_MINUTES", "0.02"
+    )
+    monkeypatch.setenv("AUDITOR_USER_OBSERVER__OPEN_BROWSER", "false")
+    src = tmp_path / "src"
+    src.mkdir()
+    worker = threading.Thread(target=serve, daemon=True)
+    worker.start()
+    try:
+        assert wait_for(daemon_json_path().exists, timeout=15.0)
+        record = read_daemon_record()
+        assert record is not None
+        assert _ask(record.port, "GET", "/api/status")["drained_events"] == 0
+        spooled = _ask(
+            record.port,
+            "POST",
+            "/events",
+            {"repo": str(src), "key": "a" * 40, "paths": ["a.py"]},
+        )
+        assert spooled["accepted"] == 1
+        assert wait_for(
+            lambda: _ask(record.port, "GET", "/api/status")["drained_events"] == 1,
+            timeout=15.0,
+        )
+    finally:
+        worker.join(timeout=30.0)
+
+
 def test_a_second_serve_returns_at_once_because_the_lock_is_held(tmp_path, monkeypatch):
     """The singleton: a second start reports the running daemon rather than binding a port."""
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))

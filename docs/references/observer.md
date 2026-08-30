@@ -139,10 +139,9 @@ thread rather than pinning one.
   With no UI bundle built the page degrades to a plain status document naming the node, edge and
   cluster counts and how to run `pnpm build`, rather than raising. The bundle shipped today makes
   no HTTP request of its own; the polling page is a later slice.
-- `/api/status` declares more than this slice fills. `state`, `idle_seconds`, `repos`,
-  `drained_events`, `evals`, `vectors` and both meters are at their defaults until the repo loop
-  lands; `home`, `version`, `compat`, `started_at`, `uptime_seconds`, `queued_repos` and
-  `sessions` are the seven that are real.
+- `/api/status` still declares more than it fills. `state`, `idle_seconds`, `evals` and `vectors`
+  are at their defaults; `home`, `version`, `compat`, `started_at`, `uptime_seconds`,
+  `queued_repos`, `drained_events`, `repos`, `sessions` and both meters are real.
 
 ## What the loop does
 
