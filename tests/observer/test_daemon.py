@@ -158,6 +158,23 @@ def test_one_tick_hands_the_drained_batch_to_the_consumer(queue):
     assert queue.keys() == ()
 
 
+def test_a_tick_drops_the_staged_batch_only_after_its_consumer_returns(queue, tmp_path):
+    """The staged file is what a killed daemon's successor adopts, so only the tick clears it."""
+    staged = tmp_path / "repos" / "k" / "spool.draining"
+    seen: list[str] = []
+
+    def consume(key: str, events: tuple[Event, ...]) -> None:
+        assert staged.exists()  # still on disk while the consumer holds the batch
+        seen.append(key)
+
+    daemon = _daemon(queue)
+    daemon.consume = consume
+    queue.put("k", Event(repo="/r", paths=("a.py",), at=1.0))
+    daemon.tick()
+    assert seen == ["k"]
+    assert not staged.exists()
+
+
 def test_the_default_consumer_counts_what_it_drained(queue):
     """S8b's consumer counts and acknowledges; `drained_events` on the wire is this number."""
     daemon = _daemon(queue)

@@ -258,6 +258,8 @@ class Daemon:
             events = self.queue.drain(key)
             if events:
                 self.consume(key, events)
+            # the staged batch is dropped only once its consumer has returned (P26)
+            self.queue.consumed(key)
         now = self.now()
         self.sessions.sweep(now=now)
         if self.idle.due(now) and not self.sessions.live(now=now):

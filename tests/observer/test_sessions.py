@@ -1,5 +1,6 @@
 """Spec 8.2's AND gate and the sessions it admits, with expiry decided on read."""
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -97,3 +98,36 @@ def test_detach_is_idempotent_and_the_sweep_counts_what_it_dropped():
     assert book.sweep(now=10_000.0) == 0
     assert book.sweep(now=10_000.0 + 45 * 60 + 1) == 1
     assert book.live(now=10_000.0 + 45 * 60 + 1) == ()
+
+
+def test_the_book_survives_readers_racing_an_attach_and_a_sweep():
+    """`live` and `sweep` run on the daemon's tick while the handlers attach on their own threads."""
+    book = SessionBook(expiry_minutes=45)
+    raised: list[BaseException] = []
+    stop = threading.Event()
+
+    def read() -> None:
+        try:
+            while not stop.is_set():
+                book.live(now=0.0)
+        except BaseException as error:  # a bare dict raises RuntimeError here
+            raised.append(error)
+
+    def write() -> None:
+        try:
+            for n in range(3_000):
+                book.attach(_session(session_id=f"s{n}"))
+                book.sweep(now=0.0)
+        except BaseException as error:
+            raised.append(error)
+        finally:
+            stop.set()
+
+    readers = [threading.Thread(target=read) for _ in range(4)]
+    writer = threading.Thread(target=write)
+    for thread in (*readers, writer):
+        thread.start()
+    for thread in (*readers, writer):
+        thread.join(timeout=30.0)
+    assert raised == []
+    assert len(book.live(now=0.0)) == 3_000

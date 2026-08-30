@@ -20,6 +20,10 @@ def queue(tmp_path: Path) -> EventQueue:
     return EventQueue(lambda key: tmp_path / "repos" / key / "spool.jsonl")
 
 
+#: one legal `repo_dir_key`, which is the only shape `EventRequest.key` admits
+_KEY = "a" * 40
+
+
 def _event(**kw) -> Event:
     return Event(**{"repo": "/r", "paths": ("a.py",), "at": 100.0, **kw})
 
@@ -57,10 +61,12 @@ def test_a_put_during_a_drain_is_not_lost(queue, tmp_path, monkeypatch):
     monkeypatch.setattr(Spool, "read", write_while_reading)
     drained = queue.drain("k")
     monkeypatch.undo()
+    queue.consumed("k")
     assert [e.paths for e in drained] == [("a.py",)]
     assert queue.keys() == ("k",)
     assert path.exists()
     assert [e.paths for e in queue.drain("k")] == [("b.py",)]
+    queue.consumed("k")
     assert queue.keys() == ()
     assert not path.exists()
     assert list(path.parent.glob("*.draining")) == []
@@ -79,7 +85,7 @@ def test_a_path_set_over_the_cap_is_refused_by_the_model():
     with pytest.raises(ValueError):
         EventRequest(
             repo="/r",
-            key="k",
+            key=_KEY,
             paths=tuple(f"f{i}.py" for i in range(MAX_EVENT_PATHS + 1)),
         )
 
@@ -88,6 +94,7 @@ def test_a_drained_spool_is_cleared_and_the_key_goes_with_it(queue):
     queue.put("k", _event())
     assert queue.drain("k") != ()
     assert queue.keys() == ()
+    queue.consumed("k")
     assert queue.drain("k") == ()
     assert queue.wait(0.0) is False
 
@@ -108,3 +115,37 @@ def test_a_torn_spool_line_is_skipped_not_raised(tmp_path):
 
 def test_a_missing_spool_reads_as_empty(tmp_path):
     assert Spool(tmp_path / "nothing.jsonl").read() == ()
+
+
+def test_a_daemon_killed_mid_drain_still_hands_the_batch_to_its_successor(
+    queue, tmp_path
+):
+    """`drain` unlinked the staged file before `consume` ran, so a kill there lost the batch."""
+    for name in ("a", "b", "c"):
+        queue.put("k", _event(paths=(f"{name}.py",)))
+    drained = queue.drain("k")  # the process dies here, before any consumer sees these
+    assert len(drained) == 3
+    staged = tmp_path / "repos" / "k" / "spool.draining"
+    assert staged.exists()
+    fresh = EventQueue(lambda key: tmp_path / "repos" / key / "spool.jsonl")
+    assert fresh.adopt(["k"]) == 1
+    assert [e.paths for e in fresh.drain("k")] == [("a.py",), ("b.py",), ("c.py",)]
+
+
+def test_a_staged_batch_is_drained_ahead_of_a_spool_written_after_it(queue, tmp_path):
+    """The staged batch was accepted first, so it has to reach the consumer first."""
+    queue.put("k", _event(paths=("older.py",)))
+    assert [e.paths for e in queue.drain("k")] == [("older.py",)]
+    queue.put("k", _event(paths=("newer.py",)))
+    fresh = EventQueue(lambda key: tmp_path / "repos" / key / "spool.jsonl")
+    assert fresh.adopt(["k"]) == 1
+    assert [e.paths for e in fresh.drain("k")] == [("older.py",)]
+    fresh.consumed("k")
+    assert [e.paths for e in fresh.drain("k")] == [("newer.py",)]
+
+
+def test_a_line_torn_mid_character_is_skipped_not_raised(tmp_path):
+    """A repo path with a non-ASCII character makes this the ordinary kill, not a corner."""
+    path = tmp_path / "spool.jsonl"
+    path.write_bytes(b'{"repo": "/r", "paths": ["a.py"]}\n{"repo": "/caf\xc3')
+    assert [e.repo for e in Spool(path).read()] == ["/r"]

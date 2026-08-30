@@ -1,5 +1,6 @@
 """Spec 8.2's sessions and the AND-gate that admits one."""
 
+import threading
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -80,14 +81,21 @@ def attach_refusal(
 
 
 class SessionBook:
-    """Attached sessions, with expiry computed on read so nothing has to tick (recon Q7)."""
+    """Attached sessions, with expiry computed on read so nothing has to tick (recon Q7).
+
+    The daemon's own tick sweeps and reads on one thread while the HTTP handlers attach, beat and
+    detach on others, so every method that touches the map takes the lock and the two readers
+    iterate a snapshot rather than the live dict.
+    """
 
     def __init__(self, *, expiry_minutes: float) -> None:
         self.expiry_seconds = expiry_minutes * MINUTE
         self._sessions: dict[str, Session] = {}
+        self._lock = threading.Lock()
 
     def attach(self, session: Session) -> Session:
-        self._sessions[session.session_id] = session
+        with self._lock:
+            self._sessions[session.session_id] = session
         return session
 
     def expired(self, session: Session, *, now: float) -> bool:
@@ -95,27 +103,34 @@ class SessionBook:
 
     def heartbeat(self, session_id: str, *, now: float) -> bool:
         """Move ``last_seen``; False for a session this daemon does not hold or has expired."""
-        held = self._sessions.get(session_id)
-        if held is None or self.expired(held, now=now):
-            return False
-        self._sessions[session_id] = held.model_copy(update={"last_seen": now})
+        with self._lock:
+            held = self._sessions.get(session_id)
+            if held is None or self.expired(held, now=now):
+                return False
+            self._sessions[session_id] = held.model_copy(update={"last_seen": now})
         return True
 
     def detach(self, session_id: str) -> bool:
-        return self._sessions.pop(session_id, None) is not None
+        with self._lock:
+            return self._sessions.pop(session_id, None) is not None
 
     def live(self, *, now: float) -> tuple[Session, ...]:
         """Every unexpired session, oldest first. Expiry is decided here, not by a timer."""
+        with self._lock:
+            held = tuple(self._sessions.values())
         return tuple(
             sorted(
-                (s for s in self._sessions.values() if not self.expired(s, now=now)),
+                (s for s in held if not self.expired(s, now=now)),
                 key=lambda s: s.started_at,
             )
         )
 
     def sweep(self, *, now: float) -> int:
         """Drop expired sessions and say how many went, for the idle tick."""
-        gone = [k for k, s in self._sessions.items() if self.expired(s, now=now)]
-        for key in gone:
-            del self._sessions[key]
+        with self._lock:
+            gone = [
+                k for k, s in list(self._sessions.items()) if self.expired(s, now=now)
+            ]
+            for key in gone:
+                del self._sessions[key]
         return len(gone)

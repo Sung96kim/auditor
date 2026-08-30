@@ -1,5 +1,6 @@
 """The events the hooks post: durable in ``spool.jsonl``, signalled in memory (spec 8.1)."""
 
+import contextlib
 import json
 import os
 import threading
@@ -67,9 +68,13 @@ class Spool:
             handle.write(event.model_dump_json() + "\n")
 
     def read(self) -> tuple[Event, ...]:
-        """Every readable event, oldest first. A torn line is skipped, never raised."""
+        """Every readable event, oldest first. A torn line is skipped, never raised.
+
+        Decoded with ``errors="replace"`` because a kill can tear a line mid-character, and a
+        `UnicodeDecodeError` out of here would propagate all the way out of the daemon's loop.
+        """
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+            lines = self.path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return ()
         out: list[Event] = []
@@ -88,7 +93,8 @@ class EventQueue:
     """What the daemon has accepted and not yet consumed, keyed by ``repo_dir_key``.
 
     The spool is the truth and the in-memory set is the wakeup, so a daemon that dies between the
-    202 and the consumer loses nothing: :meth:`drain` reads the file.
+    202 and the consumer loses nothing: :meth:`drain` reads the file and leaves it staged until
+    :meth:`consumed` says the batch was taken.
     """
 
     def __init__(self, spool_for: Callable[[str], Path] = spool_path) -> None:
@@ -101,6 +107,10 @@ class EventQueue:
 
     def spool(self, key: str) -> Spool:
         return Spool(self._spool_for(key))
+
+    def staged(self, key: str) -> Path:
+        """Where :meth:`drain` parks a batch until its consumer has seen it."""
+        return self._spool_for(key).with_suffix(".draining")
 
     def _key_lock(self, key: str) -> threading.Lock:
         """One lock per repo, so two request threads cannot interleave a line."""
@@ -117,8 +127,16 @@ class EventQueue:
         self._signal.set()
 
     def adopt(self, keys: Iterable[str]) -> int:
-        """Take on spools found on disk at start (spec 8.1's drain). Returns how many."""
-        found = [key for key in keys if self._spool_for(key).exists()]
+        """Take on spools found on disk at start (spec 8.1's drain). Returns how many.
+
+        A ``spool.draining`` counts: it is a batch a killed predecessor answered 202 for and
+        never handed to a consumer, and :meth:`drain` reads it before the fresh spool.
+        """
+        found = [
+            key
+            for key in keys
+            if self._spool_for(key).exists() or self.staged(key).exists()
+        ]
         with self._lock:
             self._pending.update(found)
         if found:
@@ -134,23 +152,28 @@ class EventQueue:
 
         The rename is what makes a write racing a drain safe: it lands in a fresh spool under the
         live name and keeps its key, so an event that was answered 202 is never unlinked (P26).
+        A batch already staged by a killed predecessor is read first and the fresh spool stays
+        pending, so the older events reach the consumer in front of the newer ones.
         """
         spool = self.spool(key)
-        staged = spool.path.with_suffix(".draining")
+        staged = self.staged(key)
         with self._key_lock(key):
-            try:
-                os.replace(spool.path, staged)
-            except OSError:
-                events: tuple[Event, ...] = ()
-            else:
-                events = Spool(staged).read()
-                staged.unlink(missing_ok=True)
+            if not staged.exists():
+                # nothing to take when no spool sits under the live name
+                with contextlib.suppress(OSError):
+                    os.replace(spool.path, staged)
+            events = Spool(staged).read()
             with self._lock:
                 if not spool.path.exists():
                     self._pending.discard(key)
                 if not self._pending:
                     self._signal.clear()
         return events
+
+    def consumed(self, key: str) -> None:
+        """Drop the batch :meth:`drain` staged. Until this runs, a restart adopts it again."""
+        with self._key_lock(key):
+            self.staged(key).unlink(missing_ok=True)
 
     def wait(self, timeout: float) -> bool:
         """Block until something is pending. The ``threading.Event`` seam spec 15's fixture uses."""
