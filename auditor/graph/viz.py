@@ -136,6 +136,30 @@ def render_app(payload: dict) -> str:
     return html + inject
 
 
+_STATUS_DOC = """<!doctype html>
+<html><head><meta charset="utf-8"><title>auditor observer</title></head>
+<body><h1>auditor observer</h1>
+<p>The graph holds {nodes} nodes, {edges} edges and {clusters} clusters.</p>
+<p>No UI bundle is built. Run `pnpm build` inside auditor/graph/ui/ to get the live page.</p>
+</body></html>
+"""
+
+
+def render_app_or_status(payload: dict) -> str:
+    """The built UI with ``payload`` injected, or a plain status document when no bundle exists.
+
+    `graph serve` keeps :func:`render_app`, which raises: its user can run `pnpm build` and the
+    daemon's user is a hook that cannot (spec 8.1).
+    """
+    if _APP_HTML.exists():
+        return render_app(payload)
+    return _STATUS_DOC.format(
+        nodes=len(payload["nodes"]),
+        edges=len(payload["edges"]),
+        clusters=len(payload["clusters"]),
+    )
+
+
 def _dot_provenance(provenance: str | None) -> str:
     """The style a `refined` edge carries in both DOT exports, so an overlay edge cannot read as
     one the resolver produced. Empty for everything else."""

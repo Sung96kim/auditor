@@ -2,23 +2,38 @@
 the shared index db path under it, and the resolved-abspath repo key."""
 
 import json
+import zlib
 from pathlib import Path
 
-from _support import git
+import pytest
+from _support import git, invoke
 
+import auditr_observer
+from auditor import paths as paths_module
 from auditor.paths import (
     auditor_home,
+    daemon_json_path,
     ensure_repo_dir,
     identity_key,
     index_db_path,
+    is_main_worktree,
     models_dir,
+    observer_dir,
+    observer_enabled,
+    observer_lock_path,
+    observer_log_dir,
+    observer_port,
     partition_for,
     read_json_dict,
     read_json_dict_strict,
     repo_dir,
+    repo_dir_for_identity,
+    repo_dir_from_key,
     repo_dir_key,
     repo_identity,
     repo_key,
+    repo_root_from_key,
+    spool_path,
     user_config_path,
     user_schema_path,
     write_json_dict,
@@ -188,3 +203,103 @@ def test_partition_for_outside_git_falls_back_to_the_partition_key(tmp_path):
 def test_identity_key_is_what_the_repo_dir_is_named_after(git_repo):
     assert repo_dir_key(git_repo) == identity_key(repo_identity(git_repo))
     assert identity_key("/a/.git") != identity_key("/b/.git")
+
+
+def test_the_port_rule_hashes_the_resolved_home(tmp_path, monkeypatch):
+    """A daemon reached through `~/.auditor` and one reached through its real path are one daemon."""
+    monkeypatch.delenv("AUDITOR_OBSERVER_PORT", raising=False)
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    expected = 7490 + zlib.crc32(str(auditor_home().resolve()).encode()) % 500
+    assert observer_port() == expected
+    assert 7490 <= observer_port() < 7990
+
+
+def test_the_port_env_var_wins_over_the_rule(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.setenv("AUDITOR_OBSERVER_PORT", "7777")
+    assert observer_port() == 7777
+
+
+def test_the_daemon_files_sit_beside_the_rebuild_lock_and_never_replace_it(
+    tmp_path, monkeypatch
+):
+    """`observer/locks/` is the rebuild lock's; the daemon adds three siblings and owns no parent."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    assert observer_dir() == tmp_path / "observer"
+    assert observer_lock_path() == tmp_path / "observer" / "lock"
+    assert daemon_json_path() == tmp_path / "observer" / "daemon.json"
+    assert observer_log_dir() == tmp_path / "observer" / "log"
+    assert spool_path("abc") == repo_dir_from_key("abc") / "spool.jsonl"
+    assert repo_dir_for_identity("/i/.git") == repo_dir_from_key(
+        identity_key("/i/.git")
+    )
+
+
+def test_a_spool_key_resolves_back_to_the_repo_it_belongs_to(tmp_path, monkeypatch):
+    """A restart adopts a spool by key alone, so the breadcrumb is the only way back to the root."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    root = tmp_path / "checkout"
+    root.mkdir()
+    key = identity_key("/i/.git")
+    assert repo_root_from_key(key) is None
+    ensure_repo_dir(root, identity="/i/.git")
+    assert repo_root_from_key(key) == root.resolve()
+
+
+@pytest.mark.parametrize(
+    ("value", "port", "enabled"),
+    [
+        ("maybe", "abc", True),
+        ("", "", True),
+        ("f", " ", False),
+        ("OFF", "0", False),
+    ],
+)
+def test_a_junk_env_value_is_ignored_rather_than_fatal(
+    value, port, enabled, tmp_path, monkeypatch
+):
+    """Every `auditr` command builds `GlobalPaths`, so a typo here must not take the CLI down."""
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    monkeypatch.setenv("AUDITOR_OBSERVER", value)
+    monkeypatch.setenv("AUDITOR_OBSERVER_PORT", port)
+    assert observer_enabled() is enabled
+    assert 7490 <= observer_port() < 7990
+    assert invoke("version").exit_code == 0
+    assert invoke("config", "check").exit_code == 0
+
+
+def test_the_client_and_the_reader_read_one_off_set():
+    """`AUDITOR_OBSERVER=f` must not disable one side of the pair and leave the other on (P4)."""
+    assert set(auditr_observer._OFF) == set(paths_module.OFF_VALUES)
+
+
+def test_the_worktree_probe_falls_back_on_git_before_2_31(
+    git_repo, tmp_path, monkeypatch
+):
+    """`--path-format=absolute` is git 2.31; without the fallback old git admits every worktree."""
+    linked = tmp_path / "linked"
+    git(git_repo, "worktree", "add", "-q", str(linked), "-b", "side")
+    real = paths_module.git_output
+
+    def old_git(root, *args):
+        return None if "--path-format=absolute" in args else real(root, *args)
+
+    monkeypatch.setattr(paths_module, "git_output", old_git)
+    assert is_main_worktree(git_repo) is True
+    assert is_main_worktree(linked) is False
+
+
+def test_the_main_worktree_is_the_one_whose_git_dir_is_the_common_dir(
+    git_repo, tmp_path
+):
+    """`repo_identity` collapses every worktree to one value, so it cannot answer this (spec 8.2)."""
+    linked = tmp_path / "linked"
+    git(git_repo, "worktree", "add", "-q", str(linked), "-b", "side")
+    assert is_main_worktree(git_repo) is True
+    assert is_main_worktree(linked) is False
+
+
+def test_a_tree_outside_git_is_its_own_main_worktree(tmp_path):
+    """Nothing is linked to anything, so the gate must not refuse a non-git root."""
+    assert is_main_worktree(tmp_path) is True

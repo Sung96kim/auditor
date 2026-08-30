@@ -340,6 +340,9 @@ class GlobalPaths(BaseSettings):
     home: Path = Field(default_factory=lambda: Path.home() / ".auditor")
     code_mode: bool = False
     refine_run: str = ""
+    # spec 14's two observer env vars, kept as strings so a typo can never fail a command (P4)
+    observer: str = ""
+    observer_port: str = ""
 
 
 class _NonPolicyEnvSource(EnvSettingsSource):

@@ -14,6 +14,8 @@ OBSERVER_API_VERSION = 1
 
 _UNAVAILABLE = "auditr-observer: not available in this release"
 _LIFECYCLE = ("ensure", "start", "stop", "status", "open")
+#: the same six strings ``auditor.paths.OFF_VALUES`` holds; a test pins the pair (P4)
+_OFF = frozenset({"0", "f", "false", "n", "no", "off"})
 
 
 def _version() -> str:

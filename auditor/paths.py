@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import time
+import zlib
 from pathlib import Path, PurePosixPath
 
 from auditor.config import GlobalPaths
@@ -148,10 +149,28 @@ def repo_dir_key(root: Path) -> str:
     return identity_key(repo_identity(root))
 
 
+def repo_dir_from_key(key: str) -> Path:
+    """Where one already-hashed ``repo_dir_key`` keeps its per-user state.
+
+    The one owner of the ``repos/<key>`` layout; every other spelling of it goes through here.
+    """
+    return auditor_home() / "repos" / key
+
+
 def repo_dir_for_identity(identity: str) -> Path:
-    """Where an already-resolved identity's per-user state lives. The one owner of the
-    ``repos/<key>`` layout, for callers holding an identity that cost a git subprocess."""
-    return auditor_home() / "repos" / identity_key(identity)
+    """Where an already-resolved identity's per-user state lives, for callers holding an identity
+    that cost a git subprocess."""
+    return repo_dir_from_key(identity_key(identity))
+
+
+def repo_root_from_key(key: str) -> Path | None:
+    """The checkout one ``repos/<key>`` directory belongs to, from its ``root.json`` breadcrumb.
+
+    The restart path knows a spool key and has read no event yet, so the breadcrumb is the only
+    way back to a root. None when the directory or the crumb is absent or unreadable.
+    """
+    recorded = read_json_dict(repo_dir_from_key(key) / "root.json").get("root")
+    return Path(recorded) if isinstance(recorded, str) and recorded else None
 
 
 def repo_dir(root: Path) -> Path:
@@ -178,3 +197,80 @@ def ensure_repo_dir(root: Path, *, identity: str | None = None) -> Path:
             )
         )
     return out
+
+
+_PORT_BASE = 7490
+_PORT_SPAN = 500
+#: the values that read as "off"; ``auditr_observer._OFF`` is the same set and a test pins the pair
+OFF_VALUES = frozenset({"0", "f", "false", "n", "no", "off"})
+
+
+def observer_dir() -> Path:
+    """The daemon's directory under the home. Never created wholesale and never cleared.
+
+    ``observer/locks/`` belongs to the rebuild lock and predates any daemon, so the daemon creates
+    only the three leaves it owns.
+    """
+    return auditor_home() / "observer"
+
+
+def observer_lock_path() -> Path:
+    """The daemon singleton: whoever holds this flock is the daemon for this home."""
+    return observer_dir() / "lock"
+
+
+def daemon_json_path() -> Path:
+    """Where a running daemon publishes its pid, port, home, version and wire compat."""
+    return observer_dir() / "daemon.json"
+
+
+def observer_log_dir() -> Path:
+    """Where the daemon's rotating log lives."""
+    return observer_dir() / "log"
+
+
+def spool_path(key: str) -> Path:
+    """One repo's pending-events spool, keyed by :func:`repo_dir_key` (spec 8.1)."""
+    return repo_dir_from_key(key) / "spool.jsonl"
+
+
+def observer_port() -> int:
+    """The loopback port this home's daemon binds: ``AUDITOR_OBSERVER_PORT``, else the home's hash.
+
+    An unreadable value is ignored rather than fatal, because every ``auditr`` command builds
+    ``GlobalPaths`` and a typo here must not take the CLI down.
+    """
+    raw = GlobalPaths().observer_port.strip()
+    try:
+        configured = int(raw)
+    except ValueError:
+        configured = 0
+    if configured:
+        return configured
+    return _PORT_BASE + zlib.crc32(str(auditor_home().resolve()).encode()) % _PORT_SPAN
+
+
+def observer_enabled() -> bool:
+    """Whether ``AUDITOR_OBSERVER`` leaves the observer on at all (spec 8.1, 14).
+
+    Anything that is not one of :data:`OFF_VALUES` leaves it on, which is the client's own rule.
+    """
+    return GlobalPaths().observer.strip().lower() not in OFF_VALUES
+
+
+def is_main_worktree(root: Path) -> bool:
+    """Whether ``root`` is the checkout's main worktree, not one ``git worktree add`` made.
+
+    ``repo_identity`` deliberately gives every worktree of one checkout the same value, so the
+    question needs the git dir against the common dir. Outside git there is one tree, so True.
+    """
+    own = git_output(root, "rev-parse", "--path-format=absolute", "--git-dir")
+    common = git_output(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if (
+        own is None or common is None
+    ):  # git < 2.31 has no --path-format, as repo_identity records
+        own = git_output(root, "rev-parse", "--git-dir")
+        common = git_output(root, "rev-parse", "--git-common-dir")
+    if own is None or common is None:
+        return True
+    return (root / own).resolve() == (root / common).resolve()

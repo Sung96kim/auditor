@@ -11,6 +11,8 @@ from auditor.discovery import (
     discover,
     find_root,
     git_changed_files,
+    git_status_paths,
+    parse_status_z,
 )
 from auditor.registry import REGISTRY
 
@@ -414,3 +416,42 @@ def test_agent_worktrees_are_excluded_without_git(tmp_path: Path):
     found = FileDiscovery(tmp_path, respect_gitignore=False).files(tmp_path)
     assert [p.name for p in found] == ["mod.py"]
     assert all(".claude" not in str(p) for p in found)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (" M a.py\0", ("a.py",)),
+        ("D  pkg/b.py\0", ("pkg/b.py",)),
+        ("R  pkg/d.py\0pkg/c.py\0", ("pkg/d.py", "pkg/c.py")),
+        ("C  copy.py\0orig.py\0", ("copy.py", "orig.py")),
+        ("?? new.py\0", ("new.py",)),
+        ("?? a b.py\0", ("a b.py",)),
+        ("", ()),
+        ("\0", ()),
+        (" M a.py\0?? n.py\0", ("a.py", "n.py")),
+    ],
+)
+def test_the_status_z_parser_takes_both_sides_of_a_rename(payload, expected):
+    """A rename spends two NUL fields, so the reader is a cursor and never a split (spec 21)."""
+    assert parse_status_z(payload) == expected
+
+
+def test_the_stop_path_set_is_the_whole_dirty_tree_not_a_delta(git_repo):
+    """Spec 8.2: modified, staged deletions, both sides of a rename, untracked expanded."""
+    (git_repo / "a.py").write_text("x = 1\n")
+    (git_repo / "pkg").mkdir()
+    (git_repo / "pkg" / "c.py").write_text("z = 1\n")
+    _git(git_repo, "add", "-A")
+    _git(git_repo, "commit", "-qm", "two")
+    _git(git_repo, "mv", "pkg/c.py", "pkg/d.py")
+    (git_repo / "a.py").write_text("x = 2\n")
+    (git_repo / "fresh").mkdir()
+    (git_repo / "fresh" / "q.py").write_text("q = 1\n")
+    found = git_status_paths(git_repo)
+    assert found is not None
+    assert set(found) == {"a.py", "pkg/d.py", "pkg/c.py", "fresh/q.py"}
+
+
+def test_git_status_paths_is_none_outside_a_checkout(tmp_path):
+    assert git_status_paths(tmp_path) is None

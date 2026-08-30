@@ -136,6 +136,50 @@ def git_changed_files(root: Path, ref: str) -> set[str] | None:
     return {line for line in lines if line}
 
 
+_STATUS_ARGS = (
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    # porcelain v1 has no submodule marker, so a submodule entry can only be dropped by git
+    "--ignore-submodules=all",
+)
+
+
+def parse_status_z(payload: str) -> tuple[str, ...]:
+    """Every path a ``git status --porcelain=v1 -z`` answer names, both sides of a rename.
+
+    Fields are NUL separated and a rename or a copy spends two of them, the new path in the record
+    and the old path in the field after it, which is why this is a cursor and not a split.
+    """
+    fields = payload.split("\0")
+    out: list[str] = []
+    index = 0
+    while index < len(fields):
+        record = fields[index]
+        index += 1
+        if len(record) < 4:  # "XY " plus at least one character of path
+            continue
+        code, path = record[:2], record[3:]
+        out.append(path)
+        if ("R" in code or "C" in code) and index < len(fields):
+            out.append(fields[index])
+            index += 1
+    return tuple(out)
+
+
+def git_status_paths(root: Path) -> tuple[str, ...] | None:
+    """The full dirty path set at ``root``, or None outside a checkout (spec 8.2).
+
+    Not a delta: a second edit to an already-dirty file is invisible to one, and this is the only
+    edit path Codex has.
+    """
+    done = _git(root, *_STATUS_ARGS)
+    if done is None or done.returncode != 0:
+        return None
+    return parse_status_z(done.stdout)
+
+
 def find_root(start: Path) -> Path:
     """Walk up from ``start`` for a repo root (.git / pyproject.toml / .auditor). Resolved first,
     so a relative start such as the default ``.`` has parents to walk."""

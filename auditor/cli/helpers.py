@@ -22,7 +22,8 @@ from auditor.cli.console import ACCENT, console, err_console
 from auditor.config import AuditorSettings, ConfigError, load_config
 from auditor.config_notice import NOTICE, ConfigNotice, format_config_error
 from auditor.database import IndexStore, open_repo_index
-from auditor.database.base import DEFAULT_REPO, UnmigratableColumn
+from auditor.database import open_shared_index as shared_index
+from auditor.database.base import UnmigratableColumn
 from auditor.discovery import find_root
 from auditor.paths import index_db_path
 from auditor.plugins import PluginLoader
@@ -262,9 +263,9 @@ async def open_index(root: Path) -> IndexStore:
 
 
 async def open_shared_index() -> IndexStore:
-    """Connect to the shared global index for cross-repo operations (listing/forgetting repos),
-    not bound to any one repo's partition."""
-    return await _repaired(IndexStore.connect(index_db_path(), DEFAULT_REPO))
+    """:func:`auditor.database.open_shared_index` with a repair instruction instead of a raw
+    schema error, the way :func:`open_index` wraps ``open_repo_index``."""
+    return await _repaired(shared_index())
 
 
 async def _repaired(opening: Awaitable[IndexStore]) -> IndexStore:

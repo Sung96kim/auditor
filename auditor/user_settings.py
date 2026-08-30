@@ -130,8 +130,8 @@ class SchedulingConfig(BaseModel):
     session_expiry_minutes: int = Field(
         45, ge=1, description="Idle minutes before a session is considered gone."
     )
-    idle_shutdown_minutes: int = Field(
-        30, ge=1, description="Idle minutes before the daemon exits."
+    idle_shutdown_minutes: float = Field(
+        30.0, ge=0.0, description="Idle minutes before the daemon exits; 0 never exits."
     )
     run_on_stale: bool = Field(
         True, description="Re-run when an edit stales an existing refinement."
