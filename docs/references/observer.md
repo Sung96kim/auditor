@@ -121,8 +121,10 @@ thread rather than pinning one.
   so a matching `If-None-Match` costs a 304 and skips the page query; the tag's own two reads are
   paid on every poll. `/api/runs`' tag names the repo, so two repos with the same run count do
   not share one.
-- Every route with a `repo` in it answers `400` unless the query names a directory. There is no
-  fall back to the daemon's own working directory, which is a repo the caller never asked about.
+- Every route with a `repo` in it answers `400` unless the query names an absolute directory. A
+  relative name and no name at all both fall back to the daemon's own working directory, which is
+  a repo the caller never asked about, so neither is answered.
+
 - `POST /events` takes the `key` a hook already computed, and it must be a `repo_dir_key`: 40 hex
   characters, because it names the directory the spool is written to. Up to 2,000 paths per body;
   the shape filter runs once per path on the request thread, which is about 84 ms at the cap.

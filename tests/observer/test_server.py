@@ -21,7 +21,12 @@ from auditor.graph.refine.models import (
 from auditor.observer.events import MAX_EVENT_PATHS
 from auditor.observer.payloads import ROUTES, RunDetailView, StatusPayload
 from auditor.observer.routes import HANDLERS, TAGS
-from auditor.observer.server import MAX_BODY_BYTES, _Handler, loopback_host
+from auditor.observer.server import (
+    MAX_BODY_BYTES,
+    REQUEST_TIMEOUT,
+    _Handler,
+    loopback_host,
+)
 
 #: one legal `repo_dir_key`: `EventRequest.key` names a directory, so its shape is constrained
 _KEY = "a" * 40
@@ -504,8 +509,14 @@ def test_an_unusable_content_length_is_answered_not_dropped(
 
 
 def test_a_short_body_frees_its_thread_on_the_deadline(daemon_server, monkeypatch):
-    """No read deadline meant N half-open connections cost N pinned threads forever."""
+    """No read deadline meant N half-open connections cost N pinned threads forever.
+
+    The deadline is asserted before it is shortened: `StreamRequestHandler` declares its own
+    `timeout = None`, so the monkeypatch alone passes whether or not production sets one.
+    """
+    assert _Handler.timeout == REQUEST_TIMEOUT
     monkeypatch.setattr(_Handler, "timeout", 0.3)
+
     server, _ = daemon_server
     started = time.monotonic()
     with socket.create_connection(("127.0.0.1", server.port), timeout=5.0) as sock:
@@ -587,6 +598,9 @@ def test_every_read_route_answers_the_payload_its_route_spec_names(
 
 
 @pytest.mark.parametrize(
+    "query", ["", "?repo=", "?repo=/nope-xyz", "?repo=.", "?repo=..", "?repo=auditor"]
+)
+@pytest.mark.parametrize(
     "route",
     [
         "/api/graph",
@@ -598,15 +612,17 @@ def test_every_read_route_answers_the_payload_its_route_spec_names(
     ],
 )
 def test_a_repo_scoped_route_refuses_to_answer_from_the_daemons_cwd(
-    daemon_server, route
+    daemon_server, route, query
 ):
-    """`Path(query.get("repo") or ".")` answered every one of these from the daemon's own cwd."""
+    """`Path(query.get("repo") or ".")` answered every one of these from the daemon's own cwd.
+
+    A relative name is that same cwd wearing a query string: `.`, `..` and `auditor` are all
+    directories the daemon can see and none of them is a repo the caller named.
+    """
     _, call = daemon_server
-    absent, _, body = call.request("GET", route)
-    assert absent == 400
-    assert body == {"error": "a repo=<path> naming a directory is required"}
-    assert call.request("GET", f"{route}?repo=")[0] == 400
-    assert call.request("GET", f"{route}?repo=/nope-xyz")[0] == 400
+    status, _, body = call.request("GET", f"{route}{query}")
+    assert status == 400
+    assert body == {"error": "a repo=<absolute path> naming a directory is required"}
 
 
 def test_an_event_bumps_the_revision_so_the_queue_count_is_pollable(

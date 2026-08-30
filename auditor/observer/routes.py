@@ -59,7 +59,7 @@ Read = Callable[[Path], WirePayload]
 
 _LOG = logging.getLogger("auditor.observer")
 #: what a repo-scoped route answers when the query named no repo, or named a path that is not one
-_NO_REPO = "a repo=<path> naming a directory is required"
+_NO_REPO = "a repo=<absolute path> naming a directory is required"
 
 
 def _no_meters() -> tuple[BudgetPayload | None, RateLimitPayload]:
@@ -400,14 +400,15 @@ class Router:
         return reply.model_copy(update={"etag": tag}) if tag else reply
 
     def _root(self, query: Mapping[str, str]) -> Path | None:
-        """The repo this query names, or None when it named none or named a path that is not one.
+        """The absolute directory this query names, or None when it named anything else.
 
-        No fallback: the daemon's inherited cwd is a repo the caller never asked about, and
-        answering from it is item 43's silent substitution.
+        No fallback and no relative name: both resolve against the daemon's inherited cwd, which
+        is a repo the caller never asked about, and answering from it is item 43's substitution.
         """
-        raw = query.get("repo", "")
-        root = Path(raw) if raw else None
-        return root if root is not None and root.is_dir() else None
+        root = Path(query["repo"]) if query.get("repo") else None
+        if root is None or not root.is_absolute() or not root.is_dir():
+            return None
+        return root
 
     def _scoped(self, query: Mapping[str, str], read: Read) -> Reply:
         """One repo-scoped answer, or the 400 a query naming no usable repo earns."""
