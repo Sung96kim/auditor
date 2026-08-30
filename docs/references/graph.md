@@ -260,10 +260,12 @@ auditr graph refinements prune
 - `accept`, `revert` and `pin` are deliberately CLI-only. An agent may propose and commit; deciding
   that a pending correction is right is a human step, and no MCP tool can take it. They change a
   status and nothing else, so run `auditr graph build` afterwards.
-- `prune` does two things, and reports both. It finishes runs left `queued` by a process that died
-  (`observer.limits.stranded_run_seconds`) as `skipped`, because nothing else can reach them. It
-  then deletes assessment-only runs past `observer.skipped_retention_days` together with the
-  `rejected` refinements they own, and never a run that owns a live refinement or a tuning row.
+- `prune` does two things, and reports both. It finishes the runs a dead process left open as
+  `skipped`, because nothing else can reach them: a `queued` row past
+  `observer.limits.stranded_run_seconds`, a `running` row past twice that, since a `running` row is
+  open for a whole model call. It then deletes assessment-only runs past
+  `observer.skipped_retention_days` together with the `rejected` refinements they own, and never a
+  run that owns a live refinement or a tuning row.
 
 ## What a correction has to clear
 
@@ -364,8 +366,9 @@ auditr graph log --skipped
 
 - `--runs` (the default) shows one row per decision, with `n`, the number of refinement rows that
   run owns; `--refinements` shows the corrections themselves. Both are newest first, which is the
-  opposite of the order a build applies them in. A run stays `queued` until it finishes: nothing
-  writes `running` yet.
+  opposite of the order a build applies them in. A run is `queued` only until its brief is
+  recorded: every runner stamps `running` before the first model turn, so a run with turns burning
+  reads `running`.
 - The `summary` column is the model's own one-line answer when it gave one. Without one it splits
   that count for a finished run ("1 committed, 0 rejected"), because a run is not credited with the
   proposals it refused. An aborted run shows its reason there instead.
@@ -388,9 +391,11 @@ auditr graph log --skipped
 - The page is capped by `--limit` (default 50, at most 500). `--json` carries `run_count` and
   `refinement_count`, the number matching the same filters, and `truncated`.
 - Under `--json` a model-driven run adds `system_prompt_sha`, `prompt_chars` and `tool_calls`, and
-  every run row carries `trigger_detail` with exactly three keys: `files` (capped at 10),
-  `file_count`, and `assessment` when there is one. The assessment travels as counts, never as node
-  ids, so a fifty row page cannot carry thousands of them.
+  every run row carries `trigger_detail` with five keys: `files` and `targets`, the paths the
+  trigger named and the node pairs the run was asked about, each capped at 10; `file_count` and
+  `target_count`, the full sizes behind those caps; and `assessment` when there is one. The
+  assessment travels as counts, never as node ids, so a fifty row page cannot carry thousands of
+  them.
 
 ## Refinement overlay
 

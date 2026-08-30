@@ -147,9 +147,10 @@ The objects behind `auditr graph refine` and `auditr graph refinements`. They ar
 
 ## Change assessment
 
-`auditor.observer` holds the gate that decides whether an edit batch is worth a refinement run.
-Every function in it is pure: no store handle, no filesystem read, no clock, so the caller does the
-I/O and hands the values in. No shipped command calls it; it is here for an embedder building one.
+`auditor.observer.assess` holds the gate that decides whether an edit batch is worth a refinement
+run. Every function in it is pure: no store handle, no filesystem read, no clock, so the caller does
+the I/O and hands the values in. `auditor.observer.loop.RepoLoop`, which `auditr observer start`
+runs, is the shipped caller that does that I/O; the rest of the package is the daemon around it.
 
 - `assess.assess_path(edited) -> PathVerdict` classifies one edited path against the facts cached
   for it, and `assess.stage_one(edited) -> Stage1` does a whole batch, deduplicating by path.
@@ -159,6 +160,11 @@ I/O and hands the values in. No shipped command calls it; it is here for an embe
 - `assess.decide(*, new_pairs, bounded_pairs, stale_refinements, scheduling, budget, kind=...)`
   is the rule itself, public because edit, suspect and verify batches gate against the same state
   and `kind` is what tells them apart. It returns the decision and the pairs a run would take.
+- `assess.choose_targets(*, pairs, after, stale_refinements, files, max_nodes) -> Selection` orders
+  and caps the questions one run takes: proximity to the batch's own files, then a `bare` or `self`
+  call form, then the newest staled refinement anchored to the node, then the queue's own drain
+  priority. The cap counts distinct nodes, so a second question about a node already taken rides
+  along free, and `Selection` carries both halves, `chosen` and `deferred`.
 - `assess.new_rows`, `new_pairs`, `resolved_pairs` and `staled_refinements` are the queue diffs.
   They compare on `graph_unresolved`'s whole key, `(node_id, name, reason)`, and report distinct
   `(node_id, name)` pairs, so a name asked twice for two reasons is two rows to diff and one

@@ -63,8 +63,8 @@ security = { min_severity = "high" }
   reference plugin-contributed rules. No trust gate ([plugins.md](plugins.md)).
 - `trust_local_plugins` (default `false`): load `.auditor/plugins/*.py`, which execute code.
 - `respect_skips` (default `true`): honor in-file `auditor: skip` directives.
-- `observer_allowed` (default `true`): the repo's hard opt-out for the graph observer. Nothing
-  reads it in this release; the observer daemon is not part of it.
+- `observer_allowed` (default `true`): the repo's hard opt-out for the graph observer. It is the
+  third clause of the daemon's attach gate, so `false` refuses every session in this repo.
 - `settings_modules` (default `["config", "settings"]`): module stems or directory names that are a
   blessed home for `BaseSettings` subclasses (`PY-CONFIG-SCATTERED-SETTINGS`).
 - `settings_cohesion` (default `true`): also bless the de-facto home, the module where settings
@@ -340,11 +340,14 @@ $AUDITOR_HOME/
 
 Five keys sit at the top of the table; the rest live in five sub-tables. `auditr graph refine`,
 `auditr graph eval` and `auditr graph refinements prune` read the budget, limits and tuning keys
-called out below. The rest of the table is for the observer daemon, which is not in this release,
-so setting one has no effect today.
+called out below. The rest of the table is the observer daemon's own, read by the daemon
+`auditr observer start` runs: see [observer.md](observer.md).
 
-- `enabled` (default `true`), `worktrees` (default `"main"`), `suspects` (default `true`) and
-  `open_browser` (default `true`) are daemon knobs with no reader today.
+- `enabled` (default `true`) and `worktrees` (default `"main"`, or `"all"`) are two clauses of the
+  attach gate: with `enabled` false no repo attaches, and under `"main"` a linked worktree is
+  refused. `suspects` (default `true`) turns on the loop's suspect drain, spec 8.3's item 3; false
+  skips it, so nothing but an edit batch or a verify pass opens a run. `open_browser` (default
+  `true`) opens the daemon's page once per daemon lifetime, on the first session that attaches.
 
 - `skipped_retention_days` (default `7`): days of assessment-row history kept. Only the gate's
   own rows are swept; an evicted or stranded run is `skipped` too and is kept whatever its age.
@@ -356,7 +359,8 @@ so setting one has no effect today.
 
 - `max_cost_usd_per_day` (default `2.0`): ceiling on spend per day, per repository, over a rolling
   24 hours scoped to one checkout identity. Assessment rows spent nothing and do not count against
-  it. Read by the assessment gate, which no shipped command calls yet.
+  it. Read by the assessment gate, which `auditr observer start` calls on every edit batch,
+  suspect drain and verify pass.
 - `max_runs_per_day` (default `40`): ceiling on runs per day, per repository. It is what bounds a
   model with no entry in the price table, and every fraction rule then reads remaining runs. Same
   reader.
@@ -373,7 +377,9 @@ so setting one has no effect today.
   rule never fires; a spent ceiling still stops every batch whatever this is set to. Read by the
   assessment gate.
 - `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
-  No reader today.
+  Read by the SDK runner: a run whose reported utilization reaches it stops as `paused:ratelimit`,
+  the same way one the window rejected outright does. `/api/status` carries it on each repo's rate
+  limit meter.
 
 `observer.limits` (`LimitsConfig`):
 
@@ -383,12 +389,25 @@ so setting one has no effect today.
 - `max_open_runs` (default `8`): runs one process may hold staged at once, per repo identity. The
   oldest is evicted to make room, its `graph_runs` row finished `skipped` and its staging stored as
   rejections.
-- `stranded_run_seconds` (default `3600`): seconds before a run still `queued` is presumed dead.
-  `auditr graph refinements prune` finishes those as `skipped` with a reason, because a run whose
-  process died can be closed by nothing else.
+- `stranded_run_seconds` (default `3600`): seconds before a run still open is presumed dead.
+  `auditr graph refinements prune` finishes those as `skipped` with a reason, and so does the
+  observer's own session-start build, which is the first pass after a daemon that died mid-run
+  comes back. Both open statuses are swept, on two windows: a `queued` row past this many seconds,
+  a `running` row past twice as long, because a `running` row is open for a whole model call.
+- `max_held_events` (default `500`): events a paused loop holds before the oldest are dropped. The
+  spool is drained even while the loop cannot spend, so the batch is assessed when the pause lifts.
+- `max_deferred_pairs` (default `200`): pairs an edit batch's node cap left behind that the loop
+  carries to the next suspect drain. Newest kept.
+- `max_paths_per_batch` (default `200`): edited paths one batch extracts facts for. A larger batch
+  is truncated to its first paths and logs that it was.
+- `max_queue_rows_per_pass` (default `500`): queue rows one suspect drain reads. The cap only ever
+  takes the first `max_nodes_per_run` distinct nodes off the front, so the rest wait for the next
+  pass.
 
 `observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`) is the quiet window
-the loop collects an edit batch over; the window restarts on every event and the last one wins.
+the loop collects an edit batch over; the window restarts on every event and the last one wins. It
+restarts at most five times, so an edit stream faster than the window still yields a batch, and `0`
+turns the window off: the batch is then whatever was already waiting when the loop looked.
 `session_expiry_minutes` (default `45`) is how long after its last heartbeat a session still
 counts, and `idle_shutdown_minutes` (default `30.0`, a float) is how long the daemon goes without a
 request before exiting; `0` never exits, and the window is only consulted when no session is
@@ -416,6 +435,25 @@ The three the loop reads:
   a run. One name asked twice for two reasons is two queue rows and one question. The floor is
   `1`: a gate that fires on nothing opens a model-calling run for every batch that rebuilds.
 
+Both of the two above are the edit batch's own bars. The suspect drain and the verify pass do not
+read them: each has a cooldown of its own, and that is what brakes it.
+
+The rest of the loop's clocks:
+
+- `verify_cooldown_minutes` (default `60`): minutes between verify runs. A verify run that agrees
+  activates the row and one that disagrees rejects it, but silence leaves it `pending`, which is
+  the common case, so without this window one unsettled row would open a run on every tick. `0`
+  opts out.
+- `ratelimit_pause_minutes` (default `5.0`): how long a rate limit holds the loop when the runner
+  named no reset instant. When it named one, that instant wins.
+- `auth_pause_minutes` (default `15.0`): how long an auth refusal holds the loop before it re-asks
+  the runner. The next run after the hold is the probe, and one that reaches the model clears it.
+- `debounce_restart_cap` (default `5.0`): how many times the quiet window may restart before the
+  batch is taken whatever is still arriving.
+- `error_backoff_seconds` (default `5.0`) and `max_error_backoff_seconds` (default `300.0`): a pass
+  that raises puts the repo in `paused:error` and its driver waits this long, doubling per
+  consecutive failure up to the ceiling. A pass that finishes clears the count.
+
 `observer.runner` (`RunnerConfig`):
 
 - `agent` (default `"auto"`): `auto`, `claude` or `codex`. The default for `graph refine --runner`
@@ -423,7 +461,9 @@ The three the loop reads:
 - `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses and the
   default for `--model`.
 - `codex_model` (default `""`) and `codex_prices` (default `{}`): the Codex model override and its
-  price table. No reader today, since the Codex runner is refused.
+  price table. `codex_model` is the model the daemon's `/api/evals` looks the Codex runner's latest
+  eval row up under, falling back to `model` when it is empty. `codex_prices` has no reader today,
+  since the Codex runner is refused.
 
 `observer.tuning` (`TuningConfig`). `mode` (default `"propose"`) and `stopwords_max` (default `20`)
 govern knob-tuning proposals and have no reader today. The one the tier gate reads:

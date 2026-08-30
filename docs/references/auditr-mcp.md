@@ -147,9 +147,10 @@ args = ["run", "-i", "--rm",
   `narrowed_by` names which filters did it; what the default run view hides on its own is reported
   apart as `hidden_statuses` and `hidden_count`.
 - A run's `refinements` is `{committed, rejected}`, the same split `graph_refine_status` reports and
-  the same one the run's `summary` line counts. Every run row carries `trigger_detail` with exactly
-  three keys: the paths the trigger named (capped at 10), `file_count`, and `assessment` when there
-  is one, travelling as counts rather than node ids.
+  the same one the run's `summary` line counts. Every run row carries `trigger_detail` with five
+  keys: `files` and `targets`, the paths the trigger named and the node pairs the run was asked
+  about, each capped at 10; `file_count` and `target_count`, the full sizes behind those caps; and
+  `assessment` when there is one, travelling as counts rather than node ids.
 
 ### Annotations and the shared preamble
 

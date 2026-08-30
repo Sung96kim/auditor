@@ -4,8 +4,9 @@ The background daemon that watches configured repos and serves the page a later 
 live. One process per `$AUDITOR_HOME`, reachable on loopback in about a millisecond, so a session
 hook can post an edit without waiting on anything.
 
-The daemon accepts, records and reports. It does not yet decide what to refine: the loop that reads
-the spool and starts runs is a later slice, so today's consumer counts each drained batch.
+The daemon accepts, records and refines. One `RepoLoop` per attached repo drives spec 8.3's ladder
+over the events the drain hands it, and `/api/status` counts those events, not batches, as
+`drained_events`.
 
 ## The five verbs
 
@@ -141,7 +142,9 @@ thread rather than pinning one.
   no HTTP request of its own; the polling page is a later slice.
 - `/api/status` still declares more than it fills. `state`, `idle_seconds`, `evals` and `vectors`
   are at their defaults; `home`, `version`, `compat`, `started_at`, `uptime_seconds`,
-  `queued_repos`, `drained_events`, `repos`, `sessions` and both meters are real.
+  `queued_repos`, `drained_events`, `repos` and `sessions` are real. So are both meters, and they
+  are per repo: `budget` and `limits` ride on each `repos[]` entry, carrying what that repo's own
+  loop published, so two repos cannot overwrite one another's numbers.
 
 ## What the loop does
 
@@ -150,19 +153,28 @@ One `RepoLoop` per attached repo works spec 8.3's five items in order, highest f
 1. **Session-start build.** An incremental scan with extraction forced on, then a rebuild. A busy
    rebuild lock is logged and the attach still ends `observing`. Writes one `session_start` run
    row: `skipped`, no runner, zero cost.
-2. **Edit batches.** Events collected per quiet window (`debounce_seconds`, last event wins), then
-   spec 8.6's gate. A batch the gate passes opens a run over the pairs it chose; a batch it
-   declines is still a run row. A batch whose every path stage 0 dropped writes nothing.
+2. **Edit batches.** Events collected per quiet window (`debounce_seconds`, last event wins, the
+   window restarting at most five times), then spec 8.6's gate. A batch the gate passes opens a run
+   over the pairs it chose; a batch it declines is still a run row. A batch whose every path stage 0
+   dropped writes nothing.
 3. **Suspect drain.** `graph_unresolved` in the store's own priority order, minus the pairs on
    cooldown and the pairs an `unresolvable` or `redundant` refinement already answers. Item 2's
    deferred pairs are drained first.
 4. **Verify runs.** A second opinion on `pending` refinements, shown the pairs and not the pending
-   correction. It judges and stores nothing: agreement activates, a named different destination
-   rejects, and silence leaves the row `pending`.
+   correction. Its proposals are judged and never stored, but the judgement moves the row it was
+   asked about: agreement activates it, a named different destination rejects it, and silence
+   leaves it `pending`.
 5. **Tuning trials.** The slot exists and returns 0; S11 fills it.
 
 A run takes **pairs**, never a path prefix. `trigger_detail.targets` carries them, so `graph log
 --json` and `GET /api/runs/<id>` both show what a run was asked about.
+
+An edit batch orders its targets on four keys. Proximity first: a question in a file the batch
+edited, then one in a directory it edited. Then a `bare` or `self` call form. Then the newest staled
+refinement anchored to the node, and last the queue's own drain priority.
+`observer.limits.max_nodes_per_run` caps the list and counts distinct nodes, so a second question
+about a node already taken rides along free. What the cap leaves over is deferred, and item 3 drains
+it first.
 
 ### The cooldown knob
 
@@ -172,17 +184,20 @@ A run takes **pairs**, never a path prefix. `trigger_detail.targets` carries the
 - Derived from `graph_runs`, not from a column on the queue: `graph_unresolved` is replaced
   wholesale by every build.
 
-### The three pauses
+### The four pauses
 
 - `paused:budget` while the day's cost or run ceiling is spent. Clears when the day window rolls.
 - `paused:ratelimit` when a run reported one. Clears at the instant the SDK named, or five minutes
   on if it named none.
 - `paused:auth` when a run could not authenticate. Clears after 15 minutes, or the moment any run
   reaches the model.
+- `paused:error` when a pass raised. Clears after `error_backoff_seconds`, doubling per consecutive
+  failure up to `max_error_backoff_seconds`; a pass that finishes clears the count.
 
-None of the three is written to disk. Auth outranks the other two, so a loop that cannot log in
-never reports a budget it can never spend. A batch drained while paused is held and assessed when
-the pause lifts.
+None of the four is written to disk. The error hold outranks the rest, because a loop whose last
+pass raised has no answer about anything else, then auth, so a loop that cannot log in never
+reports a budget it can never spend. A batch drained while paused is held and assessed when the
+pause lifts; the hold keeps at most 500 events and drops the oldest first.
 
 ## Stopping
 

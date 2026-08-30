@@ -43,7 +43,9 @@ pnpm --dir auditor/graph/ui run build       # rebuild the committed dist/index.h
   run constantly and `import auditor` costs about 0.17 s. The daemon it talks to lives in
   `auditor/observer/`: `daemon.py` (the process, its lock and its restart), `server.py` (the
   loopback transport), `routes.py` (the handlers), `events.py` (the spool), `sessions.py` (the
-  attach gate), `scheduling.py` (how many runs may be open at once) and `payloads.py` (the wire
+  attach gate), `scheduling.py` (when a loop may act: the state enum, the quiet window, the three
+  pauses, the run slots and the retry budget), `loop.py` (what it does when it may: spec 8.3's five
+  work items, and every side effect `assess.py` refuses to have) and `payloads.py` (the wire
   shapes). The two sides share five things by duplication, each pinned by a test: the
   `OBSERVER_API_VERSION` literal, `home()` against `paths.auditor_home()`, the `_OFF` set against
   `paths.OFF_VALUES`, `STATUS_KEYS` against `DaemonStatus`, and the two lifecycle timeouts against
