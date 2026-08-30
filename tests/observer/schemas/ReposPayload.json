@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "RepoPayload": {
+      "description": "One repo in the switcher.",
+      "properties": {
+        "attached": {
+          "default": false,
+          "title": "Attached",
+          "type": "boolean"
+        },
+        "identity": {
+          "title": "Identity",
+          "type": "string"
+        },
+        "queued_repos": {
+          "default": 0,
+          "title": "Queued Repos",
+          "type": "integer"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "repo_dir_key": {
+          "title": "Repo Dir Key",
+          "type": "string"
+        },
+        "sessions": {
+          "default": 0,
+          "title": "Sessions",
+          "type": "integer"
+        },
+        "state": {
+          "default": "",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "identity",
+        "repo_dir_key"
+      ],
+      "title": "RepoPayload",
+      "type": "object"
+    }
+  },
+  "description": "The repo switcher's list.",
+  "properties": {
+    "repos": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RepoPayload"
+      },
+      "title": "Repos",
+      "type": "array"
+    }
+  },
+  "title": "ReposPayload",
+  "type": "object"
+}

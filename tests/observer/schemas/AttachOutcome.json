@@ -1,0 +1,22 @@
+{
+  "description": "Spec 8.2's attach answer. `reason` is empty exactly when `attached` is true.",
+  "properties": {
+    "attached": {
+      "default": false,
+      "title": "Attached",
+      "type": "boolean"
+    },
+    "page_url": {
+      "default": "",
+      "title": "Page Url",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "title": "AttachOutcome",
+  "type": "object"
+}

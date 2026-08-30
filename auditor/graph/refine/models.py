@@ -1016,6 +1016,24 @@ class TuningStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class TuningMetrics(BaseModel):
+    """One trial's measured effect on the clustering (spec 11), from two facts-only rebuilds.
+
+    Spec 10.2's accuracy numbers answer a different question, so a tuning row does not carry them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    modularity: float = 0.0
+    cohesion_intra: float = 0.0
+    cohesion_inter: float = 0.0
+    label_specificity: float = 0.0
+    clusters: int = 0
+    singletons: int = 0
+    top_cluster_share: float = 0.0
+    stranded_pins: int = 0
+
+
 class TuningRow(BaseModel):
     """One proposed knob change (spec 5.8). ``value_json`` stays a raw JSON string because a knob
     can be a float, an int or a list of stopwords."""
@@ -1030,7 +1048,7 @@ class TuningRow(BaseModel):
     run_id: str
     reason: str = ""
     status: TuningStatus = TuningStatus.PENDING
-    metrics: EvalMetrics = EvalMetrics()
+    metrics: TuningMetrics = TuningMetrics()
     created_at: float = Field(default_factory=time.time)
 
 

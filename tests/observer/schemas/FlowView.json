@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "FlowDirection": {
+      "enum": [
+        "out",
+        "in"
+      ],
+      "title": "FlowDirection",
+      "type": "string"
+    },
+    "FlowNode": {
+      "description": "One node of a flow tree. ``edge`` is the relation that reached it, ``None`` at the root.",
+      "properties": {
+        "children": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FlowNode"
+          },
+          "title": "Children",
+          "type": "array"
+        },
+        "cycle": {
+          "default": false,
+          "title": "Cycle",
+          "type": "boolean"
+        },
+        "depth": {
+          "default": 0,
+          "title": "Depth",
+          "type": "integer"
+        },
+        "edge": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edge"
+        },
+        "hub": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HubMark"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "seen_ref": {
+          "default": false,
+          "title": "Seen Ref",
+          "type": "boolean"
+        },
+        "source": {
+          "default": "deterministic",
+          "title": "Source",
+          "type": "string"
+        },
+        "stopped": {
+          "default": false,
+          "title": "Stopped",
+          "type": "boolean"
+        },
+        "unresolved": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UnresolvedLeaf"
+          },
+          "title": "Unresolved",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "title": "FlowNode",
+      "type": "object"
+    },
+    "FlowPayload": {
+      "description": "``GraphQuery.flow``'s wire shape: a ``FlowResult`` plus how the symbol resolved.",
+      "properties": {
+        "ambiguous": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Ambiguous",
+          "type": "array"
+        },
+        "direction": {
+          "$ref": "#/$defs/FlowDirection"
+        },
+        "limit": {
+          "default": 200,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "modules": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Modules",
+          "type": "array"
+        },
+        "resolved": {
+          "title": "Resolved",
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/$defs/FlowNode"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "root",
+        "direction",
+        "symbol",
+        "resolved"
+      ],
+      "title": "FlowPayload",
+      "type": "object"
+    },
+    "HubMark": {
+      "description": "Why a node's fan crossed the floor, and whether that actually stopped the walk.",
+      "properties": {
+        "collapsed": {
+          "default": false,
+          "title": "Collapsed",
+          "type": "boolean"
+        },
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "fan_in",
+            "expansion"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "count",
+        "kind"
+      ],
+      "title": "HubMark",
+      "type": "object"
+    },
+    "UnresolvedLeaf": {
+      "description": "One ``graph_unresolved`` row hanging off the node that could not place the name.",
+      "properties": {
+        "external": {
+          "default": false,
+          "title": "External",
+          "type": "boolean"
+        },
+        "fact_kind": {
+          "title": "Fact Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "fact_kind",
+        "reason"
+      ],
+      "title": "UnresolvedLeaf",
+      "type": "object"
+    }
+  },
+  "description": "One flow walk, as `graph flow` answers it.",
+  "properties": {
+    "flow": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FlowPayload"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "identity": {
+      "title": "Identity",
+      "type": "string"
+    },
+    "repo": {
+      "title": "Repo",
+      "type": "string"
+    },
+    "symbol": {
+      "default": "",
+      "title": "Symbol",
+      "type": "string"
+    }
+  },
+  "required": [
+    "repo",
+    "identity"
+  ],
+  "title": "FlowView",
+  "type": "object"
+}

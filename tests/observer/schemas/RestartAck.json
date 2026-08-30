@@ -1,0 +1,17 @@
+{
+  "description": "A compat mismatch's answer: the caller returns at once and the next `ensure` attaches.",
+  "properties": {
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    },
+    "restarting": {
+      "default": false,
+      "title": "Restarting",
+      "type": "boolean"
+    }
+  },
+  "title": "RestartAck",
+  "type": "object"
+}

@@ -35,6 +35,7 @@ from auditor.graph.refine.models import (
     ToolCall,
     TriggerDetail,
     TriggerKind,
+    TuningMetrics,
     TuningRow,
     TuningStatus,
 )
@@ -211,8 +212,22 @@ def _saturated_tuning(run_id: str) -> TuningRow:
         token="tok-1",
         reason="recall is low on bare calls",
         status=TuningStatus.ACTIVE,
-        metrics=_metrics(),
+        metrics=_tuning_metrics(),
         created_at=100.0,
+    )
+
+
+def _tuning_metrics() -> TuningMetrics:
+    """Every trial metric at a distinct non-default value (spec 11)."""
+    return TuningMetrics(
+        modularity=0.42,
+        cohesion_intra=0.71,
+        cohesion_inter=0.19,
+        label_specificity=0.63,
+        clusters=21,
+        singletons=3,
+        top_cluster_share=0.28,
+        stranded_pins=1,
     )
 
 
