@@ -1,15 +1,9 @@
 # plugins reference
 
-`auditr plugins list` shows every detector, language auditor, and reporter loaded for a repo, with
+`auditr plugins list` shows every detector, language auditor and reporter loaded for a repo, with
 the source recorded for each, plus any warning the loader raised. `auditr plugins list --help`
 lists every flag. It loads the repo's config first, so what it prints is what a scan of that repo
 would use.
-
-- It prints three sections: `detectors`, `languages` and `reporters`, each row carrying the entry's
-  name and the source it was registered from (`built-in`, an entry point, or a local plugin file).
-- There is no `profiles` section. Profiles are TOML files resolved by `extends`, not registry
-  entries; see [configuration.md](configuration.md).
-- `--json` emits the same three sections plus `warnings`.
 
 ## Common invocations
 
@@ -24,18 +18,21 @@ auditr plugins list -r ../other-repo
 auditr plugins list --json
 ```
 
+- The output has one section per registry: `detectors`, `languages`, `reporters`. Each row carries
+  the entry's name and the source it was registered from (`built-in`, an entry point, or a local
+  plugin file). `--json` emits the same three sections plus `warnings`.
+- There is no `profiles` section. Profiles are TOML files resolved by `extends`, not registered
+  classes; see [configuration.md](configuration.md).
+
 ## What gets loaded, and from where
 
-- Entry points: a distribution advertising `auditor.detectors`, `auditor.languages`, or
-  `auditor.reporters` is imported whenever it is installed. There is no profiles group; profiles
-  are TOML, not registered classes.
+- Entry points: a distribution advertising `auditor.detectors`, `auditor.languages` or
+  `auditor.reporters` is imported whenever it is installed.
 - Config-named modules: `plugins = ["acme.rules"]` in the repo's config imports those modules.
 - Local files: `.auditor/plugins/*.py` in the repo, sorted by name.
 - Entry points and config-named modules load unconditionally. Local files do not; see below.
 - A plugin that raises on import does not crash the auditor. The failure becomes a warning in the
   `plugins list` output.
-- The output has one section per registry: detectors, languages, reporters. Profiles are TOML
-  resolved by name or path rather than registered classes, so they get no section.
 
 ## Local plugins and trust
 
@@ -50,16 +47,15 @@ auditr plugins list --json
 
 ## The plugin contract
 
-- A plugin registers by subclassing: `Detector`, `LanguageAuditor`, and `Reporter` auto-register
-  the moment the class body executes. There is no separate registration call.
-- One `Detector` subclass is one rule id: class-level metadata (category, default severity,
-  verdict kind, language, framework, version, standard references) plus a `run(ctx)` that returns
-  the findings for one file.
+- A plugin registers by subclassing: `Detector`, `LanguageAuditor` and `Reporter` auto-register the
+  moment the class body executes. There is no separate registration call.
+- One `Detector` subclass is one rule id: class-level metadata (category, default severity, verdict
+  kind, language, framework, version, standard references) plus a `run(ctx)` that returns the
+  findings for one file.
 - An intermediate base class that must not register sets `abstract = True`.
 - A detector may declare a category string that is not built in; config then accepts it.
-- Registration records a source: the module name or file path the loader imported, or `built-in`
-  for a rule that ships with the auditor.
-- A class one plugin imports from another module is credited to the importing plugin, unless that
+- Registration records a source: the module name or file path the loader imported, or `built-in`.
+  A class one plugin imports from another module is credited to the importing plugin, unless that
   module is a loaded plugin in its own right, in which case it keeps its own name.
 - The full metadata table, the `AuditContext` fields a detector may read, and the detector shapes
   with worked examples are in the bundled skill:

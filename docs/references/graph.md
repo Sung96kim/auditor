@@ -308,7 +308,9 @@ auditr graph eval --dry-run
   `unresolvable` or silence. `negative` presents names this repo defines nowhere. `--suite
   fixtures` is refused, naming what it still needs.
 - `add` is stratified by how far the destination is from the source: `same-module`,
-  `direct-import`, `neither`.
+  `direct-import`, `neither`. On this repo those hold 883 / 1,321 / 38 tier-B-shaped truths, so
+  `neither` has too few to prove at the default bar and proposals of that shape keep landing
+  `pending`. `Stratum`'s docstring carries the same three counts and a test pins the pair.
 - `--sample` is per stratum (default 80, at most 500). A stratum draws `min(sample, available)`,
   and the report names `short`, `empty`, `stopped`, `off_target`, `unprovable_drawn` and
   `unprovable_judged` strata.
