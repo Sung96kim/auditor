@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import FlowPanel from "./FlowPanel";
+import FlowPanel, { origin } from "./FlowPanel";
+import type { Placed } from "./tree";
 import type { FlowNode } from "../api/types";
 
 function node(id: string, over: Partial<FlowNode> = {}): FlowNode {
@@ -93,5 +94,40 @@ describe("the flow panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "in" }));
     expect(screen.getByRole("button", { name: "in" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "out" }).getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+function at(x: number, y: number): Placed {
+  return {
+    key: `${x}-${y}`,
+    id: "a.py::one",
+    depth: 0,
+    edge: "calls",
+    unresolved: false,
+    external: false,
+    hub: null,
+    collapsed: false,
+    parent: null,
+    x,
+    y,
+  };
+}
+
+describe("where the walk is drawn", () => {
+  it("the corner of the drawing is the corner of the panel, not dagre's own centre", () => {
+    expect(origin([at(90, 14), at(290, 74)])).toEqual({ x: 90, y: 14 });
+  });
+
+  it("an empty walk has nothing to shift", () => {
+    expect(origin([])).toEqual({ x: 0, y: 0 });
+  });
+
+  it("the root of a rendered walk starts at the edge, with no margin of nothing before it", async () => {
+    const hub = await walked();
+    const lefts = [...document.querySelectorAll("[title$='::build'], [title$='::write']")].map(
+      (el) => (el as HTMLElement).style.left,
+    );
+    expect(lefts).toContain("0px");
+    expect(hub).not.toBeNull();
   });
 });

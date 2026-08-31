@@ -28,25 +28,48 @@ const node: React.CSSProperties = {
   width: `${NODE_W}px`,
 };
 
+export interface Origin {
+  x: number;
+  y: number;
+}
+
+/** dagre lays the walk out around its own centre, which leaves the panel a margin of nothing
+ * above and to the left of the root. The drawing is shifted back onto its own corner. */
+export function origin(rows: Placed[]): Origin {
+  if (rows.length === 0) return { x: 0, y: 0 };
+  return {
+    x: Math.min(...rows.map((r) => r.x)),
+    y: Math.min(...rows.map((r) => r.y)),
+  };
+}
+
 /** Spec 12.1: an unresolved leaf is highlighted, and an externally bound one is dimmed instead. */
-function placement(row: Placed): React.CSSProperties {
+function placement(row: Placed, at: Origin): React.CSSProperties {
   return {
     ...node,
     border: row.external
       ? `1px dashed ${THEME.border}`
       : `1px solid ${row.unresolved ? THEME.accent : THEME.border}`,
-    left: `${row.x}px`,
+    left: `${row.x - at.x}px`,
     opacity: row.external ? 0.6 : 1,
-    top: `${row.y}px`,
+    top: `${row.y - at.y}px`,
   };
 }
 
 /** Only a hub is a control: the rest of the walk is read, not pressed. */
-function Node({ row, onToggle }: { row: Placed; onToggle: (key: string) => void }) {
+function Node({
+  row,
+  at,
+  onToggle,
+}: {
+  row: Placed;
+  at: Origin;
+  onToggle: (key: string) => void;
+}) {
   const label = row.id.split("::").pop();
   if (row.hub === null) {
     return (
-      <div style={{ ...placement(row), lineHeight: `${NODE_H}px` }} title={row.id}>
+      <div style={{ ...placement(row, at), lineHeight: `${NODE_H}px` }} title={row.id}>
         {label}
       </div>
     );
@@ -58,7 +81,7 @@ function Node({ row, onToggle }: { row: Placed; onToggle: (key: string) => void 
       className="flow-node"
       onClick={() => onToggle(row.key)}
       title={row.id}
-      style={{ ...placement(row), cursor: "pointer", display: "flex", alignItems: "center" }}
+      style={{ ...placement(row, at), cursor: "pointer", display: "flex", alignItems: "center" }}
     >
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
       {row.collapsed ? (
@@ -113,8 +136,9 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
     });
   };
 
-  const width = Math.max(...rows.map((r) => r.x + NODE_W), NODE_W) + 20;
-  const height = Math.max(...rows.map((r) => r.y + NODE_H), NODE_H) + 20;
+  const at = origin(rows);
+  const width = Math.max(...rows.map((r) => r.x - at.x + NODE_W), NODE_W) + 6;
+  const height = Math.max(...rows.map((r) => r.y - at.y + NODE_H), NODE_H) + 6;
   const placed = new Map(rows.map((r) => [r.key, r]));
 
   return (
@@ -214,10 +238,10 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
                 return (
                   <line
                     key={`${row.key}-edge`}
-                    x1={parent.x + NODE_W}
-                    y1={parent.y + NODE_H / 2}
-                    x2={row.x}
-                    y2={row.y + NODE_H / 2}
+                    x1={parent.x - at.x + NODE_W}
+                    y1={parent.y - at.y + NODE_H / 2}
+                    x2={row.x - at.x}
+                    y2={row.y - at.y + NODE_H / 2}
                     stroke={EDGE_STROKE}
                     strokeWidth={1}
                   />
@@ -225,7 +249,7 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
               })}
             </svg>
             {rows.map((row) => (
-              <Node key={row.key} row={row} onToggle={toggle} />
+              <Node key={row.key} row={row} at={at} onToggle={toggle} />
             ))}
           </div>
         </div>
