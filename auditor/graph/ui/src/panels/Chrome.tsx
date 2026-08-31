@@ -23,7 +23,7 @@ const METER_TONE: Record<Meter["tone"], string> = {
 
 /** A track with no reading is hatched, so "not published yet" cannot be misread as "nothing left". */
 const UNKNOWN_TRACK =
-  "repeating-linear-gradient(115deg, rgba(122,139,163,0.28) 0 4px, transparent 4px 8px)";
+  "repeating-linear-gradient(115deg, rgba(122,139,163,0.22) 0 4px, transparent 4px 8px)";
 
 /** Spec 12.1's state badge: the selected repo's loop state, coloured by what that state means. */
 function Badge({ state }: { state: string }) {

@@ -148,7 +148,7 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
         className="field"
         value={symbol}
         onChange={(e) => setSymbol(e.target.value)}
-        placeholder="Walk a symbol..."
+        placeholder="Walk a symbol…"
         style={{
           background: THEME.bgElevated,
           color: TEXT.value,
