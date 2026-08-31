@@ -6,6 +6,7 @@ import {
   panelMode,
   repoLabel,
   repoState,
+  stateTone,
   vectorLabel,
 } from "./chrome";
 import type { Budget, Repo } from "../api/types";
@@ -153,5 +154,29 @@ describe("the vector layer status", () => {
   it("distinguishes enabled from ready", () => {
     expect(vectorLabel({ enabled: true, model: "m2v", ready: false })).toBe("vectors warming up");
     expect(vectorLabel({ enabled: true, model: "m2v", ready: true })).toBe("vectors ready (m2v)");
+  });
+});
+
+describe("the badge's tone", () => {
+  it.each([
+    ["building", "busy"],
+    ["observing", "ok"],
+    ["running", "busy"],
+    ["paused:budget", "warn"],
+    ["paused:ratelimit", "warn"],
+    ["paused:auth", "bad"],
+    ["paused:error", "bad"],
+    ["detached", "idle"],
+  ])("%s reads as %s", (state, tone) => {
+    expect(stateTone(state)).toBe(tone);
+  });
+
+  it("a repo with no loop yet is idle, not a failure and not a working state", () => {
+    expect(stateTone(repoState(null))).toBe("idle");
+    expect(stateTone(repoState({ ...REPO, state: "" }))).toBe("idle");
+  });
+
+  it("a wait and a failure are told apart, so every pause is not one colour", () => {
+    expect(stateTone("paused:budget")).not.toBe(stateTone("paused:auth"));
   });
 });

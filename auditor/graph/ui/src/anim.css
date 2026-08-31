@@ -228,3 +228,16 @@
     opacity: 0.4;
   }
 }
+
+/* ─── Panel fields (the repo switcher, the flow symbol box) ─────────────────── */
+.field {
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.field:hover {
+  border-color: rgba(124, 124, 255, 0.35) !important;
+}
+.field:focus {
+  border-color: rgba(124, 124, 255, 0.5) !important;
+  box-shadow: 0 0 0 2px rgba(124, 124, 255, 0.12);
+  outline: none;
+}

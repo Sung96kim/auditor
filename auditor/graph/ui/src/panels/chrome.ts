@@ -41,6 +41,18 @@ export function repoState(repo: Repo | null): string {
   return repo.state || "not started";
 }
 
+/** The badge's colour, so a paused or detached loop is not the same green as a working one. */
+export type StateTone = "ok" | "busy" | "warn" | "bad" | "idle";
+
+/** `LoopState` as a tone. Auth and error pauses are failures; budget and rate limit are waits. */
+export function stateTone(state: string): StateTone {
+  if (state === "paused:auth" || state === "paused:error") return "bad";
+  if (state.startsWith("paused")) return "warn";
+  if (state === "running" || state === "building") return "busy";
+  if (state === "observing") return "ok";
+  return "idle";
+}
+
 export type PanelMode = "static" | "no repo" | "live";
 
 /** Which of the three reachable pages this bundle is on, decided before anything renders. */

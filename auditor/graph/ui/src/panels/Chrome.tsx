@@ -1,12 +1,13 @@
 import type { PollState } from "../api/poll";
 import type { Status } from "../api/types";
-import { THEME, TONE } from "../theme";
+import { TEXT, THEME, TONE, TONE_WASH } from "../theme";
 import {
   budgetMeter,
   evalLines,
   limitMeter,
   repoLabel,
   repoState,
+  stateTone,
   vectorLabel,
   type Meter,
 } from "./chrome";
@@ -20,23 +21,64 @@ const METER_TONE: Record<Meter["tone"], string> = {
   spent: TONE.bad,
 };
 
+/** A track with no reading is hatched, so "not published yet" cannot be misread as "nothing left". */
+const UNKNOWN_TRACK =
+  "repeating-linear-gradient(115deg, rgba(122,139,163,0.28) 0 4px, transparent 4px 8px)";
+
+/** Spec 12.1's state badge: the selected repo's loop state, coloured by what that state means. */
+function Badge({ state }: { state: string }) {
+  const tone = stateTone(state);
+  return (
+    <span
+      style={{
+        background: TONE_WASH[tone],
+        border: `1px solid ${TONE[tone]}55`,
+        borderRadius: "999px",
+        color: TONE[tone],
+        fontFamily: mono.fontFamily,
+        fontSize: "10.5px",
+        padding: "2px 8px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {state}
+    </span>
+  );
+}
+
 /** One labelled bar. `known` is false for a repo whose loop has not published a budget yet. */
 function Bar({ title, meter }: { title: string; meter: Meter }) {
+  const pct = Math.round(meter.fill * 100);
   return (
     <div style={block}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
         <span style={microLabel}>{title}</span>
-        <span style={mono}>{meter.label}</span>
+        <span style={{ ...mono, color: meter.known ? TEXT.body : TEXT.label }}>{meter.label}</span>
       </div>
-      <div style={{ height: "4px", borderRadius: "999px", background: THEME.bgElevated }}>
-        <div
-          style={{
-            height: "100%",
-            width: `${Math.round(meter.fill * 100)}%`,
-            borderRadius: "999px",
-            background: meter.known ? METER_TONE[meter.tone] : "transparent",
-          }}
-        />
+      <div
+        aria-label={meter.known ? title : undefined}
+        aria-valuenow={meter.known ? pct : undefined}
+        aria-valuemin={meter.known ? 0 : undefined}
+        aria-valuemax={meter.known ? 100 : undefined}
+        role={meter.known ? "progressbar" : undefined}
+        style={{
+          background: meter.known ? THEME.bgElevated : UNKNOWN_TRACK,
+          borderRadius: "999px",
+          height: "5px",
+          overflow: "hidden",
+        }}
+      >
+        {meter.known ? (
+          <div
+            style={{
+              background: METER_TONE[meter.tone],
+              borderRadius: "999px",
+              height: "100%",
+              transition: "width 320ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms ease",
+              width: pct === 0 ? "0" : `max(4px, ${pct}%)`,
+            }}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -58,7 +100,7 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
     <Panel
       title="Observer"
       testId="chrome"
-      trailing={data ? <span style={mono}>{`${data.state} · ${repoState(selected)}`}</span> : null}
+      trailing={data ? <Badge state={repoState(selected)} /> : null}
     >
       {status.phase === "loading" ? <Loading what="the daemon" /> : null}
       {status.phase === "error" ? <Failed error={status.error} onRetry={onRetry} /> : null}
@@ -69,15 +111,18 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
         <>
           <select
             aria-label="Repository"
+            className="field"
             value={repo}
             onChange={(e) => onChooseRepo(e.target.value)}
             style={{
               background: THEME.bgElevated,
-              color: "#e2e8f0",
+              color: TEXT.value,
               border: `1px solid ${THEME.border}`,
               borderRadius: "7px",
-              padding: "5px 8px",
+              cursor: "pointer",
+              padding: "6px 8px",
               fontSize: "12px",
+              width: "100%",
             }}
           >
             <option value="">Choose a repo</option>
@@ -96,11 +141,28 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
             {evalLines(data.evals).map((line) => (
               <div
                 key={line.runner}
-                style={{ display: "flex", alignItems: "center", gap: "6px", ...mono }}
+                style={{ alignItems: "center", display: "flex", gap: "7px", ...mono }}
               >
-                <RunnerMark runner={line.runner} />
-                <span>{line.model}</span>
-                <span style={{ marginLeft: "auto" }}>
+                <RunnerMark runner={line.runner} size={13} />
+                <span
+                  title={line.model}
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {line.model}
+                </span>
+                <span
+                  style={{
+                    color: line.measured ? TEXT.body : TEXT.label,
+                    flexShrink: 0,
+                    marginLeft: "auto",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {line.measured
                     ? `${line.proven} proven, floor ${line.floor?.toFixed(2) ?? "n/a"}`
                     : "no eval yet"}
@@ -109,7 +171,18 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
             ))}
           </div>
 
-          <span style={mono}>{vectorLabel(data.vectors)}</span>
+          <div
+            style={{
+              borderTop: `1px solid ${THEME.border}`,
+              display: "flex",
+              gap: "8px",
+              justifyContent: "space-between",
+              paddingTop: "9px",
+            }}
+          >
+            <span style={{ ...mono, color: TEXT.label }}>{vectorLabel(data.vectors)}</span>
+            <span style={{ ...mono, color: TEXT.label }}>daemon {data.state}</span>
+          </div>
         </>
       ) : null}
     </Panel>
