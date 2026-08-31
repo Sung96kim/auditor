@@ -103,6 +103,7 @@ def _run_values(run: Run) -> dict[str, Any]:
         "error": run.error,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
+        "updated_at": run.started_at,
     }
 
 
@@ -115,6 +116,7 @@ def _outcome_values(outcome: RunOutcome, *, now: float) -> dict[str, Any]:
         [call.model_dump() for call in outcome.tool_trace]
     )
     values["finished_at"] = outcome.finished_at if outcome.finished_at else now
+    values["updated_at"] = now
     return values | _usage_values(outcome.usage)
 
 
@@ -215,6 +217,8 @@ class RunsDB(BaseDB):
                 Column(name="error", type="TEXT"),
                 Column(name="started_at", type="REAL", not_null=True, default="0"),
                 Column(name="finished_at", type="REAL"),
+                #: every writer below stamps this, so a reader can see an in-place update
+                Column(name="updated_at", type="REAL", not_null=True, default="0"),
             ),
             indexes=(
                 Index(
@@ -266,10 +270,11 @@ class RunsDB(BaseDB):
 
         def op(conn: sqlite3.Connection) -> None:
             conn.execute(
-                "UPDATE graph_runs SET status = ? WHERE run_id = ? AND repo_identity = ? "
-                "AND status = ?",
+                "UPDATE graph_runs SET status = ?, updated_at = ? "
+                "WHERE run_id = ? AND repo_identity = ? AND status = ?",
                 (
                     RunStatus.RUNNING.value,
+                    time.time(),
                     run_id,
                     self.partition.identity,
                     RunStatus.QUEUED.value,
@@ -327,10 +332,16 @@ class RunsDB(BaseDB):
             NoSuchRun: no run with this id belongs to this checkout's identity.
         """
         sql = (
-            "UPDATE graph_runs SET prompt = ?, system_prompt_sha = ? "
+            "UPDATE graph_runs SET prompt = ?, system_prompt_sha = ?, updated_at = ? "
             "WHERE run_id = ? AND repo_identity = ?"
         )
-        binds = (prompt, system_prompt_sha, run_id, self.partition.identity)
+        binds = (
+            prompt,
+            system_prompt_sha,
+            time.time(),
+            run_id,
+            self.partition.identity,
+        )
 
         def op(conn: sqlite3.Connection) -> int:
             changed = conn.execute(sql, binds).rowcount
@@ -402,6 +413,18 @@ class RunsDB(BaseDB):
         )
         return int(row["n"]) if row else 0
 
+    async def last_change(self) -> float:
+        """When this checkout's ledger last moved, insert or in-place update alike.
+
+        A run is written once and then mutated: `set_running` and `finish_run` move neither the
+        row count nor the newest start, so a tag built from those two cannot see a run finish.
+        """
+        row = await self._fetch_one_by_identity(
+            "SELECT COALESCE(MAX(updated_at), 0.0) AS at "
+            "FROM graph_runs WHERE repo_identity = ?"
+        )
+        return float(row["at"]) if row else 0.0
+
     async def spend_since(self, since: float) -> Spend:
         """What this checkout's model-calling runs cost since ``since`` (spec 8.4).
 
@@ -436,7 +459,7 @@ class RunsDB(BaseDB):
         stamp = time.time() if now is None else now
         running_than = older_than * running_factor
         sql = (
-            "UPDATE graph_runs SET status = ?, error = ?, finished_at = ? "
+            "UPDATE graph_runs SET status = ?, error = ?, finished_at = ?, updated_at = ? "
             "WHERE repo_identity = ? AND status = ? AND started_at < ?"
         )
         windows = (
@@ -452,6 +475,7 @@ class RunsDB(BaseDB):
                     (
                         RunStatus.SKIPPED.value,
                         f"stranded: no commit within {int(window)} s",
+                        stamp,
                         stamp,
                         self.partition.identity,
                         status.value,

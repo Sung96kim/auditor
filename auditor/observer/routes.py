@@ -280,11 +280,12 @@ class Readers:
         )
         return RunsView(repo=str(root), identity=identity, log=report)
 
-    async def _ledger(self, index: IndexStore) -> tuple[int, float]:
-        """The run count and the newest start, on one event loop rather than one apiece."""
+    async def _ledger(self, index: IndexStore) -> tuple[int, float, float]:
+        """The run count, the newest start and the last change, on one event loop not three."""
         count = await index.runs.count()
         newest = await index.runs.runs(limit=1)
-        return count, newest[0].started_at if newest else 0.0
+        changed = await index.runs.last_change()
+        return count, newest[0].started_at if newest else 0.0, changed
 
     def runs_tag(
         self,
@@ -294,17 +295,21 @@ class Readers:
         chosen: LogFilter | None = None,
         since: str | None = None,
     ) -> str:
-        """`(repo, count, newest started_at, filter)`: shipped readers, one decoded row, no new SQL.
+        """`(repo, count, newest start, last change, filter)`: three aggregates, no decoded page.
 
         The repo is in the tag because the page has a switcher: two repos whose counts coincide
         would otherwise share a tag and the second would 304 on the first one's rows (P14). The
         filter is in it because one ledger answers two bodies once `skipped=1` exists, and the
-        window rides as the caller's raw string rather than as its resolved epoch (P23).
+        window rides as the caller's raw string rather than as its resolved epoch (P23). The last
+        change is in it because a run is inserted once and then mutated in place, and neither the
+        count nor the newest start moves when one finishes.
         """
         identity = self.identity(root, identity=identity)
-        count, started = asyncio.run(self._ledger(self.index(root, identity=identity)))
+        count, started, changed = asyncio.run(
+            self._ledger(self.index(root, identity=identity))
+        )
         key = filter_key(chosen or LogFilter(), since=since)
-        return f'W/"{identity_key(identity)}-{count}-{started}-{key}"'
+        return f'W/"{identity_key(identity)}-{count}-{started}-{changed}-{key}"'
 
     def graph(self, root: Path, *, identity: str | None = None) -> GraphView:
         identity = self.identity(root, identity=identity)

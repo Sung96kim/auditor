@@ -5,7 +5,7 @@ from pathlib import Path
 
 import auditor.observer.routes as routes_module
 from auditor.graph.payloads import LogFilter
-from auditor.graph.refine.models import Run
+from auditor.graph.refine.models import Run, RunOutcome, RunStatus
 from auditor.observer.routes import Readers, filter_key
 from auditor.paths import repo_identity
 from auditor.user_settings import UserSettings
@@ -20,8 +20,8 @@ def test_the_runs_reader_answers_an_empty_page_and_a_stable_tag(refine_repo: Pat
         assert view.log.runs == ()
         assert view.log.run_count == 0
         first = readers.runs_tag(refine_repo)
-        # an empty ledger: no runs, no newest start, then S10's filter fingerprint
-        assert f"-0-0.0-{filter_key(LogFilter())}" in first
+        # an empty ledger: no runs, no newest start, no change, then the filter fingerprint
+        assert f"-0-0.0-0.0-{filter_key(LogFilter())}" in first
         assert readers.runs_tag(refine_repo) == first
         widened = readers.runs_tag(refine_repo, chosen=LogFilter(skipped=True))
         assert widened != first
@@ -92,6 +92,33 @@ def test_the_runs_tag_moves_when_a_run_lands(refine_repo: Path):
             )
         )
         assert readers.runs_tag(refine_repo) != empty
+    finally:
+        readers.close()
+
+
+def test_the_runs_tag_moves_when_a_run_is_updated_in_place(refine_repo: Path):
+    """A run is inserted once and mutated after: neither the count nor the newest start moves.
+
+    Without this the 3 s poll 304s from `queued` to `succeeded` and the stream draws every run
+    frozen at whatever status it had when the page first loaded.
+    """
+    readers = Readers(settings=UserSettings())
+    try:
+        identity = repo_identity(refine_repo)
+        index = readers.index(refine_repo, identity=identity)
+        asyncio.run(
+            index.runs.add_run(
+                Run(repo_identity=identity, run_id="r-1", started_at=100.0)
+            )
+        )
+        queued = readers.runs_tag(refine_repo)
+        asyncio.run(index.runs.set_running("r-1"))
+        running = readers.runs_tag(refine_repo)
+        assert running != queued, "queued to running left the tag standing still"
+        asyncio.run(
+            index.runs.finish_run("r-1", RunOutcome(status=RunStatus.SUCCEEDED))
+        )
+        assert readers.runs_tag(refine_repo) != running, "a run finished behind the tag"
     finally:
         readers.close()
 

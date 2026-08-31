@@ -120,9 +120,11 @@ thread rather than pinning one.
 | `POST /admin/restart` | `{restarting, reason}` | no |
 
 - The two ETag routes are the two a page would poll. The tag is computed before the handler runs,
-  so a matching `If-None-Match` costs a 304 and skips the page query; the tag's own two reads are
-  paid on every poll. `/api/runs`' tag names the repo, so two repos with the same run count do
-  not share one.
+  so a matching `If-None-Match` costs a 304 and skips the page query; the tag's own three
+  aggregates are paid on every poll. `/api/runs`' tag names the repo, so two repos with the same
+  run count do not share one, and it carries the ledger's last change as well as its count and
+  its newest start, because a run is inserted once and then mutated in place: without that a run
+  going from `queued` to `succeeded` never reaches an open page.
 - Every route with a `repo` in it answers `400` unless the query names an absolute directory. A
   relative name and no name at all both fall back to the daemon's own working directory, which is
   a repo the caller never asked about, so neither is answered.
