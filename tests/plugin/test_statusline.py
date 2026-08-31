@@ -281,20 +281,35 @@ def test_the_state_words_are_the_loops_own():
     assert {state.value for state in LoopState} == _module()._STATES
 
 
-def test_a_state_the_loop_never_wrote_is_not_echoed(tmp_path):
+@pytest.mark.parametrize(
+    "state",
+    [
+        "obs\x1b[31mX\nY",
+        # not a string: `state in frozenset(...)` raised for the first two and took the line
+        [],
+        {},
+        1,
+        None,
+    ],
+)
+def test_a_state_the_loop_never_wrote_is_not_echoed(tmp_path, state):
     """`state` is JSON off disk and the segment is one line of a live terminal.
 
     A newline in it breaks the widget and an escape sequence repaints the terminal, so the word
-    is rendered only when it is one the daemon could have written.
+    is rendered only when it is one the daemon could have written. The severity segment is
+    asserted alongside it, because `_render` promises each segment degrades on its own, and a
+    `state` of the wrong type used to raise out of `_graph` and take that segment with it. The
+    counts stay at zero so the one red escape in the line can only have come from `state`.
     """
     _write_status(
         tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
     )
-    _write_graph(tmp_path, state="obs\x1b[31mX\nY")
+    _write_graph(tmp_path, state=state)
     _publish_daemon()
     out = _run(tmp_path)
     assert "\n" not in out and "\x1b[31m" not in out
     assert "· observing" in out
+    assert "auditor  clean" in out
 
 
 def test_a_block_stamped_in_the_future_is_not_treated_as_live(tmp_path):

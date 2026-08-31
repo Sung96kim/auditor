@@ -138,13 +138,13 @@ def _graph(data: object, home: Path) -> str:
     if not isinstance(block, dict):
         return GRAPH_OFF if published else ""
     expiry = _num(block.get("expiry_seconds"))
-    # a stamp from the future is a skewed clock or a shared network home, not a live writer,
-    # so the window is bounded on both sides rather than only above
+    # a stamp from the future is a skewed clock, not a live writer: bound the window below too
     age = time.time() - _num(block.get("written_at"))
     if not (expiry > 0 and 0 <= age <= expiry and published):
         return GRAPH_OFF
     state = block.get("state")
-    state = state if state in _STATES else "observing"
+    # type first: `state in frozenset(...)` raises for the list or dict a torn block can hold
+    state = state if isinstance(state, str) and state in _STATES else "observing"
     dot = ORANGE if state.startswith("paused") else GREEN
     nodes = _compact(max(0.0, _num(block.get("nodes"))))
     refined = int(max(0.0, _num(block.get("refined"))))
