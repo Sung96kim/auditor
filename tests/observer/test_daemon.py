@@ -19,6 +19,7 @@ import auditr_observer
 from auditor.cli import observer as cli_observer
 from auditor.config import AuditorSettings
 from auditor.database import open_repo_index
+from auditor.observer import daemon as daemon_module
 from auditor.observer.daemon import (
     Daemon,
     DaemonLock,
@@ -34,9 +35,9 @@ from auditor.observer.daemon import (
 )
 from auditor.observer.events import Event, EventQueue, Spool
 from auditor.observer.payloads import DaemonStatus
-from auditor.observer.routes import Readers
+from auditor.observer.routes import Readers, Router
 from auditor.observer.scheduling import LoopState
-from auditor.observer.sessions import Session, SessionBook
+from auditor.observer.sessions import AttachRequest, Session, SessionBook
 from auditor.paths import (
     auditor_home,
     daemon_json_path,
@@ -468,6 +469,46 @@ def test_a_port_collision_ends_the_start_and_gives_back_the_lock_and_the_handles
     lock = DaemonLock(tmp_path / "observer" / "lock")
     assert lock.acquire() is True
     lock.release()
+
+
+def test_a_started_daemon_shares_the_gate_the_router_answers_from(
+    tmp_path, monkeypatch, restored_logging
+):
+    """Spec 8.2's gate reaches `Daemon` through one keyword in `serve`, and nothing pinned it.
+
+    Deleting `gate=gate` there dropped every adopted spool back to `Daemon.__init__`'s permissive
+    default with the whole suite still green, because the only gate test assigned `daemon.gate`
+    by hand. Driven through the real `serve` instead: the port is taken first, so the run ends at
+    the bind, after both objects are built. The identity is the ruling's own words - one gate,
+    shared with the router - and the refusal is what says it is a real gate and not the fallback
+    (H2).
+    """
+    built: dict[str, object] = {}
+    make_daemon, make_router = daemon_module.Daemon, daemon_module.Router
+
+    def recorded_daemon(**kwargs: object) -> Daemon:
+        built["daemon"] = daemon = make_daemon(**kwargs)
+        return daemon
+
+    def recorded_router(deps: object, **kwargs: object) -> Router:
+        built["router"] = router = make_router(deps, **kwargs)
+        return router
+
+    monkeypatch.setattr(daemon_module, "Daemon", recorded_daemon)
+    monkeypatch.setattr(daemon_module, "Router", recorded_router)
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    unconfigured = tmp_path / "unconfigured"
+    unconfigured.mkdir()
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        monkeypatch.setenv("AUDITOR_OBSERVER_PORT", str(taken.getsockname()[1]))
+        assert serve() == 1
+    daemon, router = built["daemon"], built["router"]
+    assert daemon.gate is router.deps.gate
+    assert daemon.gate(
+        AttachRequest(repo=str(unconfigured), session_id="", home=str(tmp_path))
+    )
 
 
 def test_the_client_and_the_settings_name_the_same_lifecycle_timeouts():
