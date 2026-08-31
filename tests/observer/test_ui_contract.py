@@ -13,6 +13,7 @@ import pytest
 _UI = Path(__file__).resolve().parents[2] / "auditor" / "graph" / "ui" / "src"
 TYPES_TS = _UI / "api" / "types.ts"
 RUNS_TS = _UI / "panels" / "runs.ts"
+RUNNER_MARK_TS = _UI / "panels" / "RunnerMark.tsx"
 SCHEMAS = Path(__file__).parent / "schemas"
 
 _RUN_ROW = frozenset(
@@ -333,6 +334,21 @@ def test_the_pages_status_map_is_exactly_the_enum_the_wire_serves():
     declared = set(re.findall(r"^  (\w+): ", block[0], re.M))
     assert declared == served
     assert declared == set(_REFINEMENT_STATUSES)
+
+
+def test_the_runner_marks_are_exactly_the_enum_the_wire_serves():
+    """`MARKS` and `UNMARKED` are the page's only two words for a runner; together they must be
+    exactly `RunnerKind`, or a runner value falls through to "unknown runner X" unnoticed.
+    """
+    served = set(
+        json.loads((SCHEMAS / "RunDetailView.json").read_text())["$defs"]["RunnerKind"]["enum"]
+    )
+    text = RUNNER_MARK_TS.read_text()
+    marks_block = text.split("export const MARKS", 1)[1].split("\n};\n", 1)[0]
+    marks = set(re.findall(r"^  (\w+): \{", marks_block, re.M))
+    unmarked_block = text.split("const UNMARKED", 1)[1].split(";", 1)[0]
+    unmarked = set(re.findall(r"(\w+):\s*\"", unmarked_block))
+    assert marks | unmarked == served
 
 
 @pytest.mark.parametrize("root", sorted(set(READS) | set(BRANCHES)))

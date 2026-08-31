@@ -136,9 +136,19 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
 
           <div style={block}>
             <span style={microLabel}>Latest eval</span>
-            {evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
-              <EvalRow key={line.runner} line={line} />
-            ))}
+            {evals.state.phase === "error" ? (
+              // no confirmed answer at all: say so, never fall back to "no eval yet"
+              <Failed error={evals.state.error} onRetry={evals.retry} />
+            ) : (
+              <>
+                {evals.state.phase === "stale" ? (
+                  <Reconnecting error={evals.state.error} onRetry={evals.retry} />
+                ) : null}
+                {evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
+                  <EvalRow key={line.runner} line={line} />
+                ))}
+              </>
+            )}
           </div>
 
           <div

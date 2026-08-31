@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Chrome from "./Chrome";
 import { initial, received } from "../api/poll";
 import {
@@ -114,5 +114,44 @@ describe("the observer card", () => {
     const model = screen.getByTitle("a-very-long-model-name-indeed");
     expect(model.style.whiteSpace).toBe("nowrap");
     expect(model.style.textOverflow).toBe("ellipsis");
+  });
+
+  it("a failed evals fetch draws the error state, never a false no eval yet", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("connection refused"))),
+    );
+    draw(STATUS);
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Could not reach the observer",
+    );
+    expect(screen.queryByText("no eval yet")).toBeNull();
+  });
+
+  it("retry on a failed evals fetch refetches and draws the measurements it gets back", async () => {
+    let call = 0;
+    const fetcher = vi.fn(() =>
+      call++ === 0
+        ? Promise.reject(new Error("connection refused"))
+        : Promise.resolve(
+            new Response(
+              JSON.stringify({
+                runners: [
+                  runnerEval({
+                    measured: 1,
+                    proven: 1,
+                    strata: [stratum({ lower_bound_95: 0.81, proven: true })],
+                  }),
+                ],
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    draw(STATUS);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("1 proven")).not.toBeNull();
   });
 });
