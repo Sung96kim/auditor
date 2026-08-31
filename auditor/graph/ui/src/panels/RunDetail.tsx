@@ -2,29 +2,37 @@ import { useEffect, useState } from "react";
 import { getJson } from "../api/client";
 import { failed, initial, received, type PollState } from "../api/poll";
 import type { RunDetailView } from "../api/types";
-import { THEME } from "../theme";
+import { TEXT, THEME } from "../theme";
 import { accepted, rejected } from "./runs";
+import { block, microLabel, mono, nested } from "./Panel";
 import { Empty, Failed, Loading } from "./States";
 
 const box: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: "8px",
-  border: `1px solid ${THEME.border}`,
-  backgroundColor: THEME.bgElevated,
+  ...nested,
+  borderLeft: `2px solid ${THEME.accent}`,
+  color: TEXT.body,
   display: "flex",
   flexDirection: "column",
-  gap: "8px",
   fontSize: "11.5px",
-  color: "#94a3b8",
+  gap: "9px",
+  padding: "10px 12px 12px",
 };
 
-const header: React.CSSProperties = {
-  fontSize: "10.5px",
-  fontWeight: 700,
-  letterSpacing: "0.09em",
-  color: "#64748b",
-  textTransform: "uppercase",
+/** Verbatim text the runner wrote or read: penned in, wrapped, and capped so it cannot run away. */
+const verbatim: React.CSSProperties = {
+  ...mono,
+  background: THEME.bgPanel,
+  border: `1px solid ${THEME.border}`,
+  borderRadius: "6px",
+  margin: 0,
+  maxHeight: "120px",
+  overflowWrap: "anywhere",
+  overflowY: "auto",
+  padding: "7px 8px",
+  whiteSpace: "pre-wrap",
 };
+
+const line: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
 
 interface Refined {
   refinement_id: string;
@@ -34,20 +42,30 @@ interface Refined {
   status: string;
 }
 
+/** One labelled section, ruled off from the one above so six headings are not one grey wall. */
+function Field({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ ...block, borderTop: `1px solid ${THEME.border}`, paddingTop: "9px" }}>
+      <span style={microLabel}>{title}</span>
+      {children}
+    </div>
+  );
+}
+
 function Group({ title, rows }: { title: string; rows: Refined[] }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-      <span style={header}>{title}</span>
+    <Field title={title}>
       {rows.length === 0 ? (
-        <span style={{ color: "#475569" }}>none</span>
+        <span style={{ color: TEXT.label }}>none</span>
       ) : (
         rows.map((row) => (
-          <span key={row.refinement_id} style={{ fontFamily: "monospace" }}>
-            [{row.tier}] {row.from_dst ?? "-"} to {row.dst ?? "-"}
+          <span key={row.refinement_id} style={line}>
+            <span style={{ color: TEXT.label }}>[{row.tier}]</span> {row.from_dst ?? "-"} to{" "}
+            {row.dst ?? "-"}
           </span>
         ))
       )}
-    </div>
+    </Field>
   );
 }
 
@@ -82,10 +100,27 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
   const view = state.data;
   return (
     <div style={box} data-testid="RunDetail">
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-        <span style={header}>Run {runId.slice(0, 8)}</span>
-        <button type="button" onClick={onClose} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer" }}>
-          close
+      <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+        <span style={microLabel}>Run</span>
+        <span style={{ ...mono, color: TEXT.strong }}>{runId.slice(0, 8)}</span>
+        <button
+          type="button"
+          aria-label="Close run detail"
+          onClick={onClose}
+          className="state-retry"
+          style={{
+            background: "transparent",
+            border: `1px solid ${THEME.border}`,
+            borderRadius: "6px",
+            color: TEXT.label,
+            cursor: "pointer",
+            fontSize: "13px",
+            lineHeight: 1,
+            marginLeft: "auto",
+            padding: "3px 7px",
+          }}
+        >
+          &#215;
         </button>
       </div>
 
@@ -94,50 +129,44 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
 
       {view ? (
         <>
-          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-            <span style={header}>Prompt</span>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: "11px" }}>
-              {view.prompt || "no prompt recorded"}
-            </pre>
-          </div>
+          <Field title="Prompt">
+            <pre style={verbatim}>{view.prompt || "no prompt recorded"}</pre>
+          </Field>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-            <span style={header}>Tool trace</span>
+          <Field title="Tool trace">
             {view.tool_trace.length === 0 ? (
-              <span style={{ color: "#475569" }}>no tool calls recorded</span>
+              <span style={{ color: TEXT.label }}>no tool calls recorded</span>
             ) : (
               view.tool_trace.map((call, i) => (
-                <span key={`${call.tool}-${call.ts}-${i}`} style={{ fontFamily: "monospace" }}>
-                  {call.tool} {call.detail}
+                <span key={`${call.tool}-${call.ts}-${i}`} style={line}>
+                  <span style={{ color: TEXT.strong }}>{call.tool}</span> {call.detail}
                 </span>
               ))
             )}
-          </div>
+          </Field>
 
           <Group title="Accepted changes" rows={accepted(view.refinements)} />
           <Group title="Rejected proposals" rows={rejected(view.refinements)} />
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-            <span style={header}>Tuning trials</span>
+          <Field title="Tuning trials">
             {view.trials.length === 0 ? (
               <Empty what="tuning trials" hint="S11 is what writes a tuning row" />
             ) : (
               view.trials.map((trial) => (
-                <span key={trial.tuning_id} style={{ fontFamily: "monospace" }}>
+                <span key={trial.tuning_id} style={line}>
                   {trial.key} {trial.status}
                 </span>
               ))
             )}
-          </div>
+          </Field>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-            <span style={header}>Assessment</span>
-            <span style={{ fontFamily: "monospace" }}>
+          <Field title="Assessment">
+            <span style={line}>
               {view.assessment?.verdict
                 ? `${view.assessment.verdict.decision}: ${view.assessment.verdict.reason}`
                 : "no assessment recorded"}
             </span>
-          </div>
+          </Field>
         </>
       ) : null}
     </div>
