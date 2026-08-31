@@ -64,7 +64,8 @@ export interface Status {
   uptime_seconds: number;
   idle_seconds: number;
   repos: Repo[];
-  queued_repos: string[];
+  /** how many repos have edits spooled and undrained, which is a count and not a list. */
+  queued_repos: number;
   drained_events: number;
   evals: RunnerEval[];
   vectors: VectorStatus;
@@ -78,13 +79,13 @@ export interface RunRow {
   runner: string;
   trigger_kind: string;
   /** the one deliberately open object on the wire: its shape is the trigger's own. */
-  trigger_detail: Record<string, unknown> | null;
-  model: string;
+  trigger_detail: Record<string, unknown>;
+  model: string | null;
   summary: string | null;
   error: string | null;
-  session_id: string;
-  branch: string;
-  commit_sha: string;
+  session_id: string | null;
+  branch: string | null;
+  commit_sha: string | null;
   cost_usd: number;
   cost_estimated: boolean;
   started_at: number;
@@ -126,7 +127,7 @@ export interface Decision {
 }
 
 export interface Assessment {
-  verdict: Decision | null;
+  verdict: Decision;
 }
 
 export interface RunDetailView {
@@ -176,4 +177,26 @@ export interface FlowPayload {
 export interface FlowView {
   symbol: string;
   flow: FlowPayload | null;
+}
+
+export interface LogReport {
+  runs: RunRow[];
+  /** how many rows the filter held back, which is what makes the skipped toggle reachable. */
+  hidden_count: number;
+  run_count: number;
+  truncated: boolean;
+}
+
+export interface RunsView {
+  log: LogReport;
+}
+
+export interface RefinementsReport {
+  rows: RefinementRow[];
+  refinement_count: number;
+  truncated: boolean;
+}
+
+export interface RefinementsView {
+  refinements: RefinementsReport;
 }

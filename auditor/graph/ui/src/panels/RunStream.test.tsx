@@ -2,28 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import RunStream from "./RunStream";
 import { initial } from "../api/poll";
-import { NO_RUNS, type LiveGraph, type RunsBody } from "../api/useLiveGraph";
-import type { RunRow, Status } from "../api/types";
+import { NO_RUNS, type LiveGraph } from "../api/useLiveGraph";
+import { cliRunRow, logReport, runRow } from "../api/wire.fixture";
+import type { RunRow, RunsView, Status } from "../api/types";
 
-const RUN: RunRow = {
-  run_id: "3f2a1b9c44de4c7f",
-  status: "succeeded",
-  producer: "observer",
-  client: "cli",
-  runner: "claude",
-  trigger_kind: "watch",
-  trigger_detail: null,
-  model: "claude-sonnet-4-5",
-  summary: null,
-  error: null,
-  session_id: "b71ce0f2aa11",
-  branch: "main",
-  commit_sha: "309bb81ac4419f",
-  cost_usd: 0.04,
-  cost_estimated: false,
-  started_at: 1000,
-  finished_at: 1042,
-};
+const RUN = runRow({ trigger_kind: "watch" });
 
 function live(runs: LiveGraph["runs"]): LiveGraph {
   return {
@@ -37,11 +20,13 @@ function live(runs: LiveGraph["runs"]): LiveGraph {
   };
 }
 
-function ready(rows: RunRow[]): LiveGraph["runs"] {
-  const body: RunsBody = {
-    log: { runs: rows, hidden_count: 0, run_count: rows.length, truncated: false },
+function ready(rows: RunRow[], over: Partial<RunsView["log"]> = {}): LiveGraph["runs"] {
+  return {
+    phase: "ready",
+    data: { log: logReport({ runs: rows, ...over }) },
+    error: "",
+    attempts: 0,
   };
-  return { phase: "ready", data: body, error: "", attempts: 0 };
 }
 
 beforeEach(() => {
@@ -74,7 +59,7 @@ describe("the run stream", () => {
   });
 
   it("the open row is marked apart from the rest, so the detail below has a source", () => {
-    const second = { ...RUN, run_id: "other", trigger_kind: "manual" };
+    const second = runRow({ run_id: "other", trigger_kind: "manual" });
     render(<RunStream live={live(ready([RUN, second]))} />);
     const [first, other] = screen.getAllByRole("row").slice(1);
     fireEvent.click(first);
@@ -82,13 +67,19 @@ describe("the run stream", () => {
     expect(other.style.background).toBe("");
   });
 
+  it("a cli run renders, though it has no session, no branch and no commit to show", () => {
+    render(<RunStream live={live(ready([cliRunRow()]))} />);
+    const row = screen.getByRole("row", { name: /manual/ });
+    expect(row.textContent).toContain("-@-");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("a skipped reason collapses into one chip carrying its count, not a stack of blocks", () => {
-    const skipped = {
-      ...RUN,
+    const skipped = runRow({
       run_id: "s1",
       status: "skipped",
-      trigger_detail: { assessment: { reason: "no new facts" } },
-    };
+      trigger_detail: { assessment: { verdict: { decision: "skip", reason: "no new facts" } } },
+    });
     render(<RunStream live={live(ready([RUN, skipped]))} />);
     const chip = screen.getByRole("button", { name: /skipped: no new facts/ });
     expect(chip.textContent).toBe("1 skipped: no new facts");

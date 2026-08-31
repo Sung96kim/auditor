@@ -54,11 +54,16 @@ export function stream(rows: RunRow[]): Stream {
   return { shown, collapsed, reasons };
 }
 
-/** The assessment's own word for why it declined, or a stable stand-in when it left none. */
+/** The assessment's own word for why it declined, or a stable stand-in when it left none.
+ *
+ * The reason lives on the verdict: `AssessmentPayload` has no `reason` of its own, so reading one
+ * off it was always undefined and every collapsed group fell back to the summary.
+ */
 export function skipReason(row: RunRow): string {
-  const detail = row.trigger_detail ?? {};
-  const assessment = detail["assessment"] as { reason?: string } | undefined;
-  return assessment?.reason || row.summary || "no reason recorded";
+  const assessment = row.trigger_detail["assessment"] as
+    | { verdict?: { reason?: string } | null }
+    | undefined;
+  return assessment?.verdict?.reason || row.summary || "no reason recorded";
 }
 
 export type StatusGroup = "accepted" | "rejected" | "other";
@@ -74,6 +79,9 @@ export const STATUS_GROUPS: Record<string, StatusGroup> = {
   superseded: "other",
   rejected: "rejected",
 };
+
+/** The one list of every `RefinementStatus`, so no panel can name a different set (M8). */
+export const REFINEMENT_STATUSES = Object.keys(STATUS_GROUPS);
 
 function grouped<T extends { status: string }>(rows: T[], group: StatusGroup): T[] {
   return rows.filter((r) => (STATUS_GROUPS[r.status] ?? "other") === group);

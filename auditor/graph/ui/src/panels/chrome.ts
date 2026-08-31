@@ -89,7 +89,7 @@ export function vectorLabel(vectors: VectorStatus): string {
   return vectors.ready ? `vectors ready (${vectors.model})` : "vectors warming up";
 }
 
-/** The switcher's label. `graph.meta` carries no repo, so the name comes from `/api/repos`. */
+/** The switcher's label. `graph.meta` carries no repo, so the name comes from `/api/status`. */
 export function repoLabel(repo: Repo): string {
   const tail = repo.repo.split("/").filter(Boolean).pop();
   return tail || repo.repo;

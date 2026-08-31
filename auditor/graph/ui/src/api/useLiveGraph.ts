@@ -2,21 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getJson } from "./client";
 import { failed, initial, received, retryDelay, type PollState } from "./poll";
 import { readBootstrap, type Bootstrap } from "./bootstrap";
-import type { RunRow, Status } from "./types";
-
-export interface RunsBody {
-  log: { runs: RunRow[]; hidden_count: number; run_count: number; truncated: boolean };
-}
+import type { RunsView, Status } from "./types";
 
 /** The answer for a page that will never ask: ready and empty, so no panel waits on a poll. */
-export const NO_RUNS: RunsBody = {
+export const NO_RUNS: RunsView = {
   log: { runs: [], hidden_count: 0, run_count: 0, truncated: false },
 };
 
 export interface LiveGraph {
   boot: Bootstrap;
   status: PollState<Status>;
-  runs: PollState<RunsBody>;
+  runs: PollState<RunsView>;
   /** true while the reader has asked to see collapsed rows, which is `skipped=1` on the wire. */
   showSkipped: boolean;
   setShowSkipped: (on: boolean) => void;
@@ -29,8 +25,8 @@ export interface LiveGraph {
 export function useLiveGraph(): LiveGraph {
   const [boot] = useState<Bootstrap>(() => readBootstrap(window));
   const [status, setStatus] = useState<PollState<Status>>(() => initial<Status>());
-  const [runs, setRuns] = useState<PollState<RunsBody>>(() =>
-    boot.live && boot.repo ? initial<RunsBody>() : initial<RunsBody>(NO_RUNS),
+  const [runs, setRuns] = useState<PollState<RunsView>>(() =>
+    boot.live && boot.repo ? initial<RunsView>() : initial<RunsView>(NO_RUNS),
   );
   const [showSkipped, setShowSkipped] = useState(false);
   const [tick, setTick] = useState(0);
@@ -67,7 +63,7 @@ export function useLiveGraph(): LiveGraph {
         const query = new URLSearchParams({ repo: boot.repo });
         if (showSkipped) query.set("skipped", "1");
         try {
-          const got = await getJson<RunsBody>(`${boot.base}api/runs?${query}`, tags.current.runs);
+          const got = await getJson<RunsView>(`${boot.base}api/runs?${query}`, tags.current.runs);
           tags.current.runs = got.etag;
           attempts.current.runs = 0;
           if (alive) setRuns((prev) => received(prev, got.value));

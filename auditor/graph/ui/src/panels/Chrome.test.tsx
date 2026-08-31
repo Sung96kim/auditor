@@ -2,42 +2,14 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import Chrome from "./Chrome";
 import { initial, received } from "../api/poll";
-import type { Repo, Status } from "../api/types";
+import { repo as aRepo, runnerEval, status as aStatus } from "../api/wire.fixture";
+import type { Status } from "../api/types";
 
-const REPO: Repo = {
-  repo: "/w/auditor",
-  identity: "i",
-  repo_dir_key: "k",
-  attached: true,
-  sessions: 1,
-  queued: false,
-  state: "observing",
-  budget: {
-    spent_usd: 0.5,
-    runs: 3,
-    max_cost_usd_per_day: 2,
-    max_runs_per_day: 40,
-    remaining_fraction: 0.75,
-    low: false,
-    exhausted: false,
-  },
-  limits: { max_utilization: 0.2, paused: false, resumes_at: null },
-};
-
-const STATUS: Status = {
-  home: "/h",
-  version: "1",
-  compat: 1,
-  state: "running",
-  started_at: 0,
-  uptime_seconds: 1,
-  idle_seconds: 0,
+const REPO = aRepo({ repo: "/w/auditor" });
+const STATUS = aStatus({
   repos: [REPO],
-  queued_repos: [],
-  drained_events: 0,
-  evals: [{ runner: "claude", model: "a-very-long-model-name-indeed", measured: 0, proven: 0, strata: [] }],
-  vectors: { enabled: false, model: "", ready: false },
-};
+  evals: [runnerEval({ model: "a-very-long-model-name-indeed" })],
+});
 
 function draw(status: Status, repo = REPO.repo) {
   return render(
@@ -72,7 +44,7 @@ describe("the observer card", () => {
   });
 
   it("a budget the loop never published draws no bar at all, because it has no value", () => {
-    draw({ ...STATUS, repos: [{ ...REPO, budget: null }] });
+    draw(aStatus({ repos: [aRepo({ repo: "/w/auditor", budget: null })] }));
     expect(screen.getAllByRole("progressbar")).toHaveLength(1);
     expect(screen.getByText("no budget yet")).not.toBeNull();
   });

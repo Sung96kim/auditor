@@ -1,30 +1,24 @@
 import { useEffect, useState } from "react";
 import { getJson } from "../api/client";
 import { failed, initial, received, type PollState } from "../api/poll";
-import type { RefinementRow } from "../api/types";
+import type { RefinementRow, RefinementsView } from "../api/types";
 import { TEXT, THEME, TONE } from "../theme";
+import { REFINEMENT_STATUSES } from "./runs";
 import Panel, { block, microLabel, mono } from "./Panel";
 import { Empty, Failed, Loading } from "./States";
-
-interface RefinementsBody {
-  refinements: { rows: RefinementRow[]; refinement_count: number; truncated: boolean };
-}
-
-/** Named so a status with no rows still shows its heading and a zero rather than vanishing. */
-const NAMED = ["pending", "active", "pinned", "redundant", "rejected", "reverted"];
 
 const row: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
 
 /** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3). */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
-  const [state, setState] = useState<PollState<RefinementsBody>>(() =>
-    initial<RefinementsBody>(),
+  const [state, setState] = useState<PollState<RefinementsView>>(() =>
+    initial<RefinementsView>(),
   );
 
   useEffect(() => {
     let alive = true;
     const query = new URLSearchParams({ repo });
-    getJson<RefinementsBody>(`${base}api/refinements?${query}`, "")
+    getJson<RefinementsView>(`${base}api/refinements?${query}`, "")
       .then((got) => {
         if (alive) setState((prev) => received(prev, got.value));
       })
@@ -39,7 +33,10 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
   const rows = state.data?.refinements.rows ?? [];
   const total = state.data?.refinements.refinement_count ?? rows.length;
   const truncated = state.data?.refinements.truncated ?? false;
-  const groups = new Map<string, RefinementRow[]>(NAMED.map((name) => [name, []]));
+  // every status the wire serves, so one with no rows shows a zero rather than vanishing
+  const groups = new Map<string, RefinementRow[]>(
+    REFINEMENT_STATUSES.map((name) => [name, []]),
+  );
   for (const held of rows) {
     const bucket = groups.get(held.status) ?? [];
     bucket.push(held);
@@ -62,7 +59,7 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
     >
       {state.phase === "loading" ? <Loading what="refinements" /> : null}
       {state.phase === "error" ? (
-        <Failed error={state.error} onRetry={() => setState(initial<RefinementsBody>())} />
+        <Failed error={state.error} onRetry={() => setState(initial<RefinementsView>())} />
       ) : null}
 
       {state.phase === "ready" && rows.length === 0 ? (

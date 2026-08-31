@@ -33,7 +33,8 @@ export interface GCluster {
 }
 
 export interface GraphPayload {
-  meta: { theme: string; accent: string; node_cap: number; repo?: string };
+  /** `node_cap` is null unless the caller asked for one; no payload has ever carried a repo. */
+  meta: { theme: string; accent: string; node_cap: number | null };
   clusters: GCluster[];
   nodes: GNode[];
   edges: GEdge[];

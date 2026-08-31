@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  REFINEMENT_STATUSES,
   STATUS_GROUPS,
   accepted,
   costLabel,
@@ -11,29 +12,11 @@ import {
   runTone,
   RUN_TONES,
 } from "./runs";
+import { runRow } from "../api/wire.fixture";
 import type { RunRow } from "../api/types";
 
 function row(over: Partial<RunRow> = {}): RunRow {
-  return {
-    run_id: "r1",
-    status: "succeeded",
-    producer: "observer",
-    client: "claude-code",
-    runner: "claude",
-    trigger_kind: "edit",
-    trigger_detail: null,
-    model: "sonnet",
-    summary: "",
-    error: "",
-    session_id: "s1",
-    branch: "main",
-    commit_sha: "abc1234",
-    cost_usd: 0.0123,
-    cost_estimated: false,
-    started_at: 100,
-    finished_at: 130,
-    ...over,
-  };
+  return runRow({ summary: "", error: "", cost_usd: 0.0123, started_at: 100, finished_at: 130, ...over });
 }
 
 describe("the run stream's derived columns", () => {
@@ -64,8 +47,8 @@ describe("collapsing skipped rows", () => {
   it("skipped rows leave the stream and are counted by their reason", () => {
     const rows = [
       row({ run_id: "a" }),
-      row({ run_id: "b", status: "skipped", trigger_detail: { assessment: { reason: "trivial" } } }),
-      row({ run_id: "c", status: "skipped", trigger_detail: { assessment: { reason: "trivial" } } }),
+      row({ run_id: "b", status: "skipped", trigger_detail: { assessment: { verdict: { decision: "skip", reason: "trivial" } } } }),
+      row({ run_id: "c", status: "skipped", trigger_detail: { assessment: { verdict: { decision: "skip", reason: "trivial" } } } }),
       row({ run_id: "d", status: "skipped", summary: "cooldown" }),
     ];
     const out = stream(rows);
@@ -88,17 +71,6 @@ describe("collapsing skipped rows", () => {
 });
 
 describe("run detail's accepted and rejected split", () => {
-  const WIRE = [
-    "pending",
-    "active",
-    "stale",
-    "redundant",
-    "reverted",
-    "pinned",
-    "superseded",
-    "rejected",
-  ];
-
   it("one status-discriminated list becomes the two lists spec 12.1 asks for", () => {
     const rows = [
       { status: "active" },
@@ -115,12 +87,14 @@ describe("run detail's accepted and rejected split", () => {
     expect(accepted([{ status: "accepted" }])).toEqual([]);
   });
 
-  it("every status the wire serves is mapped, so none of the eight can silently vanish", () => {
-    expect(Object.keys(STATUS_GROUPS).sort()).toEqual([...WIRE].sort());
-    const rows = WIRE.map((status) => ({ status }));
+  it("every status the map holds lands in exactly one of the three lists", () => {
+    // the list itself is held to the wire by `test_ui_contract.py`, which reads the schema
+    expect(REFINEMENT_STATUSES).toEqual(Object.keys(STATUS_GROUPS));
+    expect(REFINEMENT_STATUSES).toHaveLength(8);
+    const rows = REFINEMENT_STATUSES.map((status) => ({ status }));
     expect(
       accepted(rows).length + rejected(rows).length + otherStatuses(rows).length,
-    ).toBe(WIRE.length);
+    ).toBe(REFINEMENT_STATUSES.length);
   });
 
   it("a status the map has never seen is `other`, so a new member shows rather than disappears", () => {

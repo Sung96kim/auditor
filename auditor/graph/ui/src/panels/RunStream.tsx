@@ -37,6 +37,11 @@ const COLUMNS = [
   "status",
 ];
 
+/** Four of the ten columns are nullable on the wire: a `cli` run has no session and no checkout. */
+function short(value: string | null, width: number): string {
+  return value ? value.slice(0, width) : "-";
+}
+
 function Row({
   row,
   open,
@@ -66,11 +71,11 @@ function Row({
       <td style={{ ...cell, lineHeight: 0 }}>
         <RunnerMark runner={row.runner} size={13} />
       </td>
-      <td style={numeric}>{row.session_id.slice(0, 8)}</td>
+      <td style={numeric}>{short(row.session_id, 8)}</td>
       <td style={numeric}>
-        {row.branch}@{row.commit_sha.slice(0, 7)}
+        {row.branch ?? "-"}@{short(row.commit_sha, 7)}
       </td>
-      <td style={cell}>{row.model}</td>
+      <td style={cell}>{row.model ?? "-"}</td>
       <td style={numeric}>{costLabel(row)}</td>
       <td style={numeric}>{seconds === null ? "running" : `${seconds.toFixed(1)}s`}</td>
       <td style={{ ...cell, color: TONE[runTone(row.status)], fontWeight: 600 }}>{row.status}</td>
