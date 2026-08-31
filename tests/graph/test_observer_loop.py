@@ -1,6 +1,7 @@
 """Spec 8.3's work items, over a real store and a `FakeRunner`: $0 and no SDK."""
 
 import asyncio
+import json
 import time
 from collections.abc import Sequence
 from typing import ClassVar
@@ -31,6 +32,7 @@ from auditor.observer.loop import RepoLoop
 from auditor.observer.scheduling import EventFeed, LoopState, pause_of
 from auditor.observer.sessions import SessionBook
 from auditor.paths import repo_dir_key
+from auditor.status import status_path
 
 _IMPL_WITH_A_NEW_CALL = (
     "from base import Base\nclass Impl(Base):\n    def run(self):\n"
@@ -865,3 +867,56 @@ async def test_the_attach_sweep_gives_a_running_row_this_repo_s_own_longer_windo
     )
     await _loop(refine_service).attach()
     assert (await refine_service.index.runs.run(run_id)).status is status
+
+
+async def test_the_daemon_writes_the_graph_block_the_status_line_reads(
+    refine_service: RefinementService, tmp_path
+):
+    """C1: `graph` is the observer's block of `status.json`, written through `merge_status`."""
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    await loop.attach()
+    await daemon._publish(loop)
+    block = json.loads(status_path(loop.root).read_text())["graph"]
+    assert block["state"] == LoopState.OBSERVING.value
+    assert block["nodes"] == await refine_service.index.graph.count_nodes()
+    assert block["refined"] == 0
+    assert block["expiry_seconds"] == (
+        refine_service.user.observer.scheduling.session_expiry_minutes * 60
+    )
+    assert block["written_at"] > 0
+
+
+async def test_an_unchanged_tick_takes_no_status_lock(
+    refine_service: RefinementService, tmp_path
+):
+    """Two COUNTs per tick is cheap; a lock file per tick against a running scan is not."""
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    await loop.attach()
+    await daemon._publish(loop)
+    written = status_path(loop.root)
+    # a second writer clears the block; an unchanged publish must not put it back
+    written.write_text(json.dumps({"scan": {"severity": {}}}))
+    await daemon._publish(loop)
+    assert "graph" not in json.loads(written.read_text())
+
+
+async def test_a_state_change_rewrites_the_block(
+    refine_service: RefinementService, tmp_path
+):
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    await loop.attach()
+    await daemon._publish(loop)
+    loop.state = LoopState.RUNNING
+    await daemon._publish(loop)
+    assert json.loads(status_path(loop.root).read_text())["graph"]["state"] == "running"
+
+
+async def test_the_node_count_reader_is_the_number_the_graph_holds(
+    refine_service: RefinementService,
+):
+    """A COUNT rather than `len(await nodes())`, which decodes the whole graph for one number."""
+    graph = refine_service.index.graph
+    assert await graph.count_nodes() == len(await graph.nodes())

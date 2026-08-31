@@ -24,7 +24,7 @@ from auditor.config import AuditorSettings, is_configured, load_config
 from auditor.database import IndexStore
 from auditor.graph.refine.drive import build_runner, select_runner
 from auditor.graph.refine.lock import flock_nb
-from auditor.graph.refine.models import Proposer, RunnerKind
+from auditor.graph.refine.models import ACTIVE_STATUSES, Proposer, RunnerKind
 from auditor.graph.refine.runner import RefinementRunner
 from auditor.graph.refine.service import RefinementService
 from auditor.graph.viz import empty_payload, render_app_or_status
@@ -66,6 +66,7 @@ from auditor.paths import (
 )
 from auditor.payload import WirePayload
 from auditor.serve import open_url
+from auditor.status import write_graph_status
 from auditor.user_settings import (
     DEFAULT_JOIN_SECONDS,
     UserSettings,
@@ -385,6 +386,8 @@ class Daemon:
         self.loops: dict[str, RepoLoop] = {}
         #: each repo's own meters, pushed by its loop rather than pulled across threads (H-9)
         self.meters: dict[str, Metered] = {}
+        #: the last `graph` block written per repo, so an unchanged tick takes no lock
+        self.blocks: dict[str, tuple[int, int, str]] = {}
         #: repos whose loop would not build, and when each may be tried again
         self.unbuildable: dict[str, Backoff] = {}
         #: drivers that ended, handed over for `reconcile` to unclaim: a `deque`
@@ -579,6 +582,30 @@ class Daemon:
         if self.meters.get(key) != drawn:
             self.meters[key] = drawn
             self.on_change()
+        await self._publish_status(loop, key)
+
+    async def _publish_status(self, loop: RepoLoop, key: str) -> None:
+        """Write this repo's `graph` block, which is what the status line's segment renders.
+
+        Only on a change, and off the event loop: `merge_status` takes a lock file and can wait
+        two seconds for a scan that is writing the other block.
+        """
+        nodes, refined = await asyncio.gather(
+            loop.index.graph.count_nodes(),
+            loop.index.refinements.count(statuses=sorted(ACTIVE_STATUSES)),
+        )
+        block = (nodes, refined, loop.state.value)
+        if self.blocks.get(key) == block:
+            return
+        self.blocks[key] = block
+        await asyncio.to_thread(
+            write_graph_status,
+            loop.root,
+            nodes=nodes,
+            refined=refined,
+            state=loop.state.value,
+            expiry_seconds=loop.user.observer.scheduling.session_expiry_minutes * 60,
+        )
 
     def adopt_home(self) -> int:
         """Spec 8.1's start-time drain: every spool under this home becomes a pending key.

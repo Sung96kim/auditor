@@ -387,6 +387,17 @@ class GraphDB(BaseDB):
             )
         ]
 
+    async def count_nodes(self) -> int:
+        """How many nodes this repo's partition holds, for the status line's `graph` segment.
+
+        A reader of its own rather than `len(await nodes())`, which decodes every row in the
+        graph for one number and runs on every observer tick.
+        """
+        row = await self._fetch_one(
+            "SELECT COUNT(*) AS n FROM graph_nodes WHERE repo = ?"
+        )
+        return int(row["n"]) if row else 0
+
     async def edges_of(
         self, node_id: str, kinds: list[str] | None
     ) -> list[dict[str, Any]]:

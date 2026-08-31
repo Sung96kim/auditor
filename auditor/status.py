@@ -98,3 +98,29 @@ def write_status(root: Path, results: list[ScanResult], *, configured: bool) -> 
             "written_at": int(time.time()),
         },
     )
+
+
+def write_graph_status(
+    root: Path,
+    *,
+    nodes: int,
+    refined: int,
+    state: str,
+    expiry_seconds: int,
+) -> Path:
+    """Write the observer's own block of the status file, which the `graph` segment renders.
+
+    `expiry_seconds` rides on the block because the status line is stdlib and cannot read the
+    user settings that hold `session_expiry_minutes`; past it the segment reads as off.
+    """
+    return merge_status(
+        root,
+        "graph",
+        {
+            "nodes": nodes,
+            "refined": refined,
+            "state": state,
+            "expiry_seconds": expiry_seconds,
+            "written_at": int(time.time()),
+        },
+    )

@@ -101,17 +101,28 @@ per hook, against the 200 ms budget the observer design gives it.
   `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`. `git rev-parse` is the only subprocess it
   runs, twice outside a git checkout for the pre-2.31 fallback, and the database is never opened.
   Which runs write that file is in [scan.md](scan.md).
-- It reads the file's `scan` block. An older in-repo `.auditor/.status.json` is ignored.
+- It reads the file's `scan` block, and the observer daemon's `graph` block after it. An older
+  in-repo `.auditor/.status.json` is ignored.
 - The Stop hook's `scan --since HEAD` does not write that block, so the segment keeps showing the
   last full scan of the repo rather than the uncommitted delta. See [scan.md](scan.md).
 
 ```
-● auditor  2 blocking  5 high  +17 lower
+● auditor  2 blocking  5 high  +17 lower  ◆ graph 1.2k · 7 refined · observing
 ```
 
 - The dot color follows the worst severity present. With nothing open it shows `auditor  clean`;
   with no cache, or a corrupt one, `auditor  not set up`.
 - A `⟳` marker appears once the cache is more than 15 minutes old.
+- The graph segment is the daemon's own: `nodes` is the size of the semantic graph, `refined` is
+  how many refinements the build currently applies, and the last word is the repo loop's state
+  (`building`, `observing`, `running`, `paused:budget`, `paused:ratelimit`, `paused:auth`,
+  `paused:error`, `detached`). Its dot is amber while the loop is paused.
+- It renders `◆ graph off`, dim, when the block is older than `session_expiry_minutes` or when
+  `$AUDITOR_HOME/observer/daemon.json` is gone, which is what a stopped daemon leaves behind. With
+  neither a block nor that file, the segment is omitted entirely, so a repo no observer ever
+  watched shows the line it always showed.
+- The status line never opens a socket and never opens the database, so a daemon that is wedged
+  cannot wedge the prompt.
 
 ## Bundled MCP server
 

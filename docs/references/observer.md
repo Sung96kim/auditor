@@ -69,6 +69,7 @@ $AUDITOR_HOME/
     locks/                     # NOT the daemon's: the graph rebuild lock owns this
   repos/<repo_dir_key>/
     spool.jsonl                # one repo's accepted, unconsumed events
+    status.json                # the scan and graph blocks the status line renders
 ```
 
 - The daemon creates only `lock`, `daemon.json` and `log/`. It never creates, clears or replaces
@@ -82,6 +83,9 @@ $AUDITOR_HOME/
   and unlinks it only once its consumer has returned, so a kill in that window loses nothing
   either. The next daemon adopts every `spool.jsonl` and every `spool.draining` it finds at start,
   oldest batch first.
+- The daemon writes the `graph` block through `auditor.status.merge_status`, which
+  read-merge-replaces one block under a lock, so a concurrent `auditr scan` writing `scan` cannot
+  lose it and it cannot lose the scan's.
 
 ## The port
 

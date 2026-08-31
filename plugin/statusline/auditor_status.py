@@ -28,6 +28,7 @@ RED, ORANGE, GREEN, DIM, RESET = (
 )
 STALE_SECONDS = 900
 NOT_SET_UP = f"{DIM}○ auditor  not set up{RESET}"
+GRAPH_OFF = f"{DIM}◆ graph off{RESET}"
 _ROOT_MARKERS = (".git", "pyproject.toml", ".auditor")
 
 
@@ -91,17 +92,42 @@ def _home() -> Path:
     return Path(raw).expanduser() if raw else Path.home() / ".auditor"
 
 
-def _status_path(cwd: Path) -> Path:
-    return _home() / "repos" / _repo_dir_key(_find_root(cwd)) / "status.json"
+def _status_path(home: Path, cwd: Path) -> Path:
+    return home / "repos" / _repo_dir_key(_find_root(cwd)) / "status.json"
 
 
-def _render(cwd: Path) -> str:
-    try:
-        data = json.loads(_status_path(cwd).read_text())
-    except (json.JSONDecodeError, ValueError, OSError):
-        # A missing, torn or unreadable cache degrades to the same sentinel — it must not make
-        # the whole segment vanish.
-        return NOT_SET_UP
+def _compact(count: float) -> str:
+    """A node count as the segment spells it: 940, 1.2k, 3.4M."""
+    if count < 1000:
+        return str(int(count))
+    if count < 1_000_000:
+        return f"{count / 1000:.1f}k"
+    return f"{count / 1_000_000:.1f}M"
+
+
+def _graph(data: object, home: Path) -> str:
+    """The `graph` segment: what the observer wrote, or a dim `off`, or nothing at all.
+
+    Nothing at all is the answer for a repo no daemon ever watched, so a user who never turned
+    the observer on sees the line they saw before. `off` needs the daemon's own file as well as
+    a fresh block, because the block outlives the process that wrote it.
+    """
+    block = data.get("graph") if isinstance(data, dict) else None
+    published = (home / "observer" / "daemon.json").exists()
+    if not isinstance(block, dict):
+        return GRAPH_OFF if published else ""
+    expiry = _num(block.get("expiry_seconds"))
+    fresh = expiry > 0 and time.time() - _num(block.get("written_at")) <= expiry
+    if not (fresh and published):
+        return GRAPH_OFF
+    state = block.get("state")
+    state = state if isinstance(state, str) and state else "observing"
+    dot = ORANGE if state.startswith("paused") else GREEN
+    nodes, refined = _compact(_num(block.get("nodes"))), int(_num(block.get("refined")))
+    return f"{dot}◆{RESET} graph {nodes} · {refined} refined · {state}"
+
+
+def _scan(data: object) -> str:
     scan = data.get("scan") if isinstance(data, dict) else None
     if not isinstance(scan, dict):
         return NOT_SET_UP
@@ -126,6 +152,22 @@ def _render(cwd: Path) -> str:
     if time.time() - _num(scan.get("written_at")) > STALE_SECONDS:
         line += f"  {DIM}⟳{RESET}"
     return line
+
+
+def _render(cwd: Path) -> str:
+    """The whole line: the severity segment, then the graph segment when there is one.
+
+    One read for both, and each segment degrades on its own, so a torn `graph` block cannot take
+    the severity counts down with it.
+    """
+    home = _home()
+    try:
+        data = json.loads(_status_path(home, cwd).read_text())
+    except (json.JSONDecodeError, ValueError, OSError):
+        # A missing, torn or unreadable cache degrades to the same sentinel: it must not make
+        # the whole segment vanish.
+        data = {}
+    return "  ".join(part for part in (_scan(data), _graph(data, home)) if part)
 
 
 def main() -> None:

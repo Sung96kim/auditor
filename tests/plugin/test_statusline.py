@@ -11,8 +11,8 @@ from _support import result_with
 
 from auditor.discovery import find_root
 from auditor.models import Severity
-from auditor.paths import auditor_home, ensure_repo_dir, repo_dir_key
-from auditor.status import merge_status, write_status
+from auditor.paths import auditor_home, ensure_repo_dir, observer_dir, repo_dir_key
+from auditor.status import merge_status, write_graph_status, write_status
 
 SCRIPT = (
     Path(__file__).resolve().parents[2] / "plugin" / "statusline" / "auditor_status.py"
@@ -92,7 +92,7 @@ def test_stale_marker(tmp_path):
     [
         "not json at all",  # decode error
         "[]",  # valid JSON, non-dict payload
-        '{"graph": {"nodes": 3}}',  # only the other writer's block
+        '{"graph": {"nodes": 3}}',  # only the other writer's block, and it carries no clock
     ],
 )
 def test_corrupt_cache_degrades_to_not_set_up(tmp_path, raw):
@@ -206,3 +206,144 @@ def test_statusline_reads_what_write_status_wrote(tmp_path):
 def test_statusline_reads_the_unconfigured_flag_write_status_wrote(tmp_path):
     write_status(tmp_path, [], configured=False)
     assert "not set up" in _run(tmp_path)
+
+
+def _publish_daemon() -> None:
+    """What a live daemon leaves behind: the file the segment reads for liveness."""
+    observer_dir().mkdir(parents=True, exist_ok=True)
+    (observer_dir() / "daemon.json").write_text(json.dumps({"pid": 1, "port": 7490}))
+
+
+def _write_graph(cwd: Path, **over) -> None:
+    payload = {
+        "nodes": 1234,
+        "refined": 7,
+        "state": "observing",
+        "expiry_seconds": 2700,
+    }
+    payload.update(over)
+    payload.setdefault("written_at", int(time.time()))
+    merge_status(find_root(cwd), "graph", payload)
+
+
+def test_the_graph_segment_renders_after_the_severity_one(tmp_path):
+    """Spec 12.4's line, in spec 12.4's order."""
+    _write_status(
+        tmp_path, {"blocking": 1, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path)
+    _publish_daemon()
+    out = _run(tmp_path)
+    assert "1 blocking" in out
+    assert "◆" in out and "graph 1.2k · 7 refined · observing" in out
+    assert out.index("blocking") < out.index("graph")
+
+
+@pytest.mark.parametrize(
+    ("nodes", "shown"),
+    [(0, "0"), (940, "940"), (1234, "1.2k"), (12_500, "12.5k"), (3_400_000, "3.4M")],
+)
+def test_the_node_count_is_compacted(tmp_path, nodes, shown):
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path, nodes=nodes)
+    _publish_daemon()
+    assert f"graph {shown} ·" in _run(tmp_path)
+
+
+def test_a_paused_loop_is_shown_as_the_daemon_wrote_it(tmp_path):
+    """`LoopState`'s own words; the statusline never invents a state name."""
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path, state="paused:budget")
+    _publish_daemon()
+    assert "· paused:budget" in _run(tmp_path)
+
+
+def test_a_stale_graph_block_reads_off(tmp_path):
+    """The block outlives the process that wrote it, so age is what makes `observing` a lie."""
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path, written_at=int(time.time()) - 2701)
+    _publish_daemon()
+    out = _run(tmp_path)
+    assert "graph off" in out and "observing" not in out
+    assert "clean" in out  # the severity segment is untouched
+
+
+def test_a_fresh_block_with_no_daemon_reads_off(tmp_path):
+    """A daemon that stopped a second ago leaves a fresh block and no `daemon.json`."""
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path)
+    assert "graph off" in _run(tmp_path)
+
+
+def test_a_daemon_with_no_block_yet_reads_off(tmp_path):
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _publish_daemon()
+    assert "graph off" in _run(tmp_path)
+
+
+def test_a_repo_no_observer_ever_watched_keeps_the_line_it_had(tmp_path):
+    """No block and no daemon means no segment: an observer-free user sees no new noise."""
+    _write_status(
+        tmp_path, {"blocking": 2, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    out = _run(tmp_path)
+    assert "2 blocking" in out
+    assert "graph" not in out and "◆" not in out
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"nodes": "many", "refined": None, "state": 7, "expiry_seconds": "soon"},
+        {"nodes": 3},
+        [],
+        "graph",
+    ],
+)
+def test_a_torn_graph_block_degrades_that_segment_alone(tmp_path, block):
+    """Spec 12.4: a torn or missing file degrades that segment only."""
+    _write_status(
+        tmp_path, {"blocking": 1, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    merge_status(find_root(tmp_path), "graph", block)
+    _publish_daemon()
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        input=json.dumps({"cwd": str(tmp_path)}),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "Traceback" not in proc.stderr
+    assert "1 blocking" in proc.stdout
+
+
+def test_statusline_reads_what_write_graph_status_wrote(tmp_path):
+    """The loop closed on the observer's own writer, the way it is closed on `write_status`."""
+    write_status(tmp_path, [], configured=True)
+    write_graph_status(
+        tmp_path, nodes=1234, refined=7, state="observing", expiry_seconds=2700
+    )
+    _publish_daemon()
+    assert "graph 1.2k · 7 refined · observing" in _run(tmp_path)
+
+
+def test_the_graph_block_does_not_disturb_the_scan_block(tmp_path):
+    """Two writers, one file: `merge_status` is read-merge-replace on both sides."""
+    write_status(tmp_path, [result_with("m.py", Severity.HIGH)], configured=True)
+    write_graph_status(
+        tmp_path, nodes=10, refined=0, state="building", expiry_seconds=2700
+    )
+    _publish_daemon()
+    out = _run(tmp_path)
+    assert "1 high" in out and "graph 10 · 0 refined · building" in out
