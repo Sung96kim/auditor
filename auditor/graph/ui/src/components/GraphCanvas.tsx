@@ -5,12 +5,12 @@ import { animateNodes } from "sigma/utils";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type Graph from "graphology";
 import { createNodeBorderProgram } from "@sigma/node-border";
-import { EdgeCurvedArrowProgram } from "@sigma/edge-curve";
+import { EdgeCurvedArrowProgram, createEdgeCurveProgram } from "@sigma/edge-curve";
 import { graphlib, layout as dagreLayout } from "@dagrejs/dagre";
 import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
 import { buildGraphologyGraph, type View } from "../graph/buildGraph";
-import { edgeKey } from "../graph/refined";
+import { EDGE_TYPES, edgeKey, refinedEdgeType } from "../graph/refined";
 import { easeInOutCubic, lerp, makeTween, tickTween, type TweenState } from "../graph/anim";
 import { labelBox, nodeAtPoint, type LabelBox } from "../graph/labelHit";
 
@@ -43,6 +43,16 @@ interface SelectionState {
   id: string | null;
   neighbors: Set<string>;
 }
+
+/** One program per name `refinedEdgeType` can return, because sigma throws on an unknown one.
+ *
+ * Exported so a test can hold the two lists together: jsdom has no WebGL, so nothing here is
+ * ever rendered under vitest and a missing program is invisible to the whole suite.
+ */
+export const EDGE_PROGRAMS = {
+  [EDGE_TYPES.drawn]: EdgeCurvedArrowProgram,
+  [EDGE_TYPES.provisional]: createEdgeCurveProgram({ arrowHead: null }),
+};
 
 const drawDarkNodeHover: NodeHoverDrawingFunction = (context, data, settings) => {
   const size = settings.labelSize;
@@ -392,7 +402,7 @@ export default function GraphCanvas({
       edgeLabelFont: LABEL_FONT,
       defaultDrawNodeHover: drawDarkNodeHover,
       nodeProgramClasses: { circle: NodeBorderProg },
-      edgeProgramClasses: { line: EdgeCurvedArrowProgram },
+      edgeProgramClasses: EDGE_PROGRAMS,
       nodeReducer: (node, data) => {
         const ep = easeInOutCubic(entranceTweenRef.current.progress);
         const hasFinding = overlayOnRef.current && findingsSet.has(node);
@@ -498,7 +508,7 @@ export default function GraphCanvas({
               label: labelAllEdges ? kind : "",
               color: THEME.accent + (unconfirmedEdgesRef.current.has(key) ? "88" : "CC"),
               size: 2.4,
-              type: unconfirmedEdgesRef.current.has(key) ? "dashed" : (data.type as string),
+              type: refinedEdgeType(!unconfirmedEdgesRef.current.has(key)),
             };
           }
           // give edges real thickness so the directional arrowheads are visible

@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { edgeKey, refinedEdgeKeys, refinedNodeIds, unconfirmedEdgeKeys } from "./refined";
+import { EDGE_PROGRAMS } from "../components/GraphCanvas";
+import {
+  EDGE_TYPES,
+  edgeKey,
+  refinedEdgeKeys,
+  refinedEdgeType,
+  refinedNodeIds,
+  unconfirmedEdgeKeys,
+} from "./refined";
 import type { GraphPayload } from "../types";
 
 const P: GraphPayload = {
@@ -45,5 +53,20 @@ describe("the refinement overlay", () => {
 
   it("the key separates the triple, so two ids carrying a space cannot collide", () => {
     expect(edgeKey("a b", "c", "calls")).not.toBe(edgeKey("a", "b c", "calls"));
+  });
+});
+
+describe("the overlay's edge programs", () => {
+  it("every type the reducer can return has a program registered for it", () => {
+    // sigma looks `type` up in `edgeProgramClasses` and throws inside its render loop on a miss,
+    // which takes the canvas down; the map it is given replaces sigma's defaults wholesale
+    for (const confirmed of [true, false]) {
+      expect(Object.keys(EDGE_PROGRAMS)).toContain(refinedEdgeType(confirmed));
+    }
+    expect(Object.keys(EDGE_PROGRAMS).sort()).toEqual(Object.values(EDGE_TYPES).sort());
+  });
+
+  it("a confirmed and an unconfirmed overlay edge are drawn by different programs", () => {
+    expect(refinedEdgeType(true)).not.toBe(refinedEdgeType(false));
   });
 });

@@ -12,5 +12,5 @@ export default defineConfig({
     assetsInlineLimit: 100000000,
     cssCodeSplit: false,
   },
-  test: { environment: "jsdom", globals: true },
+  test: { environment: "jsdom", globals: true, setupFiles: ["./vitest.setup.ts"] },
 });

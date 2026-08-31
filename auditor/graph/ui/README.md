@@ -52,7 +52,9 @@ unset. If a rebuild ever disagrees with the committed bytes, the pytest stamp ab
 authoritative gate.
 
 `vite.config.ts` sets `emptyOutDir: false`, because `dist/inputs.sha256` is committed and lives in
-the output directory; vite's default wipes it on every build.
+the output directory; vite's default wipes it on every build. It also names `vitest.setup.ts`,
+which stubs the two WebGL constructors and `matchMedia` that jsdom does not have, so a module
+importing sigma can at least be loaded and held to something under test.
 
 ## Type-check
 

@@ -29,3 +29,17 @@ export function unconfirmedEdgeKeys(payload: GraphPayload): Set<string> {
       .map((e) => edgeKey(e.source, e.target, e.kind)),
   );
 }
+
+/** Every edge type the canvas reducer can return, so `GraphCanvas` registers a program for each.
+ *
+ * Sigma looks the reducer's `type` up in `edgeProgramClasses` and throws inside its render loop
+ * when it finds nothing, taking the whole canvas down with it; the map it is given replaces
+ * sigma's defaults wholesale, so an unregistered name is not a fallback, it is a crash.
+ */
+export const EDGE_TYPES = { drawn: "line", provisional: "provisional" } as const;
+
+/** The style an overlay edge is drawn in. Sigma ships no dashed program, so an unconfirmed
+ * edge is the same curve without its arrowhead, which is a distinction the renderer supports. */
+export function refinedEdgeType(confirmed: boolean): string {
+  return confirmed ? EDGE_TYPES.drawn : EDGE_TYPES.provisional;
+}
