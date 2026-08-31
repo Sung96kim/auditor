@@ -1,12 +1,13 @@
 # Claude Code plugin reference
 
-auditor ships as a Claude Code plugin that drives the `auditr` CLI: skills, a review subagent,
+auditor ships as a Claude Code plugin that drives the `auditr` CLI: skills, two subagents,
 hooks, a status line and the MCP server. The plugin itself carries no Python dependencies, so
 install the CLI separately. Each piece is configured in its own file under `plugin/`: skills in
-`plugin/skills/<name>/SKILL.md`, the subagent in `plugin/agents/auditor-reviewer.md`, hooks in
-`plugin/hooks/hooks.json`, the status line in `plugin/settings.json`, the MCP server in
-`plugin/.mcp.json`, and the manifest in `plugin/.claude-plugin/plugin.json`, which points at the
-skills, the subagent, and the MCP server; hooks and the status line are discovered by convention.
+`plugin/skills/<name>/SKILL.md`, the subagents in `plugin/agents/auditor-reviewer.md` and
+`plugin/agents/graph-refiner.md`, hooks in `plugin/hooks/hooks.json`, the status line in
+`plugin/settings.json`, the MCP server in `plugin/.mcp.json`, and the manifest in
+`plugin/.claude-plugin/plugin.json`, which points at the skills, the subagents, and the MCP
+server; hooks and the status line are discovered by convention.
 
 ## Common invocations
 
@@ -33,8 +34,9 @@ claude --plugin-dir ./plugin
   repo-root `.claude-plugin/marketplace.json`, which points at `./plugin`.
 - `/plugin install auditor` enables it in a session.
 - `claude --plugin-dir ./plugin` loads the checkout directly, for plugin development.
-- The CLI is a separate install (`uv tool install auditr`); the hooks and status line stay silent
-  when `auditr` is not on PATH.
+- The CLI is a separate install (`uv tool install auditr`); the hooks' audit halves and the
+  status line stay silent when `auditr` is not on PATH. The observer half of each hook is gated
+  on `auditr-observer` instead, and `session_start.py` says once on stderr when that is missing.
 
 ## Skills
 
@@ -75,9 +77,10 @@ Invoked as `/auditor:<name>`, and auto-invoked when the task matches the skill's
 
 ## Hooks
 
-`plugin/hooks/hooks.json` registers four stdlib-only scripts. Each no-ops when `auditr` is missing
-from PATH or the event payload is unusable. The environment variables that tune them are in
-[configuration.md](configuration.md).
+`plugin/hooks/hooks.json` registers four stdlib-only scripts. Each script's audit half no-ops
+when `auditr` is missing from PATH or the event payload is unusable; the observer half runs
+whenever `auditr-observer` is on PATH, and is gated only by `AUDITOR_OBSERVER`. The environment
+variables that tune them are in [configuration.md](configuration.md).
 
 - `session_start.py` on `SessionStart`: reports whether auditor is installed and whether this repo
   is configured (`.auditor/config.toml`, or a `[tool.auditor]` table in `pyproject.toml`).
@@ -89,7 +92,7 @@ from PATH or the event payload is unusable. The environment variables that tune 
   delta (`--since HEAD`) and blocks finishing while the gate still trips. A tool or config error
   surfaces a note and does not block, so a hiccup cannot wedge the agent.
 - `session_end.py` on `SessionEnd`: detaches this session from the observer daemon. It reads no
-  reason field and emits nothing; a `SessionEnd` hook's output is discarded anyway.
+  reason field and writes nothing to stdout.
 
 Every one of the four also hands its payload to `auditr-observer hook <event> --client claude-code`
 on that command's stdin, before its own audit behaviour runs and independently of the environment
@@ -97,10 +100,13 @@ variable that gates it: `AUDITOR_AUTOHOOK` and `AUDITOR_VERIFY_HOOK` turn the au
 `AUDITOR_OBSERVER=0` turns the observer half off, and it does so before any process is started,
 so switching it off costs nothing per event. `auditr-observer` is resolved on PATH and nowhere
 else: there is no `uvx` fallback, because resolving a package inside a hook's one to three second
-budget cannot finish, and `session_start.py` says once on stderr when the client is not installed.
+budget cannot finish, and `session_start.py` writes one line to stderr when the client is not
+installed. Claude Code shows a hook's stderr to the user only on exit code 2; these hooks exit 0,
+so that line reaches the debug log rather than the transcript.
 The observer half holds no HTTP client, no port lookup and no spool of its own: those live once,
-in `auditr_observer.py` ([observer.md](observer.md)). Measured cost of the delegation: about 42 ms
-per hook, against the 200 ms budget the observer design gives it.
+in `auditr_observer.py` ([observer.md](observer.md)). Measured cost of the delegation: 49 ms
+median per hook (44 to 65 ms over 20 runs, on a non-auditable edit that posts nothing), against
+the 200 ms budget the observer design gives an edit event.
 
 ## Status line
 
@@ -128,8 +134,10 @@ per hook, against the 200 ms budget the observer design gives it.
   `paused:error`, `detached`). Its dot is amber while the loop is paused.
 - It renders `◆ graph off`, dim, when the block is older than `session_expiry_minutes` or when
   `$AUDITOR_HOME/observer/daemon.json` is gone, which is what a stopped daemon leaves behind. With
-  neither a block nor that file, the segment is omitted entirely, so a repo no observer ever
-  watched shows the line it always showed.
+  neither a block nor that file, the segment is omitted entirely, so a user who never started an
+  observer sees the line they always saw. `daemon.json` is one file per `$AUDITOR_HOME`, not one
+  per repo: once a daemon has run for any repo under this home, a repo it is not watching reads
+  `◆ graph off` rather than nothing.
 - The status line never opens a socket and never opens the database, so a daemon that is wedged
   cannot wedge the prompt.
 

@@ -38,7 +38,7 @@ Paths are relative to the repo root.
   8.3's five work items over a store, a service and a runner factory, owning every side effect
   `assess.py` refuses to have.
 - Everything else at `auditor/` top level is a shared seam, described next.
-- `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagent, hooks,
+- `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagents, hooks,
   statusline, bundled MCP config); `assets/` holds the project icon and the vendored runner marks
   (see `assets/README.md`).
 
@@ -298,11 +298,13 @@ flowchart TB
   publishes it. See [claude-code-plugin.md](references/claude-code-plugin.md).
 - `plugin/.claude-plugin/plugin.json` points at `plugin/skills/`, `plugin/agents/`, and
   `plugin/.mcp.json` (a `uvx`-launched `auditr-mcp`). `plugin/settings.json` wires the status line
-  and `plugin/hooks/hooks.json` the three stdlib hooks (`session_start.py`, `audit_edit.py`,
-  `verify_stop.py`).
+  and `plugin/hooks/hooks.json` the four stdlib hooks (`session_start.py`, `audit_edit.py`,
+  `verify_stop.py`, `session_end.py`). Each hands its payload to `auditr-observer hook <event>`
+  before its own audit half runs; `plugin/hooks/_common.py` is that one seam.
 - `plugin/statusline/auditor_status.py` re-implements `discovery.find_root`, `paths.repo_identity`,
-  `paths.repo_dir_key` and `paths.auditor_home` in stdlib only, then reads the `scan` block of
-  `$AUDITOR_HOME/repos/<key>/status.json`. `tests/plugin/test_statusline.py` pins each pair.
+  `paths.repo_dir_key` and `paths.auditor_home` in stdlib only, then reads the `scan` and `graph`
+  blocks of `$AUDITOR_HOME/repos/<key>/status.json`. `tests/plugin/test_statusline.py` pins each
+  pair, and the `graph` block's eight state words against `LoopState`.
 
 ## Cross-cutting behavior
 

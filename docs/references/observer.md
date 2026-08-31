@@ -41,22 +41,40 @@ shell out to it and hold none of them.
 | `stop` | `POST /sessions/heartbeat`, an attach when that answers `ok: false`, then the whole `git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=all` path set as `kind="stop"` |
 | `session-end` | `POST /sessions/detach` |
 
-- An event carrying `agent_id` is dropped: that is a subagent's tool call, not this session's edit.
+- A `post-tool-use` event carrying `agent_id` is dropped: that is a subagent's tool call, not
+  this session's edit. The three lifecycle events are not gated on it.
 - Hook-side Stage 0 is the config-free half only, a suffix or filename allowlist plus the excluded
   directory names. It can only drop paths the daemon's own `FileDiscovery.auditable_shape` would
   also drop, so a drop is a saved round trip and never a lost edit.
-- Every path posted is repo-relative, whatever shape the client named it in. That is the only
-  shape the graph is keyed on, so an absolute path would be a file the index has never seen.
+- Every path posted is repo-relative. A relative name is anchored at the session's `cwd` and an
+  absolute one is made relative to the repo root; a path that is under neither has no
+  repo-relative spelling and is not posted at all. That shape is the only one the graph is keyed
+  on, so anything else would name a file the index has never seen.
 - A batch is truncated at 2,000 paths, the wire's own cap. A longer body is refused whole, and a
-  refusal is dropped rather than spooled, so the tail of one Stop batch is the cheaper loss.
-- Each request has a 200 ms budget, and the session-start attach 3 s. A cold daemon launch can
-  outrun that budget, in which case the session is not attached yet; the next `Stop` heartbeat
-  answers `ok: false` and the client attaches there, so the lag is one turn and not one session.
-- When nothing answers, the batch is written to `repos/<repo_dir_key>/spool.jsonl` with a
-  `root.json` breadcrumb beside it, and the **next** daemon start adopts it. A daemon that answers
-  with a 4xx has refused the body, so that batch is dropped rather than spooled for ever.
+  refusal is dropped rather than kept, so the tail of one Stop batch is the cheaper loss.
+- An edit event has a 200 ms budget, the session-start attach 3 s, the attach that repairs a lost
+  session 1 s, and a Stop batch 2 s, because the daemon runs its own Stage 0 once per path on the
+  request thread before it answers. A cold daemon launch can outrun the session-start budget, in
+  which case the session is not attached yet; the next `Stop` heartbeat answers `ok: false` and
+  the client attaches there, so the lag is one turn and not one session.
+- **The batch is written to the spool before it is posted, not after.** The hook's parent kills it
+  on a timeout, and only a batch already on disk survives that. Each batch is its own file,
+  `repos/<repo_dir_key>/spool.client.<batch>.jsonl`, with a `root.json` breadcrumb beside it, and
+  it carries a `batch` id. What the answer means:
+  - a 2xx took it, so the file is deleted;
+  - a 4xx refused this body, which no retry changes, so the file is deleted too;
+  - a 5xx is the daemon failing rather than refusing, so the file stays;
+  - nothing at all, including the client being killed, leaves the file where it is.
+  A daemon adopts those files at start and on every drain, and it drops a `batch` id it has
+  already drained, so a delivery whose answer outran the client's socket budget is not assessed
+  twice. The client stops adding to a repo's spool past 128 undelivered batches.
+- Every path is attributed to the **session's** repo, never the edited file's. An edit inside a
+  nested checkout under the session root is posted under the outer repo's key, which is what
+  `auditr scan` does with the same file.
 - `AUDITOR_OBSERVER=0` is read before the verb runs, so the kill switch covers all four events.
-- Nothing exits non-zero, whatever happens.
+- Nothing exits non-zero, whatever happens: an unexpected failure inside the verb is one line on
+  stderr and an exit code of 0, and a `hook` verb run by hand from a terminal reads no payload
+  rather than blocking on stdin.
 
 ## What it adds under the home
 
@@ -68,7 +86,9 @@ $AUDITOR_HOME/
     log/observer.log           # both logging stacks plus the child's stderr, rotated at 5 MB
     locks/                     # NOT the daemon's: the graph rebuild lock owns this
   repos/<repo_dir_key>/
+    root.json                  # the crumb that gives an adopted spool a repo root
     spool.jsonl                # one repo's accepted, unconsumed events
+    spool.client.<batch>.jsonl # one batch the hook client wrote and could not deliver
     status.json                # the scan and graph blocks the status line renders
 ```
 
@@ -81,8 +101,14 @@ $AUDITOR_HOME/
 - `spool.jsonl` is the durable half of `POST /events`: an event is on disk before the 202 returns,
   so a daemon killed mid-flight loses nothing. A drain takes the file by rename to `spool.draining`
   and unlinks it only once its consumer has returned, so a kill in that window loses nothing
-  either. The next daemon adopts every `spool.jsonl` and every `spool.draining` it finds at start,
-  oldest batch first.
+  either. The next daemon adopts every `spool.jsonl`, every `spool.client.<batch>.jsonl` and every
+  `.draining` of both that it finds at start, oldest batch first. The client writes its own files
+  rather than appending to `spool.jsonl` because the daemon renames that one out from under a
+  writer on every drain, and because one file per batch is what makes delete-on-2xx a single
+  unlink.
+- An adopted spool goes through the same gate `POST /sessions/attach` does before it gets a loop.
+  A repo that never opted in is left with its spool on disk and no loop, so spooling an event at a
+  daemon that is not running is not a way past the gate.
 - The daemon writes the `graph` block through `auditor.status.merge_status`, which
   read-merge-replaces one block under a lock, so a concurrent `auditr scan` writing `scan` cannot
   lose it and it cannot lose the scan's.
@@ -164,8 +190,10 @@ thread rather than pinning one.
   relative name and no name at all both fall back to the daemon's own working directory, which is
   a repo the caller never asked about, so neither is answered.
 - `POST /events` takes the `key` a hook already computed, and it must be a `repo_dir_key`: 40 hex
-  characters, because it names the directory the spool is written to. Up to 2,000 paths per body;
-  the shape filter runs once per path on the request thread, which is about 84 ms at the cap.
+  characters, because it names the directory the spool is written to. It also takes the client's
+  own `batch` id, which is what a redelivery is recognised by. Up to 2,000 paths per body; the
+  shape filter runs once per path on the request thread, which is 127 ms median at the cap on the
+  machine this was last measured on, and has been seen at 900 ms on a slower one.
 - `POST /admin/restart` takes `{compat, reason}`. A caller whose declared wire version this daemon
   already speaks is declined, so no local process can re-exec the daemon on its own say-so.
 - `GET`, `HEAD`, `POST`, `PUT` and `DELETE` all answer JSON; an unknown route or method is a JSON

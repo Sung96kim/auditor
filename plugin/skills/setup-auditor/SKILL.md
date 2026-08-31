@@ -24,9 +24,10 @@ Set up auditor in this repo. Report what already exists; don't clobber it.
 4. Write the repo's own policy. `observer_allowed` is a **top-level** `[tool.auditor]` key, never
    under `graph.*`: `observer_allowed = false` is the repo's hard opt-out from the background
    observer and it wins over any user setting. Leave it out to keep the default (`true`). State
-   the minimum `auditr` for the config you just wrote before the team commits it: the graph
-   config is `extra="forbid"`, so an older install refuses a key it does not know rather than
-   ignoring it, and `auditr version` on this machine is the floor to quote.
+   the minimum `auditr` for the config you just wrote before the team commits it: every config
+   model is `extra="ignore"`, so an older install silently drops a key it does not know and the
+   team believes a setting applies when it does not. `auditr init --check` is what reports
+   unknown keys, and `auditr version` on this machine is the floor to quote.
 5. Write a baseline so pre-existing findings don't gate new work:
    `auditr scan . --write-baseline .auditor/baseline.json`. Skip this on a repo genuinely starting
    from zero findings — see `references/config-guide.md` for when a baseline is/isn't worth it.

@@ -2,7 +2,7 @@
   "name": "auditor",
   "displayName": "Auditor",
   "version": "0.2.0",
-  "description": "Drive the auditor code-audit CLI/MCP from Claude Code: judge findings, gate PRs, scan for malware, explore the code graph.",
+  "description": "Drive the auditor code-audit CLI/MCP from Claude Code: judge findings, gate PRs, scan for malware, explore the code graph, refine it, and watch it with the observer.",
   "author": { "name": "Sung Kim" },
   "homepage": "https://github.com/Sung96kim/auditor",
   "repository": "https://github.com/Sung96kim/auditor",

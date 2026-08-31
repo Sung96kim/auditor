@@ -26,8 +26,9 @@ auditr graph refine pkg/ --brief        # render what that run would be asked, o
   budget knobs are in [configuration.md](../../../docs/references/configuration.md).
 - Every proposal is verified against the extracted facts before it is stored. `unverified` is a
   kind the verifier has no check for, not a failure.
-- Refinements are an overlay. The build applies the `active` and `pinned` ones and nothing else, so
-  reverting one is a status change and never a rebuild.
+- Refinements are an overlay. The build applies the `active` and `pinned` ones and nothing else,
+  so reverting one is a status change and not a rebuild. The built graph keeps the edge until the
+  next `graph build` reads the ledger again.
 
 ## Review what it proposed
 

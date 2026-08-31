@@ -33,7 +33,8 @@ and most batches are correctly declined; the reason on the row says which stage 
 `◆ graph 1.2k · 7 refined · observing` is the daemon's own segment: the size of the graph, the
 refinements the build currently applies, and the repo loop's state. `◆ graph off`, dim, means the
 daemon is not running or its last report is older than `session_expiry_minutes`. No segment at all
-means this repo has never been observed.
+means no daemon has ever run for this `$AUDITOR_HOME`; once one has, a repo it is not watching
+reads `◆ graph off` rather than nothing.
 
 ## When it is not attaching
 
