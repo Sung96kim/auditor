@@ -7,7 +7,23 @@ const VIEW: RunDetailView = {
   run: null,
   prompt: "walk the call graph from build and propose the edges the static pass could not resolve",
   tool_trace: [{ tool: "graph_search", ts: 1, detail: "query=build limit=20" }],
-  refinements: [],
+  refinements: [
+    {
+      refinement_id: "r1",
+      run_id: "run1",
+      kind: "node",
+      tier: "call",
+      status: "rejected",
+      src: null,
+      dst: null,
+      edge_kind: null,
+      node_id: "cli/main.py::_hidden",
+      from_dst: null,
+      reason: "the symbol does not exist",
+      confidence: 0.2,
+      drifted: false,
+    },
+  ],
   trials: [],
   assessment: null,
 };
@@ -54,5 +70,22 @@ describe("the run detail", () => {
     serve();
     const call = await screen.findByText(/query=build/);
     expect(call.style.overflowWrap).toBe("anywhere");
+  });
+});
+
+describe("what a run detail says when a row has no edge to show", () => {
+  it("a node refinement names its node, rather than drawing a dash moving to a dash", async () => {
+    serve();
+    expect((await screen.findByText(/cli\/main.py::_hidden/)).textContent).toContain(
+      "[call] cli/main.py::_hidden",
+    );
+    expect(screen.queryByText(/- to -/)).toBeNull();
+  });
+
+  it("an empty tuning list reads inline, like every other empty group in the box", async () => {
+    serve();
+    const none = await screen.findByText(/S11 is what writes a tuning row/);
+    expect(none.textContent).toBe("none, S11 is what writes a tuning row");
+    expect(none.tagName).toBe("SPAN");
   });
 });
