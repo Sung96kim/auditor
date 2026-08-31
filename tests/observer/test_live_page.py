@@ -1,6 +1,7 @@
 """Spec 12.1's live page: the bootstrap that turns it on, and the page with no repo."""
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -25,18 +26,20 @@ class _OneRepo:
         return GraphView(repo=str(root), identity="id", graph=empty_payload())
 
 
-def _globals(html: str) -> dict:
-    """Every `window.X=...;` the injector appended, decoded. Anchored past the bundle's own body.
+#: the injector's own spelling, so the 1.8 MB bundle's inlined script cannot be mistaken for it
+_INJECTED = re.compile(r"<script>window\.(__AUDITOR_[A-Z]+__)=(.*?);</script>")
 
-    The 1.8 MB bundle contains its own inlined `<script>` and its own `</script>`, so a split over
-    the whole document is one inlined occurrence away from decoding minified JS.
+
+def _globals(html: str) -> dict:
+    """Every global the injector appended inside the body, decoded, and no others.
+
+    Every match rather than the last two: a third global would otherwise be dropped in silence,
+    and a global injected past `</body>` reads here as an absence rather than as a decode crash.
     """
-    found = {}
     tail = html.rsplit("</body>", 1)[0] if "</body>" in html else html
-    for chunk in tail.split("<script>window.")[-2:]:
-        name, _, rest = chunk.partition("=")
-        found[name] = json.loads(rest.rsplit(";</script>", 1)[0])
-    return found
+    return {
+        found.group(1): json.loads(found.group(2)) for found in _INJECTED.finditer(tail)
+    }
 
 
 def test_graph_serve_injects_no_bootstrap_so_the_page_stays_static():
@@ -58,23 +61,37 @@ def test_the_bootstrap_is_a_second_global_next_to_the_payload():
     )
     injected = _globals(html)
     assert injected["__AUDITOR_OBSERVER__"] == {"live": True, "base": "/", "repo": "/w"}
-    assert html.index("__AUDITOR_GRAPH__") < html.index("</body>")
+    # both are inside the body: `_globals` reads the tail before `</body>` and nothing after it
+    assert set(injected) == {"__AUDITOR_GRAPH__", "__AUDITOR_OBSERVER__"}
 
 
-def test_a_payload_holding_a_closing_tag_cannot_end_the_script():
-    """The escape is per injected global, not per call site, so both blobs get it."""
+@pytest.mark.parametrize(
+    "hostile",
+    ["</script><b>", "<!--<script>", "<!-- <script>", "<!--<script ", "<script>"],
+    ids=["closer", "comment opener", "spaced", "unterminated", "opener"],
+)
+def test_a_payload_holding_a_tag_cannot_steer_the_parser(hostile: str):
+    """The escape is per injected global, not per call site, so both blobs get it.
+
+    `<!--<script` puts the tokenizer in script-data-double-escaped state, where the real
+    `</script>` stops closing the element and the rest of the document becomes script text.
+    """
     harmless = render_app(
         {"meta": {"repo": "ok"}, "nodes": [], "edges": [], "clusters": []},
         bootstrap={"live": True, "base": "/", "repo": "/w"},
     )
-    hostile = render_app(
-        {"meta": {"repo": "</script><b>"}, "nodes": [], "edges": [], "clusters": []},
-        bootstrap={"live": True, "base": "/", "repo": "</script>"},
+    drawn = render_app(
+        {"meta": {"repo": hostile}, "nodes": [], "edges": [], "clusters": []},
+        bootstrap={"live": True, "base": "/", "repo": hostile},
     )
-    assert "</script><b>" not in hostile
-    assert hostile.count("</script>") == harmless.count("</script>")
-    escaped = "<\\/script>"
-    assert hostile.count(escaped) - harmless.count(escaped) == 2
+    # not one `<` more than the same page carrying a harmless value: none of it reached the HTML
+    assert drawn.count("<") == harmless.count("<")
+    assert drawn.count("</script>") == harmless.count("</script>")
+    assert drawn.count(hostile) == harmless.count(hostile)
+    # escaped on the way out and decoded on the way back in: the value itself is not mangled
+    injected = _globals(drawn)
+    assert injected["__AUDITOR_OBSERVER__"]["repo"] == hostile
+    assert injected["__AUDITOR_GRAPH__"]["meta"]["repo"] == hostile
 
 
 def test_the_no_repo_page_carries_a_meta_the_app_can_read():

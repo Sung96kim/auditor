@@ -158,8 +158,9 @@ thread rather than pinning one.
   directory draws the no-repo page rather than opening a store handle per distinct string.
   With no UI bundle built the page degrades to a plain status document naming the node, edge and
   cluster counts and how to run `pnpm build`, rather than raising. The daemon injects
-  `window.__AUDITOR_OBSERVER__ = {live, base, repo}` beside `window.__AUDITOR_GRAPH__`, and the
-  page reads that flag at first paint and then polls `/api/status` and `/api/runs` every 3 s with
+  `window.__AUDITOR_OBSERVER__ = {live, base, repo}` beside `window.__AUDITOR_GRAPH__`, with every
+  `<` in either blob escaped, so no value in them can end the element or open the tokenizer's
+  double-escaped state. The page reads that flag at first paint and then polls `/api/status` and `/api/runs` every 3 s with
   `If-None-Match`. `graph serve` injects no bootstrap, so the same bundle stays a static snapshot
   there and issues no request at all. The page is read-only by transport: a browser sends `Origin`
   on a same-origin `POST` and the server refuses any request that carries one, so nothing on the

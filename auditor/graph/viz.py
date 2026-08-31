@@ -56,8 +56,13 @@ def empty_payload() -> dict:
 
 
 def _script(name: str, value: object) -> str:
-    """One injected global. ``</`` is escaped so a string in the payload cannot end the tag."""
-    blob = json.dumps(value).replace("</", "<\\/")
+    """One injected global, with every ``<`` escaped so no string in it can steer the parser.
+
+    The opener rather than the closer: ``</script`` ends the element, and ``<!--<script`` opens
+    the tokenizer's double-escaped state, where the real ``</script>`` no longer closes it and
+    the rest of the document becomes script text. One rule covers both.
+    """
+    blob = json.dumps(value).replace("<", "\\u003c")
     return f"<script>window.{name}={blob};</script>"
 
 
