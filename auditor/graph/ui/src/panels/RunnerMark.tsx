@@ -32,11 +32,25 @@ export function markFor(runner: string): Mark | null {
 }
 
 /** Spec 12.1: the runner column and the eval block render the mark, never initials or a badge. */
-export default function RunnerMark({ runner, size = 14 }: { runner: string; size?: number }) {
+export default function RunnerMark({ runner, size = 13 }: { runner: string; size?: number }) {
   const mark = markFor(runner);
   if (mark === null) {
     return (
-      <span title={`unknown runner ${runner}`} style={{ opacity: 0.5 }}>
+      <span
+        role="img"
+        aria-label={`unknown runner ${runner}`}
+        title={`unknown runner ${runner}`}
+        style={{
+          alignItems: "center",
+          display: "inline-flex",
+          flexShrink: 0,
+          fontSize: `${Math.round(size * 0.62)}px`,
+          height: `${size}px`,
+          justifyContent: "center",
+          opacity: 0.5,
+          width: `${size}px`,
+        }}
+      >
         &#9679;
       </span>
     );
@@ -50,6 +64,7 @@ export default function RunnerMark({ runner, size = 14 }: { runner: string; size
       viewBox={mark.viewBox}
       width={size}
       height={size}
+      style={{ display: "block", flexShrink: 0 }}
       xmlns="http://www.w3.org/2000/svg"
     >
       <title>{mark.label}</title>

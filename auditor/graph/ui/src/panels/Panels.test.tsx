@@ -69,6 +69,16 @@ describe("the chrome every card in the column is drawn with", () => {
     ]);
   });
 
+  it("the column keeps its width when the panels beside it grow", () => {
+    const boot = live({ live: true, base: "/", repo: "/w" });
+    const { container } = render(
+      <Panels live={{ ...boot, status: { ...boot.status, phase: "ready" } }} />,
+    );
+    const column = container.querySelector("aside") as HTMLElement;
+    expect(column.style.flexShrink).toBe("0");
+    expect(column.style.width).toBe("340px");
+  });
+
   it("a failed first poll still says which panel failed, rather than swapping the card for an error", () => {
     const boot = live({ live: true, base: "/", repo: "/w" });
     const status = { ...boot.status, phase: "error" as const, error: "connection refused" };

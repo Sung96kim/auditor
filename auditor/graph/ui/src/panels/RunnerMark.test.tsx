@@ -48,3 +48,18 @@ describe("the runner column's mark", () => {
     expect(Object.keys(MARKS).sort()).toEqual(["claude", "codex"]);
   });
 });
+
+describe("the mark's box", () => {
+  it("the mark is its own block, so a table cell does not reserve a text descender under it", () => {
+    const { container } = render(<RunnerMark runner="claude" />);
+    expect((container.querySelector("svg") as SVGElement).style.display).toBe("block");
+  });
+
+  it("an unknown runner's stand-in fills the same box, so a column of marks stays aligned", () => {
+    const { container } = render(<RunnerMark runner="gemini" size={13} />);
+    const stand = container.firstElementChild as HTMLElement;
+    expect(stand.style.width).toBe("13px");
+    expect(stand.style.height).toBe("13px");
+    expect(stand.getAttribute("aria-label")).toBe("unknown runner gemini");
+  });
+});

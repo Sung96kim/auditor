@@ -258,3 +258,8 @@
   background: rgba(124, 124, 255, 0.16) !important;
   border-color: rgba(124, 124, 255, 0.55) !important;
 }
+
+/* ─── Live column (S10) ─────────────────────────────────────────────────────── */
+.anim-panels {
+  animation: fadeSlideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+}

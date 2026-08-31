@@ -9,9 +9,11 @@ import FlowPanel from "../flow/FlowPanel";
 const column: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: "10px",
-  width: "340px",
+  flexShrink: 0,
+  gap: "12px",
+  minHeight: 0,
   overflowY: "auto",
+  width: "340px",
 };
 
 /** Spec 12.1's right-hand column, and the one component `App.tsx` has to know about.
@@ -24,7 +26,7 @@ export default function Panels({ live }: { live: LiveGraph }) {
   const mode = panelMode(live.boot);
   if (mode === "static") return null;
   return (
-    <aside style={column}>
+    <aside className="anim-panels" style={column}>
       <Chrome
         status={live.status}
         repo={live.boot.repo}
