@@ -27,6 +27,37 @@ auditr observer ensure         # start one if there is none, restart one whose w
 - `auditr observer start --foreground` is the daemon itself, hidden. It is what the launcher spawns
   and what a restart re-execs.
 
+## The hook client
+
+`auditr-observer hook <session-start|post-tool-use|stop|session-end> --client <claude-code|codex>`
+reads that client's own hook JSON on stdin and posts what it means. It is the only place the
+observer's transport, kill switch, Stage 0 filter and spool exist; the Claude plugin's scripts
+shell out to it and hold none of them.
+
+| event | what it does |
+|---|---|
+| `session-start` | `ensure` (starts a daemon if there is none), then `POST /sessions/attach` with a 3 s budget |
+| `post-tool-use` | Stage 0 on the one path the Edit or Write named, then `POST /events` with `kind="edit"` |
+| `stop` | `POST /sessions/heartbeat`, an attach when that answers `ok: false`, then the whole `git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=all` path set as `kind="stop"` |
+| `session-end` | `POST /sessions/detach` |
+
+- An event carrying `agent_id` is dropped: that is a subagent's tool call, not this session's edit.
+- Hook-side Stage 0 is the config-free half only, a suffix or filename allowlist plus the excluded
+  directory names. It can only drop paths the daemon's own `FileDiscovery.auditable_shape` would
+  also drop, so a drop is a saved round trip and never a lost edit.
+- Every path posted is repo-relative, whatever shape the client named it in. That is the only
+  shape the graph is keyed on, so an absolute path would be a file the index has never seen.
+- A batch is truncated at 2,000 paths, the wire's own cap. A longer body is refused whole, and a
+  refusal is dropped rather than spooled, so the tail of one Stop batch is the cheaper loss.
+- Each request has a 200 ms budget, and the session-start attach 3 s. A cold daemon launch can
+  outrun that budget, in which case the session is not attached yet; the next `Stop` heartbeat
+  answers `ok: false` and the client attaches there, so the lag is one turn and not one session.
+- When nothing answers, the batch is written to `repos/<repo_dir_key>/spool.jsonl` with a
+  `root.json` breadcrumb beside it, and the **next** daemon start adopts it. A daemon that answers
+  with a 4xx has refused the body, so that batch is dropped rather than spooled for ever.
+- `AUDITOR_OBSERVER=0` is read before the verb runs, so the kill switch covers all four events.
+- Nothing exits non-zero, whatever happens.
+
 ## What it adds under the home
 
 ```

@@ -2,6 +2,7 @@
 
 import asyncio
 import http.client
+import io
 import json
 import os
 import socket
@@ -294,10 +295,15 @@ def test_no_subcommand_prints_usage_and_exits_zero(capsys):
     assert "not available in this release" not in err
 
 
-def test_the_hook_verb_is_still_inert(capsys):
-    """P20: the five lifecycle verbs got bodies in this slice and `hook` deliberately did not."""
-    assert auditr_observer.main(["hook", "SessionStart", "--client", "claude"]) == 0
-    assert "not available in this release" in capsys.readouterr().err
+def test_the_hook_verb_has_a_body_and_still_cannot_fail_a_session(monkeypatch, capsys):
+    """S9 gave the branch a body; what survives from S8b is that it still exits 0 and stays quiet.
+
+    The old spelling of this test passed an event name and a client the parser now refuses, so it
+    would have gone on asserting the notice while argparse, not the branch, printed it.
+    """
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert auditr_observer.main(["hook", "stop", "--client", "claude-code"]) == 0
+    assert "not available in this release" not in capsys.readouterr().err
 
 
 def test_the_client_resolves_the_same_home_as_the_package(tmp_path, monkeypatch):

@@ -755,8 +755,9 @@ class Router:
         """Stage 0 through the shape predicate, then spool, then 202. No lock is taken here.
 
         `FileDiscovery(root)` is built with the default excludes, so a repo's configured `exclude`
-        globs do not reach Stage 0 here and their edits still spool; spec 8.2 puts that filter in
-        the hook, and S9 is where the repo's own globs arrive.
+        globs do not reach Stage 0 here and their edits still spool. The hook runs a narrower,
+        config-free Stage 0 of its own (spec 8.2), which only ever drops what this would drop too,
+        so this predicate stays the authoritative one.
         """
         try:
             request = EventRequest.model_validate_json(body or b"{}")

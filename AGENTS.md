@@ -47,10 +47,12 @@ uv run python -m auditor.graph.ui_inputs --write        # restamps dist/inputs.s
   attach gate), `scheduling.py` (when a loop may act: the state enum, the quiet window, the three
   pauses, the run slots and the retry budget), `loop.py` (what it does when it may: spec 8.3's five
   work items, and every side effect `assess.py` refuses to have) and `payloads.py` (the wire
-  shapes). The two sides share five things by duplication, each pinned by a test: the
+  shapes). The two sides share nine things by duplication, each pinned by a test: the
   `OBSERVER_API_VERSION` literal, `home()` against `paths.auditor_home()`, the `_OFF` set against
-  `paths.OFF_VALUES`, `STATUS_KEYS` against `DaemonStatus`, and the two lifecycle timeouts against
-  `SchedulingConfig`.
+  `paths.OFF_VALUES`, `STATUS_KEYS` against `DaemonStatus`, the two lifecycle timeouts against
+  `SchedulingConfig`, `find_root` against `discovery.find_root`, `repo_dir_key` against
+  `paths.repo_dir_key`, `parse_status_z` against `discovery.parse_status_z`, and Stage 0's suffix,
+  filename and excluded-directory sets against `FileDiscovery`'s.
 - `plugin/` is stdlib-only and imports nothing from `auditor`; it drives the installed `auditr`.
   `plugin/statusline/auditor_status.py` hand-re-implements package helpers that
   `tests/plugin/test_statusline.py` pins; change one side and change the other.
