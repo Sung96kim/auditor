@@ -29,6 +29,21 @@ RED, ORANGE, GREEN, DIM, RESET = (
 STALE_SECONDS = 900
 NOT_SET_UP = f"{DIM}○ auditor  not set up{RESET}"
 GRAPH_OFF = f"{DIM}◆ graph off{RESET}"
+#: `auditor.observer.scheduling.LoopState`'s eight words; a test pins the set. The block is
+#: JSON from disk, so the state is echoed only when it is one of these: a newline would break
+#: the single-line widget and an escape sequence would repaint the terminal.
+_STATES = frozenset(
+    {
+        "building",
+        "observing",
+        "running",
+        "paused:budget",
+        "paused:ratelimit",
+        "paused:auth",
+        "paused:error",
+        "detached",
+    }
+)
 _ROOT_MARKERS = (".git", "pyproject.toml", ".auditor")
 
 
@@ -97,10 +112,14 @@ def _status_path(home: Path, cwd: Path) -> Path:
 
 
 def _compact(count: float) -> str:
-    """A node count as the segment spells it: 940, 1.2k, 3.4M."""
+    """A node count as the segment spells it: 940, 1.2k, 3.4M.
+
+    The `k` branch stops at 999,950 rather than a million: one decimal place rounds anything
+    above it to `1000.0k`, which is a wider string than the `M` it should already be.
+    """
     if count < 1000:
         return str(int(count))
-    if count < 1_000_000:
+    if count < 999_950:
         return f"{count / 1000:.1f}k"
     return f"{count / 1_000_000:.1f}M"
 
@@ -108,22 +127,27 @@ def _compact(count: float) -> str:
 def _graph(data: object, home: Path) -> str:
     """The `graph` segment: what the observer wrote, or a dim `off`, or nothing at all.
 
-    Nothing at all is the answer for a repo no daemon ever watched, so a user who never turned
-    the observer on sees the line they saw before. `off` needs the daemon's own file as well as
-    a fresh block, because the block outlives the process that wrote it.
+    Nothing at all needs both halves to be missing: no block for this repo *and* no
+    `observer/daemon.json`, which is one file per `$AUDITOR_HOME` rather than one per repo. So a
+    user who never turned the observer on sees the line they saw before, and once a daemon has
+    run for any repo under this home, a repo it is not watching reads `off`. `off` needs the
+    daemon's own file as well as a fresh block, because the block outlives its writer.
     """
     block = data.get("graph") if isinstance(data, dict) else None
     published = (home / "observer" / "daemon.json").exists()
     if not isinstance(block, dict):
         return GRAPH_OFF if published else ""
     expiry = _num(block.get("expiry_seconds"))
-    fresh = expiry > 0 and time.time() - _num(block.get("written_at")) <= expiry
-    if not (fresh and published):
+    # a stamp from the future is a skewed clock or a shared network home, not a live writer,
+    # so the window is bounded on both sides rather than only above
+    age = time.time() - _num(block.get("written_at"))
+    if not (expiry > 0 and 0 <= age <= expiry and published):
         return GRAPH_OFF
     state = block.get("state")
-    state = state if isinstance(state, str) and state else "observing"
+    state = state if state in _STATES else "observing"
     dot = ORANGE if state.startswith("paused") else GREEN
-    nodes, refined = _compact(_num(block.get("nodes"))), int(_num(block.get("refined")))
+    nodes = _compact(max(0.0, _num(block.get("nodes"))))
+    refined = int(max(0.0, _num(block.get("refined"))))
     return f"{dot}◆{RESET} graph {nodes} · {refined} refined · {state}"
 
 

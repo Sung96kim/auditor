@@ -11,6 +11,7 @@ from _support import result_with
 
 from auditor.discovery import find_root
 from auditor.models import Severity
+from auditor.observer.scheduling import LoopState
 from auditor.paths import auditor_home, ensure_repo_dir, observer_dir, repo_dir_key
 from auditor.status import merge_status, write_graph_status, write_status
 
@@ -241,7 +242,20 @@ def test_the_graph_segment_renders_after_the_severity_one(tmp_path):
 
 @pytest.mark.parametrize(
     ("nodes", "shown"),
-    [(0, "0"), (940, "940"), (1234, "1.2k"), (12_500, "12.5k"), (3_400_000, "3.4M")],
+    [
+        (0, "0"),
+        (940, "940"),
+        (1234, "1.2k"),
+        (12_500, "12.5k"),
+        (3_400_000, "3.4M"),
+        # one decimal place rounds anything from 999,950 up to `1000.0k`, which is wider than
+        # the `M` spelling it should already have crossed into
+        (999_949, "999.9k"),
+        (999_950, "1.0M"),
+        (999_999, "1.0M"),
+        # a count from a torn or hostile block is still a count, never a negative one
+        (-5, "0"),
+    ],
 )
 def test_the_node_count_is_compacted(tmp_path, nodes, shown):
     _write_status(
@@ -260,6 +274,51 @@ def test_a_paused_loop_is_shown_as_the_daemon_wrote_it(tmp_path):
     _write_graph(tmp_path, state="paused:budget")
     _publish_daemon()
     assert "· paused:budget" in _run(tmp_path)
+
+
+def test_the_state_words_are_the_loops_own():
+    """The statusline is stdlib and hand-copies the eight words it will echo; this is the pin."""
+    assert {state.value for state in LoopState} == _module()._STATES
+
+
+def test_a_state_the_loop_never_wrote_is_not_echoed(tmp_path):
+    """`state` is JSON off disk and the segment is one line of a live terminal.
+
+    A newline in it breaks the widget and an escape sequence repaints the terminal, so the word
+    is rendered only when it is one the daemon could have written.
+    """
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path, state="obs\x1b[31mX\nY")
+    _publish_daemon()
+    out = _run(tmp_path)
+    assert "\n" not in out and "\x1b[31m" not in out
+    assert "· observing" in out
+
+
+def test_a_block_stamped_in_the_future_is_not_treated_as_live(tmp_path):
+    """A clock-skewed writer, or a home on a network filesystem, would otherwise never expire."""
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path, written_at=int(time.time()) + 86_400)
+    _publish_daemon()
+    assert "graph off" in _run(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "shown"), [("nodes", "graph 0 ·"), ("refined", "· 0 refined")]
+)
+def test_a_boolean_count_is_not_a_count_of_one(tmp_path, field: str, shown: str):
+    """`True` is an `int` in Python, and `{"nodes": true}` would otherwise render `graph 1`."""
+    _write_status(
+        tmp_path, {"blocking": 0, "high": 0, "medium": 0, "low": 0, "suggestion": 0}
+    )
+    _write_graph(tmp_path, **{field: True})
+    _publish_daemon()
+    assert _module()._num(True) == 0
+    assert shown in _run(tmp_path)
 
 
 def test_a_stale_graph_block_reads_off(tmp_path):
