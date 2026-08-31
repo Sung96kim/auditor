@@ -50,7 +50,7 @@ function Badge({ state }: { state: string }) {
 function Bar({ title, meter }: { title: string; meter: Meter }) {
   const pct = Math.round(meter.fill * 100);
   return (
-    <div style={block}>
+    <div style={{ ...block, gap: "7px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
         <span style={microLabel}>{title}</span>
         <span style={{ ...mono, color: meter.known ? TEXT.body : TEXT.label }}>{meter.label}</span>

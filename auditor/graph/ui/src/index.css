@@ -5,6 +5,10 @@ html, body, #root {
   width: 100%;
   height: 100%;
 }
+html {
+  /* the UA draws its own controls: the select, the range track and the checkboxes follow this */
+  color-scheme: dark;
+}
 body {
   background: #0B0E14;          /* THEME.bgApp — no flash/gap behind the app */
   overflow: hidden;            /* app manages its own scrolling */
