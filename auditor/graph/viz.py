@@ -42,6 +42,25 @@ async def _findings_by_node(index: "IndexStore") -> dict[str, list[str]]:
     return out
 
 
+def _meta(node_cap: int | None) -> dict:
+    """The document's `meta` block, so the empty page and a built one cannot disagree."""
+    return {"theme": "dark", "accent": "#7C7CFF", "node_cap": node_cap}
+
+
+def empty_payload() -> dict:
+    """The document the page renders when the query named no repo: real ``meta``, no rows.
+
+    An object with no ``meta`` is what made the daemon's own no-repo page throw on first render.
+    """
+    return {"meta": _meta(None), "clusters": [], "nodes": [], "edges": []}
+
+
+def _script(name: str, value: object) -> str:
+    """One injected global. ``</`` is escaped so a string in the payload cannot end the tag."""
+    blob = json.dumps(value).replace("</", "<\\/")
+    return f"<script>window.{name}={blob};</script>"
+
+
 async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> dict:
     """Return the graph payload consumed by the visualization UI.
 
@@ -110,18 +129,19 @@ async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> 
     ]
 
     return {
-        "meta": {"theme": "dark", "accent": "#7C7CFF", "node_cap": node_cap},
+        "meta": _meta(node_cap),
         "clusters": clusters,
         "nodes": nodes,
         "edges": edges,
     }
 
 
-def render_app(payload: dict) -> str:
+def render_app(payload: dict, *, bootstrap: dict | None = None) -> str:
     """Inject ``payload`` into the built UI HTML and return the result.
 
     The global ``window.__AUDITOR_GRAPH__`` is injected immediately before
-    ``</body>`` so the app bundle can read it at startup.
+    ``</body>`` so the app bundle can read it at startup. ``bootstrap`` is the daemon's own
+    second global, absent for `graph serve`, which is what puts the page in static mode.
     """
     if not _APP_HTML.exists():
         raise FileNotFoundError(
@@ -129,8 +149,9 @@ def render_app(payload: dict) -> str:
             "Run `pnpm build` inside auditor/graph/ui/ first."
         )
     html = _APP_HTML.read_text(encoding="utf-8")
-    blob = json.dumps(payload).replace("</", "<\\/")  # avoid </script> breakage
-    inject = f"<script>window.__AUDITOR_GRAPH__={blob};</script>"
+    inject = _script("__AUDITOR_GRAPH__", payload)
+    if bootstrap is not None:
+        inject += _script("__AUDITOR_OBSERVER__", bootstrap)
     if "</body>" in html:
         return html.replace("</body>", inject + "</body>", 1)
     return html + inject
@@ -145,7 +166,7 @@ _STATUS_DOC = """<!doctype html>
 """
 
 
-def render_app_or_status(payload: dict) -> str:
+def render_app_or_status(payload: dict, *, bootstrap: dict | None = None) -> str:
     """The built UI with ``payload`` injected, or a plain status document when no bundle exists.
 
     `graph serve` keeps :func:`render_app`, which raises: its user can run `pnpm build` and the
@@ -153,7 +174,7 @@ def render_app_or_status(payload: dict) -> str:
     because the caller that passes an empty one is the page with no repo named.
     """
     if _APP_HTML.exists():
-        return render_app(payload)
+        return render_app(payload, bootstrap=bootstrap)
     return _STATUS_DOC.format(
         nodes=len(payload.get("nodes", ())),
         edges=len(payload.get("edges", ())),

@@ -27,7 +27,7 @@ from auditor.graph.refine.lock import flock_nb
 from auditor.graph.refine.models import Proposer, RunnerKind
 from auditor.graph.refine.runner import RefinementRunner
 from auditor.graph.refine.service import RefinementService
-from auditor.graph.viz import render_app_or_status
+from auditor.graph.viz import empty_payload, render_app_or_status
 from auditor.observer import MINUTE, OBSERVER_API_VERSION
 from auditor.observer.events import Event, EventQueue
 from auditor.observer.loop import RepoLoop
@@ -646,12 +646,18 @@ def repo_gate(
 
 
 def repo_page(readers: Readers) -> Callable[[str | None], str]:
-    """The page at `/`: the built UI for one repo, or the status document with no bundle (P16)."""
+    """The page at `/`: the built UI for one repo, or the status document with no bundle (P16).
+
+    The daemon is the only caller that injects a bootstrap, which is what puts the page in live
+    mode; `graph serve` renders the same bundle with no bootstrap and it stays static.
+    """
 
     def page(repo: str | None) -> str:
-        """Render this repo's document, or an empty one when the query named no repo at all."""
-        empty: dict[str, list] = {"nodes": [], "edges": [], "clusters": []}
-        return render_app_or_status(readers.graph(Path(repo)).graph if repo else empty)
+        """Render this repo's document, or the empty one when the query named no repo at all."""
+        document = readers.graph(Path(repo)).graph if repo else empty_payload()
+        return render_app_or_status(
+            document, bootstrap={"live": True, "base": "/", "repo": repo or ""}
+        )
 
     return page
 

@@ -55,6 +55,11 @@ class RunnerKind(StrEnum):
     NONE = "none"  # assessment-only and synthetic rows
 
 
+#: the runners a model actually answers for. `FAKE` is the test double and `NONE` is the
+#: assessment-only sentinel, so neither belongs in an eval block or a runner column.
+MODEL_RUNNERS: tuple[RunnerKind, ...] = (RunnerKind.CLAUDE, RunnerKind.CODEX)
+
+
 class RunnerChoiceCode(StrEnum):
     """What came of asking for a runner: one runner, or one reason there is none."""
 

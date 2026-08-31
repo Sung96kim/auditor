@@ -20,7 +20,7 @@ from auditor.graph.payloads import (
     RunRowPayload,
 )
 from auditor.graph.query import GraphQuery, LogQuery
-from auditor.graph.refine.models import RunnerKind
+from auditor.graph.refine.models import MODEL_RUNNERS, RunnerKind
 from auditor.graph.refine.tiers import TierPolicy
 from auditor.graph.viz import build_payload
 from auditor.observer.events import Event, EventQueue, EventRequest
@@ -268,11 +268,17 @@ class Readers:
         index = self.index(root, identity=identity)
         return asyncio.run(self._detail(index, root, identity, run_id))
 
-    def _model_for(self, runner: RunnerKind, settings: UserSettings) -> str:
-        """The model this runner is pinned to, which `EvalsDB.latest` needs beside the runner."""
+    def _model_for(
+        self, runner: RunnerKind, settings: UserSettings, *, fallback: bool = True
+    ) -> str:
+        """The model this runner is pinned to, which `EvalsDB.latest` needs beside the runner.
+
+        `fallback=False` answers with the runner's own pin only, so the roster can say a runner
+        has no model rather than drawing Claude's beside the Codex mark.
+        """
         pinned = settings.observer.runner
-        if runner is RunnerKind.CODEX and pinned.codex_model:
-            return pinned.codex_model
+        if runner is RunnerKind.CODEX:
+            return pinned.codex_model or (pinned.model if fallback else "")
         return pinned.model
 
     async def _runner_evals(
@@ -281,10 +287,12 @@ class Readers:
         """Every runner's latest eval on one event loop, with the tier policy behind each."""
         minimum = settings.observer.tuning.min_precision
         runners: list[RunnerEvalPayload] = []
-        for runner in RunnerKind:
+        for runner in MODEL_RUNNERS:
             model = self._model_for(runner, settings)
             rows = await index.evals.latest(runner, model)
             if not rows:
+                # a runner with no eval is a row, not an omission: the page says "no eval yet"
+                runners.append(RunnerEvalPayload(runner=runner, model=model))
                 continue
             policy = TierPolicy.of(
                 rows, min_precision=minimum, runner=runner, model=model
@@ -320,6 +328,22 @@ class Readers:
         index = self.index(root, identity=identity)
         runners = asyncio.run(self._runner_evals(index, self.user(root)))
         return EvalsView(repo=str(root), identity=identity, runners=runners)
+
+    def roster(self) -> tuple[RunnerEvalPayload, ...]:
+        """Which runners exist and the model each is pinned to, daemon-wide and unmeasured.
+
+        Daemon-wide by construction: this reads :attr:`settings`, the home layer, while
+        `/api/evals` resolves the per-repo overlay through :meth:`user`, so a repo that overrides
+        `observer.runner.model` shows the overridden model in its numbers and this one in the
+        roster. A runner with no model of its own is an empty string, never another runner's.
+        """
+        return tuple(
+            RunnerEvalPayload(
+                runner=runner,
+                model=self._model_for(runner, self.settings, fallback=False),
+            )
+            for runner in MODEL_RUNNERS
+        )
 
     async def _repo_paths(self) -> tuple[str, ...]:
         """Every repo path the shared index holds; the one place its own row format is read."""
@@ -374,6 +398,11 @@ class RouterDeps(BaseModel):
     drained: Callable[[], int] = _no_drained
 
 
+#: the page's own 3 s cycle. A poll is a read, not activity, so it must not push spec 8.1's idle
+#: deadline out: `daemon.py:743-744` feeds `Router.last_request` straight into the `IdleTimer`
+POLLED_PATHS = frozenset({"/api/status", "/api/runs"})
+
+
 class Router:
     """Turns one method and path into a `Reply`. Holds no socket and no thread."""
 
@@ -388,6 +417,8 @@ class Router:
         self.restarting = False
         self.opened_page = False
         self.last_request = 0.0
+        #: the gap before the request being served, which is the badge's "how quiet has it been"
+        self.idle_seconds = 0.0
 
     def bump(self) -> int:
         """One state change. `/api/status`'s tag carries this counter, and the loops move it."""
@@ -400,7 +431,10 @@ class Router:
         """One request. The tag is computed before the handler, so a 304 costs no query (P14)."""
         parsed = urlparse(target)
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-        self.last_request = time.time()
+        now = time.time()
+        self.idle_seconds = now - (self.last_request or self.started_at)
+        if parsed.path not in POLLED_PATHS:
+            self.last_request = now
         # the two read methods reach the page; it is answered before the table, naming no payload
         if method in {"GET", "HEAD"} and parsed.path == "/":
             return Reply.html(self.deps.page(query.get("repo")))
@@ -434,6 +468,11 @@ class Router:
         if root is None:
             return Reply.error(400, _NO_REPO)
         return Reply.json(read(root))
+
+    @property
+    def state(self) -> str:
+        """The daemon's own word, never a loop's: the badge reads `repos[i].state` for a repo."""
+        return "restarting" if self.restarting else "running"
 
     def status_tag(self, query: Mapping[str, str]) -> str:
         """Restart-unique: a page holding a tag from a dead daemon must not get a 304 (P14)."""
@@ -474,10 +513,13 @@ class Router:
             home=str(self.deps.identity.home),
             version=self.deps.identity.version,
             compat=self.deps.identity.compat,
+            state=self.state,
             started_at=self.started_at,
+            idle_seconds=self.idle_seconds,
             uptime_seconds=time.time() - self.started_at,
             queued_repos=self.deps.queue.pending_keys,
             drained_events=self.deps.drained(),
+            evals=self.deps.readers.roster(),
             repos=tuple(
                 self._metered(repo) for repo in self.deps.readers.repos().repos
             ),

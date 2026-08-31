@@ -1,0 +1,175 @@
+"""Spec 12.1's live page: the bootstrap that turns it on, and the page with no repo."""
+
+import json
+import time
+from pathlib import Path
+
+import pytest
+
+from auditor.graph.refine.models import MODEL_RUNNERS, RunnerKind
+from auditor.graph.viz import empty_payload, render_app
+from auditor.observer.daemon import IdleTimer, repo_page
+from auditor.observer.payloads import GraphView
+from auditor.observer.routes import Readers
+from auditor.user_settings import UserSettings
+
+
+class _OneRepo:
+    """A `Readers` stand-in whose graph read is the only thing `repo_page` uses."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def graph(self, root: Path, *, identity: str | None = None) -> GraphView:
+        self.asked.append(str(root))
+        return GraphView(repo=str(root), identity="id", graph=empty_payload())
+
+
+def _globals(html: str) -> dict:
+    """Every `window.X=...;` the injector appended, decoded. Anchored past the bundle's own body.
+
+    The 1.8 MB bundle contains its own inlined `<script>` and its own `</script>`, so a split over
+    the whole document is one inlined occurrence away from decoding minified JS.
+    """
+    found = {}
+    tail = html.rsplit("</body>", 1)[0] if "</body>" in html else html
+    for chunk in tail.split("<script>window.")[-2:]:
+        name, _, rest = chunk.partition("=")
+        found[name] = json.loads(rest.rsplit(";</script>", 1)[0])
+    return found
+
+
+def test_graph_serve_injects_no_bootstrap_so_the_page_stays_static():
+    """`graph serve` has no `/api/*` at all, so a page that polled it would 404 every 3 s."""
+    html = render_app({"meta": {}, "nodes": [], "edges": [], "clusters": []})
+    assert "__AUDITOR_GRAPH__" in html
+    assert "__AUDITOR_OBSERVER__" not in html
+
+
+def test_the_bootstrap_is_a_second_global_next_to_the_payload():
+    """First paint, no probe and no doomed request: the flag is on the page before React runs."""
+    html = render_app(
+        {"meta": {}, "nodes": [], "edges": [], "clusters": []},
+        bootstrap={"live": True, "base": "/", "repo": "/w"},
+    )
+    injected = _globals(html)
+    assert injected["__AUDITOR_OBSERVER__"] == {"live": True, "base": "/", "repo": "/w"}
+    assert html.index("__AUDITOR_GRAPH__") < html.index("</body>")
+
+
+def test_a_payload_holding_a_closing_tag_cannot_end_the_script():
+    """The escape is per injected global, not per call site, so both blobs get it."""
+    harmless = render_app(
+        {"meta": {"repo": "ok"}, "nodes": [], "edges": [], "clusters": []},
+        bootstrap={"live": True, "base": "/", "repo": "/w"},
+    )
+    hostile = render_app(
+        {"meta": {"repo": "</script><b>"}, "nodes": [], "edges": [], "clusters": []},
+        bootstrap={"live": True, "base": "/", "repo": "</script>"},
+    )
+    assert "</script><b>" not in hostile
+    assert hostile.count("</script>") == harmless.count("</script>")
+    escaped = "<\\/script>"
+    assert hostile.count(escaped) - harmless.count(escaped) == 2
+
+
+def test_the_no_repo_page_carries_a_meta_the_app_can_read():
+    """The daemon's own `open_browser` URL names no repo, and `data.meta.repo` was unguarded."""
+    document = empty_payload()
+    assert document["meta"]["theme"] == "dark"
+    assert document["meta"]["node_cap"] is None
+    assert document["nodes"] == [] and document["edges"] == []
+
+
+def test_the_page_with_no_repo_reads_no_store_and_still_bootstraps():
+    """Regression: the URL `sessions/attach` hands back is the bare page, which used to throw."""
+    readers = _OneRepo()
+    html = repo_page(readers)(None)
+    assert readers.asked == []
+    injected = _globals(html)
+    assert injected["__AUDITOR_OBSERVER__"]["repo"] == ""
+    assert injected["__AUDITOR_GRAPH__"]["meta"]["theme"] == "dark"
+
+
+def test_the_page_with_a_repo_names_it_in_the_bootstrap():
+    readers = _OneRepo()
+    html = repo_page(readers)("/w/repo")
+    assert readers.asked == ["/w/repo"]
+    assert _globals(html)["__AUDITOR_OBSERVER__"]["repo"] == "/w/repo"
+
+
+def test_the_status_badge_reads_a_daemon_word_and_not_a_loop_state(daemon_router):
+    """Spec 8.3's `LoopState` is per repo; `repos[i].state` is the badge, this is the daemon."""
+    assert daemon_router.state == "running"
+    daemon_router.restarting = True
+    assert daemon_router.state == "restarting"
+
+
+def test_idle_seconds_is_the_gap_before_the_request_being_served(daemon_router):
+    """Measured against the previous request, never against this one, or it would always be 0."""
+    daemon_router.dispatch("GET", "/health", {}, b"")
+    first = daemon_router.last_request
+    daemon_router.last_request = first - 12.0
+    daemon_router.dispatch("GET", "/health", {}, b"")
+    assert daemon_router.idle_seconds == pytest.approx(12.0, abs=0.5)
+
+
+def test_the_first_request_measures_idleness_from_the_daemon_s_start(daemon_router):
+    """`last_request` is 0.0 until something arrives, and 1970 is not an idle window."""
+    daemon_router.started_at = time.time() - 5.0
+    daemon_router.dispatch("GET", "/health", {}, b"")
+    assert daemon_router.idle_seconds == pytest.approx(5.0, abs=0.5)
+
+
+def test_the_three_second_poll_is_not_what_the_idle_timer_counts(
+    daemon_router, tmp_path
+):
+    """Spec 8.1: reading the page must not decide how long the process lives (P21)."""
+    daemon_router.dispatch("GET", "/health", {}, b"")
+    real = daemon_router.last_request
+    daemon_router.dispatch("GET", "/api/status", {}, b"")
+    daemon_router.dispatch("GET", f"/api/runs?repo={tmp_path}", {}, b"")
+    assert daemon_router.last_request == real
+
+
+def test_a_page_polling_past_the_idle_window_still_lets_the_daemon_exit(daemon_router):
+    """`daemon.py:743-744` feeds `last_request` to the timer; this is that line, on a clock."""
+    idle = IdleTimer(minutes=1.0, now=0.0)
+    for _ in range(40):  # 40 polls is two idle windows at 3 s a poll
+        daemon_router.dispatch("GET", "/api/status", {}, b"")
+        if daemon_router.last_request > idle.last:
+            idle.touch(daemon_router.last_request)
+    assert idle.due(120.0) is True
+
+
+def test_a_request_that_is_not_the_poll_still_holds_the_daemon_open(daemon_router):
+    """The other half: an attach or a status CLI call is activity and must push the deadline."""
+    idle = IdleTimer(minutes=1.0, now=0.0)
+    daemon_router.started_at = 0.0
+    daemon_router.last_request = 0.0
+    daemon_router.dispatch("GET", "/health", {}, b"")
+    idle.touch(daemon_router.last_request)
+    assert idle.due(daemon_router.last_request + 30.0) is False
+
+
+def test_a_runner_with_no_model_of_its_own_is_a_row_with_no_model():
+    """`codex_model` is empty by default, and the fallback would name Claude's beside Codex."""
+    roster = Readers(settings=UserSettings()).roster()
+    by_runner = {row.runner: row.model for row in roster}
+    assert by_runner[RunnerKind.CLAUDE]
+    assert by_runner[RunnerKind.CODEX] == ""
+
+
+def test_the_status_poll_carries_a_runner_roster_so_the_eval_block_can_say_no_eval_yet():
+    """`/api/evals` returned nothing at all, so the page could not tell "none" from "not run"."""
+    roster = Readers(settings=UserSettings()).roster()
+    assert [row.runner for row in roster] == list(MODEL_RUNNERS)
+    assert all(
+        row.measured == 0 and row.proven == 0 and row.strata == () for row in roster
+    )
+
+
+def test_the_roster_leaves_out_the_test_double_and_the_assessment_sentinel():
+    """`RunnerKind` has four members and only two of them ever answer for a model."""
+    assert set(MODEL_RUNNERS) == {RunnerKind.CLAUDE, RunnerKind.CODEX}
+    assert set(RunnerKind) - set(MODEL_RUNNERS) == {RunnerKind.FAKE, RunnerKind.NONE}

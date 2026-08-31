@@ -45,9 +45,12 @@ _FILLED = {
     "home",
     "version",
     "compat",
+    "state",
     "started_at",
     "uptime_seconds",
+    "idle_seconds",
     "queued_repos",
+    "evals",
     "sessions",
 }
 
@@ -251,7 +254,9 @@ def test_the_status_tag_does_not_survive_a_restart(daemon_server, daemon_router)
     assert headers["ETag"] != tag
 
 
-def test_the_status_body_names_only_what_this_slice_fills(daemon_server, tmp_path):
+def test_the_status_body_names_only_the_fields_a_producer_fills(
+    daemon_server, tmp_path
+):
     """S10 is written against these shapes, so a default must be distinguishable from a value.
 
     The three counters are asserted with something in them, because on an empty daemon they are

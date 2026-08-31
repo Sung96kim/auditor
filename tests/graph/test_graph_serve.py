@@ -21,10 +21,13 @@ async def test_the_daemon_degrades_when_no_ui_bundle_was_built(viz_store, monkey
     """Spec 8.1: a missing bundle is a plain status document, never a crash."""
     monkeypatch.setattr("auditor.graph.viz._APP_HTML", Path("/nonexistent/index.html"))
     payload = await build_payload(viz_store)
-    document = render_app_or_status(payload)
+    document = render_app_or_status(payload, bootstrap={"live": True})
     assert "<html" in document.lower()
     assert "pnpm build" in document
     assert str(len(payload["nodes"])) in document
+    assert (
+        "__AUDITOR_OBSERVER__" not in document
+    )  # a plain notice has no app to bootstrap
 
 
 async def test_graph_serve_still_refuses_to_serve_a_page_it_cannot_build(
