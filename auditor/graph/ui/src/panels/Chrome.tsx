@@ -11,6 +11,7 @@ import {
   type Meter,
 } from "./chrome";
 import { Failed, Loading, Reconnecting } from "./States";
+import RunnerMark from "./RunnerMark";
 
 const TONE: Record<Meter["tone"], string> = {
   ok: THEME.accent,
@@ -125,7 +126,7 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
                   color: "#94a3b8",
                 }}
               >
-                <span style={{ color: "#cbd5e1" }}>{line.runner}</span>
+                <RunnerMark runner={line.runner} />
                 <span style={{ fontFamily: "monospace" }}>{line.model}</span>
                 <span style={{ marginLeft: "auto", fontFamily: "monospace" }}>
                   {line.measured

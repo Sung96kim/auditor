@@ -15,6 +15,7 @@ import TopBar from "./components/TopBar";
 import type { View } from "./graph/buildGraph";
 import { applyFilters } from "./graph/filter";
 import { breadcrumbPath, type CrumbTarget } from "./graph/breadcrumb";
+import { refinedEdgeKeys, refinedNodeIds, unconfirmedEdgeKeys } from "./graph/refined";
 import { useLiveGraph } from "./api/useLiveGraph";
 import Panels from "./panels/Panels";
 import { repoLabel } from "./panels/chrome";
@@ -195,6 +196,11 @@ export default function App() {
     [view, data, selectedNodeId]
   );
 
+  // spec 12.1's C15: the four fields declared since Phase V and never read until now
+  const refinedNodes = useMemo(() => refinedNodeIds(data), [data]);
+  const refinedEdges = useMemo(() => refinedEdgeKeys(data), [data]);
+  const unconfirmedEdges = useMemo(() => unconfirmedEdgeKeys(data), [data]);
+
   const selected =
     live.status.data?.repos.find((r) => r.repo === live.boot.repo) ?? null;
   const title = selected ? repoLabel(selected) : "Codebase Graph";
@@ -359,6 +365,9 @@ export default function App() {
               onBackground={handleBackground}
               selectedNodeId={selectedNodeId}
               overlayOn={filters.overlayOn}
+              refinedNodes={refinedNodes}
+              refinedEdges={refinedEdges}
+              unconfirmedEdges={unconfirmedEdges}
             />
           )}
 

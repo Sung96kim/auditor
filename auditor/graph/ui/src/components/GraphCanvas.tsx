@@ -10,6 +10,7 @@ import { graphlib, layout as dagreLayout } from "@dagrejs/dagre";
 import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
 import { buildGraphologyGraph, type View } from "../graph/buildGraph";
+import { edgeKey } from "../graph/refined";
 import { easeInOutCubic, lerp, makeTween, tickTween, type TweenState } from "../graph/anim";
 import { labelBox, nodeAtPoint, type LabelBox } from "../graph/labelHit";
 
@@ -31,6 +32,11 @@ interface GraphCanvasProps {
   onBackground: () => void;
   selectedNodeId?: string | null;
   overlayOn?: boolean;
+  /** spec 12.1: the node ids a refinement touched, drawn with the accent border. */
+  refinedNodes?: Set<string>;
+  /** the refined edges, keyed by `edgeKey`; an unconfirmed one is drawn dashed. */
+  refinedEdges?: Set<string>;
+  unconfirmedEdges?: Set<string>;
 }
 
 interface SelectionState {
@@ -123,6 +129,9 @@ export default function GraphCanvas({
   onBackground,
   selectedNodeId = null,
   overlayOn = false,
+  refinedNodes,
+  refinedEdges,
+  unconfirmedEdges,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -150,6 +159,14 @@ export default function GraphCanvas({
   const findingsSetRef = useRef<Set<string>>(new Set());
   const overlayOnRef = useRef<boolean>(overlayOn);
   overlayOnRef.current = overlayOn;
+  // the refinement overlay is read through refs for the same reason `overlayOn` is:
+  // a reducer must see the current sets without rebuilding sigma
+  const refinedNodesRef = useRef<Set<string>>(refinedNodes ?? new Set());
+  refinedNodesRef.current = refinedNodes ?? new Set();
+  const refinedEdgesRef = useRef<Set<string>>(refinedEdges ?? new Set());
+  refinedEdgesRef.current = refinedEdges ?? new Set();
+  const unconfirmedEdgesRef = useRef<Set<string>>(unconfirmedEdges ?? new Set());
+  unconfirmedEdgesRef.current = unconfirmedEdges ?? new Set();
 
   function stopRaf(): void {
     if (rafRef.current !== null) {
@@ -379,6 +396,7 @@ export default function GraphCanvas({
       nodeReducer: (node, data) => {
         const ep = easeInOutCubic(entranceTweenRef.current.progress);
         const hasFinding = overlayOnRef.current && findingsSet.has(node);
+        const isRefined = refinedNodesRef.current.has(node);
         const sel = selectionRef.current;
 
         const pulseAmp = 0.15;
@@ -422,7 +440,11 @@ export default function GraphCanvas({
           }
         } else {
           const baseSize = (data.size as number) ?? 8;
-          const finalColor = hasFinding ? "#EF4444" : (data.color as string ?? THEME.accent);
+          const finalColor = hasFinding
+            ? "#EF4444"
+            : isRefined
+              ? THEME.accent
+              : (data.color as string ?? THEME.accent);
           resolved = {
             ...data,
             color: finalColor,
@@ -468,6 +490,17 @@ export default function GraphCanvas({
           return { ...data, label: kind, color: THEME.accent, size: 3.4, zIndex: 2 };
         }
         if (sel.id === null) {
+          const key = edgeKey(g.source(edge), g.target(edge), kind);
+          // spec 12.1: a refined edge is the overlay, and one nobody confirmed is provisional
+          if (refinedEdgesRef.current.has(key)) {
+            return {
+              ...data,
+              label: labelAllEdges ? kind : "",
+              color: THEME.accent + (unconfirmedEdgesRef.current.has(key) ? "88" : "CC"),
+              size: 2.4,
+              type: unconfirmedEdgesRef.current.has(key) ? "dashed" : (data.type as string),
+            };
+          }
           // give edges real thickness so the directional arrowheads are visible
           return {
             ...data,
