@@ -40,10 +40,14 @@ def _globals(html: str) -> dict:
 
 
 def test_graph_serve_injects_no_bootstrap_so_the_page_stays_static():
-    """`graph serve` has no `/api/*` at all, so a page that polled it would 404 every 3 s."""
+    """`graph serve` has no `/api/*` at all, so a page that polled it would 404 every 3 s.
+
+    The injected tag is what is absent, not the name: `bootstrap.ts` reads the global, so the
+    bundle spells it and a minifier cannot rename a property read off `window`.
+    """
     html = render_app({"meta": {}, "nodes": [], "edges": [], "clusters": []})
-    assert "__AUDITOR_GRAPH__" in html
-    assert "__AUDITOR_OBSERVER__" not in html
+    assert "<script>window.__AUDITOR_GRAPH__=" in html
+    assert "<script>window.__AUDITOR_OBSERVER__=" not in html
 
 
 def test_the_bootstrap_is_a_second_global_next_to_the_payload():

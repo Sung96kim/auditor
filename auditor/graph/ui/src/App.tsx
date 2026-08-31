@@ -15,6 +15,9 @@ import TopBar from "./components/TopBar";
 import type { View } from "./graph/buildGraph";
 import { applyFilters } from "./graph/filter";
 import { breadcrumbPath, type CrumbTarget } from "./graph/breadcrumb";
+import { useLiveGraph } from "./api/useLiveGraph";
+import Panels from "./panels/Panels";
+import { repoLabel } from "./panels/chrome";
 
 declare global {
   interface Window {
@@ -82,6 +85,7 @@ const collapseBtnStyle: React.CSSProperties = {
 };
 
 export default function App() {
+  const live = useLiveGraph();
   const data: GraphPayload = window.__AUDITOR_GRAPH__ ?? sample;
 
   const [view, setView] = useState<View>({ mode: "overview" });
@@ -191,7 +195,9 @@ export default function App() {
     [view, data, selectedNodeId]
   );
 
-  const title = data.meta.repo ?? "Codebase Graph";
+  const selected =
+    live.status.data?.repos.find((r) => r.repo === live.boot.repo) ?? null;
+  const title = selected ? repoLabel(selected) : "Codebase Graph";
 
   const sidebarWidth = 268;
   const detailWidth = 288;
@@ -550,6 +556,9 @@ export default function App() {
             onFocus={handleFocus}
           />
         </div>
+
+        {/* Spec 12.1's live column. Returns null in static mode, so this line is unconditional. */}
+        <Panels live={live} />
       </div>
     </div>
   );
