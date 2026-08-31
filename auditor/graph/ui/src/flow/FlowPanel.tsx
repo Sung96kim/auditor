@@ -1,38 +1,17 @@
 import { useMemo, useState } from "react";
+import { useDebounced } from "../api/useDebounced";
 import { useFetchOnce } from "../api/useFetchOnce";
 import type { FlowView } from "../api/types";
 import { TEXT, THEME } from "../theme";
 import Panel, { microLabel, mono } from "../panels/Panel";
 import { Empty, Failed, Loading, Reconnecting } from "../panels/States";
+import WalkNode, { NODE_H, NODE_W, type Origin } from "./WalkNode";
 import { flatten, layered, type Placed } from "./tree";
-
-const NODE_W = 180;
-const NODE_H = 28;
 
 /** Bright enough to read as a connection on the panel, quiet enough to stay behind the nodes. */
 const EDGE_STROKE = "rgba(122, 139, 163, 0.38)";
 
-const node: React.CSSProperties = {
-  background: THEME.bgElevated,
-  borderRadius: "6px",
-  color: TEXT.strong,
-  fontSize: "11px",
-  height: `${NODE_H}px`,
-  overflow: "hidden",
-  padding: "0 7px",
-  position: "absolute",
-  textAlign: "left",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  width: `${NODE_W}px`,
-};
-
-export interface Origin {
-  x: number;
-  y: number;
-}
-
-/** dagre lays the walk out around its own centre, which leaves the panel a margin of nothing
+/** dagre lays the walk out around its own origin, which can leave the panel a margin of nothing
  * above and to the left of the root. The drawing is shifted back onto its own corner. */
 export function origin(rows: Placed[]): Origin {
   if (rows.length === 0) return { x: 0, y: 0 };
@@ -42,68 +21,24 @@ export function origin(rows: Placed[]): Origin {
   };
 }
 
-/** Spec 12.1: an unresolved leaf is highlighted, and an externally bound one is dimmed instead. */
-function placement(row: Placed, at: Origin): React.CSSProperties {
-  return {
-    ...node,
-    border: row.external
-      ? `1px dashed ${THEME.border}`
-      : `1px solid ${row.unresolved ? THEME.accent : THEME.border}`,
-    left: `${row.x - at.x}px`,
-    opacity: row.external ? 0.6 : 1,
-    top: `${row.y - at.y}px`,
-  };
-}
-
-/** Only a hub is a control: the rest of the walk is read, not pressed. */
-function Node({
-  row,
-  at,
-  onToggle,
-}: {
-  row: Placed;
-  at: Origin;
-  onToggle: (key: string) => void;
-}) {
-  const label = row.id.split("::").pop();
-  if (row.hub === null) {
-    return (
-      <div style={{ ...placement(row, at), lineHeight: `${NODE_H}px` }} title={row.id}>
-        {label}
-      </div>
-    );
-  }
-  return (
-    <button
-      type="button"
-      aria-expanded={!row.collapsed}
-      className="flow-node"
-      onClick={() => onToggle(row.key)}
-      title={row.id}
-      style={{ ...placement(row, at), cursor: "pointer", display: "flex", alignItems: "center" }}
-    >
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
-      {row.collapsed ? (
-        <span style={{ color: THEME.accent, flexShrink: 0, marginLeft: "auto" }}>
-          +{row.hub}
-        </span>
-      ) : null}
-    </button>
-  );
-}
-
 /** Spec 12.1's C16 to C20: the toggle, the slider, the layered layout and the collapsed hubs. */
 export default function FlowPanel({ base, repo }: { base: string; repo: string }) {
-  const [symbol, setSymbol] = useState("");
+  const [typed, setTyped] = useState("");
   const [direction, setDirection] = useState<"out" | "in">("out");
   const [depth, setDepth] = useState(4);
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  // one walk per settled symbol, never one per keystroke: each is a full server-side traversal
+  const symbol = useDebounced(typed, 300);
+  // the walk stops at a hub unless it is asked past one, so an opened hub has to refetch (E3)
+  const expand = opened.size > 0;
+
   const query = new URLSearchParams({
     repo,
     symbol,
     direction,
     depth: String(depth),
   });
+  if (expand) query.set("expand_hubs", "1");
   const { state, retry } = useFetchOnce<FlowView>(
     `${base}api/flow?${query}`,
     Boolean(symbol),
@@ -133,8 +68,8 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
       <input
         aria-label="Symbol"
         className="field"
-        value={symbol}
-        onChange={(e) => setSymbol(e.target.value)}
+        value={typed}
+        onChange={(e) => setTyped(e.target.value)}
         placeholder="Walk a symbol…"
         style={{
           background: THEME.bgElevated,
@@ -221,7 +156,12 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
           }}
         >
           <div style={{ position: "relative", width, height }}>
-            <svg width={width} height={height} style={{ position: "absolute", inset: 0 }}>
+            <svg
+              aria-hidden="true"
+              width={width}
+              height={height}
+              style={{ position: "absolute", inset: 0 }}
+            >
               {rows.map((row) => {
                 const parent = row.parent ? placed.get(row.parent) : undefined;
                 if (!parent) return null;
@@ -238,9 +178,11 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
                 );
               })}
             </svg>
-            {rows.map((row) => (
-              <Node key={row.key} row={row} at={at} onToggle={toggle} />
-            ))}
+            <div role="list" aria-label={`Flow walk from ${symbol}`}>
+              {rows.map((row) => (
+                <WalkNode key={row.key} row={row} at={at} onToggle={toggle} />
+              ))}
+            </div>
           </div>
         </div>
       ) : null}

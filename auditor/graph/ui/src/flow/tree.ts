@@ -24,15 +24,17 @@ export function flatten(root: FlowNode, opened: ReadonlySet<string> = new Set())
   const out: FlowRow[] = [];
   const visit = (node: FlowNode, parent: string | null) => {
     const key = parent === null ? node.id : `${parent}>${node.id}`;
-    const collapsed = node.hub !== null && !opened.has(key);
+    const hub = node.hub ? node.hub.count : null;
+    const collapsed = hub !== null && !opened.has(key);
     out.push({
       key,
       id: node.id,
       depth: node.depth,
       edge: node.edge ?? "",
       unresolved: node.unresolved.length > 0,
+      // every leaf, not any: a node with one third-party call and one genuine gap is a gap
       external: node.unresolved.length > 0 && node.unresolved.every((u) => u.external),
-      hub: node.hub ? node.hub.count : null,
+      hub,
       collapsed,
       parent,
     });
@@ -53,7 +55,11 @@ function fallback(view: FlowRow, index: number): Placed {
   return { ...view, x: view.depth * 200, y: index * 40 };
 }
 
-/** dagre's layered layout, left to right, which is the reading order of a call chain. */
+/** dagre's layered layout, left to right, which is the reading order of a call chain.
+ *
+ * dagre answers with node centres and the panel draws from the top left, so half a box comes
+ * off each coordinate here rather than at one of the three call sites that read them.
+ */
 export function layered(views: FlowRow[], nodeWidth = 180, nodeHeight = 28): Placed[] {
   const g = new graphlib.Graph();
   g.setGraph({ rankdir: "LR", nodesep: 12, ranksep: 60 });
@@ -73,6 +79,6 @@ export function layered(views: FlowRow[], nodeWidth = 180, nodeHeight = 28): Pla
     if (!placed || !Number.isFinite(placed.x) || !Number.isFinite(placed.y)) {
       return fallback(view, index);
     }
-    return { ...view, x: placed.x, y: placed.y };
+    return { ...view, x: placed.x - nodeWidth / 2, y: placed.y - nodeHeight / 2 };
   });
 }

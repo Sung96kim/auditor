@@ -1,42 +1,39 @@
 import { describe, it, expect } from "vitest";
-import { flatten, layered, type FlowNode } from "./tree";
+import { flatten, layered } from "./tree";
+import { flowNode as node, hubMark, unresolvedLeaf } from "../api/wire.fixture";
 
-function node(over: Partial<FlowNode> = {}): FlowNode {
-  return {
-    id: "m::a",
-    kind: "function",
-    edge: "calls",
-    source: "static",
-    depth: 0,
-    seen_ref: false,
-    cycle: false,
-    stopped: false,
-    hub: null,
-    unresolved: [],
-    children: [],
-    ...over,
-  };
-}
-
+/** What `/api/flow?expand_hubs=1` answers with: a hub that carries its fan and its children.
+ *
+ * With `expand_hubs` off the walk `continue`s before the children, so a collapsed hub arrives
+ * with none and the client has nothing to open. The two shapes are pinned apart below.
+ */
 const TREE = node({
   id: "root",
   children: [
     node({
       id: "hub",
       depth: 1,
-      hub: { count: 61, kind: "fan_in", collapsed: true },
+      hub: hubMark({ count: 61, kind: "fan_in", collapsed: false }),
       children: [node({ id: "buried", depth: 2 })],
     }),
     node({
       id: "leaf",
       depth: 1,
-      unresolved: [{ name: "requests.get", fact_kind: "call", reason: "third_party", external: true }],
+      unresolved: [unresolvedLeaf({ reason: "third_party" })],
     }),
     node({
       id: "gap",
       depth: 1,
-      unresolved: [{ name: "helper", fact_kind: "call", reason: "unknown", external: false }],
+      unresolved: [unresolvedLeaf({ name: "helper", reason: "unknown", external: false })],
     }),
+  ],
+});
+
+/** What the same walk answers with the flag off: the hub is marked collapsed and holds nothing. */
+const UNEXPANDED = node({
+  id: "root",
+  children: [
+    node({ id: "hub", depth: 1, hub: hubMark({ count: 61, kind: "fan_in" }), children: [] }),
   ],
 });
 
@@ -47,10 +44,20 @@ describe("flattening a flow walk", () => {
     expect(flatten(TREE).find((v) => v.id === "hub")!.collapsed).toBe(true);
   });
 
-  it("opening one hub draws its children and leaves other hubs closed", () => {
+  it("opening one hub draws the children the expanded walk sent with it", () => {
     const ids = flatten(TREE, new Set(["root>hub"])).map((v) => v.id);
     expect(ids).toContain("buried");
     expect(flatten(TREE, new Set(["root>hub"])).find((v) => v.id === "hub")!.collapsed).toBe(false);
+  });
+
+  it("a hub the walk stopped at has nothing to draw, opened or not", () => {
+    // the shape `/api/flow` serves without `expand_hubs=1`: the control needs the refetch
+    const shut = flatten(UNEXPANDED).find((v) => v.id === "hub")!;
+    expect(shut.collapsed).toBe(true);
+    expect(flatten(UNEXPANDED, new Set(["root>hub"])).map((v) => v.id)).toEqual([
+      "root",
+      "hub",
+    ]);
   });
 
   it("the hub carries its fan so the collapsed node can say how much it hides", () => {
@@ -65,6 +72,19 @@ describe("flattening a flow walk", () => {
     expect(external.external).toBe(true);
     expect(gap.unresolved).toBe(true);
     expect(gap.external).toBe(false);
+  });
+
+  it("one third-party call beside one genuine gap is a gap, because external means every leaf", () => {
+    const mixed = node({
+      id: "mixed",
+      unresolved: [
+        unresolvedLeaf({ external: true }),
+        unresolvedLeaf({ name: "helper", external: false }),
+      ],
+    });
+    const row = flatten(mixed)[0];
+    expect(row.unresolved).toBe(true);
+    expect(row.external).toBe(false);
   });
 
   it("a resolved node is neither highlighted nor dimmed", () => {
@@ -108,6 +128,15 @@ describe("the dagre layered layout", () => {
     const siblings = placed.filter((p) => p.parent === "root");
     expect(new Set(siblings.map((p) => p.x)).size).toBe(1);
     expect(new Set(siblings.map((p) => p.y)).size).toBe(siblings.length);
+  });
+
+  it("the coordinates are the node's own corner, which is where the panel draws from", () => {
+    // dagre answers with centres; both branches of `layered` have to agree about which corner
+    const placed = layered(flatten(TREE), 180, 28);
+    const fallen = layered(flatten(node({ id: "only" })), 180, 28);
+    expect(Math.min(...placed.map((p) => p.x))).toBe(0);
+    expect(Math.min(...placed.map((p) => p.y))).toBe(0);
+    expect(fallen[0].x).toBe(0);
   });
 
   it("a single-node walk still lays out rather than throwing", () => {
