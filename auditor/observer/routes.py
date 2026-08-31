@@ -408,17 +408,15 @@ class Readers:
         index = self.index(root, identity=identity)
         return asyncio.run(self._detail(index, root, identity, run_id))
 
-    def _model_for(
-        self, runner: RunnerKind, settings: UserSettings, *, fallback: bool = True
-    ) -> str:
+    def _model_for(self, runner: RunnerKind, settings: UserSettings) -> str:
         """The model this runner is pinned to, which `EvalsDB.latest` needs beside the runner.
 
-        `fallback=False` answers with the runner's own pin only, so the roster can say a runner
-        has no model rather than drawing Claude's beside the Codex mark.
+        A runner's own pin only: a Codex with no `codex_model` has no model, and lending it
+        Claude's would draw Claude's eval numbers under the Codex mark.
         """
         pinned = settings.observer.runner
         if runner is RunnerKind.CODEX:
-            return pinned.codex_model or (pinned.model if fallback else "")
+            return pinned.codex_model
         return pinned.model
 
     async def _runner_evals(
@@ -475,12 +473,12 @@ class Readers:
         Daemon-wide by construction: this reads :attr:`settings`, the home layer, while
         `/api/evals` resolves the per-repo overlay through :meth:`user`, so a repo that overrides
         `observer.runner.model` shows the overridden model in its numbers and this one in the
-        roster. A runner with no model of its own is an empty string, never another runner's.
+        roster. Both layers resolve the model the same way, so the eval block cannot draw one
+        runner's name beside another runner's numbers.
         """
         return tuple(
             RunnerEvalPayload(
-                runner=runner,
-                model=self._model_for(runner, self.settings, fallback=False),
+                runner=runner, model=self._model_for(runner, self.settings)
             )
             for runner in MODEL_RUNNERS
         )

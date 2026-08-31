@@ -170,8 +170,8 @@ thread rather than pinning one.
   read is never activity: no `GET` or `HEAD` moves it, whatever the route, so no page fetch and no
   status call can hold the daemon open past the idle window. Only a write does. `evals` is the runner roster, one row per model runner carrying its name and the
   model it is pinned to with no measurements in it; `/api/evals` is the per-repo answer that fills
-  the numbers, and a runner with no model of its own carries an empty string rather than another
-  runner's. `vectors` is still at its default and stays there until S13. So are both meters, and they
+  the numbers. Both resolve a runner's model the same way, so a runner with no model of its own
+  carries an empty string and no numbers on either route, rather than another runner's. `vectors` is still at its default and stays there until S13. So are both meters, and they
   are per repo: `budget` and `limits` ride on each `repos[]` entry, carrying what that repo's own
   loop published, so two repos cannot overwrite one another's numbers.
 

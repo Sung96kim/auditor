@@ -5,7 +5,7 @@ from pathlib import Path
 
 import auditor.observer.routes as routes_module
 from auditor.graph.payloads import LogFilter
-from auditor.graph.refine.models import Run, RunOutcome, RunStatus
+from auditor.graph.refine.models import MODEL_RUNNERS, Run, RunOutcome, RunStatus
 from auditor.observer.routes import Readers, filter_key
 from auditor.paths import repo_identity
 from auditor.user_settings import UserSettings
@@ -119,6 +119,25 @@ def test_the_runs_tag_moves_when_a_run_is_updated_in_place(refine_repo: Path):
             index.runs.finish_run("r-1", RunOutcome(status=RunStatus.SUCCEEDED))
         )
         assert readers.runs_tag(refine_repo) != running, "a run finished behind the tag"
+    finally:
+        readers.close()
+
+
+def test_every_model_runner_is_a_row_even_with_no_eval_in_the_ledger(refine_repo: Path):
+    """P7: the block cannot tell "never run" from "not configured" unless the payload does.
+
+    Deleting the empty-runner append left the whole suite green, so the one decision this route
+    exists to carry had no coverage at all.
+    """
+    readers = Readers(settings=UserSettings())
+    try:
+        view = readers.evals(refine_repo)
+        assert {row.runner for row in view.runners} == {r.value for r in MODEL_RUNNERS}
+        assert [row.measured for row in view.runners] == [0, 0]
+        assert [row.strata for row in view.runners] == [(), ()]
+        codex = next(row for row in view.runners if row.runner == "codex")
+        # a runner with no model of its own says so here as well as in the roster (L-19)
+        assert codex.model == ""
     finally:
         readers.close()
 
