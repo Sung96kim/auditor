@@ -118,6 +118,23 @@ def route_pattern(path: str) -> str:
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
 
+def _named(query: Mapping[str, str], name: str) -> str | None:
+    """One control's raw value, or None when the query did not name it at all.
+
+    A control named with an empty value is a typo rather than a default: `enum_value` says so for
+    the enums, `parse_since` says so for the window, and the other three read the same way here.
+
+    Raises:
+        ValueError: when the control is present and blank.
+    """
+    raw = query.get(name)
+    if raw is None:
+        return None
+    if not raw.strip():
+        raise ValueError(f"{name} was named with no value")
+    return raw
+
+
 def _flag(raw: str | None) -> bool:
     """A query flag. `parse_qs` drops a bare `?skipped`, so the page sends `skipped=1`."""
     return raw is not None and raw.strip().lower() in _TRUE
@@ -125,8 +142,8 @@ def _flag(raw: str | None) -> bool:
 
 def _int(query: Mapping[str, str], name: str, default: int) -> int:
     """One integer control, refused by name. `int()`'s own message names no field."""
-    raw = query.get(name)
-    if not raw:
+    raw = _named(query, name)
+    if raw is None:
         return default
     try:
         return int(raw)
@@ -140,11 +157,12 @@ def runs_filter(query: Mapping[str, str]) -> LogFilter:
     Raises:
         ValueError: for any value the CLI would also refuse, which the handler answers 400 with.
     """
+    status = _named(query, "status")
     return LogFilter.of(
-        view=LogView.RUNS,
-        status=query["status"].split(",") if query.get("status") else None,
-        since=query.get("since"),
-        skipped=_flag(query.get("skipped")),
+        view=LogView.RUNS,  # never the caller's: one route, one view (P16)
+        status=status.split(",") if status else None,
+        since=_named(query, "since"),
+        skipped=_flag(_named(query, "skipped")),
         limit=_int(query, "limit", LOG_ROW_LIMIT),
     )
 
@@ -165,12 +183,12 @@ def flow_options(query: Mapping[str, str], *, hub_fan_in: int) -> FlowOptions:
     Raises:
         ValueError: when `depth` or `limit` is not an integer, or `direction` is not a direction.
     """
-    named = query.get("direction")
+    named = _named(query, "direction")
     return FlowOptions.of(
         hub_fan_in=hub_fan_in,
         direction=(
             FlowDirection(enum_value(named, FlowDirection, "direction"))
-            if named
+            if named is not None
             else FlowDirection.OUT
         ),
         depth=_int(query, "depth", DEFAULT_FLOW_DEPTH),
@@ -552,7 +570,10 @@ class Router:
     ) -> Reply:
         """One request. The tag is computed before the handler, so a 304 costs no query (P14)."""
         parsed = urlparse(target)
-        query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        # blanks are kept, so `?depth=` reaches the parser that refuses it rather than vanishing
+        query = {
+            k: v[0] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()
+        }
         now = time.time()
         self.idle_seconds = now - (self.last_request or self.started_at)
         if method not in READ_METHODS:

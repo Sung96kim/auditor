@@ -48,17 +48,64 @@ def test_a_status_list_and_a_window_reach_the_filter(daemon_server, readers, tmp
         ("status=sideways", "status"),
         ("since=whenever", "since"),
         ("limit=abc", "limit"),
+        ("status=", "status"),
+        ("since=", "since"),
+        ("limit=", "limit"),
+        ("skipped=", "skipped"),
     ],
-    ids=["status", "since", "limit"],
+    ids=[
+        "status",
+        "since",
+        "limit",
+        "empty status",
+        "empty since",
+        "empty limit",
+        "empty skipped",
+    ],
 )
 def test_an_unusable_filter_is_a_400_naming_the_field(
     daemon_server, tmp_path, query, names
 ):
-    """A 500 from a query string is the failure this replaces; the CLI's own message is reused."""
+    """A 500 from a query string is the failure this replaces; the CLI's own message is reused.
+
+    The four empty cases are the asymmetry: `since=` refused and the other three defaulted, so
+    one typo was a 400 and three were silently the value the caller did not ask for.
+    """
     _, call = daemon_server
     status, _, body = call.request("GET", f"/api/runs?repo={tmp_path}&{query}")
     assert status == 400
     assert names in body["error"]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("skipped=1", True),
+        ("skipped=true", True),
+        ("skipped=yes", True),
+        ("skipped=on", True),
+        ("skipped=0", False),
+        ("skipped=false", False),
+        ("skipped=off", False),
+        ("skipped=no", False),
+    ],
+)
+def test_the_skipped_flag_reads_both_ways(
+    daemon_server, readers, tmp_path, query, expected
+):
+    """Only the `1` direction was pinned, so `_flag` reduced to `raw is not None` stayed green."""
+    _, call = daemon_server
+    status, _, _ = call.request("GET", f"/api/runs?repo={tmp_path}&{query}")
+    assert status == 200
+    assert readers.filters[-1].skipped is expected
+
+
+def test_the_view_is_never_taken_from_the_query(daemon_server, readers, tmp_path):
+    """One route, one view: `/api/runs` answers runs however the caller spells the query (P16)."""
+    _, call = daemon_server
+    status, _, _ = call.request("GET", f"/api/runs?repo={tmp_path}&view=refinements")
+    assert status == 200
+    assert readers.filters[-1].view is LogView.RUNS
 
 
 def test_two_windows_over_one_ledger_do_not_share_an_etag(daemon_server, tmp_path):
@@ -181,8 +228,22 @@ def test_an_out_of_range_depth_is_clamped_rather_than_refused(
 
 @pytest.mark.parametrize(
     ("query", "names"),
-    [("direction=sideways", "direction"), ("depth=deep", "depth")],
-    ids=["direction", "depth"],
+    [
+        ("direction=sideways", "direction"),
+        ("depth=deep", "depth"),
+        ("limit=abc", "limit"),
+        ("direction=", "direction"),
+        ("depth=", "depth"),
+        ("limit=", "limit"),
+    ],
+    ids=[
+        "direction",
+        "depth",
+        "limit",
+        "empty direction",
+        "empty depth",
+        "empty limit",
+    ],
 )
 def test_an_unusable_flow_control_is_a_400_naming_the_field(
     daemon_server, tmp_path, query, names

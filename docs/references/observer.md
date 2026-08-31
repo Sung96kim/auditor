@@ -146,7 +146,8 @@ thread rather than pinning one.
 
   An unusable value is a 400 naming the field, never a 500 and never `int()`'s own message; a
   query the handler will refuse produces no ETag, so a stale `If-None-Match` cannot turn it into a
-  304. An out-of-range `depth` or `limit` is clamped rather than refused, because `FlowOptions.of`
+  304. A control named with no value at all is one of those: `?depth=` and `?status=` are typos
+  rather than requests for the default, and all five controls read them the same way. An out-of-range `depth` or `limit` is clamped rather than refused, because `FlowOptions.of`
   clamps by design. `/api/runs`' ETag covers the filter, `since` included, so two windows over one
   ledger never share a tag while each still 304s on its own; `since` is fingerprinted as the raw
   query value rather than the epoch it resolves to, or a window would mint a new tag every request.
