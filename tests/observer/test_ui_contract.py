@@ -111,6 +111,8 @@ READS: dict[str, dict[tuple[str, str], frozenset[str]]] = {
             {"enabled", "model", "ready"}
         ),
     },
+    # the roster rides on `/api/status`; the measurements are their own route (P7)
+    "EvalsView": {("EvalsView", "EvalsView"): frozenset({"runners"})},
     "RunsView": {
         ("RunsView", "RunsView"): frozenset({"log"}),
         ("LogReport", "LogReport"): frozenset(

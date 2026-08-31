@@ -20,8 +20,15 @@ export function budgetMeter(budget: Budget | null): Meter {
   return { fill, label: spent, tone: budget.low ? "low" : "ok", known: true };
 }
 
-/** The rate-limit meter, whose only interesting state is a pause with a time on it. */
-export function limitMeter(limits: RateLimit, now: number): Meter {
+/** The rate-limit meter, whose only interesting state is a pause with a time on it.
+ *
+ * Null is the repo the roster does not hold, a stale bookmark or a repo dropped from the shared
+ * index; it reads the way the budget's own unknown does rather than removing the bar.
+ */
+export function limitMeter(limits: RateLimit | null, now: number): Meter {
+  if (limits === null) {
+    return { fill: 0, label: "no rate limit yet", tone: "ok", known: false };
+  }
   const fill = Math.min(1, Math.max(0, limits.max_utilization));
   if (!limits.paused) {
     return { fill, label: `${Math.round(fill * 100)}% of the window`, tone: "ok", known: true };
@@ -61,6 +68,14 @@ export function panelMode(boot: Bootstrap): PanelMode {
   return boot.repo ? "live" : "no repo";
 }
 
+export interface StratumLine {
+  key: string;
+  label: string;
+  /** the 95% lower bound, which is the number the tier gate reads, not the point estimate. */
+  lower: number;
+  proven: boolean;
+}
+
 export interface EvalLine {
   runner: string;
   /** the runner's own pinned model, or the words for a runner that has none configured. */
@@ -68,19 +83,46 @@ export interface EvalLine {
   /** false until a suite has been run against this runner: the block says so rather than hiding. */
   measured: boolean;
   proven: number;
-  /** the weakest lower bound across strata, proven or not; `proven` is the gate's own count. */
-  floor: number | null;
+  strata: StratumLine[];
 }
 
-/** Spec 12.1's "latest eval per runner with lower bounds per stratum", empty state included. */
-export function evalLines(rows: RunnerEval[]): EvalLine[] {
-  return rows.map((row) => ({
-    runner: row.runner,
-    model: row.model || "no model configured",
-    measured: row.measured > 0,
-    proven: row.proven,
-    floor: row.strata.length ? Math.min(...row.strata.map((s) => s.lower_bound_95)) : null,
-  }));
+/** Spec 12.1's "latest eval per runner with lower bounds per stratum", empty state included.
+ *
+ * Two sources by design: `/api/status` carries the roster, which is which runners exist and what
+ * each is pinned to, and `/api/evals` carries the measurements. The roster decides the rows, so
+ * the block lays out before the second fetch lands and a runner with no eval still gets a line.
+ */
+export function evalLines(roster: RunnerEval[], measured: RunnerEval[] = []): EvalLine[] {
+  const numbers = new Map(measured.map((row) => [row.runner, row]));
+  return roster.map((row) => {
+    const found = numbers.get(row.runner) ?? row;
+    return {
+      runner: row.runner,
+      model: row.model || "no model configured",
+      measured: found.measured > 0,
+      proven: found.proven,
+      strata: found.strata.map((s) => ({
+        key: `${s.suite}/${s.stratum}`,
+        label: s.stratum,
+        lower: s.lower_bound_95,
+        proven: s.proven,
+      })),
+    };
+  });
+}
+
+/** A clock reading the payload took, carried forward to now: a 304 must not freeze it (H2). */
+export function sinceLabel(seconds: number): string {
+  const whole = Math.max(0, Math.round(seconds));
+  if (whole < 60) return `${whole}s`;
+  if (whole < 3600) return `${Math.floor(whole / 60)}m`;
+  if (whole < 86400) return `${Math.floor(whole / 3600)}h`;
+  return `${Math.floor(whole / 86400)}d`;
+}
+
+/** The repo the URL names, out of the roster the daemon serves, or null when it holds no such row. */
+export function selectedRepo(repos: Repo[], repo: string): Repo | null {
+  return repos.find((row) => row.repo === repo) ?? null;
 }
 
 /** The vector layer is S13's; until then the block reports off rather than being absent. */

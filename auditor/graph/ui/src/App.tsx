@@ -18,7 +18,7 @@ import { breadcrumbPath, type CrumbTarget } from "./graph/breadcrumb";
 import { refinedEdgeKeys, refinedNodeIds, unconfirmedEdgeKeys } from "./graph/refined";
 import { useLiveGraph } from "./api/useLiveGraph";
 import Panels from "./panels/Panels";
-import { repoLabel } from "./panels/chrome";
+import { repoLabel, selectedRepo } from "./panels/chrome";
 
 declare global {
   interface Window {
@@ -201,8 +201,7 @@ export default function App() {
   const refinedEdges = useMemo(() => refinedEdgeKeys(data), [data]);
   const unconfirmedEdges = useMemo(() => unconfirmedEdgeKeys(data), [data]);
 
-  const selected =
-    live.status.data?.repos.find((r) => r.repo === live.boot.repo) ?? null;
+  const selected = selectedRepo(live.status.data?.repos ?? [], live.boot.repo);
   const title = selected ? repoLabel(selected) : "Codebase Graph";
 
   const sidebarWidth = 268;

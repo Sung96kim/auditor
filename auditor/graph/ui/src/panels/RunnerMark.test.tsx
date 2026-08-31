@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { cleanup, render } from "@testing-library/react";
-import RunnerMark, { MARKS, markFor } from "./RunnerMark";
+import { cleanup, render, screen } from "@testing-library/react";
+import RunnerMark, { MARKS, markFor, markName } from "./RunnerMark";
 
 afterEach(cleanup);
 
@@ -61,5 +61,21 @@ describe("the mark's box", () => {
     expect(stand.style.width).toBe("13px");
     expect(stand.style.height).toBe("13px");
     expect(stand.getAttribute("aria-label")).toBe("unknown runner gemini");
+  });
+});
+
+describe("the two runners the wire serves with no mark of their own", () => {
+  it.each([
+    ["none", "no runner"],
+    ["fake", "test runner"],
+  ])("%s is named %s rather than reported as a mystery", (runner, name) => {
+    // both are ordinary `RunnerKind` members: every assessment-only row carries `none`
+    expect(markName(runner)).toBe(name);
+    render(<RunnerMark runner={runner} />);
+    expect(screen.getByRole("img", { name }).textContent).toBe("-");
+  });
+
+  it("a runner the enum has never had is still called unknown", () => {
+    expect(markName("gemini")).toBe("unknown runner gemini");
   });
 });

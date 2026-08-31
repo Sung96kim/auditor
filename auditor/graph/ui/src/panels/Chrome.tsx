@@ -1,101 +1,99 @@
 import type { PollState } from "../api/poll";
-import type { Status } from "../api/types";
-import { TEXT, THEME, TONE, TONE_WASH } from "../theme";
+import type { EvalsView, Status } from "../api/types";
+import { useFetchOnce } from "../api/useFetchOnce";
+import { TEXT, THEME, TONE } from "../theme";
 import {
   budgetMeter,
   evalLines,
   limitMeter,
   repoLabel,
   repoState,
-  stateTone,
+  selectedRepo,
+  sinceLabel,
   vectorLabel,
-  type Meter,
+  type EvalLine,
 } from "./chrome";
 import { Failed, Loading, Reconnecting } from "./States";
+import Badge from "./Badge";
+import Bar from "./Bar";
 import Panel, { block, microLabel, mono } from "./Panel";
 import RunnerMark from "./RunnerMark";
 
-const METER_TONE: Record<Meter["tone"], string> = {
-  ok: TONE.busy,
-  low: TONE.warn,
-  spent: TONE.bad,
-};
-
-/** A track with no reading is hatched, so "not published yet" cannot be misread as "nothing left". */
-const UNKNOWN_TRACK =
-  "repeating-linear-gradient(115deg, rgba(122,139,163,0.22) 0 4px, transparent 4px 8px)";
-
-/** Spec 12.1's state badge: the selected repo's loop state, coloured by what that state means. */
-function Badge({ state }: { state: string }) {
-  const tone = stateTone(state);
+/** One runner's latest eval: the model it ran, how many strata are proven, and each one's floor. */
+function EvalRow({ line }: { line: EvalLine }) {
   return (
-    <span
-      style={{
-        background: TONE_WASH[tone],
-        border: `1px solid ${TONE[tone]}55`,
-        borderRadius: "999px",
-        color: TONE[tone],
-        fontFamily: mono.fontFamily,
-        fontSize: "10.5px",
-        padding: "2px 8px",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {state}
-    </span>
-  );
-}
-
-/** One labelled bar. `known` is false for a repo whose loop has not published a budget yet. */
-function Bar({ title, meter }: { title: string; meter: Meter }) {
-  const pct = Math.round(meter.fill * 100);
-  return (
-    <div style={{ ...block, gap: "7px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-        <span style={microLabel}>{title}</span>
-        <span style={{ ...mono, color: meter.known ? TEXT.body : TEXT.label }}>{meter.label}</span>
+    <div style={{ ...block, gap: "3px" }}>
+      <div style={{ alignItems: "center", display: "flex", gap: "7px", ...mono }}>
+        <RunnerMark runner={line.runner} size={13} />
+        <span
+          title={line.model}
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {line.model}
+        </span>
+        <span
+          style={{
+            color: line.measured ? TEXT.body : TEXT.label,
+            flexShrink: 0,
+            marginLeft: "auto",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {line.measured ? `${line.proven} proven` : "no eval yet"}
+        </span>
       </div>
-      <div
-        aria-label={meter.known ? title : undefined}
-        aria-valuenow={meter.known ? pct : undefined}
-        aria-valuemin={meter.known ? 0 : undefined}
-        aria-valuemax={meter.known ? 100 : undefined}
-        role={meter.known ? "progressbar" : undefined}
-        style={{
-          background: meter.known ? THEME.bgElevated : UNKNOWN_TRACK,
-          borderRadius: "999px",
-          height: "5px",
-          overflow: "hidden",
-        }}
-      >
-        {meter.known ? (
-          <div
-            style={{
-              background: METER_TONE[meter.tone],
-              borderRadius: "999px",
-              height: "100%",
-              transition: "width 320ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms ease",
-              width: pct === 0 ? "0" : `max(4px, ${pct}%)`,
-            }}
-          />
-        ) : null}
-      </div>
+      {line.strata.map((stratum) => (
+        <div
+          key={stratum.key}
+          style={{
+            ...mono,
+            color: TEXT.label,
+            display: "flex",
+            gap: "8px",
+            justifyContent: "space-between",
+            paddingLeft: "20px",
+          }}
+        >
+          <span
+            style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+            title={stratum.key}
+          >
+            {stratum.label}
+          </span>
+          <span style={{ color: stratum.proven ? TONE.ok : TEXT.label, flexShrink: 0 }}>
+            {stratum.lower.toFixed(2)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
 
 export interface ChromeProps {
   status: PollState<Status>;
+  base: string;
   repo: string;
   onChooseRepo: (repo: string) => void;
   onRetry: () => void;
 }
 
 /** Spec 12.1's C5 to C10: the switcher, the badge, the two meters, the evals and the vectors. */
-export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromeProps) {
+export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: ChromeProps) {
   const data = status.data;
-  const selected = data?.repos.find((r) => r.repo === repo) ?? null;
-  const now = Date.now() / 1000;
+  const selected = selectedRepo(data?.repos ?? [], repo);
+  const now = Date.now();
+  // the roster rides on the poll; the measurements are their own route and their own fetch (P3)
+  const evals = useFetchOnce<EvalsView>(
+    `${base}api/evals?${new URLSearchParams({ repo })}`,
+    Boolean(repo),
+  );
+  // both clock readings were served with the body: a 304 holds the body, so carry them forward
+  const held = (now - status.at) / 1000;
   return (
     <Panel
       title="Observer"
@@ -134,40 +132,12 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
           </select>
 
           <Bar title="Budget" meter={budgetMeter(selected?.budget ?? null)} />
-          {selected ? <Bar title="Rate limit" meter={limitMeter(selected.limits, now)} /> : null}
+          <Bar title="Rate limit" meter={limitMeter(selected?.limits ?? null, now / 1000)} />
 
           <div style={block}>
             <span style={microLabel}>Latest eval</span>
-            {evalLines(data.evals).map((line) => (
-              <div
-                key={line.runner}
-                style={{ alignItems: "center", display: "flex", gap: "7px", ...mono }}
-              >
-                <RunnerMark runner={line.runner} size={13} />
-                <span
-                  title={line.model}
-                  style={{
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {line.model}
-                </span>
-                <span
-                  style={{
-                    color: line.measured ? TEXT.body : TEXT.label,
-                    flexShrink: 0,
-                    marginLeft: "auto",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {line.measured
-                    ? `${line.proven} proven, floor ${line.floor?.toFixed(2) ?? "n/a"}`
-                    : "no eval yet"}
-                </span>
-              </div>
+            {evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
+              <EvalRow key={line.runner} line={line} />
             ))}
           </div>
 
@@ -181,7 +151,10 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
             }}
           >
             <span style={{ ...mono, color: TEXT.label }}>{vectorLabel(data.vectors)}</span>
-            <span style={{ ...mono, color: TEXT.label }}>daemon {data.state}</span>
+            <span style={{ ...mono, color: TEXT.label }}>
+              {data.state} up {sinceLabel(data.uptime_seconds + held)}, idle{" "}
+              {sinceLabel(data.idle_seconds + held)}
+            </span>
           </div>
         </>
       ) : null}

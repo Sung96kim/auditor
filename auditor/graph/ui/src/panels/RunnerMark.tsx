@@ -31,15 +31,25 @@ export function markFor(runner: string): Mark | null {
   return MARKS[runner.toLowerCase()] ?? null;
 }
 
+/** The two `RunnerKind` members with no vendored mark. Both are ordinary values on the wire:
+ * `none` is what an assessment-only row carries, and `fake` is the test double. */
+const UNMARKED: Record<string, string> = { none: "no runner", fake: "test runner" };
+
+/** What a runner with no mark is called, so a legitimate value is not reported as a mystery. */
+export function markName(runner: string): string {
+  return UNMARKED[runner.toLowerCase()] ?? `unknown runner ${runner}`;
+}
+
 /** Spec 12.1: the runner column and the eval block render the mark, never initials or a badge. */
 export default function RunnerMark({ runner, size = 13 }: { runner: string; size?: number }) {
   const mark = markFor(runner);
   if (mark === null) {
+    const named = runner.toLowerCase() in UNMARKED;
     return (
       <span
         role="img"
-        aria-label={`unknown runner ${runner}`}
-        title={`unknown runner ${runner}`}
+        aria-label={markName(runner)}
+        title={markName(runner)}
         style={{
           alignItems: "center",
           display: "inline-flex",
@@ -51,7 +61,7 @@ export default function RunnerMark({ runner, size = 13 }: { runner: string; size
           width: `${size}px`,
         }}
       >
-        &#9679;
+        {named ? "-" : "\u25CF"}
       </span>
     );
   }

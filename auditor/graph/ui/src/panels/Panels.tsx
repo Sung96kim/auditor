@@ -29,6 +29,7 @@ export default function Panels({ live }: { live: LiveGraph }) {
     <aside className="anim-panels" style={column}>
       <Chrome
         status={live.status}
+        base={live.boot.base}
         repo={live.boot.repo}
         onChooseRepo={live.chooseRepo}
         onRetry={live.retry}

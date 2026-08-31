@@ -171,7 +171,9 @@ thread rather than pinning one.
   is never activity: no `GET` or `HEAD` moves it, whatever the route, so no page fetch and no
   status call can hold the daemon open past the idle window. Only a write does.
 - `evals` is the runner roster, one row per model runner carrying its name and the model it is
-  pinned to with no measurements in it; `/api/evals` is the per-repo answer that fills the numbers.
+  pinned to with no measurements in it; `/api/evals` is the per-repo answer that fills the numbers,
+  and the page fetches both: the roster lays the block out at first paint and decides its rows,
+  the measurements route supplies each stratum's 95% lower bound.
   Both resolve a runner's model the same way, so a runner with no model of its own carries an
   empty string and no numbers on either route, rather than another runner's.
 - `vectors` is still at its default and stays there until S13. Both meters are real, and they are

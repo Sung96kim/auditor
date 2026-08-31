@@ -14,13 +14,31 @@ describe("the polled-surface state machine", () => {
 
   it("a 200 replaces the data and clears the error", () => {
     const state = received(failed(initial(1), "boom"), 2);
-    expect(state).toEqual({ phase: "ready", data: 2, error: "", attempts: 0 });
+    expect(state).toEqual({
+      phase: "ready",
+      data: 2,
+      error: "",
+      attempts: 0,
+      at: state.at,
+    });
+    expect(state.at).toBeGreaterThan(0);
   });
 
   it("a 304 keeps the last good data rather than blanking the panel", () => {
     const state = received(initial(1), null);
     expect(state.data).toBe(1);
     expect(state.phase).toBe("ready");
+  });
+
+  it("a 304 keeps the stamp of the body it answers for, so a clock in it is not called fresh", () => {
+    const first = { ...initial(1), at: 1000 };
+    expect(received(first, null).at).toBe(1000);
+    expect(received(first, 2).at).toBeGreaterThan(1000);
+  });
+
+  it("a failed poll keeps the stamp of the data it is still drawing", () => {
+    const first = { ...initial(1), at: 1000 };
+    expect(failed(first, "boom").at).toBe(1000);
   });
 
   it("a failed poll over existing data reconnects instead of showing a spinner", () => {

@@ -179,6 +179,10 @@ export interface FlowView {
   flow: FlowPayload | null;
 }
 
+export interface EvalsView {
+  runners: RunnerEval[];
+}
+
 export interface LogReport {
   runs: RunRow[];
   /** how many rows the filter held back, which is what makes the skipped toggle reachable. */

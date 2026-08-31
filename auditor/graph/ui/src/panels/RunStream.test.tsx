@@ -26,6 +26,7 @@ function ready(rows: RunRow[], over: Partial<RunsView["log"]> = {}): LiveGraph["
     data: { log: logReport({ runs: rows, ...over }) },
     error: "",
     attempts: 0,
+    at: Date.now(),
   };
 }
 

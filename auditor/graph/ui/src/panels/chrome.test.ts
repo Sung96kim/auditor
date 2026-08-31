@@ -6,9 +6,12 @@ import {
   panelMode,
   repoLabel,
   repoState,
+  selectedRepo,
+  sinceLabel,
   stateTone,
   vectorLabel,
 } from "./chrome";
+import { repo as repoFixture, runnerEval, stratum } from "../api/wire.fixture";
 import type { Budget, Repo } from "../api/types";
 
 const BUDGET: Budget = {
@@ -111,38 +114,80 @@ describe("which of the three pages this bundle is on", () => {
 });
 
 describe("latest eval per runner", () => {
+  const MEASURED = runnerEval({
+    measured: 2,
+    proven: 1,
+    strata: [
+      stratum({ suite: "edges", stratum: "calls", lower_bound_95: 0.81, proven: true }),
+      stratum({ suite: "edges", stratum: "imports", lower_bound_95: 0.64, proven: false }),
+    ],
+  });
+
   it("a runner with no eval is a line saying so, not a missing row", () => {
-    const lines = evalLines([
-      { runner: "codex", model: "gpt-5", measured: 0, proven: 0, strata: [] },
-    ]);
+    const lines = evalLines([runnerEval({ runner: "codex", model: "gpt-5" })]);
     expect(lines).toHaveLength(1);
     expect(lines[0].measured).toBe(false);
-    expect(lines[0].floor).toBeNull();
+    expect(lines[0].strata).toEqual([]);
   });
 
   it("a runner with no model of its own says so, never another runner's model", () => {
-    const lines = evalLines([
-      { runner: "codex", model: "", measured: 0, proven: 0, strata: [] },
-    ]);
+    const lines = evalLines([runnerEval({ runner: "codex", model: "" })]);
     expect(lines[0].model).toBe("no model configured");
   });
 
-  it("the floor is the weakest lower bound across strata, proven or not", () => {
-    const lines = evalLines([
-      {
-        runner: "claude",
-        model: "sonnet",
-        measured: 2,
-        proven: 1,
-        strata: [
-          { suite: "s", stratum: "a", n: 30, precision: 0.9, lower_bound_95: 0.81, proven: true },
-          { suite: "s", stratum: "b", n: 30, precision: 0.8, lower_bound_95: 0.64, proven: false },
-        ],
-      },
+  it("the roster decides the rows and the measurements route fills the numbers", () => {
+    const lines = evalLines([runnerEval(), runnerEval({ runner: "codex", model: "gpt-5" })], [
+      MEASURED,
     ]);
+    expect(lines.map((l) => l.runner)).toEqual(["claude", "codex"]);
     expect(lines[0].measured).toBe(true);
     expect(lines[0].proven).toBe(1);
-    expect(lines[0].floor).toBeCloseTo(0.64);
+    expect(lines[1].measured).toBe(false);
+  });
+
+  it("every stratum carries its own lower bound, which is what the tier gate reads", () => {
+    const [line] = evalLines([runnerEval()], [MEASURED]);
+    expect(line.strata.map((s) => s.label)).toEqual(["calls", "imports"]);
+    expect(line.strata.map((s) => s.lower)).toEqual([0.81, 0.64]);
+    expect(line.strata.map((s) => s.proven)).toEqual([true, false]);
+    expect(line.strata.map((s) => s.key)).toEqual(["edges/calls", "edges/imports"]);
+  });
+
+  it("the roster's own model stands even when the measured row was pinned to another", () => {
+    const [line] = evalLines(
+      [runnerEval({ model: "claude-sonnet-4-5" })],
+      [runnerEval({ model: "an-older-pin", measured: 3 })],
+    );
+    expect(line.model).toBe("claude-sonnet-4-5");
+    expect(line.measured).toBe(true);
+  });
+});
+
+describe("a clock reading the page carries forward", () => {
+  it.each([
+    [0, "0s"],
+    [45, "45s"],
+    [90, "1m"],
+    [7200, "2h"],
+    [200000, "2d"],
+  ])("%s seconds reads as %s", (seconds, words) => {
+    expect(sinceLabel(seconds)).toBe(words);
+  });
+
+  it("a negative reading is zero rather than a minus sign", () => {
+    expect(sinceLabel(-4)).toBe("0s");
+  });
+});
+
+describe("the repo the URL names", () => {
+  it("is the roster row with that path", () => {
+    const rows = [repoFixture({ repo: "/a" }), repoFixture({ repo: "/b" })];
+    expect(selectedRepo(rows, "/b")?.repo).toBe("/b");
+  });
+
+  it("is null for a repo the daemon's roster does not hold, never the first row", () => {
+    expect(selectedRepo([repoFixture({ repo: "/a" })], "/gone")).toBeNull();
+    expect(selectedRepo([], "/a")).toBeNull();
   });
 });
 
