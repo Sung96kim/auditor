@@ -21,14 +21,23 @@ Set up auditor in this repo. Report what already exists; don't clobber it.
    against, and this repo's overlay plus breadcrumb under `$AUDITOR_HOME/repos/<key>/`. Nothing
    is written into the repository. `auditr init --check` reports unknown keys and a leftover
    `.auditor/.status.json` from an older release; `auditr init --clean-status` deletes that file.
-4. Write a baseline so pre-existing findings don't gate new work:
+4. Write the repo's own policy. `observer_allowed` is a **top-level** `[tool.auditor]` key, never
+   under `graph.*`: `observer_allowed = false` is the repo's hard opt-out from the background
+   observer and it wins over any user setting. Leave it out to keep the default (`true`). State
+   the minimum `auditr` for the config you just wrote before the team commits it: the graph
+   config is `extra="forbid"`, so an older install refuses a key it does not know rather than
+   ignoring it, and `auditr version` on this machine is the floor to quote.
+5. Write a baseline so pre-existing findings don't gate new work:
    `auditr scan . --write-baseline .auditor/baseline.json`. Skip this on a repo genuinely starting
    from zero findings — see `references/config-guide.md` for when a baseline is/isn't worth it.
-5. Confirm the MCP server. Via this plugin, `plugin/.mcp.json` registers it automatically — no
-   action needed. Outside the plugin, `references/config-guide.md` has the `claude mcp add` /
+6. Confirm the MCP server. Via this plugin, `plugin/.mcp.json` registers it automatically, so no
+   action is needed. Outside the plugin, `references/config-guide.md` has the `claude mcp add` /
    Codex registration commands.
-6. Summarize: CLI version + extras installed, profile chosen, whether the user config home was
-   created, whether a baseline was written (and how many findings it snapshotted), MCP status.
+7. Summarize: CLI version + extras installed, profile chosen, the repo policy written, whether the
+   user config home was created, whether a baseline was written (and how many findings it
+   snapshotted), MCP status, and ask the user to run `auditr graph eval` once. It measures what a
+   runner gets right on this repo and is the number the activation tiers are set from, so the
+   graph's refinement layer should not be trusted before it has run.
 
 ## References
 

@@ -52,8 +52,12 @@ Invoked as `/auditor:<name>`, and auto-invoked when the task matches the skill's
   findings.
 - `aggregate-report`: produce a repo-wide `AUDIT.md` rollup from the incremental index.
 - `write-detector`: author a repo-local detector under `.auditor/plugins/`, with a required test.
+- `refine-graph`: run one refinement pass over the graph's unresolved queue and review what it
+  proposed. Repo-level: it works the queue, not a file scope.
+- `graph-observer`: report on the observer daemon, what it refined, what it skipped and how to
+  turn it off. Repo-level, for the same reason.
 
-## Subagent
+## Agents
 
 - `auditor-reviewer` runs a full or changeset scan in its own context and returns a triaged report:
   severity rollup, worst findings per file, and judged `candidate` verdicts.
@@ -63,6 +67,11 @@ Invoked as `/auditor:<name>`, and auto-invoked when the task matches the skill's
   grant is `Read`, `Grep`, `Glob`, `Bash` and `mcp__auditor__*`, and it inherits the session's
   model.
 - The `judge-findings` skill dispatches this agent rather than judging in the main context.
+- `graph-refiner` proposes one refinement per open question from `auditr graph unresolved`,
+  reading the code that raises each before it proposes. Everything it proposes is verified
+  against the extracted facts before it is stored, so a guess is rejected rather than believed.
+- It **never edits the repository**: it changes the graph's overlay and nothing else. The
+  `refine-graph` skill dispatches it. Same tool grant and inherited model as `auditor-reviewer`.
 
 ## Hooks
 

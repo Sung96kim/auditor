@@ -25,7 +25,14 @@ check first: the graph libraries are core dependencies of `auditr`, so the CLI s
    - `graph clusters`: cohesive concept groups; combine with the `GRAPH-GOD-CONCEPT` /
      `GRAPH-SCATTERED-CONCEPT` findings for *why* something is a hotspot, not just its size.
    - `graph search` / `graph concept`: locate by name/term. `search` finds the exact symbol id,
-     `concept` finds the cluster a term belongs to.
+     `concept` finds the cluster a term belongs to. For a *meaning* rather than a name,
+     `graph related` is the semantic query: it walks name and usage similarity, not string
+     match.
+   - Every edge carries `provenance`: `resolver` for one the deterministic pass derived, and a
+     refinement id for one a model proposed and the verifier accepted. A cluster member and a
+     build report both carry `refined`, the count of refinements the graph currently applies.
+     When an answer rests on a refined edge, say so: it is evidence of a different kind from a
+     deterministic one, and `graph refinements list --json` carries the reason each was made for.
    - `graph unresolved` lists what the deterministic resolver could not place, worst first. Use it
      to tell "the graph has no edge here" from "there is genuinely no caller" before trusting an
      empty `used_by`. `--reason ambiguous_name` is the short, high-signal end; rows flagged
