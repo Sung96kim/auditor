@@ -367,6 +367,7 @@ class Daemon:
         readers: Readers | None = None,
         settings: UserSettings | None = None,
         on_change: Callable[[], object] | None = None,
+        gate: Callable[[AttachRequest], str] | None = None,
     ) -> None:
         self.queue = queue
         self.sessions = sessions
@@ -375,6 +376,9 @@ class Daemon:
         self.consume = consume or self.offer
         #: what a state change the page can see calls; `serve` passes the router's tag counter
         self.on_change = on_change or (lambda: None)
+        #: spec 8.2's gate, the same callable `/sessions/attach` answers from: an adopted spool
+        #: is the second door into this daemon and it may not be an ungated one (H2)
+        self.gate = gate or (lambda request: "")
         #: spec 8.4's "two globally" is across every loop in one daemon, so the daemon owns it
         self.slots = slots or RunSlots()
         self.readers = readers
@@ -394,6 +398,8 @@ class Daemon:
         self.ended: deque[tuple[str, RepoLoop]] = deque()
         #: what the daemon drained from the spools, delivered to a loop or not
         self.drained = 0
+        #: spool keys the gate refused, so the reason is logged once rather than every tick
+        self.ungated: dict[str, str] = {}
         self.stopping = False
 
     def offer(self, key: str, events: tuple[Event, ...]) -> None:
@@ -430,13 +436,33 @@ class Daemon:
         roots = {Path(s.repo) for s in self.sessions.live(now=self.now())}
         for key in self.queue.keys():  # noqa: SIM118 - EventQueue, not a dict
             adopted = repo_root_from_key(key)
-            if adopted is not None:
+            if adopted is not None and self._adoptable(key, adopted):
                 roots.add(adopted)
         wanted = {repo_dir_key(root) for root in roots}
         for key in [k for k in self.loops if k not in wanted]:
             self.retire(key)
         for root in sorted(roots, key=str):
             self.ensure_loop(root)
+
+    def _adoptable(self, key: str, root: Path) -> bool:
+        """Whether spec 8.2's gate lets an adopted spool have a loop, rather than only a session.
+
+        A live session came through `/sessions/attach` and was gated there; a spool arrived on
+        disk and was gated nowhere, so a repo that never opted in would get a loop, a built graph
+        and a status block through it. The spool is left where it is - a daemon whose gate
+        answers differently adopts it - and nothing is built for it here.
+        """
+        reason = self.gate(
+            AttachRequest(repo=str(root), session_id="", home=str(auditor_home()))
+        )
+        if not reason:
+            self.ungated.pop(key, None)
+            return True
+        if self.ungated.get(key) != reason:
+            self.ungated[key] = reason
+            _LOG.info("not building a loop for the spool at %s: %s", root, reason)
+        self.queue.forget(key)
+        return False
 
     def retire(self, key: str) -> None:
         """Let this repo's driver finish: it stops as soon as its key is no longer claimed."""
@@ -719,12 +745,14 @@ def serve(settings: UserSettings | None = None) -> int:
     queue = EventQueue()
     sessions = SessionBook(expiry_minutes=scheduling.session_expiry_minutes)
     idle = IdleTimer(minutes=scheduling.idle_shutdown_minutes, now=time.time())
+    gate = repo_gate(home, settings)
     daemon = Daemon(
         queue=queue,
         sessions=sessions,
         idle=idle,
         readers=readers,
         settings=settings,
+        gate=gate,
     )
     router = Router(
         RouterDeps(
@@ -738,7 +766,7 @@ def serve(settings: UserSettings | None = None) -> int:
             sessions=sessions,
             readers=readers,
             page=repo_page(readers),
-            gate=repo_gate(home, settings),
+            gate=gate,
             open_page=open_url if settings.observer.open_browser else lambda url: None,
             loop_state=daemon.loop_state,
             meters=daemon.repo_meters,

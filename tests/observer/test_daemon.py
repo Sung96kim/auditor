@@ -298,11 +298,19 @@ def test_no_subcommand_prints_usage_and_exits_zero(capsys):
 def test_the_hook_verb_has_a_body_and_still_cannot_fail_a_session(monkeypatch, capsys):
     """S9 gave the branch a body; what survives from S8b is that it still exits 0 and stays quiet.
 
-    The old spelling of this test passed an event name and a client the parser now refuses, so it
-    would have gone on asserting the notice while argparse, not the branch, printed it.
+    Spying on `_hook` rather than only reading the exit code: `main` swallows everything, so
+    `main(...) == 0` holds with the whole dispatch deleted, and the notice it also checks is a
+    statement about argparse rather than about this branch.
     """
+    called: list[tuple[str, str, dict]] = []
+    monkeypatch.setattr(
+        auditr_observer,
+        "_hook",
+        lambda event, client, payload: called.append((event, client, payload)) or 0,
+    )
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert auditr_observer.main(["hook", "stop", "--client", "claude-code"]) == 0
+    assert called == [("stop", "claude-code", {})]
     assert "not available in this release" not in capsys.readouterr().err
 
 
@@ -626,6 +634,37 @@ def test_reconcile_gives_a_live_session_and_an_adopted_spool_a_loop(
     queue.put(key, Event(repo=str(adopted), paths=("a.py",), at=1.0))
     daemon.reconcile()
     assert set(built) == {Path("/r"), adopted}
+
+
+def test_an_adopted_spool_only_gets_a_loop_when_the_gate_lets_it(
+    queue, tmp_path, monkeypatch
+):
+    """The client's spool plus its `root.json` crumb is a second door into this daemon.
+
+    Nothing on the adoption path consulted spec 8.2's gate, so a repo that never opted in - no
+    `[tool.auditor]`, `observer_allowed = false`, `observer.enabled = false` - got a loop, a
+    built graph and a rendered `graph` status block by spooling one edit at a daemon that was
+    not running. The spool is left on disk rather than drained into nothing, so a daemon whose
+    gate answers differently still finds it.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    adopted = tmp_path / "unconfigured"
+    adopted.mkdir()
+    key = repo_dir_key(adopted)
+    ensure_repo_dir(adopted)
+    write_json_dict(repo_dir_from_key(key) / "root.json", {"root": str(adopted)})
+    daemon = _daemon(queue)
+    daemon.gate = lambda request: "the repo is not configured for auditor"
+    daemon.readers = SimpleNamespace()
+    built: list[Path] = []
+    daemon.ensure_loop = built.append
+    queue.put(key, Event(repo=str(adopted), paths=("a.py",), at=1.0))
+    spooled = queue.spool(key).path
+    daemon.reconcile()
+    assert built == []
+    assert queue.keys() == ()
+    assert spooled.exists()
+    assert daemon.ungated[key] == "the repo is not configured for auditor"
 
 
 def test_reconcile_retires_the_loop_of_a_repo_that_is_neither_live_nor_queued(queue):
