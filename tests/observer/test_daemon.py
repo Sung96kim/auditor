@@ -21,6 +21,7 @@ from auditor.config import AuditorSettings
 from auditor.database import open_repo_index
 from auditor.observer import daemon as daemon_module
 from auditor.observer.daemon import (
+    LOGGED_REFUSALS,
     Daemon,
     DaemonLock,
     DaemonRecord,
@@ -706,6 +707,26 @@ def test_an_adopted_spool_only_gets_a_loop_when_the_gate_lets_it(
     assert queue.keys() == ()
     assert spooled.exists()
     assert daemon.ungated[key] == "the repo is not configured for auditor"
+
+
+def test_the_gate_refusal_log_forgets_keys_rather_than_growing_for_ever(
+    queue, tmp_path, monkeypatch
+):
+    """A refused key never gets a loop, so `retire` never reaches it and nothing else did (L5).
+
+    The map exists only to keep one refusal out of every tick's log, so the oldest entry costs a
+    repeated line and nothing more; unbounded, it was one entry per refused repo for the
+    daemon's life.
+    """
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    daemon = _daemon(queue)
+    daemon.gate = lambda request: "the repo is not configured for auditor"
+    keys = [f"{n:040x}" for n in range(LOGGED_REFUSALS + 5)]
+    for n, key in enumerate(keys):
+        assert daemon._adoptable(key, tmp_path / f"r{n}") is False
+    assert len(daemon.ungated) == LOGGED_REFUSALS
+    assert keys[0] not in daemon.ungated
+    assert keys[-1] in daemon.ungated
 
 
 def test_reconcile_retires_the_loop_of_a_repo_that_is_neither_live_nor_queued(queue):

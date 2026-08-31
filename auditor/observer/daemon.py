@@ -10,7 +10,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -79,6 +79,10 @@ _LOG = logging.getLogger("auditor.observer")
 _ASK_TIMEOUT = 2.0
 #: unwind budget, not a policy someone retunes: too short to matter and too load-bearing to expose
 _CANCEL_GRACE = 0.25
+#: how many refused spool keys `Daemon.ungated` holds. It exists to keep one refusal out of every
+#: tick's log, and a refused key never gets a loop, so `retire` never reaches it and nothing else
+#: bounded it; forgetting the oldest costs one repeated log line (L5).
+LOGGED_REFUSALS = 256
 _P = TypeVar("_P", bound=WirePayload)
 _T = TypeVar("_T")
 
@@ -399,8 +403,9 @@ class Daemon:
         self.ended: deque[tuple[str, RepoLoop]] = deque()
         #: what the daemon drained from the spools, delivered to a loop or not
         self.drained = 0
-        #: spool keys the gate refused, so the reason is logged once rather than every tick
-        self.ungated: dict[str, str] = {}
+        #: spool keys the gate refused, so the reason is logged once rather than every tick,
+        #: capped at `LOGGED_REFUSALS` because nothing retires a key that never got a loop
+        self.ungated: OrderedDict[str, str] = OrderedDict()
         self.stopping = False
 
     def offer(self, key: str, events: tuple[Event, ...]) -> None:
@@ -462,6 +467,9 @@ class Daemon:
         if self.ungated.get(key) != reason:
             self.ungated[key] = reason
             _LOG.info("not building a loop for the spool at %s: %s", root, reason)
+        self.ungated.move_to_end(key)
+        while len(self.ungated) > LOGGED_REFUSALS:
+            self.ungated.popitem(last=False)
         self.queue.forget(key)
         return False
 

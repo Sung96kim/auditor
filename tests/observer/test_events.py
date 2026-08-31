@@ -6,6 +6,7 @@ import pytest
 
 from auditor.observer.events import (
     MAX_EVENT_PATHS,
+    REMEMBERED_REPOS,
     Event,
     EventKind,
     EventQueue,
@@ -205,6 +206,45 @@ def test_a_consumed_client_batch_is_gone(queue, tmp_path):
     queue.drain("k")
     queue.consumed("k")
     assert list((tmp_path / "repos" / "k").glob("spool.client.*")) == []
+
+
+def test_the_batch_memory_forgets_repos_rather_than_growing_for_ever(queue):
+    """One `OrderedDict` of ids per repo key ever drained, and nothing ever dropped one (L5).
+
+    The per-repo cap was already there; the map holding those caps had none, so a daemon left
+    running across many repos grew one entry a repo for its whole life. Eviction is
+    least-recently-drained, so the repos still being edited keep their dedupe.
+    """
+    keys = [f"{n:040x}" for n in range(REMEMBERED_REPOS + 5)]
+    for n, key in enumerate(keys):
+        queue.put(key, _event(batch=f"b{n}"))
+        queue.drain(key)
+        queue.consumed(key)
+    assert len(queue._seen) == REMEMBERED_REPOS
+    assert keys[0] not in queue._seen
+    assert keys[-1] in queue._seen
+
+
+def test_the_repo_the_daemon_is_still_draining_keeps_its_dedupe(queue):
+    """Eviction is by last drain, so the busy repo is the last one a full map forgets.
+
+    Evicted by insertion order instead, the repo the daemon has been working on all along is the
+    first one to lose its ids, and its next redelivery is assessed twice.
+    """
+    busy = f"{0:040x}"
+    queue.put(busy, _event(batch="b0"))
+    assert len(queue.drain(busy)) == 1
+    queue.consumed(busy)
+    for n in range(REMEMBERED_REPOS + 5):
+        key = f"{n + 1:040x}"
+        queue.put(key, _event(batch=f"b{n}"))
+        queue.drain(key)
+        queue.consumed(key)
+        queue.drain(
+            busy
+        )  # an empty drain still says this repo is the one being worked on
+    queue.put(busy, _event(batch="b0"))
+    assert queue.drain(busy) == ()
 
 
 def test_a_forgotten_key_keeps_its_spool_and_stops_being_offered(queue, tmp_path):

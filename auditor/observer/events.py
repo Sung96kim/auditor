@@ -22,6 +22,11 @@ MAX_EVENT_PATHS = 2_000
 #: dropped rather than assessed twice. Two Stop batches a second would still take two minutes
 #: to roll one out, and the client's own spool is capped well below it.
 REMEMBERED_BATCHES = 256
+#: how many repos' batch memories one daemon holds at a time. The map grew one entry per repo
+#: key ever drained and nothing dropped one, so it was unbounded for the daemon's life; past
+#: this the least recently drained repo is forgotten, which costs at most one batch assessed
+#: twice on a redelivery and never a batch lost (L5).
+REMEMBERED_REPOS = 256
 #: `auditr_observer.spool_name`'s glob: one file per client-written batch, so delete-on-2xx is a
 #: single unlink and the daemon's own `spool.jsonl` is never renamed out from under a writer
 CLIENT_SPOOL_GLOB = "spool.client.*.jsonl"
@@ -124,8 +129,9 @@ class EventQueue:
         self._signal = threading.Event()
         self._lock = threading.Lock()
         self._keyed: dict[str, threading.Lock] = {}
-        #: the last `REMEMBERED_BATCHES` batch ids per repo, newest last
-        self._seen: dict[str, OrderedDict[str, None]] = {}
+        #: the last `REMEMBERED_BATCHES` batch ids of the last `REMEMBERED_REPOS` repos to be
+        #: drained, both newest last
+        self._seen: OrderedDict[str, OrderedDict[str, None]] = OrderedDict()
         #: every event this daemon has taken; `/api/status` reports the drained half of it
         self.accepted = 0
 
@@ -169,9 +175,13 @@ class EventQueue:
 
         Only :meth:`drain` records: a `put` that recorded here would make the daemon's own copy
         the duplicate and drop the delivery entirely.
+
+        Bounded on both axes: `REMEMBERED_BATCHES` ids per repo, and `REMEMBERED_REPOS` repos,
+        each evicted least-recently-drained first (L5).
         """
         with self._lock:
             seen = self._seen.setdefault(key, OrderedDict())
+            self._seen.move_to_end(key)
             kept: list[Event] = []
             for event in events:
                 if event.batch and event.batch in seen:
@@ -181,6 +191,8 @@ class EventQueue:
                 kept.append(event)
             while len(seen) > REMEMBERED_BATCHES:
                 seen.popitem(last=False)
+            while len(self._seen) > REMEMBERED_REPOS:
+                self._seen.popitem(last=False)
         return tuple(kept)
 
     def _key_lock(self, key: str) -> threading.Lock:
