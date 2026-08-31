@@ -840,9 +840,8 @@ class Router:
         if isinstance(ref, Reply):
             return ref
         known = self.deps.sessions.heartbeat(ref.session_id, now=time.time())
-        if (
-            known
-        ):  # `sessions[i].last_seen` is on the page, so its tag has to move with it
+        # `sessions[i].last_seen` is on the page, so its tag has to move with the heartbeat
+        if known:
             self.bump()
         return Reply.json(
             SessionAck(ok=known, reason="" if known else "no such session")
