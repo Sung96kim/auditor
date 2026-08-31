@@ -15,7 +15,7 @@ import auditr_observer
 from auditor import discovery
 from auditor.discovery import FileDiscovery, find_root, git_status_paths, parse_status_z
 from auditor.observer.events import CLIENT_SPOOL_GLOB, MAX_EVENT_PATHS
-from auditor.paths import repo_dir_key
+from auditor.paths import repo_dir_from_key, repo_dir_key
 
 
 def _spooled(home: Path, key: str) -> list[Path]:
@@ -110,6 +110,16 @@ def test_the_spool_the_client_writes_is_the_one_the_daemon_adopts():
     assert fnmatch(auditr_observer.spool_name("deadbeef"), CLIENT_SPOOL_GLOB)
 
 
+def test_the_client_and_the_daemon_name_the_same_spool_directory(git_repo: Path):
+    """The filename is only half of it: another directory orphans every batch, silently.
+
+    `repo_dir_from_key` owns the `repos/<key>` layout package-side, and the client re-spells both
+    halves of the path in stdlib - the home and the layout. The glob pin above sees neither (L3).
+    """
+    key = repo_dir_key(git_repo)
+    assert auditr_observer.home() / "repos" / key == repo_dir_from_key(key)
+
+
 @pytest.mark.parametrize(
     "rel",
     ["node_modules/d.js", ".venv/lib/e.py", "build/out.js", "pkg/__pycache__/a.py"],
@@ -126,23 +136,34 @@ def test_stage_zero_drops_an_excluded_directory(rel: str):
 
 
 @pytest.mark.parametrize(
-    "rel",
+    ("rel", "discovery_keeps", "hook_keeps"),
     [
-        "a.py",
-        "pkg/b.ts",
-        "pkg/c.md",
-        "node_modules/d.js",
-        ".venv/lib/e.py",
-        "package.json",
-        ".env",
-        "cfg/.env.local",
-        "app/migrations/0001_initial.py",
-        "gen/x.gen.py",
-        "{root}/pkg/a.py",  # the absolute shape Claude Code actually sends
+        ("a.py", True, True),
+        ("pkg/b.ts", True, True),
+        ("package.json", True, True),
+        (".env", True, True),
+        ("cfg/.env.local", True, True),
+        (
+            "{root}/pkg/a.py",
+            True,
+            True,
+        ),  # the absolute shape Claude Code actually sends
+        ("pkg/c.md", False, False),
+        ("node_modules/d.js", False, False),
+        (".venv/lib/e.py", False, False),
+        # the hook keeps these two and discovery's own globs drop them: a superset is the rule
+        ("app/migrations/0001_initial.py", False, True),
+        ("gen/x.gen.py", False, True),
     ],
 )
-def test_stage_zero_never_drops_what_discovery_keeps(tmp_path: Path, rel: str):
+def test_stage_zero_never_drops_what_discovery_keeps(
+    tmp_path: Path, rel: str, discovery_keeps: bool, hook_keeps: bool
+):
     """The hook is a subset filter, over the shape the client really sends.
+
+    Both verdicts per id rather than one under an `if discovery keeps it` guard: under that
+    guard the ids discovery drops asserted nothing at all, so a hook that had stopped filtering
+    and a hook that had started dropping real edits read the same (L6).
 
     The root lives under a directory named `build` on purpose: `_EXCLUDE_DIRS` is a path-segment
     test, so an absolute path carries excluded names from outside the repo and every edit in such
@@ -153,10 +174,11 @@ def test_stage_zero_never_drops_what_discovery_keeps(tmp_path: Path, rel: str):
     root.mkdir(parents=True)
     named = Path(rel.format(root=root)) if "{root}" in rel else root / rel
     finder = FileDiscovery(root)
-    if finder.auditable_shape(named):
-        assert auditr_observer.auditable_shape(
-            auditr_observer._relative(str(named), root, root)
-        )
+    assert finder.auditable_shape(named) is discovery_keeps
+    hooked = auditr_observer.auditable_shape(
+        auditr_observer._relative(str(named), root, root)
+    )
+    assert hooked is hook_keeps
 
 
 @pytest.mark.parametrize(
@@ -630,6 +652,36 @@ def test_one_batch_resolves_the_repo_identity_once(
         (wired / "repos" / repo_dir_key(git_repo) / "root.json").read_text()
     )
     assert crumb["identity"] == real(git_repo)
+
+
+def test_an_edit_in_a_nested_checkout_is_attributed_to_the_session_repo(
+    git_repo: Path, wired: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Review L9's deferral, pinned rather than only written down in the reference.
+
+    `auditr scan` attributes the same file to the outer repo too, and re-rooting per edit would
+    key a vendored checkout the user never configured - where spec 8.2's gate now refuses the
+    adopted spool - so the edit would vanish rather than move. Changing that is a spec decision
+    and not a patch, so what the client does today is asserted here instead (L7).
+    """
+    nested = git_repo / "vendor" / "sub"
+    nested.mkdir(parents=True)
+    (nested / ".git").mkdir()
+    (nested / "n.py").write_text("x = 1\n")
+    posted: list[dict] = []
+    monkeypatch.setattr(
+        auditr_observer,
+        "_post",
+        lambda path, body, timeout: posted.append(body) or (202, {}),
+    )
+    auditr_observer._hook(
+        "post-tool-use",
+        "claude-code",
+        _payload(cwd=str(git_repo), tool_input={"file_path": str(nested / "n.py")}),
+    )
+    assert posted[0]["repo"] == str(auditr_observer.find_root(git_repo))
+    assert posted[0]["paths"] == ["vendor/sub/n.py"]
+    assert posted[0]["key"] == repo_dir_key(git_repo)
 
 
 def test_the_spool_stops_growing_once_a_daemon_has_been_gone_long_enough(
