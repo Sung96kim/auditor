@@ -390,8 +390,9 @@ class Daemon:
         self.loops: dict[str, RepoLoop] = {}
         #: each repo's own meters, pushed by its loop rather than pulled across threads (H-9)
         self.meters: dict[str, Metered] = {}
-        #: the last `graph` block written per repo, so an unchanged tick takes no lock
-        self.blocks: dict[str, tuple[int, int, str]] = {}
+        #: the last `graph` block written per repo and when it was written, so an unchanged
+        #: tick takes no lock and a quiet repo still refreshes before the block reads stale
+        self.blocks: dict[str, tuple[tuple[int, int, str], float]] = {}
         #: repos whose loop would not build, and when each may be tried again
         self.unbuildable: dict[str, Backoff] = {}
         #: drivers that ended, handed over for `reconcile` to unclaim: a `deque`
@@ -613,25 +614,35 @@ class Daemon:
     async def _publish_status(self, loop: RepoLoop, key: str) -> None:
         """Write this repo's `graph` block, which is what the status line's segment renders.
 
-        Only on a change, and off the event loop: `merge_status` takes a lock file and can wait
-        two seconds for a scan that is writing the other block.
+        On a change or a stale stamp, and off the event loop: `merge_status` takes a lock file
+        and can wait two seconds for a scan that is writing the other block. The stamp is the
+        second half because the status line reads the block as off once `written_at` is older
+        than `expiry_seconds`, and a repo can observe for a whole session without its node count,
+        its active refinements or its state moving at all (S9-4).
         """
         nodes, refined = await asyncio.gather(
             loop.index.graph.count_nodes(),
             loop.index.refinements.count(statuses=sorted(ACTIVE_STATUSES)),
         )
         block = (nodes, refined, loop.state.value)
-        if self.blocks.get(key) == block:
+        expiry = loop.user.observer.scheduling.session_expiry_minutes * 60
+        now = self.now()
+        held = self.blocks.get(key)
+        if held is not None and held[0] == block and now - held[1] < expiry / 2:
             return
-        self.blocks[key] = block
-        await asyncio.to_thread(
-            write_graph_status,
-            loop.root,
-            nodes=nodes,
-            refined=refined,
-            state=loop.state.value,
-            expiry_seconds=loop.user.observer.scheduling.session_expiry_minutes * 60,
-        )
+        try:
+            await asyncio.to_thread(
+                write_graph_status,
+                loop.root,
+                nodes=nodes,
+                refined=refined,
+                state=loop.state.value,
+                expiry_seconds=expiry,
+            )
+        except Exception:  # the cache may not claim a write that did not happen (S9-18)
+            _LOG.exception("could not write %s's graph status block", loop.root)
+            return
+        self.blocks[key] = (block, now)
 
     def adopt_home(self) -> int:
         """Spec 8.1's start-time drain: every spool under this home becomes a pending key.

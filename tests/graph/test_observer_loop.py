@@ -875,16 +875,60 @@ async def test_the_daemon_writes_the_graph_block_the_status_line_reads(
     """C1: `graph` is the observer's block of `status.json`, written through `merge_status`."""
     loop = _loop(refine_service)
     daemon = _daemon_for(loop, tmp_path)
+    before = int(time.time())
     await loop.attach()
     await daemon._publish(loop)
     block = json.loads(status_path(loop.root).read_text())["graph"]
     assert block["state"] == LoopState.OBSERVING.value
-    assert block["nodes"] == await refine_service.index.graph.count_nodes()
+    # `len(await nodes())` and not `count_nodes()`: the reader under test on both sides of an
+    # assertion is satisfied by a reader that returns a constant
+    assert block["nodes"] == len(await refine_service.index.graph.nodes())
     assert block["refined"] == 0
     assert block["expiry_seconds"] == (
         refine_service.user.observer.scheduling.session_expiry_minutes * 60
     )
-    assert block["written_at"] > 0
+    assert block["written_at"] >= before
+
+
+async def test_the_block_counts_the_refinements_the_build_applies_and_no_others(
+    refine_service: RefinementService, tmp_path
+):
+    """`refined` is half of what the segment renders, and it was only ever asserted at zero.
+
+    The filter matters as much as the number: a rejected refinement is not applied to the graph,
+    so counting it would tell the user the build is carrying work it threw away.
+    """
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    await loop.attach()
+    run_id = await refine_service.index.runs.add_run(
+        Run(repo_identity=refine_service.identity, started_at=1.0)
+    )
+    for status in (RefinementStatus.ACTIVE, RefinementStatus.PINNED):
+        await refine_service.index.refinements.add_refinement(
+            Refinement(
+                run_id=run_id,
+                repo_identity=refine_service.identity,
+                kind=RefinementKind.UNRESOLVABLE,
+                reason="applied by the build",
+                target=RefinementTarget(
+                    node_id=f"n-{status.value}", name="x", reason_code="dynamic"
+                ),
+                status=status,
+            )
+        )
+    await refine_service.index.refinements.add_refinement(
+        Refinement(
+            run_id=run_id,
+            repo_identity=refine_service.identity,
+            kind=RefinementKind.UNRESOLVABLE,
+            reason="thrown away, so the build does not carry it",
+            target=RefinementTarget(node_id="n-gone", name="x", reason_code="dynamic"),
+            status=RefinementStatus.REJECTED,
+        )
+    )
+    await daemon._publish(loop)
+    assert json.loads(status_path(loop.root).read_text())["graph"]["refined"] == 2
 
 
 async def test_an_unchanged_tick_takes_no_status_lock(
@@ -900,6 +944,53 @@ async def test_an_unchanged_tick_takes_no_status_lock(
     written.write_text(json.dumps({"scan": {"severity": {}}}))
     await daemon._publish(loop)
     assert "graph" not in json.loads(written.read_text())
+
+
+async def test_a_quiet_repo_still_refreshes_the_block_before_it_reads_stale(
+    refine_service: RefinementService, tmp_path
+):
+    """The status line reads the block as off once `written_at` is older than `expiry_seconds`.
+
+    Nothing about an ordinary editing session moves the node count, the active refinement count
+    or the loop state: editing an existing function adds no node, and no refinement runs without
+    the `observer-claude` extra. So the content guard alone froze `written_at` at the last
+    content change and a live, attached, observing repo rendered `graph off` after 45 minutes.
+    """
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    clock = {"now": 1_000.0}
+    daemon.now = lambda: clock["now"]
+    await loop.attach()
+    await daemon._publish(loop)
+    written = status_path(loop.root)
+    written.write_text(json.dumps({"scan": {"severity": {}}}))
+    expiry = refine_service.user.observer.scheduling.session_expiry_minutes * 60
+    clock["now"] += expiry / 2 + 1
+    await daemon._publish(loop)
+    assert (
+        json.loads(written.read_text())["graph"]["state"] == LoopState.OBSERVING.value
+    )
+
+
+async def test_a_block_that_could_not_be_written_is_not_recorded_as_written(
+    refine_service: RefinementService, tmp_path, monkeypatch
+):
+    """The cache is the reason a tick takes no lock, so a cache that claims a write nothing did
+    skips the block until the tuple changes again - and the failure it swallowed would be logged
+    against the repo loop rather than against the status file."""
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    await loop.attach()
+
+    def broken(*args: object, **kw: object) -> None:
+        raise RuntimeError("the status file is not writable")
+
+    monkeypatch.setattr("auditor.observer.daemon.write_graph_status", broken)
+    await daemon._publish(loop)
+    assert daemon.blocks == {}
+    monkeypatch.undo()
+    await daemon._publish(loop)
+    assert "graph" in json.loads(status_path(loop.root).read_text())
 
 
 async def test_a_state_change_rewrites_the_block(
