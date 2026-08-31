@@ -95,11 +95,26 @@ def test_the_page_with_no_repo_reads_no_store_and_still_bootstraps():
     assert injected["__AUDITOR_GRAPH__"]["meta"]["theme"] == "dark"
 
 
-def test_the_page_with_a_repo_names_it_in_the_bootstrap():
+def test_the_page_with_a_repo_names_it_in_the_bootstrap(tmp_path):
     readers = _OneRepo()
-    html = repo_page(readers)("/w/repo")
-    assert readers.asked == ["/w/repo"]
-    assert _globals(html)["__AUDITOR_OBSERVER__"]["repo"] == "/w/repo"
+    html = repo_page(readers)(str(tmp_path))
+    assert readers.asked == [str(tmp_path)]
+    assert _globals(html)["__AUDITOR_OBSERVER__"]["repo"] == str(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "repo", ["/nope/never", "relative/path", "", "   ", "<!--<script>"]
+)
+def test_the_page_opens_no_store_for_a_repo_that_is_not_one(repo: str):
+    """`/` took its `repo` raw, and every distinct string cached a handle, a thread and two fds.
+
+    The guard is the one every `/api/*` route already used, so a name that would earn a 400 there
+    draws the no-repo page here rather than booting live against a repo the poll then refuses.
+    """
+    readers = _OneRepo()
+    html = repo_page(readers)(repo)
+    assert readers.asked == []
+    assert _globals(html)["__AUDITOR_OBSERVER__"]["repo"] == ""
 
 
 def test_the_status_badge_reads_a_daemon_word_and_not_a_loop_state(daemon_router):

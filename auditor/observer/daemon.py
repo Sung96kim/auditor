@@ -40,7 +40,13 @@ from auditor.observer.payloads import (
     RestartRequest,
     StatusPayload,
 )
-from auditor.observer.routes import DaemonIdentity, Readers, Router, RouterDeps
+from auditor.observer.routes import (
+    DaemonIdentity,
+    Readers,
+    Router,
+    RouterDeps,
+    repo_root,
+)
 from auditor.observer.scheduling import Backoff, LoopState, QueueFeed, RunSlots
 from auditor.observer.server import ObserverServer
 from auditor.observer.sessions import AttachRequest, SessionBook, attach_refusal
@@ -653,10 +659,17 @@ def repo_page(readers: Readers) -> Callable[[str | None], str]:
     """
 
     def page(repo: str | None) -> str:
-        """Render this repo's document, or the empty one when the query named no repo at all."""
-        document = readers.graph(Path(repo)).graph if repo else empty_payload()
+        """Render this repo's document, or the empty one when the query named no usable repo.
+
+        The name goes through the same guard every `/api/*` route uses: an arbitrary string would
+        otherwise open and cache an `IndexStore`, one worker thread and two descriptors apiece,
+        and the page would boot into live mode against a repo every poll then answers 400 for.
+        """
+        root = repo_root(repo)
+        document = readers.graph(root).graph if root else empty_payload()
         return render_app_or_status(
-            document, bootstrap={"live": True, "base": "/", "repo": repo or ""}
+            document,
+            bootstrap={"live": True, "base": "/", "repo": str(root) if root else ""},
         )
 
     return page

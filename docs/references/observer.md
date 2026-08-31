@@ -152,6 +152,8 @@ thread rather than pinning one.
   query value rather than the epoch it resolves to, or a window would mint a new tag every request.
 - The page is served at `GET /` and `HEAD /`, outside the API table. A HEAD answers the headers
   the GET would, its length included; every other method on `/` falls through to the table's 404.
+  Its `repo` goes through the same guard the API routes use, so a name that is not an absolute
+  directory draws the no-repo page rather than opening a store handle per distinct string.
   With no UI bundle built the page degrades to a plain status document naming the node, edge and
   cluster counts and how to run `pnpm build`, rather than raising. The daemon injects
   `window.__AUDITOR_OBSERVER__ = {live, base, repo}` beside `window.__AUDITOR_GRAPH__`, and the

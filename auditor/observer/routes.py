@@ -92,6 +92,18 @@ def _no_drained() -> int:
     return 0
 
 
+def repo_root(repo: str | None) -> Path | None:
+    """The absolute directory this name is, or None when it is anything else.
+
+    No fallback and no relative name: both resolve against the daemon's inherited cwd, which is a
+    repo the caller never asked about, and answering from it is a silent substitution.
+    """
+    root = Path(repo) if repo else None
+    if root is None or not root.is_absolute() or not root.is_dir():
+        return None
+    return root
+
+
 def route_pattern(path: str) -> str:
     """The one route with a variable segment, matched by shape rather than by regex.
 
@@ -562,15 +574,8 @@ class Router:
         return reply.model_copy(update={"etag": tag}) if tag else reply
 
     def _root(self, query: Mapping[str, str]) -> Path | None:
-        """The absolute directory this query names, or None when it named anything else.
-
-        No fallback and no relative name: both resolve against the daemon's inherited cwd, which
-        is a repo the caller never asked about, and answering from it is item 43's substitution.
-        """
-        root = Path(query["repo"]) if query.get("repo") else None
-        if root is None or not root.is_absolute() or not root.is_dir():
-            return None
-        return root
+        """The absolute directory this query names, or None when it named anything else."""
+        return repo_root(query.get("repo"))
 
     def _scoped(self, query: Mapping[str, str], read: Read) -> Reply:
         """One repo-scoped answer, or the 400 a query naming no usable repo earns."""
