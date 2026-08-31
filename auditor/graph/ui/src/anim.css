@@ -249,3 +249,12 @@
 .run-row:hover {
   background: rgba(124, 124, 255, 0.1);
 }
+
+/* ─── Flow hub node ─────────────────────────────────────────────────────────── */
+.flow-node {
+  transition: background 130ms ease, border-color 130ms ease;
+}
+.flow-node:hover {
+  background: rgba(124, 124, 255, 0.16) !important;
+  border-color: rgba(124, 124, 255, 0.55) !important;
+}
