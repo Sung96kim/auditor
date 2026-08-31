@@ -13,6 +13,24 @@ export function costLabel(row: RunRow): string {
   return row.cost_estimated ? `~${money}` : money;
 }
 
+/** The status column's colour. Every `RunStatus` the wire serves is mapped, so none reads grey
+ * by accident: a run that died and a run the gate turned down are not the same news. */
+export type RunTone = "ok" | "busy" | "warn" | "bad" | "idle";
+
+export const RUN_TONES: Record<string, RunTone> = {
+  queued: "idle",
+  running: "busy",
+  succeeded: "ok",
+  failed: "bad",
+  aborted: "bad",
+  rejected: "warn",
+  skipped: "idle",
+};
+
+export function runTone(status: string): RunTone {
+  return RUN_TONES[status] ?? "idle";
+}
+
 export interface Stream {
   shown: RunRow[];
   collapsed: RunRow[];

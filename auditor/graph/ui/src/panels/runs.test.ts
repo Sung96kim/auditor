@@ -8,6 +8,8 @@ import {
   rejected,
   skipReason,
   stream,
+  runTone,
+  RUN_TONES,
 } from "./runs";
 import type { RunRow } from "../api/types";
 
@@ -123,5 +125,35 @@ describe("run detail's accepted and rejected split", () => {
 
   it("a status the map has never seen is `other`, so a new member shows rather than disappears", () => {
     expect(otherStatuses([{ status: "invented" }])).toEqual([{ status: "invented" }]);
+  });
+});
+
+describe("the status column's tone", () => {
+  it.each([
+    ["queued", "idle"],
+    ["running", "busy"],
+    ["succeeded", "ok"],
+    ["failed", "bad"],
+    ["aborted", "bad"],
+    ["rejected", "warn"],
+    ["skipped", "idle"],
+  ])("%s reads as %s", (status, tone) => {
+    expect(runTone(status)).toBe(tone);
+  });
+
+  it("every RunStatus the wire serves is mapped, so none falls through to grey", () => {
+    expect(Object.keys(RUN_TONES).sort()).toEqual([
+      "aborted",
+      "failed",
+      "queued",
+      "rejected",
+      "running",
+      "skipped",
+      "succeeded",
+    ]);
+  });
+
+  it("a finished run, a dead one and a turned-down one are three different colours", () => {
+    expect(new Set(["succeeded", "failed", "rejected"].map(runTone)).size).toBe(3);
   });
 });

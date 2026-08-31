@@ -241,3 +241,11 @@
   box-shadow: 0 0 0 2px rgba(124, 124, 255, 0.12);
   outline: none;
 }
+
+/* ─── Run stream row ────────────────────────────────────────────────────────── */
+.run-row {
+  transition: background 120ms ease;
+}
+.run-row:hover {
+  background: rgba(124, 124, 255, 0.1);
+}
