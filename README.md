@@ -167,7 +167,7 @@ uv run pytest tests/malware/test_integration.py -v   # the second CI job; needs 
 | I want to | Page | Covers |
 | --- | --- | --- |
 | Query the semantic code graph | [graph](docs/references/graph.md) | Build, queries, flow, refinement |
-| Run the background observer | [observer](docs/references/observer.md) | The daemon, its lifecycle and its API |
+| Run the background observer | [observer](docs/references/observer.md) | The daemon, its lifecycle, its API and the live page |
 | Scan for malware and advisories | [malware](docs/references/malware.md) | ClamAV, osv-scanner, databases |
 
 ### Integrations

@@ -135,14 +135,37 @@ thread rather than pinning one.
   404, never a stdlib HTML 501. A 304 sends the tag and no `Content-Length`: the length it would
   carry is zero, and a 304 names the cached body rather than describing its own.
 - Every JSON shape is pinned by a committed schema under `tests/observer/schemas/`.
+- Two routes take query parameters beyond `repo`:
+
+  ```
+  GET /api/runs   repo (required), skipped=1, status=a,b, since=90s|2h|7d|ISO, limit=N
+  GET /api/flow   repo (required), symbol, direction=out|in, depth=N, limit=N
+  ```
+
+  An unusable value is a 400 naming the field, never a 500 and never `int()`'s own message; a
+  query the handler will refuse produces no ETag, so a stale `If-None-Match` cannot turn it into a
+  304. An out-of-range `depth` or `limit` is clamped rather than refused, because `FlowOptions.of`
+  clamps by design. `/api/runs`' ETag covers the filter, `since` included, so two windows over one
+  ledger never share a tag while each still 304s on its own; `since` is fingerprinted as the raw
+  query value rather than the epoch it resolves to, or a window would mint a new tag every request.
 - The page is served at `GET /` and `HEAD /`, outside the API table. A HEAD answers the headers
   the GET would, its length included; every other method on `/` falls through to the table's 404.
   With no UI bundle built the page degrades to a plain status document naming the node, edge and
-  cluster counts and how to run `pnpm build`, rather than raising. The bundle shipped today makes
-  no HTTP request of its own; the polling page is a later slice.
-- `/api/status` still declares more than it fills. `state`, `idle_seconds`, `evals` and `vectors`
-  are at their defaults; `home`, `version`, `compat`, `started_at`, `uptime_seconds`,
-  `queued_repos`, `drained_events`, `repos` and `sessions` are real. So are both meters, and they
+  cluster counts and how to run `pnpm build`, rather than raising. The daemon injects
+  `window.__AUDITOR_OBSERVER__ = {live, base, repo}` beside `window.__AUDITOR_GRAPH__`, and the
+  page reads that flag at first paint and then polls `/api/status` and `/api/runs` every 3 s with
+  `If-None-Match`. `graph serve` injects no bootstrap, so the same bundle stays a static snapshot
+  there and issues no request at all. The page is read-only by transport: a browser sends `Origin`
+  on a same-origin `POST` and the server refuses any request that carries one, so nothing on the
+  page can write.
+- `/api/status`'s `state` is the daemon's own word, `running` or `restarting`; the per-repo state
+  badge reads `repos[i].state` instead, which is that repo's `LoopState`. `idle_seconds` is the gap
+  before the request being served, measured from the daemon's start until something arrives, and
+  the page's own 3 s cycle does not move it, so a forgotten tab cannot hold the daemon open past
+  the idle window. `evals` is the runner roster, one row per model runner carrying its name and the
+  model it is pinned to with no measurements in it; `/api/evals` is the per-repo answer that fills
+  the numbers, and a runner with no model of its own carries an empty string rather than another
+  runner's. `vectors` is still at its default and stays there until S13. So are both meters, and they
   are per repo: `budget` and `limits` ride on each `repos[]` entry, carrying what that repo's own
   loop published, so two repos cannot overwrite one another's numbers.
 
