@@ -24,10 +24,11 @@ uv run cz bump --dry-run                                             # preview t
 The graph UI lives in `auditor/graph/ui` and uses pnpm only, never npm, npx, yarn or bun:
 
 ```bash
-pnpm --dir auditor/graph/ui install
-pnpm --dir auditor/graph/ui run typecheck   # tsc --noEmit
-pnpm --dir auditor/graph/ui run test        # vitest
-pnpm --dir auditor/graph/ui run build       # rebuild the committed dist/index.html `graph serve` ships
+pnpm --dir auditor/graph/ui install --frozen-lockfile   # pnpm only, never npm or yarn
+pnpm --dir auditor/graph/ui typecheck                   # tsc --noEmit
+pnpm --dir auditor/graph/ui test                        # vitest run
+pnpm --dir auditor/graph/ui build                       # rewrites the committed dist/index.html
+uv run python -m auditor.graph.ui_inputs --write        # restamps dist/inputs.sha256
 ```
 
 - Never `--all-extras` locally: it adds only the observer and vectors SDK wheels, about 640 MB

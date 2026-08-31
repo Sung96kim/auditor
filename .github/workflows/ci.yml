@@ -26,6 +26,28 @@ jobs:
           npm i -g @anthropic-ai/claude-code || true
           claude plugin validate ./plugin --strict || echo "validate unavailable in CI — skipping"
 
+  ui:
+    name: ui (pnpm build + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # this repo has no root package.json, and that is where the action looks by default
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: auditor/graph/ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: auditor/graph/ui/pnpm-lock.yaml
+      - run: pnpm --dir auditor/graph/ui install --frozen-lockfile
+      - run: pnpm --dir auditor/graph/ui typecheck
+      - run: pnpm --dir auditor/graph/ui test
+      - run: pnpm --dir auditor/graph/ui build
+      # The wheel ships the committed bundle, so a rebuild that differs means the shipped
+      # artifact is not what src/ says it is. The pytest stamp is the local half of this.
+      - run: git diff --exit-code -- auditor/graph/ui/dist/index.html
+
   integration:
     name: integration (real clamscan)
     runs-on: ubuntu-latest
