@@ -95,14 +95,49 @@ describe("the run stream", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("a skipped reason collapses into one chip carrying its count, not a stack of blocks", () => {
+  it("the withheld rows are offered by the count the server sent, not by rows it did not", () => {
+    render(<RunStream live={live(ready([RUN], { hidden_count: 4 }))} />);
+    const show = screen.getByRole("button", { name: /skipped, show them/ });
+    expect(show.textContent).toBe("4 skipped, show them");
+  });
+
+  it("asking for the withheld rows is what puts skipped=1 on the wire", () => {
+    const graph = live(ready([RUN], { hidden_count: 4 }));
+    render(<RunStream live={graph} />);
+    fireEvent.click(screen.getByRole("button", { name: /skipped, show them/ }));
+    expect(graph.setShowSkipped).toHaveBeenCalledWith(true);
+  });
+
+  it("the rows the server then sends are drawn, and the control turns back into a way out", () => {
     const skipped = runRow({
       run_id: "s1",
       status: "skipped",
       trigger_detail: { assessment: { verdict: { decision: "skip", reason: "no new facts" } } },
     });
-    render(<RunStream live={live(ready([RUN, skipped]))} />);
-    const chip = screen.getByRole("button", { name: /skipped: no new facts/ });
-    expect(chip.textContent).toBe("1 skipped: no new facts");
+    const graph = { ...live(ready([RUN, skipped])), showSkipped: true };
+    render(<RunStream live={graph} />);
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+    const hide = screen.getByRole("button", { name: /skipped, hide them/ });
+    expect(hide.textContent).toBe("1 skipped, hide them");
+    fireEvent.click(hide);
+    expect(graph.setShowSkipped).toHaveBeenCalledWith(false);
+  });
+
+  it("a skipped reason is summarised in one chip carrying its count, not a stack of blocks", () => {
+    const skipped = runRow({
+      run_id: "s1",
+      status: "skipped",
+      trigger_detail: { assessment: { verdict: { decision: "skip", reason: "no new facts" } } },
+    });
+    render(<RunStream live={{ ...live(ready([RUN, skipped])), showSkipped: true }} />);
+    expect(screen.getByText(/skipped: no new facts/).textContent).toBe(
+      "1 skipped: no new facts",
+    );
+  });
+
+  it("a truncated page says how many rows it is not showing", () => {
+    render(<RunStream live={live(ready([RUN], { run_count: 91, truncated: true }))} />);
+    const strip = screen.getByTestId("RunStream").firstElementChild;
+    expect(strip?.textContent).toBe("Runs1 of 91");
   });
 });

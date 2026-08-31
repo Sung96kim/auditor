@@ -31,14 +31,25 @@ export function runTone(status: string): RunTone {
   return RUN_TONES[status] ?? "idle";
 }
 
+/** The duration column: wall time, or the word for a run that has not stopped yet. */
+export function durationLabel(row: RunRow): string {
+  const seconds = duration(row);
+  return seconds === null ? "running" : `${seconds.toFixed(1)}s`;
+}
+
 export interface Stream {
   shown: RunRow[];
+  /** every skipped row the server sent, whether or not the reader asked to see them drawn. */
   collapsed: RunRow[];
   reasons: Map<string, number>;
 }
 
-/** Spec 12.1: `skipped` rows collapse behind their reason rather than filling the stream. */
-export function stream(rows: RunRow[]): Stream {
+/** Spec 12.1: `skipped` rows collapse behind their reason rather than filling the stream.
+ *
+ * `showSkipped` is an input because the disclosure is server-driven: asking for them puts
+ * `skipped=1` on the wire, and re-hiding them here is what makes the control reversible.
+ */
+export function stream(rows: RunRow[], showSkipped = false): Stream {
   const shown: RunRow[] = [];
   const collapsed: RunRow[] = [];
   const reasons = new Map<string, number>();
@@ -50,6 +61,7 @@ export function stream(rows: RunRow[]): Stream {
     collapsed.push(row);
     const reason = skipReason(row);
     reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+    if (showSkipped) shown.push(row);
   }
   return { shown, collapsed, reasons };
 }

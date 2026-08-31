@@ -5,6 +5,7 @@ import {
   accepted,
   costLabel,
   duration,
+  durationLabel,
   otherStatuses,
   rejected,
   skipReason,
@@ -43,6 +44,16 @@ describe("the run stream's derived columns", () => {
   });
 });
 
+describe("the duration column's word for a run that has not stopped", () => {
+  it("a finished run reads in seconds to one decimal", () => {
+    expect(durationLabel(row())).toBe("30.0s");
+  });
+
+  it("an open run says it is running rather than showing a dash or a zero", () => {
+    expect(durationLabel(row({ finished_at: 0 }))).toBe("running");
+  });
+});
+
 describe("collapsing skipped rows", () => {
   it("skipped rows leave the stream and are counted by their reason", () => {
     const rows = [
@@ -60,6 +71,21 @@ describe("collapsing skipped rows", () => {
 
   it("a skipped row with no reason at all still groups under a stable label", () => {
     expect(skipReason(row({ status: "skipped" }))).toBe("no reason recorded");
+  });
+
+  it("asking to see them puts them back in the stream and still counts their reasons", () => {
+    const rows = [
+      row({ run_id: "a" }),
+      row({
+        run_id: "b",
+        status: "skipped",
+        trigger_detail: { assessment: { verdict: { decision: "skip", reason: "trivial" } } },
+      }),
+    ];
+    const out = stream(rows, true);
+    expect(out.shown.map((r) => r.run_id)).toEqual(["a", "b"]);
+    expect(out.collapsed.map((r) => r.run_id)).toEqual(["b"]);
+    expect(out.reasons.get("trivial")).toBe(1);
   });
 
   it("an empty ledger collapses to an empty stream, not to undefined", () => {

@@ -1,100 +1,67 @@
 import { useState } from "react";
 import type { LiveGraph } from "../api/useLiveGraph";
-import type { RunRow } from "../api/types";
-import { onEnterOrSpace } from "../a11y";
-import { TEXT, THEME, TONE } from "../theme";
-import { costLabel, duration, runTone, stream } from "./runs";
-import Panel, { microLabel, mono } from "./Panel";
-import RunnerMark from "./RunnerMark";
+import { TEXT, THEME } from "../theme";
+import { stream } from "./runs";
+import Panel, { mono } from "./Panel";
 import RunDetail from "./RunDetail";
+import StreamRow, { COLUMNS, head } from "./StreamRow";
 import { Empty, Failed, Loading, Reconnecting } from "./States";
 
-const cell: React.CSSProperties = {
-  color: TEXT.body,
-  fontSize: "11px",
-  padding: "4px 6px",
-  textAlign: "left",
-  whiteSpace: "nowrap",
-};
-
-const numeric: React.CSSProperties = {
-  ...cell,
-  fontFamily: mono.fontFamily,
-  fontVariantNumeric: "tabular-nums",
-};
-
-/** Spec 12.1's ten columns, in the order the spec names them. */
-const COLUMNS = [
-  "trigger",
-  "client",
-  "producer",
-  "runner",
-  "session",
-  "branch@commit",
-  "model",
-  "cost",
-  "duration",
-  "status",
-];
-
-/** Four of the ten columns are nullable on the wire: a `cli` run has no session and no checkout. */
-function short(value: string | null, width: number): string {
-  return value ? value.slice(0, width) : "-";
-}
-
-function Row({
-  row,
-  open,
-  onOpen,
+/** The one control shape the stream's two disclosures share: a dashed pill with a count in it. */
+function Chip({
+  label,
+  count,
+  onClick,
 }: {
-  row: RunRow;
-  open: boolean;
-  onOpen: (id: string) => void;
+  label: string;
+  count: number;
+  onClick?: () => void;
 }) {
-  const seconds = duration(row);
-  const pick = () => onOpen(row.run_id);
+  const style: React.CSSProperties = {
+    background: "transparent",
+    border: `1px solid ${THEME.border}`,
+    borderRadius: "999px",
+    color: TEXT.label,
+    fontSize: "10.5px",
+    maxWidth: "100%",
+    overflow: "hidden",
+    padding: "3px 9px",
+    textAlign: "left",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+  const body = (
+    <>
+      <span style={{ color: TEXT.body, fontWeight: 600 }}>{count}</span> {label}
+    </>
+  );
+  if (!onClick) return <span style={style}>{body}</span>;
   return (
-    <tr
-      className="run-row"
-      tabIndex={0}
-      onClick={pick}
-      onKeyDown={onEnterOrSpace(pick)}
-      style={{
-        background: open ? "rgba(124, 124, 255, 0.14)" : undefined,
-        boxShadow: open ? `inset 2px 0 0 ${THEME.accent}` : undefined,
-        cursor: "pointer",
-      }}
-    >
-      <td style={cell}>{row.trigger_kind}</td>
-      <td style={cell}>{row.client}</td>
-      <td style={cell}>{row.producer}</td>
-      <td style={{ ...cell, lineHeight: 0 }}>
-        <RunnerMark runner={row.runner} size={13} />
-      </td>
-      <td style={numeric}>{short(row.session_id, 8)}</td>
-      <td style={numeric}>
-        {row.branch ?? "-"}@{short(row.commit_sha, 7)}
-      </td>
-      <td style={cell}>{row.model ?? "-"}</td>
-      <td style={numeric}>{costLabel(row)}</td>
-      <td style={numeric}>{seconds === null ? "running" : `${seconds.toFixed(1)}s`}</td>
-      <td style={{ ...cell, color: TONE[runTone(row.status)], fontWeight: 600 }}>{row.status}</td>
-    </tr>
+    <button type="button" onClick={onClick} className="state-retry" style={{ ...style, cursor: "pointer" }}>
+      {body}
+    </button>
   );
 }
 
 /** Spec 12.1's run stream, with `skipped` rows collapsed behind their reason (C11 and C12). */
 export default function RunStream({ live }: { live: LiveGraph }) {
   const [open, setOpen] = useState<string | null>(null);
-  const rows = live.runs.data?.log.runs ?? [];
-  const { shown, reasons } = stream(rows);
+  const log = live.runs.data?.log;
+  const rows = log?.runs ?? [];
+  const { shown, collapsed, reasons } = stream(rows, live.showSkipped);
   const answered = live.runs.phase === "ready" || live.runs.phase === "stale";
+  // the server withholds skipped rows until asked, so its count is the only way to offer them
+  const hidden = live.showSkipped ? collapsed.length : (log?.hidden_count ?? 0);
   return (
     <Panel
       title="Runs"
       testId="RunStream"
       trailing={
-        shown.length > 0 ? <span style={{ ...mono, color: TEXT.label }}>{shown.length}</span> : null
+        shown.length > 0 ? (
+          <span style={{ ...mono, color: TEXT.label }}>
+            {log?.truncated ? `${shown.length} of ${log.run_count}` : shown.length}
+          </span>
+        ) : null
       }
     >
       {live.runs.phase === "loading" ? <Loading what="runs" /> : null}
@@ -117,24 +84,16 @@ export default function RunStream({ live }: { live: LiveGraph }) {
           <table style={{ borderCollapse: "collapse", width: "100%" }}>
             <thead>
               <tr>
-                {COLUMNS.map((name) => (
-                  <th
-                    key={name}
-                    style={{
-                      ...cell,
-                      ...microLabel,
-                      borderBottom: `1px solid ${THEME.border}`,
-                      paddingBottom: "6px",
-                    }}
-                  >
-                    {name}
+                {COLUMNS.map((column) => (
+                  <th key={column.label} style={head}>
+                    {column.label}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {shown.map((row) => (
-                <Row
+                <StreamRow
                   key={row.run_id}
                   row={row}
                   open={row.run_id === open}
@@ -146,32 +105,15 @@ export default function RunStream({ live }: { live: LiveGraph }) {
         </div>
       ) : null}
 
-      {reasons.size > 0 ? (
+      {hidden > 0 || live.showSkipped ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+          <Chip
+            label={live.showSkipped ? "skipped, hide them" : "skipped, show them"}
+            count={hidden}
+            onClick={() => live.setShowSkipped(!live.showSkipped)}
+          />
           {[...reasons].map(([reason, count]) => (
-            <button
-              key={reason}
-              type="button"
-              onClick={() => live.setShowSkipped(true)}
-              className="state-retry"
-              title={`Show the ${count} run${count === 1 ? "" : "s"} skipped: ${reason}`}
-              style={{
-                background: "transparent",
-                border: `1px solid ${THEME.border}`,
-                borderRadius: "999px",
-                color: TEXT.label,
-                cursor: "pointer",
-                fontSize: "10.5px",
-                maxWidth: "100%",
-                overflow: "hidden",
-                padding: "3px 9px",
-                textAlign: "left",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              <span style={{ color: TEXT.body, fontWeight: 600 }}>{count}</span> skipped: {reason}
-            </button>
+            <Chip key={reason} label={`skipped: ${reason}`} count={count} />
           ))}
         </div>
       ) : null}
