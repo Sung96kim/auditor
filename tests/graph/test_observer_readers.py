@@ -4,8 +4,9 @@ import asyncio
 from pathlib import Path
 
 import auditor.observer.routes as routes_module
+from auditor.graph.payloads import LogFilter
 from auditor.graph.refine.models import Run
-from auditor.observer.routes import Readers
+from auditor.observer.routes import Readers, filter_key
 from auditor.paths import repo_identity
 from auditor.user_settings import UserSettings
 
@@ -19,8 +20,11 @@ def test_the_runs_reader_answers_an_empty_page_and_a_stable_tag(refine_repo: Pat
         assert view.log.runs == ()
         assert view.log.run_count == 0
         first = readers.runs_tag(refine_repo)
-        assert first.endswith('-0-0.0"')  # an empty ledger: no runs, no newest start
+        # an empty ledger: no runs, no newest start, then S10's filter fingerprint
+        assert f"-0-0.0-{filter_key(LogFilter())}" in first
         assert readers.runs_tag(refine_repo) == first
+        widened = readers.runs_tag(refine_repo, chosen=LogFilter(skipped=True))
+        assert widened != first
     finally:
         readers.close()
 

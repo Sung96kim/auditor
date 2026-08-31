@@ -10,7 +10,9 @@ from typing import Any
 import pytest
 from loguru import logger
 
-from auditor.graph.payloads import LogReport, RefinementsReport
+from auditor.config import AuditorSettings
+from auditor.graph.flow import FlowOptions
+from auditor.graph.payloads import LogFilter, LogReport, RefinementsReport
 from auditor.observer.events import EventQueue
 from auditor.observer.payloads import (
     EvalsView,
@@ -21,7 +23,13 @@ from auditor.observer.payloads import (
     RunDetailView,
     RunsView,
 )
-from auditor.observer.routes import DaemonIdentity, Readers, Router, RouterDeps
+from auditor.observer.routes import (
+    DaemonIdentity,
+    Readers,
+    Router,
+    RouterDeps,
+    filter_key,
+)
 from auditor.observer.server import ObserverServer
 from auditor.observer.sessions import SessionBook
 from auditor.user_settings import UserSettings
@@ -40,14 +48,31 @@ class FakeReaders(Readers):
         self.page_calls = 0
         self.rows = 0
         self.detail: RunDetailView | None = None
+        self.filters: list[LogFilter] = []
+        self.options: list[FlowOptions | None] = []
 
-    def runs(self, root: Path, *, identity: str | None = None) -> RunsView:
+    def runs(
+        self,
+        root: Path,
+        *,
+        identity: str | None = None,
+        chosen: LogFilter | None = None,
+    ) -> RunsView:
         self.page_calls += 1
+        self.filters.append(chosen or LogFilter())
         return RunsView(repo=str(root), identity="id", log=LogReport())
 
-    def runs_tag(self, root: Path, *, identity: str | None = None) -> str:
+    def runs_tag(
+        self,
+        root: Path,
+        *,
+        identity: str | None = None,
+        chosen: LogFilter | None = None,
+        since: str | None = None,
+    ) -> str:
         self.tag_calls += 1
-        return f'W/"{root}-{self.rows}"'
+        key = filter_key(chosen or LogFilter(), since=since)
+        return f'W/"{root}-{self.rows}-{key}"'
 
     def repos(self) -> ReposPayload:
         return ReposPayload()
@@ -65,8 +90,20 @@ class FakeReaders(Readers):
     def evals(self, root: Path, *, identity: str | None = None) -> EvalsView:
         return EvalsView(repo=str(root), identity="id")
 
-    def flow(self, root: Path, symbol: str, *, identity: str | None = None) -> FlowView:
+    def flow(
+        self,
+        root: Path,
+        symbol: str,
+        *,
+        identity: str | None = None,
+        options: FlowOptions | None = None,
+    ) -> FlowView:
+        self.options.append(options)
         return FlowView(repo=str(root), identity="id", symbol=symbol)
+
+    def config(self, root: Path) -> AuditorSettings:
+        """Defaults, not `load_config(root)`: this fake promises the transport needs no disk."""
+        return AuditorSettings()
 
     def run(
         self, root: Path, run_id: str, *, identity: str | None = None

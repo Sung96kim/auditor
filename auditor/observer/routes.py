@@ -1,6 +1,7 @@
 """Spec 12.1's handlers: one route, one payload, one `Reply` (spec 8.1)."""
 
 import asyncio
+import hashlib
 import logging
 import threading
 import time
@@ -14,8 +15,16 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from auditor.config import AuditorSettings, load_config
 from auditor.database import IndexStore, open_repo_index, open_shared_index
 from auditor.discovery import FileDiscovery
+from auditor.graph.flow import (
+    DEFAULT_FLOW_DEPTH,
+    DEFAULT_FLOW_LIMIT,
+    FlowDirection,
+    FlowOptions,
+)
+from auditor.graph.model import LOG_ROW_LIMIT, enum_value
 from auditor.graph.payloads import (
     LogFilter,
+    LogView,
     RefinementRowPayload,
     RunRowPayload,
 )
@@ -94,6 +103,69 @@ def route_pattern(path: str) -> str:
     return path
 
 
+_TRUE = frozenset({"1", "true", "yes", "on"})
+
+
+def _flag(raw: str | None) -> bool:
+    """A query flag. `parse_qs` drops a bare `?skipped`, so the page sends `skipped=1`."""
+    return raw is not None and raw.strip().lower() in _TRUE
+
+
+def _int(query: Mapping[str, str], name: str, default: int) -> int:
+    """One integer control, refused by name. `int()`'s own message names no field."""
+    raw = query.get(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a whole number, not {raw!r}") from None
+
+
+def runs_filter(query: Mapping[str, str]) -> LogFilter:
+    """Spec 12.1's collapsed `skipped` rows and the stream's window, through `graph log`'s parser.
+
+    Raises:
+        ValueError: for any value the CLI would also refuse, which the handler answers 400 with.
+    """
+    return LogFilter.of(
+        view=LogView.RUNS,
+        status=query["status"].split(",") if query.get("status") else None,
+        since=query.get("since"),
+        skipped=_flag(query.get("skipped")),
+        limit=_int(query, "limit", LOG_ROW_LIMIT),
+    )
+
+
+def filter_key(chosen: LogFilter, *, since: str | None = None) -> str:
+    """A filter's fingerprint, so two windows over one ledger cannot share an ETag.
+
+    ``since`` is fingerprinted as the raw query value, never as the epoch `parse_since` resolved
+    against the clock, or a window would mint a new tag every request and could never 304 (P23).
+    """
+    body = chosen.model_dump_json(exclude={"since"})
+    return hashlib.sha256(f"{body}|{since or ''}".encode()).hexdigest()[:12]
+
+
+def flow_options(query: Mapping[str, str], *, hub_fan_in: int) -> FlowOptions:
+    """Spec 12.1's direction toggle and depth slider. `FlowOptions.of` clamps, it does not raise.
+
+    Raises:
+        ValueError: when `depth` or `limit` is not an integer, or `direction` is not a direction.
+    """
+    named = query.get("direction")
+    return FlowOptions.of(
+        hub_fan_in=hub_fan_in,
+        direction=(
+            FlowDirection(enum_value(named, FlowDirection, "direction"))
+            if named
+            else FlowDirection.OUT
+        ),
+        depth=_int(query, "depth", DEFAULT_FLOW_DEPTH),
+        limit=_int(query, "limit", DEFAULT_FLOW_LIMIT),
+    )
+
+
 class DaemonIdentity(BaseModel):
     """What `/health` answers and `ensure` compares: one object, not four parameters (P31)."""
 
@@ -168,7 +240,8 @@ class Readers:
         """This repo's own `AuditorSettings`, loaded once and kept.
 
         Named `config` rather than `settings` because :attr:`settings` is the user's own layer,
-        which P31 put on this object first. The `RepoLoop` the daemon builds is its one caller.
+        which P31 put on this object first. Two callers read it: the `RepoLoop` the daemon
+        builds, and `Router.api_flow`, which needs `graph.flow_hub_fan_in` to parse a walk.
         """
         return self._cached(self._configs, root, lambda: load_config(root))
 
@@ -194,10 +267,16 @@ class Readers:
                 asyncio.run(handle.aclose())
             self._handles.clear()
 
-    def runs(self, root: Path, *, identity: str | None = None) -> RunsView:
+    def runs(
+        self,
+        root: Path,
+        *,
+        identity: str | None = None,
+        chosen: LogFilter | None = None,
+    ) -> RunsView:
         identity = self.identity(root, identity=identity)
         report = asyncio.run(
-            LogQuery(self.index(root, identity=identity)).page(LogFilter())
+            LogQuery(self.index(root, identity=identity)).page(chosen or LogFilter())
         )
         return RunsView(repo=str(root), identity=identity, log=report)
 
@@ -207,15 +286,25 @@ class Readers:
         newest = await index.runs.runs(limit=1)
         return count, newest[0].started_at if newest else 0.0
 
-    def runs_tag(self, root: Path, *, identity: str | None = None) -> str:
-        """`(repo, count, newest started_at)`: two shipped readers, one decoded row, no new SQL.
+    def runs_tag(
+        self,
+        root: Path,
+        *,
+        identity: str | None = None,
+        chosen: LogFilter | None = None,
+        since: str | None = None,
+    ) -> str:
+        """`(repo, count, newest started_at, filter)`: shipped readers, one decoded row, no new SQL.
 
         The repo is in the tag because the page has a switcher: two repos whose counts coincide
-        would otherwise share a tag and the second would 304 on the first one's rows (P14).
+        would otherwise share a tag and the second would 304 on the first one's rows (P14). The
+        filter is in it because one ledger answers two bodies once `skipped=1` exists, and the
+        window rides as the caller's raw string rather than as its resolved epoch (P23).
         """
         identity = self.identity(root, identity=identity)
         count, started = asyncio.run(self._ledger(self.index(root, identity=identity)))
-        return f'W/"{identity_key(identity)}-{count}-{started}"'
+        key = filter_key(chosen or LogFilter(), since=since)
+        return f'W/"{identity_key(identity)}-{count}-{started}-{key}"'
 
     def graph(self, root: Path, *, identity: str | None = None) -> GraphView:
         identity = self.identity(root, identity=identity)
@@ -231,9 +320,21 @@ class Readers:
         )
         return RefinementsView(repo=str(root), identity=identity, refinements=report)
 
-    def flow(self, root: Path, symbol: str, *, identity: str | None = None) -> FlowView:
+    def flow(
+        self,
+        root: Path,
+        symbol: str,
+        *,
+        identity: str | None = None,
+        options: FlowOptions | None = None,
+    ) -> FlowView:
         identity = self.identity(root, identity=identity)
-        walk = asyncio.run(GraphQuery(self.index(root, identity=identity)).flow(symbol))
+        chosen = options or FlowOptions(
+            hub_fan_in=self.config(root).graph.flow_hub_fan_in
+        )
+        walk = asyncio.run(
+            GraphQuery(self.index(root, identity=identity)).flow(symbol, chosen)
+        )
         return FlowView(repo=str(root), identity=identity, symbol=symbol, flow=walk)
 
     async def _detail(
@@ -479,9 +580,15 @@ class Router:
         return f'W/"{self.started_at:.0f}-{self.revision}"'
 
     def runs_tag(self, query: Mapping[str, str]) -> str:
-        """Empty for a query that named no usable repo, so its handler answers the 400."""
+        """Empty for a query the handler will refuse, so a 400 is never short-circuited to 304."""
         root = self._root(query)
-        return self.deps.readers.runs_tag(root) if root is not None else ""
+        if root is None:
+            return ""
+        try:
+            chosen = runs_filter(query)
+        except ValueError:
+            return ""
+        return self.deps.readers.runs_tag(root, chosen=chosen, since=query.get("since"))
 
     def health(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
         return Reply.json(
@@ -561,7 +668,13 @@ class Router:
         return self._scoped(query, self.deps.readers.graph)
 
     def api_runs(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
-        return self._scoped(query, self.deps.readers.runs)
+        try:
+            chosen = runs_filter(query)
+        except ValueError as invalid:
+            return Reply.error(400, str(invalid))
+        return self._scoped(
+            query, lambda root: self.deps.readers.runs(root, chosen=chosen)
+        )
 
     def api_runs_detail(
         self, path: str, query: Mapping[str, str], body: bytes
@@ -585,7 +698,16 @@ class Router:
 
     def api_flow(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
         symbol = query.get("symbol", "")
-        return self._scoped(query, lambda root: self.deps.readers.flow(root, symbol))
+        root = self._root(query)
+        if root is None:
+            return Reply.error(400, _NO_REPO)
+        try:
+            options = flow_options(
+                query, hub_fan_in=self.deps.readers.config(root).graph.flow_hub_fan_in
+            )
+        except ValueError as invalid:
+            return Reply.error(400, str(invalid))
+        return Reply.json(self.deps.readers.flow(root, symbol, options=options))
 
     def events(self, path: str, query: Mapping[str, str], body: bytes) -> Reply:
         """Stage 0 through the shape predicate, then spool, then 202. No lock is taken here.
