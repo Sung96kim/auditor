@@ -2,30 +2,13 @@ import { useEffect, useState } from "react";
 import { getJson } from "../api/client";
 import { failed, initial, received, type PollState } from "../api/poll";
 import type { RefinementRow } from "../api/types";
-import { THEME } from "../theme";
+import { TEXT } from "../theme";
+import Panel, { block, microLabel } from "./Panel";
 import { Empty, Failed, Loading } from "./States";
 
 interface RefinementsBody {
   refinements: { rows: RefinementRow[]; refinement_count: number; truncated: boolean };
 }
-
-const card: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: "10px",
-  border: `1px solid ${THEME.border}`,
-  backgroundColor: THEME.bgPanel,
-  display: "flex",
-  flexDirection: "column",
-  gap: "8px",
-};
-
-const header: React.CSSProperties = {
-  fontSize: "10.5px",
-  fontWeight: 700,
-  letterSpacing: "0.09em",
-  color: "#64748b",
-  textTransform: "uppercase",
-};
 
 /** Named so a status with no rows still shows its heading and a zero rather than vanishing. */
 const NAMED = ["pending", "active", "pinned", "redundant", "rejected", "reverted"];
@@ -60,8 +43,7 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
   }
 
   return (
-    <div style={card} data-testid="RefinementList">
-      <span style={header}>Refinements</span>
+    <Panel title="Refinements" testId="RefinementList">
       {state.phase === "loading" ? <Loading what="refinements" /> : null}
       {state.phase === "error" ? (
         <Failed error={state.error} onRetry={() => setState(initial<RefinementsBody>())} />
@@ -73,14 +55,14 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
 
       {rows.length > 0
         ? [...groups].map(([status, group]) => (
-            <div key={status} style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              <span style={header}>
+            <div key={status} style={block}>
+              <span style={microLabel}>
                 {status} ({group.length})
               </span>
               {group.map((row) => (
                 <span
                   key={row.refinement_id}
-                  style={{ fontFamily: "monospace", fontSize: "11px", color: "#94a3b8" }}
+                  style={{ fontFamily: "monospace", fontSize: "11px", color: TEXT.body }}
                 >
                   [{row.tier}] {row.kind} {row.src ?? row.node_id ?? "-"}
                   {row.drifted ? " (drifted)" : ""}
@@ -89,6 +71,6 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
             </div>
           ))
         : null}
-    </div>
+    </Panel>
   );
 }

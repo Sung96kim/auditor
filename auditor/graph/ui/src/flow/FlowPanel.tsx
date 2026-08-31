@@ -2,27 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { getJson } from "../api/client";
 import { failed, initial, received, type PollState } from "../api/poll";
 import type { FlowView } from "../api/types";
-import { THEME } from "../theme";
+import { TEXT, THEME } from "../theme";
+import Panel from "../panels/Panel";
 import { Empty, Failed, Loading } from "../panels/States";
 import { flatten, layered } from "./tree";
-
-const card: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: "10px",
-  border: `1px solid ${THEME.border}`,
-  backgroundColor: THEME.bgPanel,
-  display: "flex",
-  flexDirection: "column",
-  gap: "8px",
-};
-
-const header: React.CSSProperties = {
-  fontSize: "10.5px",
-  fontWeight: 700,
-  letterSpacing: "0.09em",
-  color: "#64748b",
-  textTransform: "uppercase",
-};
 
 const NODE_W = 180;
 const NODE_H = 28;
@@ -75,9 +58,7 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
   const placed = new Map(rows.map((r) => [r.key, r]));
 
   return (
-    <div style={card} data-testid="FlowPanel">
-      <span style={header}>Flow</span>
-
+    <Panel title="Flow" testId="FlowPanel">
       <input
         aria-label="Symbol"
         value={symbol}
@@ -122,7 +103,7 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
           onChange={(e) => setDepth(Number(e.target.value))}
           style={{ flex: 1 }}
         />
-        <span style={{ fontSize: "11px", color: "#64748b", fontFamily: "monospace" }}>
+        <span style={{ fontSize: "11px", color: TEXT.label, fontFamily: "monospace" }}>
           depth {depth}
         </span>
       </div>
@@ -191,6 +172,6 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
           </div>
         </div>
       ) : null}
-    </div>
+    </Panel>
   );
 }

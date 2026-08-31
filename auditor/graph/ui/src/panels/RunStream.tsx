@@ -1,34 +1,17 @@
 import { useState } from "react";
 import type { LiveGraph } from "../api/useLiveGraph";
 import type { RunRow } from "../api/types";
-import { THEME } from "../theme";
+import { TEXT, THEME } from "../theme";
 import { costLabel, duration, stream } from "./runs";
+import Panel, { microLabel } from "./Panel";
 import RunnerMark from "./RunnerMark";
 import RunDetail from "./RunDetail";
 import { Empty, Failed, Loading, Reconnecting } from "./States";
 
-const card: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: "10px",
-  border: `1px solid ${THEME.border}`,
-  backgroundColor: THEME.bgPanel,
-  display: "flex",
-  flexDirection: "column",
-  gap: "8px",
-};
-
-const header: React.CSSProperties = {
-  fontSize: "10.5px",
-  fontWeight: 700,
-  letterSpacing: "0.09em",
-  color: "#64748b",
-  textTransform: "uppercase",
-};
-
 const cell: React.CSSProperties = {
   padding: "3px 5px",
   fontSize: "11px",
-  color: "#94a3b8",
+  color: TEXT.body,
   whiteSpace: "nowrap",
   textAlign: "left",
 };
@@ -75,8 +58,7 @@ export default function RunStream({ live }: { live: LiveGraph }) {
   const rows = live.runs.data?.log.runs ?? [];
   const { shown, reasons } = stream(rows);
   return (
-    <div style={card} data-testid="RunStream">
-      <span style={header}>Runs</span>
+    <Panel title="Runs" testId="RunStream">
       {live.runs.phase === "loading" ? <Loading what="runs" /> : null}
       {live.runs.phase === "error" ? (
         <Failed error={live.runs.error} onRetry={live.retry} />
@@ -98,7 +80,7 @@ export default function RunStream({ live }: { live: LiveGraph }) {
             <thead>
               <tr>
                 {COLUMNS.map((name) => (
-                  <th key={name} style={{ ...cell, ...header }}>
+                  <th key={name} style={{ ...cell, ...microLabel }}>
                     {name}
                   </th>
                 ))}
@@ -141,6 +123,6 @@ export default function RunStream({ live }: { live: LiveGraph }) {
           onClose={() => setOpen(null)}
         />
       ) : null}
-    </div>
+    </Panel>
   );
 }

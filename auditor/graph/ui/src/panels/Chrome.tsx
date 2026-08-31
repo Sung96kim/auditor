@@ -1,6 +1,6 @@
 import type { PollState } from "../api/poll";
 import type { Status } from "../api/types";
-import { THEME } from "../theme";
+import { THEME, TONE } from "../theme";
 import {
   budgetMeter,
   evalLines,
@@ -11,41 +11,22 @@ import {
   type Meter,
 } from "./chrome";
 import { Failed, Loading, Reconnecting } from "./States";
+import Panel, { block, microLabel, mono } from "./Panel";
 import RunnerMark from "./RunnerMark";
 
-const TONE: Record<Meter["tone"], string> = {
-  ok: THEME.accent,
-  low: "#f59e0b",
-  spent: "#ef4444",
-};
-
-const card: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: "10px",
-  border: `1px solid ${THEME.border}`,
-  backgroundColor: THEME.bgPanel,
-  display: "flex",
-  flexDirection: "column",
-  gap: "10px",
-};
-
-const label: React.CSSProperties = {
-  fontSize: "10.5px",
-  fontWeight: 700,
-  letterSpacing: "0.09em",
-  color: "#64748b",
-  textTransform: "uppercase",
+const METER_TONE: Record<Meter["tone"], string> = {
+  ok: TONE.busy,
+  low: TONE.warn,
+  spent: TONE.bad,
 };
 
 /** One labelled bar. `known` is false for a repo whose loop has not published a budget yet. */
 function Bar({ title, meter }: { title: string; meter: Meter }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+    <div style={block}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-        <span style={label}>{title}</span>
-        <span style={{ fontSize: "11px", color: "#94a3b8", fontFamily: "monospace" }}>
-          {meter.label}
-        </span>
+        <span style={microLabel}>{title}</span>
+        <span style={mono}>{meter.label}</span>
       </div>
       <div style={{ height: "4px", borderRadius: "999px", background: THEME.bgElevated }}>
         <div
@@ -53,7 +34,7 @@ function Bar({ title, meter }: { title: string; meter: Meter }) {
             height: "100%",
             width: `${Math.round(meter.fill * 100)}%`,
             borderRadius: "999px",
-            background: meter.known ? TONE[meter.tone] : "transparent",
+            background: meter.known ? METER_TONE[meter.tone] : "transparent",
           }}
         />
       </div>
@@ -74,7 +55,11 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
   const selected = data?.repos.find((r) => r.repo === repo) ?? null;
   const now = Date.now() / 1000;
   return (
-    <div style={card} data-testid="chrome">
+    <Panel
+      title="Observer"
+      testId="chrome"
+      trailing={data ? <span style={mono}>{`${data.state} · ${repoState(selected)}`}</span> : null}
+    >
       {status.phase === "loading" ? <Loading what="the daemon" /> : null}
       {status.phase === "error" ? <Failed error={status.error} onRetry={onRetry} /> : null}
       {status.phase === "stale" ? (
@@ -82,13 +67,6 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
       ) : null}
       {data ? (
         <>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-            <span style={label}>Observer</span>
-            <span style={{ fontSize: "11px", color: "#94a3b8", fontFamily: "monospace" }}>
-              {data.state} - {repoState(selected)}
-            </span>
-          </div>
-
           <select
             aria-label="Repository"
             value={repo}
@@ -113,22 +91,16 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
           <Bar title="Budget" meter={budgetMeter(selected?.budget ?? null)} />
           {selected ? <Bar title="Rate limit" meter={limitMeter(selected.limits, now)} /> : null}
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span style={label}>Latest eval</span>
+          <div style={block}>
+            <span style={microLabel}>Latest eval</span>
             {evalLines(data.evals).map((line) => (
               <div
                 key={line.runner}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "11.5px",
-                  color: "#94a3b8",
-                }}
+                style={{ display: "flex", alignItems: "center", gap: "6px", ...mono }}
               >
                 <RunnerMark runner={line.runner} />
-                <span style={{ fontFamily: "monospace" }}>{line.model}</span>
-                <span style={{ marginLeft: "auto", fontFamily: "monospace" }}>
+                <span>{line.model}</span>
+                <span style={{ marginLeft: "auto" }}>
                   {line.measured
                     ? `${line.proven} proven, floor ${line.floor?.toFixed(2) ?? "n/a"}`
                     : "no eval yet"}
@@ -137,9 +109,9 @@ export default function Chrome({ status, repo, onChooseRepo, onRetry }: ChromePr
             ))}
           </div>
 
-          <span style={{ fontSize: "11px", color: "#64748b" }}>{vectorLabel(data.vectors)}</span>
+          <span style={mono}>{vectorLabel(data.vectors)}</span>
         </>
       ) : null}
-    </div>
+    </Panel>
   );
 }
