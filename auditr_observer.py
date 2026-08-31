@@ -75,6 +75,14 @@ HOOK_BUDGETS = {
     "stop": _POST_TIMEOUT + _REPAIR_TIMEOUT + _STOP_POST_TIMEOUT,
     "session-end": _POST_TIMEOUT,
 }
+#: the statuses that mean *this daemon refused this body*, so no retry changes the answer and the
+#: client's own copy is deleted: `routes.py` answers 400 for a body its models will not validate,
+#: and `server.py` answers 400 for an unreadable Content-Length, 403 for a cross-origin or
+#: non-loopback request and 413 for a body over 1 MiB. Its 411 is not here because this client
+#: always sends a Content-Length, so a 411 came from someone else. Every other 4xx is someone
+#: else's too: a 404 is what a recycled port's own HTTP server answers, and deleting a durable
+#: batch on it destroys work no daemon ever took (M1).
+_AUTHORITATIVE_REFUSALS = frozenset({400, 403, 413})
 #: `auditor.observer.events.MAX_EVENT_PATHS`: a longer body is a 400, which is dropped, not spooled
 _MAX_PATHS = 2000
 #: how many undelivered batches one repo's spool holds before the client stops adding to it. Past
@@ -460,9 +468,10 @@ def _emit(
 
     Spool first: this process can be killed by its parent at any point, and only a batch already
     on disk survives that. The answer then decides what the spool line means - a 2xx took it and
-    a 4xx refused this body for ever, so both delete it; a 5xx or a timeout is transient, so the
-    line stays and the daemon adopts it. The `batch` id is what keeps a delivery whose answer
-    never arrived from being assessed twice (spec 8.1, amended).
+    one of `_AUTHORITATIVE_REFUSALS` is this daemon refusing this body for ever, so both delete
+    it; a 5xx, a timeout, or any other status is transient or is not the daemon answering at all,
+    so the line stays and the daemon adopts it. The `batch` id is what keeps a delivery whose
+    answer never arrived from being assessed twice (spec 8.1, amended).
 
     Truncated at `_MAX_PATHS`, because a longer body is refused whole: losing the tail of one
     Stop batch beats losing all of it.
@@ -482,7 +491,7 @@ def _emit(
     spooled = _spool(key, root, body)
     budget = _STOP_POST_TIMEOUT if kind == "stop" else _POST_TIMEOUT
     sent = _post("/events", body, budget)
-    if sent is not None and sent[0] < 500:
+    if sent is not None and (sent[0] < 300 or sent[0] in _AUTHORITATIVE_REFUSALS):
         _drop(spooled)
 
 

@@ -62,7 +62,10 @@ shell out to it and hold none of them.
   `repos/<repo_dir_key>/spool.client.<batch>.jsonl`, with a `root.json` breadcrumb beside it, and
   it carries a `batch` id. What the answer means:
   - a 2xx took it, so the file is deleted;
-  - a 4xx refused this body, which no retry changes, so the file is deleted too;
+  - a 400, 403 or 413 is this daemon refusing this body, which no retry changes, so the file is
+    deleted too;
+  - any other 4xx is not this daemon's answer at all - a 404 is what a stranger on a recycled
+    port, or a daemon from a release without `/events`, replies - so the file stays;
   - a 5xx is the daemon failing rather than refusing, so the file stays;
   - nothing at all, including the client being killed, leaves the file where it is.
   A daemon adopts those files at start and on every drain, and it drops a `batch` id it has

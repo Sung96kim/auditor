@@ -2,7 +2,10 @@
 
 import io
 import json
+import threading
+from collections.abc import Iterator
 from fnmatch import fnmatch
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -24,6 +27,45 @@ _SESSION = {"session_id": "s1", "cwd": ""}
 
 def _payload(**over: object) -> dict:
     return {**_SESSION, **over}
+
+
+class _Stranger(BaseHTTPRequestHandler):
+    """Whatever else ended up on the port `daemon.json` still names: an HTTP 404, in JSON."""
+
+    def do_POST(self) -> None:
+        body = json.dumps({"error": "no route for POST /events"}).encode()
+        self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:
+        """Keep the stub off stderr; a hook that talks to it is not a test failure."""
+
+
+@pytest.fixture
+def recycled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """An `AUDITOR_HOME` whose `daemon.json` names a port somebody else's server answers on.
+
+    The port rule is a hash over 500 slots and the record outlives the daemon that wrote it, so
+    this is the shape a client really meets, not a hypothetical one.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Stranger)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    home = tmp_path / "recycled-home"
+    (home / "observer").mkdir(parents=True)
+    (home / "observer" / "daemon.json").write_text(
+        json.dumps({"port": server.server_port})
+    )
+    monkeypatch.setenv("AUDITOR_HOME", str(home))
+    try:
+        yield home
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.fixture
@@ -428,17 +470,42 @@ def test_a_refused_post_is_dropped_rather_than_spooled(
     assert _spooled(wired, "not-a-key") == []
 
 
-def test_a_daemon_that_broke_on_the_body_keeps_it_spooled(
-    git_repo: Path, wired: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("status", "left"),
+    [
+        (202, 0),  # the daemon took it
+        (400, 0),  # its models will not validate this body, and no retry changes that
+        (403, 0),  # `server.py` refuses a cross-origin or non-loopback request outright
+        (413, 0),  # this body is over the wire's own 1 MiB cap
+        (
+            404,
+            1,
+        ),  # no route: a stranger on a recycled port, or a daemon without `/events`
+        (405, 1),
+        (
+            411,
+            1,
+        ),  # this client always sends a Content-Length, so this came from somebody else
+        (429, 1),
+        (500, 1),  # `server.py` turns an unhandled handler exception into a JSON 500
+        (503, 1),
+    ],
+)
+def test_only_this_daemons_own_refusal_destroys_the_clients_copy(
+    status: int,
+    left: int,
+    git_repo: Path,
+    wired: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    """A 500 is the daemon failing, not refusing: the batch is still good and comes back.
+    """`< 500` read every 4xx as authoritative, and most of them are not this daemon's at all.
 
-    `_send` answers with a tuple for any status the daemon returns, and
-    `auditor/observer/server.py` turns every unhandled handler exception into a JSON 500, so a
-    daemon that crashed on this request used to be read as one that rejected it.
+    A 5xx is the daemon failing rather than refusing, so the batch is still good and comes back.
+    A 404 is worse than that: it is the answer of a server that never saw an `/events` route, so
+    unlinking on it destroys a durable batch nobody ever took (M1).
     """
     monkeypatch.setattr(
-        auditr_observer, "_post", lambda path, body, timeout: (500, {"error": "boom"})
+        auditr_observer, "_post", lambda path, body, timeout: (status, {})
     )
     (git_repo / "m.py").write_text("x = 1\n")
     auditr_observer._hook(
@@ -446,7 +513,25 @@ def test_a_daemon_that_broke_on_the_body_keeps_it_spooled(
         "claude-code",
         _payload(cwd=str(git_repo), tool_input={"file_path": str(git_repo / "m.py")}),
     )
-    assert len(_spooled(wired, repo_dir_key(git_repo))) == 1
+    assert len(_spooled(wired, repo_dir_key(git_repo))) == left
+
+
+def test_a_stranger_on_a_recycled_port_does_not_get_to_delete_the_batch(
+    git_repo: Path, recycled: Path
+):
+    """End to end against a real HTTP server that is not a daemon, over a real socket.
+
+    `daemon.json` outlives the daemon that wrote it and the port rule is a hash over 500 slots,
+    so the client does meet other people's servers. This one answers a well-formed JSON 404,
+    which `_send` returns as a status like any other, and the batch has to survive it.
+    """
+    (git_repo / "m.py").write_text("x = 1\n")
+    auditr_observer._hook(
+        "post-tool-use",
+        "claude-code",
+        _payload(cwd=str(git_repo), tool_input={"file_path": str(git_repo / "m.py")}),
+    )
+    assert len(_spooled(recycled, repo_dir_key(git_repo))) == 1
 
 
 def test_a_batch_is_durable_before_it_is_posted(
