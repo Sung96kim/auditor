@@ -111,7 +111,7 @@ def test_the_status_badge_reads_a_daemon_word_and_not_a_loop_state(daemon_router
 
 def test_idle_seconds_is_the_gap_before_the_request_being_served(daemon_router):
     """Measured against the previous request, never against this one, or it would always be 0."""
-    daemon_router.dispatch("GET", "/health", {}, b"")
+    daemon_router.dispatch("POST", "/sessions/heartbeat", {}, b'{"session_id": "s1"}')
     first = daemon_router.last_request
     daemon_router.last_request = first - 12.0
     daemon_router.dispatch("GET", "/health", {}, b"")
@@ -125,14 +125,28 @@ def test_the_first_request_measures_idleness_from_the_daemon_s_start(daemon_rout
     assert daemon_router.idle_seconds == pytest.approx(5.0, abs=0.5)
 
 
-def test_the_three_second_poll_is_not_what_the_idle_timer_counts(
-    daemon_router, tmp_path
-):
-    """Spec 8.1: reading the page must not decide how long the process lives (P21)."""
-    daemon_router.dispatch("GET", "/health", {}, b"")
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/",
+        "/health",
+        "/api/status",
+        "/api/runs",
+        "/api/refinements",
+        "/api/evals",
+        "/api/flow",
+        "/api/runs/r-1",
+    ],
+)
+def test_no_read_is_what_the_idle_timer_counts(daemon_router, tmp_path, target: str):
+    """Spec 8.1: reading the page must not decide how long the process lives (P21).
+
+    Every path here is one the page fetches, on a timer or on a panel opening, and a list of the
+    two the first page happened to poll left the other four holding the daemon open.
+    """
+    daemon_router.dispatch("POST", "/sessions/heartbeat", {}, b'{"session_id": "s1"}')
     real = daemon_router.last_request
-    daemon_router.dispatch("GET", "/api/status", {}, b"")
-    daemon_router.dispatch("GET", f"/api/runs?repo={tmp_path}", {}, b"")
+    daemon_router.dispatch("GET", f"{target}?repo={tmp_path}", {}, b"")
     assert daemon_router.last_request == real
 
 
@@ -146,12 +160,12 @@ def test_a_page_polling_past_the_idle_window_still_lets_the_daemon_exit(daemon_r
     assert idle.due(120.0) is True
 
 
-def test_a_request_that_is_not_the_poll_still_holds_the_daemon_open(daemon_router):
-    """The other half: an attach or a status CLI call is activity and must push the deadline."""
+def test_a_write_is_the_activity_that_holds_the_daemon_open(daemon_router):
+    """The other half: a hook spooling an edit or attaching a session must push the deadline."""
     idle = IdleTimer(minutes=1.0, now=0.0)
     daemon_router.started_at = 0.0
     daemon_router.last_request = 0.0
-    daemon_router.dispatch("GET", "/health", {}, b"")
+    daemon_router.dispatch("POST", "/sessions/heartbeat", {}, b'{"session_id": "s1"}')
     idle.touch(daemon_router.last_request)
     assert idle.due(daemon_router.last_request + 30.0) is False
 

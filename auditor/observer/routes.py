@@ -504,9 +504,9 @@ class RouterDeps(BaseModel):
     drained: Callable[[], int] = _no_drained
 
 
-#: the page's own 3 s cycle. A poll is a read, not activity, so it must not push spec 8.1's idle
-#: deadline out: `daemon.py:743-744` feeds `Router.last_request` straight into the `IdleTimer`
-POLLED_PATHS = frozenset({"/api/status", "/api/runs"})
+#: a read is never activity, so no `GET` pushes spec 8.1's idle deadline out: `daemon.py:743-744`
+#: feeds `Router.last_request` straight into the `IdleTimer`, and every page fetch is a read
+READ_METHODS = frozenset({"GET", "HEAD"})
 
 
 class Router:
@@ -527,7 +527,11 @@ class Router:
         self.idle_seconds = 0.0
 
     def bump(self) -> int:
-        """One state change. `/api/status`'s tag carries this counter, and the loops move it."""
+        """One state change on the status payload, which is what its ETag counts.
+
+        Moved by every write route through :meth:`dispatch`, and by the daemon: a loop state, a
+        meter, a drained batch and an expired session all reach `on_change`, wired to this.
+        """
         self.revision += 1
         return self.revision
 
@@ -539,7 +543,7 @@ class Router:
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         now = time.time()
         self.idle_seconds = now - (self.last_request or self.started_at)
-        if parsed.path not in POLLED_PATHS:
+        if method not in READ_METHODS:
             self.last_request = now
         # the two read methods reach the page; it is answered before the table, naming no payload
         if method in {"GET", "HEAD"} and parsed.path == "/":
@@ -581,8 +585,13 @@ class Router:
         return "restarting" if self.restarting else "running"
 
     def status_tag(self, query: Mapping[str, str]) -> str:
-        """Restart-unique: a page holding a tag from a dead daemon must not get a 304 (P14)."""
-        return f'W/"{self.started_at:.0f}-{self.revision}"'
+        """Restart-unique and change-unique: a 304 here means nothing on the payload moved.
+
+        Milliseconds rather than whole seconds, because two daemons whose starts round to the
+        same second would both mint `W/"<sec>-0"` and a page holding the dead one's tag would
+        304 over the new one's state.
+        """
+        return f'W/"{self.started_at:.3f}-{self.revision}"'
 
     def runs_tag(self, query: Mapping[str, str]) -> str:
         """Empty for a query the handler will refuse, so a 400 is never short-circuited to 304."""
@@ -803,6 +812,10 @@ class Router:
         if isinstance(ref, Reply):
             return ref
         known = self.deps.sessions.heartbeat(ref.session_id, now=time.time())
+        if (
+            known
+        ):  # `sessions[i].last_seen` is on the page, so its tag has to move with it
+            self.bump()
         return Reply.json(
             SessionAck(ok=known, reason="" if known else "no such session")
         )

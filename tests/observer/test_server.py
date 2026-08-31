@@ -371,6 +371,26 @@ def test_a_detach_bumps_the_revision_only_for_a_session_the_daemon_held(
     assert daemon_router.revision == before + 1
 
 
+def test_a_heartbeat_bumps_the_revision_so_last_seen_is_pollable(
+    daemon_server, daemon_router
+):
+    """`sessions[i].last_seen` is on the status payload, and the tag froze every heartbeat."""
+    _, call = daemon_server
+    call.request("POST", "/sessions/attach", {"repo": "/r", "session_id": "s1"})
+    before = daemon_router.revision
+    call.request("POST", "/sessions/heartbeat", {"session_id": "nobody"})
+    assert daemon_router.revision == before
+    call.request("POST", "/sessions/heartbeat", {"session_id": "s1"})
+    assert daemon_router.revision == before + 1
+
+
+def test_two_daemons_starting_in_one_second_do_not_mint_the_same_tag(daemon_router):
+    """The tag rounded the start to a whole second, and a restart is faster than that."""
+    first = daemon_router.status_tag({})
+    daemon_router.started_at += 0.05
+    assert daemon_router.status_tag({}) != first
+
+
 def test_the_status_etag_moves_when_the_daemon_changes_state(
     daemon_server, daemon_router
 ):

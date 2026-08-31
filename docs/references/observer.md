@@ -162,9 +162,9 @@ thread rather than pinning one.
   page can write.
 - `/api/status`'s `state` is the daemon's own word, `running` or `restarting`; the per-repo state
   badge reads `repos[i].state` instead, which is that repo's `LoopState`. `idle_seconds` is the gap
-  before the request being served, measured from the daemon's start until something arrives, and
-  the page's own 3 s cycle does not move it, so a forgotten tab cannot hold the daemon open past
-  the idle window. `evals` is the runner roster, one row per model runner carrying its name and the
+  before the request being served, measured from the daemon's start until something arrives. A
+  read is never activity: no `GET` or `HEAD` moves it, whatever the route, so no page fetch and no
+  status call can hold the daemon open past the idle window. Only a write does. `evals` is the runner roster, one row per model runner carrying its name and the
   model it is pinned to with no measurements in it; `/api/evals` is the per-repo answer that fills
   the numbers, and a runner with no model of its own carries an empty string rather than another
   runner's. `vectors` is still at its default and stays there until S13. So are both meters, and they
