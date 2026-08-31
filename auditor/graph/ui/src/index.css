@@ -36,3 +36,9 @@ body {
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* keyboard focus is visible on every control the panels ship, not only the search box */
+:focus-visible {
+  outline: 2px solid rgba(124, 124, 255, 0.55);
+  outline-offset: 2px;
+}

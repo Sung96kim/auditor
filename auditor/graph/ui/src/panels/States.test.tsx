@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { Empty, Failed, Loading, Reconnecting } from "./States";
+import { Empty, Failed, Loading, Reconnecting, reason } from "./States";
 
 afterEach(cleanup);
 
@@ -30,5 +30,41 @@ describe("the four states every polled surface renders through", () => {
     expect(screen.getByRole("alert").textContent).toContain("Could not reach the observer");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what a state box looks like, not only what it says", () => {
+  it("the thrown class name never reaches the reader, only the reason does", () => {
+    expect(reason("Error: connection refused")).toBe("connection refused");
+    expect(reason("TypeError: fetch failed")).toBe("fetch failed");
+    expect(reason("connection refused")).toBe("connection refused");
+  });
+
+  it("a retry is a styled control, never the browser's own grey button on a dark panel", () => {
+    render(<Failed error="Error: network down" onRetry={vi.fn()} />);
+    const button = screen.getByRole("button", { name: "Retry" });
+    expect(button.style.border).not.toBe("");
+    expect(button.style.color).not.toBe("");
+    expect(button.style.cursor).toBe("pointer");
+  });
+
+  it("a failure and a reconnect are told apart by tone, not only by wording", () => {
+    const { container: bad } = render(<Failed error="down" onRetry={vi.fn()} />);
+    const { container: warn } = render(<Reconnecting error="down" onRetry={vi.fn()} />);
+    const wash = (el: Element) => (el.firstElementChild as HTMLElement).style.background;
+    expect(wash(bad)).not.toBe("");
+    expect(wash(bad)).not.toBe(wash(warn));
+  });
+
+  it("an empty ledger separates its answer from its hint, so the two do not read as one line", () => {
+    render(<Empty what="runs" hint="the observer has not started a run yet" />);
+    const box = screen.getByRole("status");
+    expect(box.children.length).toBe(2);
+    expect(box.children[0].textContent).toBe("No runs yet");
+  });
+
+  it("loading shows a pending indicator, so a slow poll is not a line of text alone", () => {
+    const { container } = render(<Loading what="the daemon" />);
+    expect(container.querySelector(".state-track")).not.toBeNull();
   });
 });
