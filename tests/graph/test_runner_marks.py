@@ -23,6 +23,18 @@ def _attr(markup: str, name: str) -> str | None:
     return found.group(1) if found else None
 
 
+def _block(stem: str) -> str:
+    """The one `MARKS` entry for this runner, so a `d` cannot be checked against the wrong key.
+
+    A whole-file substring passes when the two glyphs are transposed, which draws Claude's logo
+    beside every Codex run and nothing says so.
+    """
+    source = MARK_TSX.read_text()
+    body = source.split(f"  {stem}: {{", 1)
+    assert len(body) == 2, f"MARKS has no {stem} entry"
+    return body[1].split("  },", 1)[0]
+
+
 @pytest.mark.parametrize(("stem", "label"), RUNNERS)
 def test_the_transcribed_path_is_the_vendored_one(stem: str, label: str):
     """The whole glyph is one `d`; a stale copy is a wrong logo nobody would notice by eye."""
@@ -30,14 +42,39 @@ def test_the_transcribed_path_is_the_vendored_one(stem: str, label: str):
     assert len(paths) == 1, f"{stem}.svg is no longer a single path; retranscribe it"
     drawn = _attr(paths[0], "d")
     assert drawn
-    assert drawn in MARK_TSX.read_text()
+    assert f'd: "{drawn}"' in _block(stem)
+
+
+@pytest.mark.parametrize(("stem", "label"), RUNNERS)
+def test_every_drawing_attribute_is_transcribed_beside_the_path(stem: str, label: str):
+    """`fill-rule` and `clip-rule` change what the glyph looks like as surely as the `d` does.
+
+    Codex carries a `clip-rule` and Claude does not, so a copy that drops it renders a filled
+    blob rather than the mark, and only the whole attribute set catches that.
+    """
+    markup = _svg(stem)
+    block = _block(stem)
+    assert f'viewBox: "{_attr(markup, "viewBox")}"' in block
+    assert f'fillRule: "{_attr(markup, "fill-rule")}"' in block
+    clip = _attr(re.findall(r"<path\b[^>]*>", markup)[0], "clip-rule")
+    if clip is None:
+        assert "clipRule" not in block
+    else:
+        assert f'clipRule: "{clip}"' in block
 
 
 @pytest.mark.parametrize(("stem", "label"), RUNNERS)
 def test_the_aria_label_carries_the_runner_name(stem: str, label: str):
     """Spec 12.1 pins the label as the runner's name, which is the page's only text for it."""
     assert _attr(_svg(stem), "aria-label") == label
-    assert f'label: "{label}"' in MARK_TSX.read_text()
+    assert f'label: "{label}"' in _block(stem)
+
+
+def test_the_component_names_its_mark_to_the_accessibility_tree():
+    """A glyph with no `role` and no name is decoration, and the runner column would be blank."""
+    source = MARK_TSX.read_text()
+    assert 'role="img"' in source
+    assert "aria-label={mark.label}" in source
 
 
 @pytest.mark.parametrize(("stem", "label"), RUNNERS)

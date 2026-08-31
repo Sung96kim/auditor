@@ -58,6 +58,20 @@ const body: React.CSSProperties = {
   padding: "12px 14px 13px",
 };
 
+/** One labelled section inside a panel body, ruled off from the one above it.
+ *
+ * In the shared chrome rather than in `RunDetail`, because six stacked headings with a 3px gap
+ * is the failure it exists to prevent and the next panel to grow sections will want the same.
+ */
+export function Field({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ ...block, borderTop: `1px solid ${THEME.border}`, paddingTop: "9px" }}>
+      <span style={microLabel}>{title}</span>
+      {children}
+    </div>
+  );
+}
+
 export interface PanelProps {
   title: string;
   /** The right-hand side of the header strip: a count, a badge, a control. */

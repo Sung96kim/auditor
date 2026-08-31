@@ -52,9 +52,13 @@ export function useLiveGraph(): LiveGraph {
     const one = async () => {
       try {
         const got = await getJson<Status>(`${boot.base}api/status`, tags.current.status);
-        tags.current.status = got.etag;
-        attempts.current.status = 0;
-        if (alive) setStatus((prev) => received(prev, got.value));
+        // inside the guard: a cycle torn down by a filter change or a retry must not put its
+        // own tag back over the new one's, which costs a body and can mask the backoff
+        if (alive) {
+          tags.current.status = got.etag;
+          attempts.current.status = 0;
+          setStatus((prev) => received(prev, got.value));
+        }
       } catch (err) {
         attempts.current.status += 1;
         if (alive) setStatus((prev) => failed(prev, String(err)));
@@ -64,9 +68,11 @@ export function useLiveGraph(): LiveGraph {
         if (showSkipped) query.set("skipped", "1");
         try {
           const got = await getJson<RunsView>(`${boot.base}api/runs?${query}`, tags.current.runs);
-          tags.current.runs = got.etag;
-          attempts.current.runs = 0;
-          if (alive) setRuns((prev) => received(prev, got.value));
+          if (alive) {
+            tags.current.runs = got.etag;
+            attempts.current.runs = 0;
+            setRuns((prev) => received(prev, got.value));
+          }
         } catch (err) {
           attempts.current.runs += 1;
           if (alive) setRuns((prev) => failed(prev, String(err)));

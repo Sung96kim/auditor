@@ -2,7 +2,8 @@ import { useFetchOnce } from "../api/useFetchOnce";
 import type { RunDetailView } from "../api/types";
 import { TEXT, THEME } from "../theme";
 import { accepted, rejected } from "./runs";
-import { block, microLabel, mono, nested } from "./Panel";
+import RefinementGroup from "./RefinementGroup";
+import { Field, microLabel, mono, nested } from "./Panel";
 import { Failed, Loading, Reconnecting } from "./States";
 
 const box: React.CSSProperties = {
@@ -31,47 +32,6 @@ const verbatim: React.CSSProperties = {
 };
 
 const line: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
-
-interface Refined {
-  refinement_id: string;
-  tier: string;
-  from_dst: string | null;
-  dst: string | null;
-  node_id: string | null;
-  status: string;
-}
-
-/** What the row moved, or what it is about when it moved no edge: never a pair of dashes. */
-function moved(row: Refined): string {
-  if (row.from_dst === null && row.dst === null) return row.node_id ?? "no target recorded";
-  return `${row.from_dst ?? "-"} to ${row.dst ?? "-"}`;
-}
-
-/** One labelled section, ruled off from the one above so six headings are not one grey wall. */
-function Field({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ ...block, borderTop: `1px solid ${THEME.border}`, paddingTop: "9px" }}>
-      <span style={microLabel}>{title}</span>
-      {children}
-    </div>
-  );
-}
-
-function Group({ title, rows }: { title: string; rows: Refined[] }) {
-  return (
-    <Field title={title}>
-      {rows.length === 0 ? (
-        <span style={{ color: TEXT.label }}>none</span>
-      ) : (
-        rows.map((row) => (
-          <span key={row.refinement_id} style={line}>
-            <span style={{ color: TEXT.label }}>[{row.tier}]</span> {moved(row)}
-          </span>
-        ))
-      )}
-    </Field>
-  );
-}
 
 export interface RunDetailProps {
   base: string;
@@ -136,8 +96,8 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
             )}
           </Field>
 
-          <Group title="Accepted changes" rows={accepted(view.refinements)} />
-          <Group title="Rejected proposals" rows={rejected(view.refinements)} />
+          <RefinementGroup title="Accepted changes" rows={accepted(view.refinements)} />
+          <RefinementGroup title="Rejected proposals" rows={rejected(view.refinements)} />
 
           <Field title="Tuning trials">
             {view.trials.length === 0 ? (

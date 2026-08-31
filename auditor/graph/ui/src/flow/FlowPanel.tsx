@@ -64,7 +64,17 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
   const placed = new Map(rows.map((r) => [r.key, r]));
 
   return (
-    <Panel title="Flow" testId="FlowPanel">
+    <Panel
+      title="Flow"
+      testId="FlowPanel"
+      trailing={
+        rows.length > 0 ? (
+          <span style={{ ...mono, color: TEXT.label }}>
+            {state.data?.flow?.truncated ? `${rows.length}, capped` : rows.length}
+          </span>
+        ) : null
+      }
+    >
       <input
         aria-label="Symbol"
         className="field"

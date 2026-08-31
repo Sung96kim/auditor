@@ -114,6 +114,23 @@ describe("the flow panel", () => {
     expect(screen.getByRole("button", { name: "c.py::collect" })).not.toBeNull();
   });
 
+  it("a walk the server capped says so, rather than looking like the whole graph", async () => {
+    serve(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            flowView({ symbol: "build", flow: { root: ROOT, direction: "out", truncated: true } }),
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("Symbol"), { target: { value: "build" } });
+    await screen.findByTitle("c.py::collect");
+    const strip = screen.getByTestId("FlowPanel").firstElementChild;
+    expect(strip?.textContent).toBe("Flow3, capped");
+  });
+
   it("the direction toggle reports which way the walk runs", () => {
     serve();
     expect(screen.getByRole("button", { name: "out" }).getAttribute("aria-pressed")).toBe("true");

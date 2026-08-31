@@ -1,9 +1,12 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import Panels from "./Panels";
-import { initial } from "../api/poll";
+import { initial, received } from "../api/poll";
 import { NO_RUNS, type LiveGraph } from "../api/useLiveGraph";
+import { repo as aRepo, status as aStatus } from "../api/wire.fixture";
 import type { Status } from "../api/types";
+
+const STATUS = aStatus({ repos: [aRepo({ repo: "/w" })] });
 
 function live(over: Partial<LiveGraph["boot"]>): LiveGraph {
   return {
@@ -17,7 +20,30 @@ function live(over: Partial<LiveGraph["boot"]>): LiveGraph {
   };
 }
 
-afterEach(cleanup);
+/** A live page whose status poll has answered, which is the only state that draws the chrome. */
+function answered(repo: string): LiveGraph {
+  const boot = live({ live: true, base: "/", repo });
+  return { ...boot, status: received(boot.status, STATUS) };
+}
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ runners: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    ),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  cleanup();
+});
 
 describe("which page the bundle draws", () => {
   it("static mode draws the inlined graph and no live chrome at all", () => {
@@ -31,19 +57,21 @@ describe("which page the bundle draws", () => {
   });
 
   it("the no-repo page draws the switcher over an explicit empty state, not a run stream", () => {
-    const boot = live({ live: true, base: "/", repo: "" });
-    render(<Panels live={{ ...boot, status: { ...boot.status, phase: "ready" } }} />);
-    expect(screen.getByTestId("chrome")).not.toBeNull();
+    render(<Panels live={answered("")} />);
+    // a real status, not an empty one: with `data` null the card draws none of what this names
+    screen.getByTestId("chrome");
+    expect(screen.getByLabelText("Repository")).not.toBeNull();
+    expect(screen.queryAllByRole("progressbar")).toHaveLength(0);
     expect(screen.getByText(/No repo chosen yet/)).not.toBeNull();
     expect(screen.queryByTestId("RunStream")).toBeNull();
   });
 
   it("a repo chosen draws the whole column", () => {
-    const boot = live({ live: true, base: "/", repo: "/w" });
-    render(<Panels live={{ ...boot, status: { ...boot.status, phase: "ready" } }} />);
-    expect(screen.getByTestId("RunStream")).not.toBeNull();
-    expect(screen.getByTestId("RefinementList")).not.toBeNull();
-    expect(screen.getByTestId("FlowPanel")).not.toBeNull();
+    render(<Panels live={answered("/w")} />);
+    screen.getByTestId("RunStream");
+    screen.getByTestId("RefinementList");
+    screen.getByTestId("FlowPanel");
+    expect(screen.getAllByRole("progressbar")).toHaveLength(2);
   });
 });
 
@@ -51,18 +79,16 @@ const CARDS = ["chrome", "RunStream", "RefinementList", "FlowPanel"];
 
 describe("the chrome every card in the column is drawn with", () => {
   it("one card, so the radius cannot drift panel by panel", () => {
-    const boot = live({ live: true, base: "/", repo: "/w" });
-    render(<Panels live={{ ...boot, status: { ...boot.status, phase: "ready" } }} />);
+    render(<Panels live={answered("/w")} />);
     const radii = new Set(CARDS.map((id) => screen.getByTestId(id).style.borderRadius));
     expect(radii).toEqual(new Set(["12px"]));
   });
 
   it("each panel names itself in the strip above its body, not in with its content", () => {
-    const boot = live({ live: true, base: "/", repo: "/w" });
-    render(<Panels live={{ ...boot, status: { ...boot.status, phase: "ready" } }} />);
+    render(<Panels live={answered("/w")} />);
     const strips = CARDS.map((id) => screen.getByTestId(id).firstElementChild);
     expect(strips.map((el) => el?.textContent)).toEqual([
-      "Observer",
+      "Observerobserving",
       "Runs",
       "Refinements",
       "Flow",
@@ -70,10 +96,7 @@ describe("the chrome every card in the column is drawn with", () => {
   });
 
   it("the column keeps its width when the panels beside it grow", () => {
-    const boot = live({ live: true, base: "/", repo: "/w" });
-    const { container } = render(
-      <Panels live={{ ...boot, status: { ...boot.status, phase: "ready" } }} />,
-    );
+    const { container } = render(<Panels live={answered("/w")} />);
     const column = container.querySelector("aside") as HTMLElement;
     expect(column.style.flexShrink).toBe("0");
     expect(column.style.width).toBe("340px");

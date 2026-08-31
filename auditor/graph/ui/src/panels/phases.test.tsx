@@ -1,0 +1,242 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import Chrome from "./Chrome";
+import RefinementList from "./RefinementList";
+import RunDetail from "./RunDetail";
+import RunStream from "./RunStream";
+import FlowPanel from "../flow/FlowPanel";
+import { failed, initial, received, type PollState } from "../api/poll";
+import type { LiveGraph } from "../api/useLiveGraph";
+import {
+  flowView,
+  refinementsView,
+  runDetail,
+  runsView,
+  status as aStatus,
+} from "../api/wire.fixture";
+import type { Status } from "../api/types";
+
+/** The four states the plan pins, in the words the shared components draw them in. */
+const LOADING = /Loading /;
+const FAILED = "Could not reach the observer";
+const RECONNECTING = "Reconnecting to the observer";
+
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** A fetch that answers, one that never answers, and one that fails, in that order per call. */
+function serve(...answers: ("ok" | "down" | "never")[]): (body: unknown) => void {
+  let call = 0;
+  let payload: unknown = {};
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => {
+      const answer = answers[Math.min(call++, answers.length - 1)];
+      if (answer === "down") return Promise.reject(new Error("connection refused"));
+      if (answer === "never") return new Promise<Response>(() => {});
+      return Promise.resolve(json(payload));
+    }),
+  );
+  return (body: unknown) => {
+    payload = body;
+  };
+}
+
+function graph(runs: PollState<LiveGraph["runs"]["data"]>): LiveGraph {
+  return {
+    boot: { live: true, base: "/", repo: "/w" },
+    status: initial<Status>(),
+    runs: runs as LiveGraph["runs"],
+    showSkipped: false,
+    setShowSkipped: vi.fn(),
+    chooseRepo: vi.fn(),
+    retry: vi.fn(),
+  };
+}
+
+function statusIn(phase: "loading" | "ready" | "error" | "stale"): PollState<Status> {
+  const ready = received(initial<Status>(), aStatus());
+  if (phase === "loading") return initial<Status>();
+  if (phase === "ready") return ready;
+  if (phase === "stale") return failed(ready, "connection refused");
+  return failed(initial<Status>(), "connection refused");
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  cleanup();
+});
+
+describe("the observer card in every state its poll can be in", () => {
+  it("says the daemon is being read while the first poll is out", () => {
+    serve("never");
+    render(<Chrome status={statusIn("loading")} base="/" repo="/w" onChooseRepo={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByText(LOADING)).not.toBeNull();
+  });
+
+  it("draws the switcher, both meters and the eval block once it has an answer", async () => {
+    const set = serve("ok");
+    set({ runners: [] });
+    render(<Chrome status={statusIn("ready")} base="/" repo="/w/repo" onChooseRepo={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByLabelText("Repository")).not.toBeNull();
+    expect(screen.getAllByRole("progressbar")).toHaveLength(2);
+    expect(await screen.findAllByText("no eval yet")).toHaveLength(2);
+  });
+
+  it("a first poll that failed is an error with a retry, and no half-drawn chrome", () => {
+    serve("never");
+    render(<Chrome status={statusIn("error")} base="/" repo="/w" onChooseRepo={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByRole("alert").textContent).toContain(FAILED);
+    expect(screen.queryByLabelText("Repository")).toBeNull();
+  });
+
+  it("a later poll that failed keeps the last good chrome under a reconnect banner", () => {
+    serve("never");
+    render(<Chrome status={statusIn("stale")} base="/" repo="/w/repo" onChooseRepo={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByText(RECONNECTING)).not.toBeNull();
+    expect(screen.getByLabelText("Repository")).not.toBeNull();
+  });
+});
+
+describe("the run stream in every state its poll can be in", () => {
+  it.each([
+    ["loading", LOADING],
+    ["error", FAILED],
+    ["stale", RECONNECTING],
+  ] as const)("%s draws its own word and nothing else's", (phase, words) => {
+    serve("never");
+    const ready = received(initial(runsView()), runsView());
+    const state =
+      phase === "loading"
+        ? initial(null)
+        : phase === "error"
+          ? failed(initial(null), "connection refused")
+          : failed(ready, "connection refused");
+    render(<RunStream live={graph(state as never)} />);
+    expect(screen.getByText(words)).not.toBeNull();
+  });
+
+  it("an answered poll draws the table, and never the empty state beside it", () => {
+    serve("never");
+    render(<RunStream live={graph(received(initial(null), runsView()) as never)} />);
+    expect(screen.getAllByRole("row").length).toBeGreaterThan(1);
+    expect(screen.queryByText("No runs yet")).toBeNull();
+  });
+});
+
+describe("the refinement list in every state its fetch can be in", () => {
+  it("draws its loading state until the fetch answers", () => {
+    serve("never");
+    render(<RefinementList base="/" repo="/w" />);
+    expect(screen.getByText(LOADING)).not.toBeNull();
+  });
+
+  it("draws its rows once it has them", async () => {
+    const set = serve("ok");
+    set(refinementsView());
+    render(<RefinementList base="/" repo="/w" />);
+    expect(await screen.findByText(/active \(1\)/)).not.toBeNull();
+  });
+
+  it("a failed fetch is an error with a retry, never a spinner", async () => {
+    serve("down");
+    render(<RefinementList base="/" repo="/w" />);
+    expect((await screen.findByRole("alert")).textContent).toContain(FAILED);
+    expect(screen.queryByText(LOADING)).toBeNull();
+  });
+
+  it("a failed refetch keeps the rows under a reconnect banner", async () => {
+    const set = serve("ok", "down");
+    set(refinementsView());
+    const { rerender } = render(<RefinementList base="/" repo="/w" />);
+    await screen.findByText(/active \(1\)/);
+    rerender(<RefinementList base="/" repo="/w/other" />);
+    await waitFor(() => expect(screen.getByText(RECONNECTING)).not.toBeNull());
+    expect(screen.getByText(/active \(1\)/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Retry now" })).not.toBeNull();
+  });
+});
+
+describe("run detail in every state its fetch can be in", () => {
+  it("draws its loading state until the fetch answers", () => {
+    serve("never");
+    render(<RunDetail base="/" repo="/w" runId="r1" onClose={vi.fn()} />);
+    expect(screen.getByText(LOADING)).not.toBeNull();
+  });
+
+  it("draws the run once it has it", async () => {
+    const set = serve("ok");
+    set(runDetail());
+    render(<RunDetail base="/" repo="/w" runId="r1" onClose={vi.fn()} />);
+    expect(await screen.findByText(/walk the changed pairs/)).not.toBeNull();
+  });
+
+  it("a failed fetch is an error with a retry that is not the close control", async () => {
+    serve("down");
+    const onClose = vi.fn();
+    render(<RunDetail base="/" repo="/w" runId="r1" onClose={onClose} />);
+    expect((await screen.findByRole("alert")).textContent).toContain(FAILED);
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("a failed refetch keeps the run under a reconnect banner", async () => {
+    const set = serve("ok", "down");
+    set(runDetail());
+    const { rerender } = render(
+      <RunDetail base="/" repo="/w" runId="r1" onClose={vi.fn()} />,
+    );
+    await screen.findByText(/walk the changed pairs/);
+    rerender(<RunDetail base="/" repo="/w/other" runId="r1" onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(RECONNECTING)).not.toBeNull());
+    expect(screen.getByText(/walk the changed pairs/)).not.toBeNull();
+  });
+});
+
+describe("the flow panel in every state its fetch can be in", () => {
+  const walk = () =>
+    fireEvent.change(screen.getByLabelText("Symbol"), { target: { value: "build" } });
+
+  it("says what it is waiting for before a symbol is typed", () => {
+    serve("never");
+    render(<FlowPanel base="/" repo="/w" />);
+    expect(screen.getByText("No flow yet")).not.toBeNull();
+  });
+
+  it("draws its loading state while the walk is out", async () => {
+    serve("never");
+    render(<FlowPanel base="/" repo="/w" />);
+    walk();
+    expect(await screen.findByText(LOADING)).not.toBeNull();
+  });
+
+  it("draws the walk once it has one", async () => {
+    const set = serve("ok");
+    set(flowView());
+    render(<FlowPanel base="/" repo="/w" />);
+    walk();
+    expect(await screen.findByTitle("app/cli.py::main")).not.toBeNull();
+  });
+
+  it("a failed walk is an error with a retry, never a blank panel", async () => {
+    serve("down");
+    render(<FlowPanel base="/" repo="/w" />);
+    walk();
+    expect((await screen.findByRole("alert")).textContent).toContain(FAILED);
+  });
+
+  it("a failed refetch keeps the last walk under a reconnect banner", async () => {
+    const set = serve("ok", "down");
+    set(flowView());
+    render(<FlowPanel base="/" repo="/w" />);
+    walk();
+    await screen.findByTitle("app/cli.py::main");
+    fireEvent.click(screen.getByRole("button", { name: "in" }));
+    expect(await screen.findByText(RECONNECTING)).not.toBeNull();
+    expect(screen.getByTitle("app/cli.py::main")).not.toBeNull();
+  });
+});

@@ -131,6 +131,60 @@ describe("the live hook", () => {
     expect(result.current.status.data!.repos).toHaveLength(1);
   });
 
+  it("retry asks again straight away rather than waiting out the backoff it just earned", async () => {
+    live("/w");
+    let up = false;
+    const fetcher = vi.fn(async () => {
+      if (!up) throw new Error("connection refused");
+      return ok({ repos: [] });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const { result } = renderHook(() => useLiveGraph());
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(result.current.status.phase).toBe("error");
+    const failed = fetcher.mock.calls.length;
+    up = true;
+    await act(async () => {
+      result.current.retry();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(fetcher.mock.calls.length).toBeGreaterThan(failed);
+    expect(result.current.status.phase).toBe("ready");
+    // the backoff is zeroed with the retry, so the next cycle is the ordinary 3 s one
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    expect(fetcher.mock.calls.length).toBeGreaterThan(failed + 2);
+  });
+
+  it("a cycle torn down mid-flight does not put its own tag back over the new one's", async () => {
+    live("/w");
+    const pending: ((answer: Response) => void)[] = [];
+    const sent: (string | undefined)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        if (!url.includes("api/status")) return Promise.resolve(ok({ repos: [] }, 'W/"runs"'));
+        sent.push(headers["If-None-Match"]);
+        return new Promise<Response>((resolve) => pending.push(resolve));
+      }),
+    );
+    const { result } = renderHook(() => useLiveGraph());
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    // the first cycle is still in flight when a filter change tears it down and starts a second
+    await act(async () => {
+      result.current.setShowSkipped(true);
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(async () => {
+      pending[1](ok({ repos: [] }, 'W/"second"'));
+    });
+    await act(async () => {
+      pending[0](ok({ repos: [] }, 'W/"first"'));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    expect(sent[sent.length - 1]).toBe('W/"second"');
+  });
+
   it("asking for collapsed rows puts `skipped=1` on the wire, which is what moves the tag", async () => {
     live("/w");
     const asked: string[] = [];
