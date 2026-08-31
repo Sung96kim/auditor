@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { getJson } from "../api/client";
 import { failed, initial, received, type PollState } from "../api/poll";
 import type { RefinementRow } from "../api/types";
-import { TEXT } from "../theme";
-import Panel, { block, microLabel } from "./Panel";
+import { TEXT, THEME, TONE } from "../theme";
+import Panel, { block, microLabel, mono } from "./Panel";
 import { Empty, Failed, Loading } from "./States";
 
 interface RefinementsBody {
@@ -12,6 +12,8 @@ interface RefinementsBody {
 
 /** Named so a status with no rows still shows its heading and a zero rather than vanishing. */
 const NAMED = ["pending", "active", "pinned", "redundant", "rejected", "reverted"];
+
+const row: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
 
 /** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3). */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
@@ -35,15 +37,29 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
   }, [base, repo]);
 
   const rows = state.data?.refinements.rows ?? [];
+  const total = state.data?.refinements.refinement_count ?? rows.length;
+  const truncated = state.data?.refinements.truncated ?? false;
   const groups = new Map<string, RefinementRow[]>(NAMED.map((name) => [name, []]));
-  for (const row of rows) {
-    const bucket = groups.get(row.status) ?? [];
-    bucket.push(row);
-    groups.set(row.status, bucket);
+  for (const held of rows) {
+    const bucket = groups.get(held.status) ?? [];
+    bucket.push(held);
+    groups.set(held.status, bucket);
   }
+  const filled = [...groups].filter(([, group]) => group.length > 0);
+  const empty = [...groups].filter(([, group]) => group.length === 0);
 
   return (
-    <Panel title="Refinements" testId="RefinementList">
+    <Panel
+      title="Refinements"
+      testId="RefinementList"
+      trailing={
+        rows.length > 0 ? (
+          <span style={{ ...mono, color: TEXT.label }}>
+            {truncated ? `${rows.length} of ${total}` : rows.length}
+          </span>
+        ) : null
+      }
+    >
       {state.phase === "loading" ? <Loading what="refinements" /> : null}
       {state.phase === "error" ? (
         <Failed error={state.error} onRetry={() => setState(initial<RefinementsBody>())} />
@@ -53,24 +69,46 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
         <Empty what="refinements" hint="no refinement has been proposed for this repo yet" />
       ) : null}
 
-      {rows.length > 0
-        ? [...groups].map(([status, group]) => (
-            <div key={status} style={block}>
-              <span style={microLabel}>
-                {status} ({group.length})
-              </span>
-              {group.map((row) => (
-                <span
-                  key={row.refinement_id}
-                  style={{ fontFamily: "monospace", fontSize: "11px", color: TEXT.body }}
-                >
-                  [{row.tier}] {row.kind} {row.src ?? row.node_id ?? "-"}
-                  {row.drifted ? " (drifted)" : ""}
-                </span>
-              ))}
-            </div>
-          ))
-        : null}
+      {filled.map(([status, group]) => (
+        <div key={status} style={block}>
+          <span style={microLabel}>
+            {status} ({group.length})
+          </span>
+          {group.map((held) => (
+            <span key={held.refinement_id} style={row}>
+              <span style={{ color: TEXT.label }}>[{held.tier}]</span> {held.kind}{" "}
+              {held.src ?? held.node_id ?? "-"}
+              {held.drifted ? <span style={{ color: TONE.warn }}> drifted</span> : null}
+            </span>
+          ))}
+        </div>
+      ))}
+
+      {rows.length > 0 && empty.length > 0 ? (
+        <div
+          style={{
+            borderTop: `1px solid ${THEME.border}`,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "5px",
+            paddingTop: "9px",
+          }}
+        >
+          {empty.map(([status]) => (
+            <span
+              key={status}
+              style={{
+                ...microLabel,
+                border: `1px solid ${THEME.border}`,
+                borderRadius: "999px",
+                padding: "2px 7px",
+              }}
+            >
+              {status} 0
+            </span>
+          ))}
+        </div>
+      ) : null}
     </Panel>
   );
 }
