@@ -13,7 +13,8 @@ from pathlib import Path
 from _common import SEVERITY_RANK, auditr_available, emit_context, observe, read_event
 
 SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".sh", ".bash"}
-#: the shell-out costs ~48 ms and the child holds spec 13.1's own 200 ms socket budget
+#: the shell-out cost is measured once in docs/references/claude-code-plugin.md; this covers
+#: it, a `git rev-parse` and the child's own 200 ms socket budget
 OBSERVE_TIMEOUT = 1.0
 
 

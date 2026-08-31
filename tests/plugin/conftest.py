@@ -1,11 +1,40 @@
-"""Stubs for the two binaries the hooks resolve on PATH: `auditr-observer` and `uvx`."""
+"""Puts a recording stub of one binary on a scratch PATH; the hooks resolve `auditr-observer`
+there. There is no `uvx` stub because no hook resolves `uvx` (P28)."""
 
+import importlib.util
 import json
 import stat
+import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import pytest
+
+HOOKS = Path(__file__).resolve().parents[2] / "plugin" / "hooks"
+
+
+def plugin_module(name: str) -> ModuleType:
+    """One `plugin/hooks/` script imported by path, the way the hook itself resolves it.
+
+    `plugin/` may not import `auditor`, but a test may import both, which is how the constants
+    the two sides duplicate get pinned against each other rather than against a third copy.
+    """
+    spec = importlib.util.spec_from_file_location(name, HOOKS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(HOOKS))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(HOOKS))
+    return module
+
+
+@pytest.fixture
+def hook_module() -> Callable[[str], ModuleType]:
+    """`plugin_module` as a fixture, so a test names the script and not the import mechanics."""
+    return plugin_module
+
 
 _RECORDER = """#!/usr/bin/env python3
 import json, sys

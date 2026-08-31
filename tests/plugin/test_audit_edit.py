@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+import auditr_observer
+from auditor.paths import OFF_VALUES
+
 SCRIPT = Path(__file__).resolve().parents[2] / "plugin" / "hooks" / "audit_edit.py"
 
 REPORT = {
@@ -141,37 +144,61 @@ def test_the_observer_half_survives_the_audit_kill_switch(recorder):
     assert len(stub.calls()) == 1
 
 
-def test_the_observer_sees_a_suffix_the_audit_half_ignores(recorder):
-    """`SUFFIXES` here is the audit's seven; Stage 0 is the client's, and it is wider."""
+def test_the_observer_sees_a_suffix_the_audit_half_ignores(recorder, tmp_path):
+    """`SUFFIXES` here is the audit's seven; Stage 0 is the client's, and it is wider.
+
+    `auditr` has to be on PATH for this to say anything: without it the audit half returns
+    before it ever looks at the suffix, so adding `.toml` to `SUFFIXES` left the old shape of
+    this test green and `stdout == ""` proved nothing about the set.
+    """
     stub = recorder("auditr-observer")
+    _auditr_over(stub.bin_dir, tmp_path)
+    edited = tmp_path / "config.toml"
+    edited.write_text("[tool]\n")
     payload = {
         "tool_name": "Edit",
-        "tool_input": {"file_path": "/repo/config.toml"},
-        "cwd": "/repo",
+        "tool_input": {"file_path": str(edited)},
+        "cwd": str(tmp_path),
     }
     assert _run_observed(payload, stub.path(), {}).stdout.strip() == ""
-    assert len(stub.calls()) == 1
+    assert len(stub.calls()) == 1  # the observer saw it
+    assert not (tmp_path / "auditr.log").exists()  # the audit half did not
+
+
+def _auditr_over(bin_dir: Path, tmp_path: Path) -> None:
+    """An `auditr` stub that records being asked to report, beside the observer recorder."""
+    stub = bin_dir / "auditr"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"open({str(tmp_path / 'auditr.log')!r}, 'a').write(' '.join(sys.argv[1:]))\n"
+        "sys.stdout.write('{}')\n"
+    )
+    stub.chmod(0o755)
+
+
+def test_the_kill_switch_set_is_the_packages_own(hook_module):
+    """The one place all four copies of the off-value set meet.
+
+    `auditor.paths.OFF_VALUES` is the source of truth; `auditr_observer._OFF` and
+    `plugin/hooks/_common._OFF` are hand-copies that may not import it, and the parametrize
+    below is a fourth copy that would otherwise stay green while a value was dropped from the
+    other three. `plugin/` itself is what may not import `auditor` - a test may.
+    """
+    assert set(auditr_observer._OFF) == set(OFF_VALUES)
+    assert set(hook_module("_common")._OFF) == set(OFF_VALUES)
 
 
 @pytest.mark.parametrize(
     ("value", "spawns"),
-    [
-        ("0", 0),
-        ("f", 0),
-        ("false", 0),
-        ("n", 0),
-        ("no", 0),
-        ("off", 0),
-        ("1", 1),
-        ("", 1),
-    ],
+    [*((value, 0) for value in sorted(OFF_VALUES)), ("1", 1), ("", 1)],
 )
 def test_the_observer_kill_switch_stops_the_spawn_itself(recorder, value, spawns):
     """`AUDITOR_OBSERVER` has to switch off the process, not only what the process does.
 
     Read inside the client alone it would cost a spawn on every Edit, every Write, every Stop and
-    every session boundary in order to be told the observer is off (P27). The six off values are
-    `auditr_observer._OFF`'s; `plugin/` may not import it, so the pair is pinned behaviourally.
+    every session boundary in order to be told the observer is off (P27). The off values are
+    `auditor.paths.OFF_VALUES`, driven from it rather than from a fifth hardcoded copy.
     """
     stub = recorder("auditr-observer")
     payload = {

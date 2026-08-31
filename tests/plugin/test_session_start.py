@@ -115,12 +115,23 @@ def test_says_once_that_the_observer_client_is_not_installed():
     assert "auditr-observer" in done.stderr
 
 
-def test_the_observer_runs_even_when_auditr_itself_is_absent(recorder):
-    """The two halves are independent: `auditr` gates the context line, not the attach."""
+def test_the_observer_runs_even_when_auditr_itself_is_absent(recorder, tmp_path):
+    """The two halves are independent: `auditr` gates the context line, not the attach.
+
+    Both sides of that claim, because only the absent one is what the delegation test above
+    already covers: with `auditr` on PATH the same payload attaches *and* emits a context line,
+    so the attach is what stays constant while the context line comes and goes.
+    """
     stub = recorder("auditr-observer")
-    done = _run_with({"cwd": "/repo", "session_id": "s1"}, stub.path())
-    assert done.stdout.strip() == ""
+    absent = _run_with({"cwd": "/repo", "session_id": "s1"}, stub.path())
+    assert absent.stdout.strip() == ""
     assert len(stub.calls()) == 1
+
+    (stub.bin_dir / "auditr").write_text("#!/bin/sh\nexit 0\n")
+    (stub.bin_dir / "auditr").chmod(0o755)
+    present = _run_with({"cwd": str(tmp_path), "session_id": "s1"}, stub.path())
+    assert "additionalContext" in present.stdout
+    assert len(stub.calls()) == 2
 
 
 def test_the_context_line_is_appended_to_never_substituted(tmp_path):

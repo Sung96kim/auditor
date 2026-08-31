@@ -24,8 +24,11 @@ def emitted_scan_report(stdout: str) -> bool:
     return isinstance(data, dict) and ("files" in data or "totals" in data)
 
 
-#: two requests and a `git status`, against the shell-out and spec 13.1's 200 ms each
-OBSERVE_TIMEOUT = 2.0
+#: the whole client-side chain this event can spend, plus the shell-out and a `git status`:
+#: a heartbeat, a repair attach and the Stop batch's own longer budget. A backstop rather than
+#: the durability boundary - the client spools the batch before it posts it - and
+#: `tests/plugin/test_verify_stop.py` pins it against the three client budgets it has to cover.
+OBSERVE_TIMEOUT = 5.0
 
 
 def main() -> None:

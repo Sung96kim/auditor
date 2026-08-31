@@ -138,15 +138,9 @@ def test_delegates_the_stop_batch_to_the_observer_client(recorder, tmp_path):
     ]
 
 
-def test_the_stop_batch_is_posted_even_though_the_gate_is_opt_in(recorder, tmp_path):
-    """Spec 8.2: this is the only edit path Codex has and it closes Claude's Bash-edit hole."""
-    stub = recorder("auditr-observer")
-    done = _run_observed(stub.path(), tmp_path, {})
-    assert done.stdout.strip() == ""  # the gate stayed off
-    assert len(stub.calls()) == 1
-
-
-def test_the_gate_still_blocks_with_the_observer_wired_in(tmp_path, recorder):
+def test_the_gate_still_blocks_and_the_stop_batch_is_posted_anyway(tmp_path, recorder):
+    """Spec 8.2: the Stop path set is the only edit path Codex has and it closes Claude's
+    Bash-edit hole, so it goes out ahead of the opt-in gate and whatever the gate decides."""
     stub = recorder("auditr-observer")
     _stub_over(stub.bin_dir, stdout=_TRIP_PAYLOAD, exit_code=1)
     decision = json.loads(

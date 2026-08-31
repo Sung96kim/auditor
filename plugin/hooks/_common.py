@@ -47,18 +47,10 @@ def emit_context(event_name: str, context: str) -> None:
     )
 
 
-#: the six values `auditr_observer._OFF` and `auditor.paths.OFF_VALUES` hold; a test pins the set
+#: the six values `auditr_observer._OFF` and `auditor.paths.OFF_VALUES` hold;
+#: `tests/plugin/test_audit_edit.py::test_the_kill_switch_set_is_the_packages_own` pins all
+#: three copies against `auditor.paths.OFF_VALUES`, which is the source of truth
 _OFF = frozenset({"0", "f", "false", "n", "no", "off"})
-
-
-def observer_argv() -> list[str] | None:
-    """How to run `auditr-observer` here, or None when it is not installed (spec 13.1).
-
-    There is no `uvx` ladder: `uvx --from "auditr[observer-claude]"` resolves a ~300MB SDK extra
-    inside a one to three second hook budget, so it is killed every time and never fills a cache.
-    """
-    found = shutil.which("auditr-observer")
-    return [found] if found else None
 
 
 def observe(event: str, payload: dict, timeout: float) -> bool:
@@ -67,15 +59,19 @@ def observe(event: str, payload: dict, timeout: float) -> bool:
     The one place a plugin hook talks to the observer: the transport, the spool and the
     202-versus-400 rule all live in `auditr_observer.py`. False means no client is installed,
     which is the one case worth a word to the user.
+
+    There is no `uvx` ladder behind the missing binary: `uvx --from "auditr[observer-claude]"`
+    resolves a ~300MB SDK extra inside a one to three second hook budget, so it is killed every
+    time and never fills a cache.
     """
     if os.environ.get("AUDITOR_OBSERVER", "").strip().lower() in _OFF:
         return True
-    argv = observer_argv()
-    if argv is None:
+    found = shutil.which("auditr-observer")
+    if found is None:
         return False
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         subprocess.run(
-            [*argv, "hook", event, "--client", "claude-code"],
+            [found, "hook", event, "--client", "claude-code"],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
