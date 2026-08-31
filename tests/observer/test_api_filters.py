@@ -214,6 +214,27 @@ def test_flow_with_no_controls_walks_the_shipped_defaults(
     assert options.depth == 4 and options.limit == 200
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [("", False), ("&expand_hubs=1", True), ("&expand_hubs=0", False)],
+    ids=["default", "asked for", "asked against"],
+)
+def test_the_hub_disclosure_reaches_the_walk(
+    daemon_server, readers, tmp_path, query, expected
+):
+    """`flow_options` read two of the walk's knobs, so opening a hub drew the same collapsed tree.
+
+    The walk `continue`s past a collapsed hub's children, so without this the control removed the
+    `+N` suffix and added nothing: there was never a child to draw.
+    """
+    _, call = daemon_server
+    status, _, _ = call.request(
+        "GET", f"/api/flow?repo={tmp_path}&symbol=build_payload{query}"
+    )
+    assert status == 200
+    assert readers.options[-1].expand_hubs is expected
+
+
 def test_an_out_of_range_depth_is_clamped_rather_than_refused(
     daemon_server, readers, tmp_path
 ):

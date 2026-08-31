@@ -178,7 +178,10 @@ def filter_key(chosen: LogFilter, *, since: str | None = None) -> str:
 
 
 def flow_options(query: Mapping[str, str], *, hub_fan_in: int) -> FlowOptions:
-    """Spec 12.1's direction toggle and depth slider. `FlowOptions.of` clamps, it does not raise.
+    """Spec 12.1's direction toggle, depth slider and hub disclosure. `FlowOptions.of` clamps.
+
+    ``expand_hubs`` is the whole walk rather than one node: `limit` already bounds it, so the
+    reader's first hub click costs one round trip and every later one costs none.
 
     Raises:
         ValueError: when `depth` or `limit` is not an integer, or `direction` is not a direction.
@@ -193,6 +196,7 @@ def flow_options(query: Mapping[str, str], *, hub_fan_in: int) -> FlowOptions:
         ),
         depth=_int(query, "depth", DEFAULT_FLOW_DEPTH),
         limit=_int(query, "limit", DEFAULT_FLOW_LIMIT),
+        expand_hubs=_flag(_named(query, "expand_hubs")),
     )
 
 

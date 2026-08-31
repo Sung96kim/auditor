@@ -141,14 +141,15 @@ thread rather than pinning one.
 
   ```
   GET /api/runs   repo (required), skipped=1, status=a,b, since=90s|2h|7d|ISO, limit=N
-  GET /api/flow   repo (required), symbol, direction=out|in, depth=N, limit=N
+  GET /api/flow   repo (required), symbol, direction=out|in, depth=N, limit=N, expand_hubs=1
   ```
 
   An unusable value is a 400 naming the field, never a 500 and never `int()`'s own message; a
   query the handler will refuse produces no ETag, so a stale `If-None-Match` cannot turn it into a
   304. A control named with no value at all is one of those: `?depth=` and `?status=` are typos
   rather than requests for the default, and all five controls read them the same way. An out-of-range `depth` or `limit` is clamped rather than refused, because `FlowOptions.of`
-  clamps by design. `/api/runs`' ETag covers the filter, `since` included, so two windows over one
+  clamps by design. `expand_hubs=1` walks past every elided hub instead of stopping at it, which
+  is how the page's hub disclosure gets children to draw; `limit` still bounds the walk. `/api/runs`' ETag covers the filter, `since` included, so two windows over one
   ledger never share a tag while each still 304s on its own; `since` is fingerprinted as the raw
   query value rather than the epoch it resolves to, or a window would mint a new tag every request.
 - The page is served at `GET /` and `HEAD /`, outside the API table. A HEAD answers the headers
