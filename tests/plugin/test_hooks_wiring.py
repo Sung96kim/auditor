@@ -90,10 +90,45 @@ def test_each_hooks_timeout_covers_the_budget_its_event_spends(
     assert timeout >= budget if event == "session-start" else timeout > budget
 
 
-def test_the_stop_budget_is_the_sum_of_what_a_stop_actually_posts():
-    """A heartbeat, the attach that repairs a session the daemon lost, and the batch itself."""
-    assert auditr_observer.HOOK_BUDGETS["stop"] == (
-        auditr_observer._POST_TIMEOUT
-        + auditr_observer._REPAIR_TIMEOUT
-        + auditr_observer._STOP_POST_TIMEOUT
+def _hook_payload(event: str, root: Path) -> dict:
+    """The smallest client payload that drives one event down its whole chain."""
+    base = {"session_id": "s1", "cwd": str(root)}
+    if event == "post-tool-use":
+        return {**base, "tool_input": {"file_path": str(root / "m.py")}}
+    return base
+
+
+@pytest.mark.parametrize(
+    "event", ["session-start", "post-tool-use", "stop", "session-end"]
+)
+def test_every_deadline_an_event_hands_out_fits_inside_its_budget(
+    event: str, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Spied on a real run, because the budget has to name every deadline and not only the wire.
+
+    The shape this replaces re-added `_POST_TIMEOUT + _REPAIR_TIMEOUT + _STOP_POST_TIMEOUT` back
+    up, so it agreed with `HOOK_BUDGETS["stop"]` by construction and could not see the git
+    subprocesses at all - and those are the largest term and the only deadlines that fall
+    *before* the batch is on disk, where a parent's kill loses it whole (L2, M2).
+    """
+    (git_repo / "m.py").write_text("x = 1\n")
+    real_git = auditr_observer._git
+    spent: list[tuple[str, float]] = []
+
+    def spy_git(root: Path, *args: str, timeout: float) -> str | None:
+        spent.append((args[0], timeout))
+        return real_git(root, *args, timeout=timeout)
+
+    monkeypatch.setattr(auditr_observer, "_run", lambda command: {})
+    monkeypatch.setattr(auditr_observer, "_git", spy_git)
+    monkeypatch.setattr(
+        auditr_observer,
+        "_post",
+        # `ok: False` is what makes a Stop take its repair attach, which is the worst case
+        lambda path, body, timeout: (
+            spent.append((path, timeout)) or (202, {"ok": False})
+        ),
     )
+    auditr_observer._hook(event, "claude-code", _hook_payload(event, git_repo))
+    assert spent, "an event that hands out no deadline at all cannot be budgeted"
+    assert sum(timeout for _, timeout in spent) <= auditr_observer.HOOK_BUDGETS[event]

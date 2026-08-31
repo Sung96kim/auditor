@@ -61,8 +61,8 @@ def observe(event: str, payload: dict, timeout: float) -> bool:
     which is the one case worth a word to the user.
 
     There is no `uvx` ladder behind the missing binary: `uvx --from "auditr[observer-claude]"`
-    resolves a ~300MB SDK extra inside a one to three second hook budget, so it is killed every
-    time and never fills a cache.
+    resolves a ~300MB SDK extra inside the few seconds a hook budget allows, so it is killed
+    every time and never fills a cache.
     """
     if os.environ.get("AUDITOR_OBSERVER", "").strip().lower() in _OFF:
         return True

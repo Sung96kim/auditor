@@ -99,8 +99,8 @@ on that command's stdin, before its own audit behaviour runs and independently o
 variable that gates it: `AUDITOR_AUTOHOOK` and `AUDITOR_VERIFY_HOOK` turn the audit halves off and
 `AUDITOR_OBSERVER=0` turns the observer half off, and it does so before any process is started,
 so switching it off costs nothing per event. `auditr-observer` is resolved on PATH and nowhere
-else: there is no `uvx` fallback, because resolving a package inside a hook's one to three second
-budget cannot finish, and `session_start.py` writes one line to stderr when the client is not
+else: there is no `uvx` fallback, because resolving a package inside the few seconds a hook
+budget allows cannot finish, and `session_start.py` writes one line to stderr when the client is not
 installed. Claude Code shows a hook's stderr to the user only on exit code 2; these hooks exit 0,
 so that line reaches the debug log rather than the transcript.
 The observer half holds no HTTP client, no port lookup and no spool of its own: those live once,

@@ -52,9 +52,11 @@ _START_TIMEOUT = 10.0
 _STOP_TIMEOUT = 10.0
 #: the mount waits `_START_TIMEOUT` itself, so the run that waits on it needs a longer budget
 _LAUNCH_TIMEOUT = _START_TIMEOUT * 2
-#: spec 13.1's per-request budgets, pinned against `SchedulingConfig` by a test because this
-#: file may not import pydantic-settings to read them: 200 ms for an edit event, 3 s for the
-#: session-start attach, 1 s for the Stop heartbeat's repair attach (which runs the same handler)
+#: spec 13.1's per-request budgets, and the client's own: no `SchedulingConfig` field holds
+#: them, because nothing in `auditor/` reads them and this file may not import pydantic-settings.
+#: 200 ms for an edit event, 3 s for the session-start attach, 1 s for the Stop heartbeat's
+#: repair attach (which runs the same handler). `HOOK_BUDGETS` below sums the ladder each event
+#: spends, and `tests/plugin/test_hooks_wiring.py` is what pins a plugin script against it (M3).
 _POST_TIMEOUT = 0.2
 _ATTACH_TIMEOUT = 3.0
 _REPAIR_TIMEOUT = 1.0
@@ -62,17 +64,34 @@ _REPAIR_TIMEOUT = 1.0
 #: measured 127 ms median / 129 ms max here, and up to 897 ms on the S9 review's box, so the
 #: Stop batch gets its own budget rather than the per-edit one (spec 13.1, amended)
 _STOP_POST_TIMEOUT = 2.0
+#: what one `git` subprocess may spend, named by its caller rather than fixed inside `_git`.
+#: Two budgets because the two calls are different shapes: `rev-parse` reads a few bytes of
+#: metadata (1.2 ms median here) and `status` walks the whole worktree (2.4 ms median here, and
+#: seconds on a large dirty one). Deadlines rather than costs, and they run before the batch is
+#: on disk, which is why they are terms in `HOOK_BUDGETS` and not just arguments (M2).
+_IDENTITY_TIMEOUT = 0.5
+_STATUS_TIMEOUT = 2.0
 #: the four events spec 13.1 names, and the two clients spec 19 splits between S9 and S12
 _EVENTS = ("session-start", "post-tool-use", "stop", "session-end")
 _CLIENTS = ("claude-code", "codex")
-#: the client-side budget each event can spend on the wire, which is what a plugin script's own
-#: `OBSERVE_TIMEOUT` has to cover. One home for a relationship that spans two processes, and
-#: `tests/plugin/` pins every script against it. `session-start` is the deliberate exception:
-#: the `ensure` launch behind it may outrun the whole hook, and the next Stop repairs it (P30).
+#: the whole client-side ladder each event can spend, sockets and git subprocesses alike, which
+#: is what a plugin script's own `OBSERVE_TIMEOUT` has to cover. One home for a relationship that
+#: spans two processes, and `tests/plugin/` pins every script against it. The identity term is
+#: counted twice because `repo_identity` falls back to a second spelling of `rev-parse` on git
+#: older than 2.31, and every git term runs *before* the batch reaches the spool, so a parent
+#: that kills inside one loses the whole batch rather than one delivery. `session-start` is the
+#: deliberate exception: the `ensure` launch behind it may outrun the whole hook, and the next
+#: Stop repairs it (P30).
 HOOK_BUDGETS = {
     "session-start": _ATTACH_TIMEOUT,
-    "post-tool-use": _POST_TIMEOUT,
-    "stop": _POST_TIMEOUT + _REPAIR_TIMEOUT + _STOP_POST_TIMEOUT,
+    "post-tool-use": 2 * _IDENTITY_TIMEOUT + _POST_TIMEOUT,
+    "stop": (
+        _POST_TIMEOUT
+        + _REPAIR_TIMEOUT
+        + _STATUS_TIMEOUT
+        + 2 * _IDENTITY_TIMEOUT
+        + _STOP_POST_TIMEOUT
+    ),
     "session-end": _POST_TIMEOUT,
 }
 #: the statuses that mean *this daemon refused this body*, so no retry changes the answer and the
@@ -238,15 +257,20 @@ def _live() -> tuple[dict[str, object], dict[str, object] | None]:
 # --- the hook client (spec 13.1, 8.2) ---------------------------------------
 
 
-def _git(root: Path, *args: str) -> str | None:
-    """Raw stdout of a git subcommand, or None when it failed.
+def _git(root: Path, *args: str, timeout: float) -> str | None:
+    """Raw stdout of a git subcommand, or None when it failed or outran `timeout`.
 
     None rather than an empty string is `discovery.git_output`'s own sentinel, so the two cannot
-    drift apart. Every caller strips, because this does not.
+    drift apart. Every caller strips, because this does not. `timeout` is required and named by
+    the caller: these calls run before the batch is spooled, so they sit inside the parent hook's
+    kill window and `HOOK_BUDGETS` has to be able to count them (M2).
     """
     try:
         done = subprocess.run(
-            ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=5
+            ["git", "-C", str(root), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -264,18 +288,35 @@ def find_root(start: Path) -> Path:
 
 def repo_identity(root: Path) -> str:
     """`auditor.paths.repo_identity`: the resolved git common dir, else the resolved root."""
-    absolute = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    absolute = _git(
+        root,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+        timeout=_IDENTITY_TIMEOUT,
+    )
     if absolute is not None:
         return str(Path(absolute.strip()).resolve())
-    relative = _git(root, "rev-parse", "--git-common-dir")  # git < 2.31
+    relative = _git(  # git < 2.31
+        root, "rev-parse", "--git-common-dir", timeout=_IDENTITY_TIMEOUT
+    )
     if relative is not None:
         return str((root / relative.strip()).resolve())
     return str(root.resolve())
 
 
+def key_for_identity(identity: str) -> str:
+    """The hash half of `repo_dir_key`, so one `repo_identity` serves both the key and the crumb.
+
+    Split out rather than inlined twice: resolving the identity is up to two git subprocesses on
+    the tightest budget the client has, and an edit event needs the answer in two places (L4).
+    """
+    return hashlib.sha1(identity.encode(), usedforsecurity=False).hexdigest()
+
+
 def repo_dir_key(root: Path) -> str:
     """`auditor.paths.repo_dir_key`: the sha1 that names `repos/<key>` and rides on `/events`."""
-    return hashlib.sha1(repo_identity(root).encode(), usedforsecurity=False).hexdigest()
+    return key_for_identity(repo_identity(root))
 
 
 def auditable_shape(rel: str) -> bool:
@@ -331,7 +372,7 @@ def parse_status_z(payload: str) -> tuple[str, ...]:
 
 def status_paths(root: Path) -> tuple[str, ...]:
     """The whole dirty tree at `root`, or empty outside a checkout (spec 8.2). Not a delta."""
-    payload = _git(root, *_STATUS_ARGS)
+    payload = _git(root, *_STATUS_ARGS, timeout=_STATUS_TIMEOUT)
     return () if payload is None else parse_status_z(payload)
 
 
@@ -355,7 +396,7 @@ def spool_name(batch: str) -> str:
     return f"spool.client.{batch}.jsonl"
 
 
-def _spool(key: str, root: Path, body: dict[str, object]) -> Path | None:
+def _spool(key: str, root: Path, identity: str, body: dict[str, object]) -> Path | None:
     """Write one batch where the daemon adopts it (spec 8.1), and answer where. Best effort.
 
     Written *before* the POST, not after it: a hook killed by its parent mid-request is the one
@@ -364,7 +405,9 @@ def _spool(key: str, root: Path, body: dict[str, object]) -> Path | None:
     rides along so a delivery this client never saw the answer to is not assessed twice.
 
     The `root.json` crumb goes with it: `Daemon.reconcile` reads it to give an adopted spool a
-    loop, so a spool without one is drained into nothing.
+    loop when spec 8.2's gate lets it, so a spool without one is drained into nothing (L9). The
+    identity is handed in rather than resolved here, because the caller already spent the git
+    calls on it to name `key` (L4).
     """
     directory = home() / "repos" / key
     try:
@@ -375,7 +418,7 @@ def _spool(key: str, root: Path, body: dict[str, object]) -> Path | None:
                 json.dumps(
                     {
                         "root": str(root.resolve()),
-                        "identity": repo_identity(root),
+                        "identity": identity,
                         "created_at": int(time.time()),
                     }
                 )
@@ -478,7 +521,8 @@ def _emit(
     """
     if not paths:
         return
-    key = repo_dir_key(root)
+    identity = repo_identity(root)
+    key = key_for_identity(identity)
     body: dict[str, object] = {
         "repo": str(root),
         "key": key,
@@ -488,7 +532,7 @@ def _emit(
         "session_id": read.session_id,
         "batch": uuid.uuid4().hex,
     }
-    spooled = _spool(key, root, body)
+    spooled = _spool(key, root, identity, body)
     budget = _STOP_POST_TIMEOUT if kind == "stop" else _POST_TIMEOUT
     sent = _post("/events", body, budget)
     if sent is not None and (sent[0] < 300 or sent[0] in _AUTHORITATIVE_REFUSALS):

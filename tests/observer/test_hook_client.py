@@ -3,6 +3,7 @@
 import io
 import json
 import threading
+import time
 from collections.abc import Iterator
 from fnmatch import fnmatch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -561,6 +562,74 @@ def test_a_batch_is_durable_before_it_is_posted(
             ),
         )
     assert len(_spooled(wired, key)) == 1
+
+
+def test_a_kill_after_the_git_calls_and_before_the_wire_still_leaves_the_batch(
+    git_repo: Path, wired: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Spooling before the POST moved the window that loses a batch upstream, onto git.
+
+    A slow `git` stands in for a large repo: what is asserted is that every git call has already
+    finished and the batch is on disk by the time the wire is touched, so the parent's kill lands
+    on a durable batch wherever in the chain it falls. The budgets those calls run on are what
+    keeps the whole window inside the parent's own deadline, so they are asserted here too (M2).
+    """
+    key = repo_dir_key(git_repo)
+    real_git = auditr_observer._git
+    budgets: list[float] = []
+
+    def slow(root: Path, *args: str, timeout: float) -> str | None:
+        budgets.append(timeout)
+        time.sleep(0.05)
+        return real_git(root, *args, timeout=timeout)
+
+    def killed(path: str, body: dict, timeout: float) -> None:
+        assert len(_spooled(wired, key)) == 1, (
+            "the batch has to be durable before the wire"
+        )
+        raise SystemExit(9)
+
+    monkeypatch.setattr(auditr_observer, "_git", slow)
+    monkeypatch.setattr(auditr_observer, "_post", killed)
+    (git_repo / "m.py").write_text("x = 1\n")
+    with pytest.raises(SystemExit):
+        auditr_observer._hook(
+            "post-tool-use",
+            "claude-code",
+            _payload(
+                cwd=str(git_repo), tool_input={"file_path": str(git_repo / "m.py")}
+            ),
+        )
+    assert set(budgets) == {auditr_observer._IDENTITY_TIMEOUT}
+    assert len(_spooled(wired, key)) == 1
+
+
+def test_one_batch_resolves_the_repo_identity_once(
+    git_repo: Path, wired: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Two git subprocesses on the tightest budget the client has, paid for twice per edit.
+
+    `repo_dir_key` resolved it to name the spool directory and `_spool` resolved it again for
+    the `root.json` crumb, inside the 200 ms an edit event gets (L4).
+    """
+    resolved: list[Path] = []
+    real = auditr_observer.repo_identity
+    monkeypatch.setattr(
+        auditr_observer,
+        "repo_identity",
+        lambda root: resolved.append(root) or real(root),
+    )
+    (git_repo / "m.py").write_text("x = 1\n")
+    auditr_observer._hook(
+        "post-tool-use",
+        "claude-code",
+        _payload(cwd=str(git_repo), tool_input={"file_path": str(git_repo / "m.py")}),
+    )
+    assert resolved == [auditr_observer.find_root(git_repo)]
+    crumb = json.loads(
+        (wired / "repos" / repo_dir_key(git_repo) / "root.json").read_text()
+    )
+    assert crumb["identity"] == real(git_repo)
 
 
 def test_the_spool_stops_growing_once_a_daemon_has_been_gone_long_enough(

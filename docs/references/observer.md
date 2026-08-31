@@ -52,11 +52,17 @@ shell out to it and hold none of them.
   on, so anything else would name a file the index has never seen.
 - A batch is truncated at 2,000 paths, the wire's own cap. A longer body is refused whole, and a
   refusal is dropped rather than kept, so the tail of one Stop batch is the cheaper loss.
-- An edit event has a 200 ms budget, the session-start attach 3 s, the attach that repairs a lost
-  session 1 s, and a Stop batch 2 s, because the daemon runs its own Stage 0 once per path on the
-  request thread before it answers. A cold daemon launch can outrun the session-start budget, in
-  which case the session is not attached yet; the next `Stop` heartbeat answers `ok: false` and
-  the client attaches there, so the lag is one turn and not one session.
+- An edit event has a 200 ms wire budget, the session-start attach 3 s, the attach that repairs
+  a lost session 1 s, and a Stop batch 2 s, because the daemon runs its own Stage 0 once per path
+  on the request thread before it answers. A cold daemon launch can outrun the session-start
+  budget, in which case the session is not attached yet; the next `Stop` heartbeat answers
+  `ok: false` and the client attaches there, so the lag is one turn and not one session.
+- The git subprocesses are budgeted too, and they are the larger half: 500 ms for each
+  `git rev-parse` that resolves the repo identity and 2 s for the `git status` behind a Stop path
+  set. They run *before* the batch reaches the spool, so a hook killed inside one loses the batch
+  outright, and the plugin script's own kill deadline has to cover the whole ladder:
+  `HOOK_BUDGETS` sums it to 1.2 s for an edit and 6.2 s for a Stop, against `OBSERVE_TIMEOUT`s of
+  2 s and 8 s.
 - **The batch is written to the spool before it is posted, not after.** The hook's parent kills it
   on a timeout, and only a batch already on disk survives that. Each batch is its own file,
   `repos/<repo_dir_key>/spool.client.<batch>.jsonl`, with a `root.json` breadcrumb beside it, and

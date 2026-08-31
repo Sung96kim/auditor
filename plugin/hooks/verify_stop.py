@@ -24,11 +24,12 @@ def emitted_scan_report(stdout: str) -> bool:
     return isinstance(data, dict) and ("files" in data or "totals" in data)
 
 
-#: the whole client-side chain this event can spend, plus the shell-out and a `git status`:
-#: a heartbeat, a repair attach and the Stop batch's own longer budget. A backstop rather than
-#: the durability boundary - the client spools the batch before it posts it - and
-#: `tests/plugin/test_verify_stop.py` pins it against the three client budgets it has to cover.
-OBSERVE_TIMEOUT = 5.0
+#: the whole client-side ladder this event can spend, which is a heartbeat, a repair attach, a
+#: `git status`, up to two `git rev-parse` calls and the Stop batch's own longer budget:
+#: `auditr_observer.HOOK_BUDGETS["stop"]` sums it to 6.2 s and
+#: `tests/plugin/test_hooks_wiring.py` pins this against that sum. Only the last of those runs
+#: after the batch is durable, so this deadline has to cover the git half too (M2, L1).
+OBSERVE_TIMEOUT = 8.0
 
 
 def main() -> None:
