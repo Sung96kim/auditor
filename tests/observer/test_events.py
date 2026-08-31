@@ -12,6 +12,7 @@ from auditor.observer.events import (
     EventRequest,
     Spool,
 )
+from auditr_observer import spool_name
 
 
 @pytest.fixture
@@ -149,3 +150,68 @@ def test_a_line_torn_mid_character_is_skipped_not_raised(tmp_path):
     path = tmp_path / "spool.jsonl"
     path.write_bytes(b'{"repo": "/r", "paths": ["a.py"]}\n{"repo": "/caf\xc3')
     assert [e.repo for e in Spool(path).read()] == ["/r"]
+
+
+def _client_batch(tmp_path: Path, key: str, batch: str, **kw) -> Path:
+    """One batch written the way `auditr_observer._spool` writes it: its own file, its own id."""
+    directory = tmp_path / "repos" / key
+    directory.mkdir(parents=True, exist_ok=True)
+    written = directory / spool_name(batch)
+    written.write_text(_event(batch=batch, **kw).model_dump_json() + "\n")
+    return written
+
+
+def test_a_client_written_batch_is_adopted_and_drained(queue, tmp_path):
+    """The client writes one file per batch so delete-on-2xx is a single unlink; the daemon has
+    to find those files, because a batch the client could not deliver is only ever in one."""
+    _client_batch(tmp_path, "k", "b1", paths=("late.py",))
+    assert queue.adopt(["k"]) == 1
+    assert [e.paths for e in queue.drain("k")] == [("late.py",)]
+
+
+def test_a_delivery_the_client_never_saw_the_answer_to_is_not_assessed_twice(
+    queue, tmp_path
+):
+    """The whole point of the batch id.
+
+    A full Stop batch can take longer on the daemon's request thread than the client's socket
+    budget allows, so the daemon queues it and the client, hearing nothing, leaves its own copy
+    on disk. Both are real; only one is a batch.
+    """
+    queue.put("k", _event(batch="b1", paths=("m.py",)))
+    _client_batch(tmp_path, "k", "b1", paths=("m.py",))
+    assert [e.paths for e in queue.drain("k")] == [("m.py",)]
+
+
+def test_a_batch_with_no_id_is_never_deduplicated(queue, tmp_path):
+    """ "" is a batch from before the id existed, and two of them are two batches."""
+    queue.put("k", _event(paths=("m.py",)))
+    _client_batch(tmp_path, "k", "", paths=("m.py",))
+    assert len(queue.drain("k")) == 2
+
+
+def test_a_client_batch_survives_a_daemon_killed_before_it_consumed(queue, tmp_path):
+    """The rename stages it; only `consumed` deletes it, so a kill in between loses nothing."""
+    _client_batch(tmp_path, "k", "b1", paths=("late.py",))
+    assert queue.drain("k")
+    fresh = EventQueue(lambda key: tmp_path / "repos" / key / "spool.jsonl")
+    assert fresh.adopt(["k"]) == 1
+    assert [e.paths for e in fresh.drain("k")] == [("late.py",)]
+
+
+def test_a_consumed_client_batch_is_gone(queue, tmp_path):
+    """`consumed` is the one place a staged batch is deleted, for both writers."""
+    _client_batch(tmp_path, "k", "b1")
+    queue.drain("k")
+    queue.consumed("k")
+    assert list((tmp_path / "repos" / "k").glob("spool.client.*")) == []
+
+
+def test_a_forgotten_key_keeps_its_spool_and_stops_being_offered(queue, tmp_path):
+    """Spec 8.2's gate refuses some repos, and their spool is left where a later daemon whose
+    gate answers differently will still find it."""
+    written = _client_batch(tmp_path, "k", "b1")
+    queue.adopt(["k"])
+    queue.forget("k")
+    assert queue.keys() == ()
+    assert written.exists()

@@ -777,6 +777,7 @@ class Router:
                     kind=request.kind,
                     client=request.client,
                     session_id=request.session_id,
+                    batch=request.batch,
                     at=time.time(),
                 ),
             )

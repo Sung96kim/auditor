@@ -7,6 +7,7 @@ a session.
 """
 
 import argparse
+import contextlib
 import hashlib
 import http.client
 import importlib.metadata
@@ -17,9 +18,12 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 import webbrowser
+from collections.abc import Callable
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 # Wire-compat literal; auditor/observer/__init__.py declares the same value and a test pins them.
 OBSERVER_API_VERSION = 1
@@ -29,6 +33,7 @@ _LIFECYCLE = ("ensure", "start", "stop", "status", "open")
 #: the same six strings ``auditor.paths.OFF_VALUES`` holds; a test pins the pair (P4)
 _OFF = frozenset({"0", "f", "false", "n", "no", "off"})
 _DISABLED = "auditr-observer: disabled by AUDITOR_OBSERVER=0"
+_FAILED = "auditr-observer: the hook client failed; the session is unaffected"
 #: the key set ``auditr observer status --json`` prints; a test pins it against ``DaemonStatus``
 STATUS_KEYS = (
     "running",
@@ -47,14 +52,34 @@ _START_TIMEOUT = 10.0
 _STOP_TIMEOUT = 10.0
 #: the mount waits `_START_TIMEOUT` itself, so the run that waits on it needs a longer budget
 _LAUNCH_TIMEOUT = _START_TIMEOUT * 2
-#: spec 13.1's per-request budgets: 200 ms for an event, 3 s for the session-start attach
+#: spec 13.1's per-request budgets, pinned against `SchedulingConfig` by a test because this
+#: file may not import pydantic-settings to read them: 200 ms for an edit event, 3 s for the
+#: session-start attach, 1 s for the Stop heartbeat's repair attach (which runs the same handler)
 _POST_TIMEOUT = 0.2
 _ATTACH_TIMEOUT = 3.0
+_REPAIR_TIMEOUT = 1.0
+#: a full `_MAX_PATHS` Stop batch runs Stage 0 once per path on the daemon's request thread:
+#: measured 127 ms median / 129 ms max here, and up to 897 ms on the S9 review's box, so the
+#: Stop batch gets its own budget rather than the per-edit one (spec 13.1, amended)
+_STOP_POST_TIMEOUT = 2.0
 #: the four events spec 13.1 names, and the two clients spec 19 splits between S9 and S12
 _EVENTS = ("session-start", "post-tool-use", "stop", "session-end")
 _CLIENTS = ("claude-code", "codex")
+#: the client-side budget each event can spend on the wire, which is what a plugin script's own
+#: `OBSERVE_TIMEOUT` has to cover. One home for a relationship that spans two processes, and
+#: `tests/plugin/` pins every script against it. `session-start` is the deliberate exception:
+#: the `ensure` launch behind it may outrun the whole hook, and the next Stop repairs it (P30).
+HOOK_BUDGETS = {
+    "session-start": _ATTACH_TIMEOUT,
+    "post-tool-use": _POST_TIMEOUT,
+    "stop": _POST_TIMEOUT + _REPAIR_TIMEOUT + _STOP_POST_TIMEOUT,
+    "session-end": _POST_TIMEOUT,
+}
 #: `auditor.observer.events.MAX_EVENT_PATHS`: a longer body is a 400, which is dropped, not spooled
 _MAX_PATHS = 2000
+#: how many undelivered batches one repo's spool holds before the client stops adding to it. Past
+#: this, a daemon has not run for a very long time and one more dropped batch costs nothing.
+_MAX_SPOOL_BATCHES = 128
 #: `auditor.discovery.find_root`'s markers, re-implemented here the way the statusline does
 _ROOT_MARKERS = (".git", "pyproject.toml", ".auditor")
 #: Stage 0's cheap half: `FileDiscovery._supported`'s two sets, pinned against it by a test
@@ -135,7 +160,7 @@ def disabled() -> bool:
     return os.environ.get("AUDITOR_OBSERVER", "").strip().lower() in _OFF
 
 
-def daemon_record() -> dict:
+def daemon_record() -> dict[str, object]:
     """What a running daemon published, or an empty dict when there is nothing to read."""
     try:
         data = json.loads((home() / "observer" / "daemon.json").read_text())
@@ -146,7 +171,7 @@ def daemon_record() -> dict:
 
 def _send(
     port: int, method: str, path: str, body: str = "", timeout: float = _TIMEOUT
-) -> tuple[int, dict] | None:
+) -> tuple[int, dict[str, object]] | None:
     """One loopback request as ``(status, answer)``, or None when nothing answers.
 
     ``http.client.HTTPException`` is in the tuple because a recycled port can put a non-HTTP
@@ -165,7 +190,7 @@ def _send(
         conn.close()
 
 
-def _ask(port: int, method: str, path: str, body: str = "") -> dict | None:
+def _ask(port: int, method: str, path: str, body: str = "") -> dict[str, object] | None:
     """The lifecycle verbs' reader: the answer alone, or None when nothing answered."""
     sent = _send(port, method, path, body)
     return sent[1] if sent is not None else None
@@ -175,7 +200,9 @@ def _page_url(port: int) -> str:
     return f"http://127.0.0.1:{port}/"
 
 
-def _status(action: str, record: dict, health: dict | None) -> dict:
+def _status(
+    action: str, record: dict[str, object], health: dict[str, object] | None
+) -> dict[str, object]:
     """One ``DaemonStatus`` shaped dict; the mount prints the same keys from the model (P19)."""
     running = health is not None
     port = record.get("port")
@@ -191,7 +218,7 @@ def _status(action: str, record: dict, health: dict | None) -> dict:
     }
 
 
-def _live() -> tuple[dict, dict | None]:
+def _live() -> tuple[dict[str, object], dict[str, object] | None]:
     """The published record and the ``/health`` answer behind it, if a daemon is really there."""
     record = daemon_record()
     port = record.get("port")
@@ -256,20 +283,20 @@ def auditable_shape(rel: str) -> bool:
     return supported and not set(rel.split("/")) & _EXCLUDE_DIRS
 
 
-def _relative(path: str, root: Path) -> str:
-    """One posted path as the repo-relative string the graph keys on.
+def _relative(path: str, root: Path, cwd: Path) -> str:
+    """One posted path as the repo-relative string the graph keys on, or "" for one outside it.
 
     Claude Code sends an absolute `file_path` and `git status -z` sends a repo-relative one; the
-    daemon stores whichever arrives, and every reader below it is keyed on the relative form. A
-    path already relative, or one outside `root`, is returned unchanged.
+    daemon stores whichever arrives, and every reader below it is keyed on the relative form, so
+    a relative name is anchored at the session's `cwd` rather than passed through. A path that is
+    not under `root` has no repo-relative spelling at all, and "" is what the caller drops on.
     """
     named = Path(path)
-    if not named.is_absolute():
-        return path
+    named = named if named.is_absolute() else cwd / named
     try:
         return named.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
-        return path
+        return ""
 
 
 def parse_status_z(payload: str) -> tuple[str, ...]:
@@ -300,7 +327,9 @@ def status_paths(root: Path) -> tuple[str, ...]:
     return () if payload is None else parse_status_z(payload)
 
 
-def _post(path: str, body: dict, timeout: float) -> tuple[int, dict] | None:
+def _post(
+    path: str, body: dict[str, object], timeout: float
+) -> tuple[int, dict[str, object]] | None:
     """One POST to whatever daemon `daemon.json` names, or None when nothing answered."""
     port = daemon_record().get("port")
     if not isinstance(port, int):
@@ -308,8 +337,23 @@ def _post(path: str, body: dict, timeout: float) -> tuple[int, dict] | None:
     return _send(port, "POST", path, json.dumps(body), timeout)
 
 
-def _spool(key: str, root: Path, body: dict) -> None:
-    """Write one refused batch where the daemon adopts it at start (spec 8.1), best effort.
+def spool_name(batch: str) -> str:
+    """What one client-written batch is called inside `repos/<key>/`.
+
+    Its own file rather than a line appended to the daemon's `spool.jsonl`: the daemon renames
+    that file out from under a writer on every drain, and one file per batch is what makes
+    delete-on-2xx a single `unlink` with nothing to interleave with (M4).
+    """
+    return f"spool.client.{batch}.jsonl"
+
+
+def _spool(key: str, root: Path, body: dict[str, object]) -> Path | None:
+    """Write one batch where the daemon adopts it (spec 8.1), and answer where. Best effort.
+
+    Written *before* the POST, not after it: a hook killed by its parent mid-request is the one
+    branch nothing else recovers, so durability may not depend on the request finishing. The
+    caller deletes the file when the daemon answers that it took the batch, and the `batch` id
+    rides along so a delivery this client never saw the answer to is not assessed twice.
 
     The `root.json` crumb goes with it: `Daemon.reconcile` reads it to give an adopted spool a
     loop, so a spool without one is drained into nothing.
@@ -328,44 +372,80 @@ def _spool(key: str, root: Path, body: dict) -> None:
                     }
                 )
             )
+        if len(list(directory.glob(spool_name("*")))) >= _MAX_SPOOL_BATCHES:
+            return None
         event = {
             "repo": body["repo"],
             "paths": body["paths"],
             "kind": body["kind"],
             "client": body["client"],
             "session_id": body["session_id"],
+            "batch": body["batch"],
             "at": time.time(),
         }
-        with (directory / "spool.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event) + "\n")
+        written = directory / spool_name(str(body["batch"]))
+        written.write_text(json.dumps(event) + "\n", encoding="utf-8")
     except OSError:
-        return
+        return None
+    return written
 
 
-def _claude_event(payload: dict) -> dict:
+def _drop(spooled: Path | None) -> None:
+    """Forget a batch the daemon has answered for. A missing file is already forgotten."""
+    if spooled is not None:
+        with contextlib.suppress(OSError):
+            spooled.unlink()
+
+
+class HookRead(NamedTuple):
+    """The four fields S9 needs out of any client's hook payload, already type-guarded.
+
+    A named shape rather than a dict so a reader that forgets a field is a signature error here
+    rather than a `KeyError` inside a hook whose whole contract is that it cannot fail.
+    """
+
+    cwd: str
+    session_id: str
+    agent_id: str
+    path: str
+
+
+def _text(payload: dict[str, object], field: str) -> str:
+    """One payload field as a string, or "" for anything else.
+
+    Every field, not just `path`: a client that sends a number where a string belongs would
+    otherwise reach `Path()` or the wire and take the exit code with it (spec 13.1's contract).
+    """
+    value = payload.get(field)
+    return value if isinstance(value, str) else ""
+
+
+def _claude_event(payload: dict[str, object]) -> HookRead:
     """The four fields S9 needs out of a Claude Code hook payload, whichever event wrote it."""
     tool_input = payload.get("tool_input")
-    path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-    return {
-        "cwd": payload.get("cwd") or "",
-        "session_id": payload.get("session_id") or "",
-        "agent_id": payload.get("agent_id") or "",
-        "path": path if isinstance(path, str) else "",
-    }
+    named = tool_input if isinstance(tool_input, dict) else {}
+    return HookRead(
+        cwd=_text(payload, "cwd"),
+        session_id=_text(payload, "session_id"),
+        agent_id=_text(payload, "agent_id"),
+        path=_text(named, "file_path"),
+    )
 
 
 #: one reader per client; S12 adds `codex` here and touches no plugin script
-_READERS = {"claude-code": _claude_event}
+_READERS: dict[str, Callable[[dict[str, object]], HookRead]] = {
+    "claude-code": _claude_event
+}
 
 
-def _attach(root: Path, read: dict, client: str, timeout: float) -> None:
+def _attach(root: Path, read: HookRead, client: str, timeout: float) -> None:
     """Tell the daemon this session is working in `root`. Best effort, like everything here."""
     _post(
         "/sessions/attach",
         {
             "repo": str(root),
-            "session_id": read["session_id"],
-            "cwd": read["cwd"],
+            "session_id": read.session_id,
+            "cwd": read.cwd,
             "client": client,
             "home": str(home()),
         },
@@ -374,63 +454,79 @@ def _attach(root: Path, read: dict, client: str, timeout: float) -> None:
 
 
 def _emit(
-    root: Path, paths: tuple[str, ...], kind: str, read: dict, client: str
+    root: Path, paths: tuple[str, ...], kind: str, read: HookRead, client: str
 ) -> None:
-    """POST one batch, and spool it when nothing answered. A refusal is dropped, never spooled.
+    """Spool one batch, POST it, and drop the spool only once the daemon has answered for it.
 
-    Truncated at `_MAX_PATHS`, because a longer body is refused whole and a refusal is not
-    spooled: losing the tail of one Stop batch beats losing all of it.
+    Spool first: this process can be killed by its parent at any point, and only a batch already
+    on disk survives that. The answer then decides what the spool line means - a 2xx took it and
+    a 4xx refused this body for ever, so both delete it; a 5xx or a timeout is transient, so the
+    line stays and the daemon adopts it. The `batch` id is what keeps a delivery whose answer
+    never arrived from being assessed twice (spec 8.1, amended).
+
+    Truncated at `_MAX_PATHS`, because a longer body is refused whole: losing the tail of one
+    Stop batch beats losing all of it.
     """
     if not paths:
         return
     key = repo_dir_key(root)
-    body = {
+    body: dict[str, object] = {
         "repo": str(root),
         "key": key,
         "paths": list(paths)[:_MAX_PATHS],
         "kind": kind,
         "client": client,
-        "session_id": read["session_id"],
+        "session_id": read.session_id,
+        "batch": uuid.uuid4().hex,
     }
-    if _post("/events", body, _POST_TIMEOUT) is None:
-        _spool(key, root, body)
+    spooled = _spool(key, root, body)
+    budget = _STOP_POST_TIMEOUT if kind == "stop" else _POST_TIMEOUT
+    sent = _post("/events", body, budget)
+    if sent is not None and sent[0] < 500:
+        _drop(spooled)
 
 
-def _hook(event: str, client: str, payload: dict) -> int:
+def _hook(event: str, client: str, payload: dict[str, object]) -> int:
     """One hook event, whatever the client. Never raises and never signals failure."""
     reader = _READERS.get(client)
     if reader is None:  # `codex` is declared and arrives in S12
         return 0
     read = reader(payload)
-    if read["agent_id"]:  # spec 8.2: a subagent's tool call is not this session's edit
-        return 0
-    root = find_root(Path(read["cwd"] or "."))
+    cwd = Path(read.cwd or ".")
+    root = find_root(cwd)
     if event == "session-start":
         _run("ensure")
         _attach(root, read, client, _ATTACH_TIMEOUT)
         return 0
     if event == "session-end":
-        _post("/sessions/detach", {"session_id": read["session_id"]}, _POST_TIMEOUT)
+        _post("/sessions/detach", {"session_id": read.session_id}, _POST_TIMEOUT)
         return 0
     if event == "post-tool-use":
-        named = (_relative(read["path"], root),) if read["path"] else ()
+        if read.agent_id:  # spec 8.2: a subagent's tool call is not this session's edit
+            return 0
+        named = (_relative(read.path, root, cwd),) if read.path else ()
         _emit(root, tuple(p for p in named if auditable_shape(p)), "edit", read, client)
         return 0
-    beat = _post(
-        "/sessions/heartbeat", {"session_id": read["session_id"]}, _POST_TIMEOUT
-    )
+    beat = _post("/sessions/heartbeat", {"session_id": read.session_id}, _POST_TIMEOUT)
     if beat is not None and not beat[1].get("ok"):
         # a cold `ensure` can outrun session-start's budget, so the daemon may never have been
-        # told about this session; this is where that is noticed and repaired
-        _attach(root, read, client, _POST_TIMEOUT)
+        # told about this session; this is where that is noticed and repaired, on the budget the
+        # same handler gets from session-start rather than an edit event's (S9-6)
+        _attach(root, read, client, _REPAIR_TIMEOUT)
     kept = tuple(p for p in status_paths(root) if auditable_shape(p))
     _emit(root, kept, "stop", read, client)
     return 0
 
 
-def read_payload() -> dict:
-    """The client's own hook JSON on stdin, or an empty payload when there is none."""
+def read_payload() -> dict[str, object]:
+    """The client's own hook JSON on stdin, or an empty payload when there is none.
+
+    A terminal is not a payload: the plugin always pipes, but `auditr-observer hook stop` run by
+    hand from a shell would otherwise block on `json.load` for ever.
+    """
     try:
+        if sys.stdin.isatty():
+            return {}
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError, OSError):
         return {}
@@ -513,7 +609,7 @@ def _restart(port: int) -> str:
     return "restarted"
 
 
-def _stop(record: dict) -> str:
+def _stop(record: dict[str, object]) -> str:
     """SIGTERM the published pid; the daemon's handler releases the lock and `daemon.json`."""
     pid = record.get("pid")
     if not isinstance(pid, int):
@@ -526,7 +622,7 @@ def _stop(record: dict) -> str:
     return "stopped" if stopped else "still stopping"
 
 
-def _run(command: str) -> dict:
+def _run(command: str) -> dict[str, object]:
     """One lifecycle verb against whatever daemon is there, starting one when asked to."""
     record, health = _live()
     if command in ("start", "ensure"):
@@ -573,7 +669,11 @@ def main(argv: list[str] | None = None) -> int:
         print(_DISABLED, file=sys.stderr)
         return 0
     if args.command == "hook":
-        return _hook(args.event, args.client, read_payload())
+        try:
+            return _hook(args.event, args.client, read_payload())
+        except Exception:  # noqa: BLE001 - the file's whole contract is that it exits 0
+            print(_FAILED, file=sys.stderr)
+            return 0
     print(json.dumps(_run(args.command)))
     return 0
 
