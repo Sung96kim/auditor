@@ -125,11 +125,14 @@ uv run ruff format --check auditor plugin auditr_observer.py tests   # format ch
 ### CI
 
 ```bash
-uv run pytest tests/malware/test_integration.py -v   # the second CI job; needs clamscan on PATH
+uv run pytest tests/malware/test_integration.py -v   # the integration CI job; needs clamscan
 ```
 
-- `.github/workflows/ci.yml` runs the three local commands above on every pull request, then the
-  integration job against a real `clamscan`.
+- `.github/workflows/ci.yml` runs three jobs on every pull request:
+  - `test`: the three local commands above.
+  - `ui`: `pnpm install --frozen-lockfile`, `typecheck`, `test`, `build`, then a `git diff` that
+    fails when the committed `auditor/graph/ui/dist/` is not what a rebuild produces.
+  - `integration`: the malware suite against a real `clamscan`.
 
 ## Docs
 

@@ -81,9 +81,43 @@ def test_the_ui_job_installs_frozen_then_typechecks_builds_and_tests(step: str):
 
 
 def test_the_ui_job_fails_when_the_committed_bundle_is_not_what_a_rebuild_produces():
-    """The only check that compares the shipped artifact to source rather than to a digest."""
+    """The only check that compares the shipped artifact to source rather than to a digest.
+
+    Scoped to the directory rather than to `index.html`: the narrower diff exited 0 while the
+    build deleted the committed `dist/inputs.sha256` next to it.
+    """
     steps = [s["run"] for s in _jobs("ci.yml")["ui"]["steps"] if "run" in s]
-    assert "git diff --exit-code -- auditor/graph/ui/dist/index.html" in steps
+    assert "git diff --exit-code -- auditor/graph/ui/dist/" in steps
+
+
+def test_the_ui_job_runs_its_steps_in_the_one_order_that_works():
+    """`pnpm/action-setup` has to precede `setup-node`, or `cache: pnpm` resolves no store."""
+    steps = _jobs("ci.yml")["ui"]["steps"]
+    used = [s["uses"].split("@")[0] for s in steps if "uses" in s]
+    assert used == ["actions/checkout", "pnpm/action-setup", "actions/setup-node"]
+    ran = [s["run"] for s in steps if "run" in s]
+    assert ran == [*_UI_STEPS, "git diff --exit-code -- auditor/graph/ui/dist/"]
+
+
+def test_the_ui_job_pins_the_node_major_and_the_pnpm_cache():
+    """`engines.node` only warns, so `setup-node` is the actual pin the reproducible build needs."""
+    setup = next(
+        s
+        for s in _jobs("ci.yml")["ui"]["steps"]
+        if s.get("uses", "").startswith("actions/setup-node@")
+    )
+    assert setup["with"]["node-version"] == 22
+    assert setup["with"]["cache"] == "pnpm"
+    assert setup["with"]["cache-dependency-path"] == "auditor/graph/ui/pnpm-lock.yaml"
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
+def test_every_job_runs_under_a_declared_token_scope(workflow: str):
+    """A job with no `permissions` above it inherits whatever the repository default happens to be."""
+    document = yaml.safe_load((_WORKFLOWS / workflow).read_text())
+    top = document.get("permissions")
+    for name, job in document["jobs"].items():
+        assert top or job.get("permissions"), name
 
 
 def test_the_ui_job_pins_the_package_manager_through_the_repo_s_own_package_manager_pin():
@@ -100,7 +134,9 @@ def test_the_ui_job_pins_the_package_manager_through_the_repo_s_own_package_mana
 def test_the_ui_job_never_reaches_for_npm_or_yarn():
     """The repo is pnpm only; an `npm i` here would resolve outside the lockfile.
 
-    Word-bounded on purpose: a substring check calls every `pnpm` line an `npm` one.
+    Word-bounded on purpose: a substring check calls every `pnpm` line an `npm` one. Scoped to
+    the `ui` job on purpose too: the `test` job installs the Claude CLI with npm because that is
+    the only distribution it has, and that step is not this repo's own dependency resolution.
     """
     steps = [s["run"] for s in _jobs("ci.yml")["ui"]["steps"] if "run" in s]
     for step in steps:

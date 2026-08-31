@@ -1,8 +1,8 @@
 # observer
 
-The background daemon that watches configured repos and serves the page a later slice will make
-live. One process per `$AUDITOR_HOME`, reachable on loopback in about a millisecond, so a session
-hook can post an edit without waiting on anything.
+The background daemon that watches configured repos and serves the live page. One process per
+`$AUDITOR_HOME`, reachable on loopback in about a millisecond, so a session hook can post an edit
+without waiting on anything.
 
 The daemon accepts, records and refines. One `RepoLoop` per attached repo drives spec 8.3's ladder
 over the events the drain hands it, and `/api/status` counts those events, not batches, as
@@ -160,21 +160,23 @@ thread rather than pinning one.
   cluster counts and how to run `pnpm build`, rather than raising. The daemon injects
   `window.__AUDITOR_OBSERVER__ = {live, base, repo}` beside `window.__AUDITOR_GRAPH__`, with every
   `<` in either blob escaped, so no value in them can end the element or open the tokenizer's
-  double-escaped state. The page reads that flag at first paint and then polls `/api/status` and `/api/runs` every 3 s with
-  `If-None-Match`. `graph serve` injects no bootstrap, so the same bundle stays a static snapshot
+  double-escaped state. The page reads that flag at first paint and then polls `/api/status` and
+  `/api/runs` every 3 s with `If-None-Match`. `graph serve` injects no bootstrap, so the same bundle stays a static snapshot
   there and issues no request at all. The page is read-only by transport: a browser sends `Origin`
   on a same-origin `POST` and the server refuses any request that carries one, so nothing on the
   page can write.
 - `/api/status`'s `state` is the daemon's own word, `running` or `restarting`; the per-repo state
   badge reads `repos[i].state` instead, which is that repo's `LoopState`. `idle_seconds` is the gap
-  before the request being served, measured from the daemon's start until something arrives. A
-  read is never activity: no `GET` or `HEAD` moves it, whatever the route, so no page fetch and no
-  status call can hold the daemon open past the idle window. Only a write does. `evals` is the runner roster, one row per model runner carrying its name and the
-  model it is pinned to with no measurements in it; `/api/evals` is the per-repo answer that fills
-  the numbers. Both resolve a runner's model the same way, so a runner with no model of its own
-  carries an empty string and no numbers on either route, rather than another runner's. `vectors` is still at its default and stays there until S13. So are both meters, and they
-  are per repo: `budget` and `limits` ride on each `repos[]` entry, carrying what that repo's own
-  loop published, so two repos cannot overwrite one another's numbers.
+  before the request being served, measured from the daemon's start until something arrives. A read
+  is never activity: no `GET` or `HEAD` moves it, whatever the route, so no page fetch and no
+  status call can hold the daemon open past the idle window. Only a write does.
+- `evals` is the runner roster, one row per model runner carrying its name and the model it is
+  pinned to with no measurements in it; `/api/evals` is the per-repo answer that fills the numbers.
+  Both resolve a runner's model the same way, so a runner with no model of its own carries an
+  empty string and no numbers on either route, rather than another runner's.
+- `vectors` is still at its default and stays there until S13. Both meters are real, and they are
+  per repo: `budget` and `limits` ride on each `repos[]` entry, carrying what that repo's own loop
+  published, so two repos cannot overwrite one another's numbers.
 
 ## What the loop does
 

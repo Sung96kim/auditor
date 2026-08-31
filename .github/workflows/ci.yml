@@ -5,6 +5,9 @@ on:
   # main is validated by release.yml (which tests the merged commit, then ships) — no need to
   # also run CI here on push and double up the suite.
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: lint + test suite
@@ -45,8 +48,9 @@ jobs:
       - run: pnpm --dir auditor/graph/ui test
       - run: pnpm --dir auditor/graph/ui build
       # The wheel ships the committed bundle, so a rebuild that differs means the shipped
-      # artifact is not what src/ says it is. The pytest stamp is the local half of this.
-      - run: git diff --exit-code -- auditor/graph/ui/dist/index.html
+      # artifact is not what src/ says it is. The whole directory, not just index.html: the
+      # stamp lives here too and a narrower diff is how a deleted one went unnoticed.
+      - run: git diff --exit-code -- auditor/graph/ui/dist/
 
   integration:
     name: integration (real clamscan)
