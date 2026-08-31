@@ -31,7 +31,7 @@ def _stub(tmp_path: Path, *, stdout: str, exit_code: int) -> Path:
 def _run(
     bin_dir: Path, tmp_path: Path, *, enabled: bool
 ) -> subprocess.CompletedProcess:
-    env = {"PATH": f"{bin_dir}:/usr/bin"}
+    env = {"PATH": f"{bin_dir}:/usr/bin", "AUDITOR_OBSERVER": "0"}
     if enabled:
         env["AUDITOR_VERIFY_HOOK"] = "1"
     return subprocess.run(
@@ -106,3 +106,51 @@ def test_silent_when_auditr_absent(tmp_path):
     )
     assert proc.stdout.strip() == ""
     assert proc.returncode == 0
+
+
+def _run_observed(
+    path: str, tmp_path: Path, env_extra: dict
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        input=json.dumps({"cwd": str(tmp_path), "session_id": "s1"}),
+        capture_output=True,
+        text=True,
+        env={"PATH": path, **env_extra},
+    )
+
+
+def _stub_over(bin_dir: Path, *, stdout: str, exit_code: int) -> None:
+    """Put the `auditr` gate stub beside an existing recorder's `auditr-observer`."""
+    stub = bin_dir / "auditr"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        f"import sys\nsys.stdout.write({stdout!r})\nraise SystemExit({exit_code})\n"
+    )
+    stub.chmod(0o755)
+
+
+def test_delegates_the_stop_batch_to_the_observer_client(recorder, tmp_path):
+    stub = recorder("auditr-observer")
+    assert _run_observed(stub.path(), tmp_path, {}).returncode == 0
+    assert [call["argv"] for call in stub.calls()] == [
+        ["hook", "stop", "--client", "claude-code"]
+    ]
+
+
+def test_the_stop_batch_is_posted_even_though_the_gate_is_opt_in(recorder, tmp_path):
+    """Spec 8.2: this is the only edit path Codex has and it closes Claude's Bash-edit hole."""
+    stub = recorder("auditr-observer")
+    done = _run_observed(stub.path(), tmp_path, {})
+    assert done.stdout.strip() == ""  # the gate stayed off
+    assert len(stub.calls()) == 1
+
+
+def test_the_gate_still_blocks_with_the_observer_wired_in(tmp_path, recorder):
+    stub = recorder("auditr-observer")
+    _stub_over(stub.bin_dir, stdout=_TRIP_PAYLOAD, exit_code=1)
+    decision = json.loads(
+        _run_observed(stub.path(), tmp_path, {"AUDITOR_VERIFY_HOOK": "1"}).stdout
+    )
+    assert decision["decision"] == "block"
+    assert len(stub.calls()) == 1

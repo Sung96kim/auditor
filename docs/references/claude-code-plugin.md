@@ -66,7 +66,7 @@ Invoked as `/auditor:<name>`, and auto-invoked when the task matches the skill's
 
 ## Hooks
 
-`plugin/hooks/hooks.json` registers three stdlib-only scripts. Each no-ops when `auditr` is missing
+`plugin/hooks/hooks.json` registers four stdlib-only scripts. Each no-ops when `auditr` is missing
 from PATH or the event payload is unusable. The environment variables that tune them are in
 [configuration.md](configuration.md).
 
@@ -79,6 +79,19 @@ from PATH or the event payload is unusable. The environment variables that tune 
 - `verify_stop.py` on `Stop`: a verify-before-stop gate, off by default. It scans the uncommitted
   delta (`--since HEAD`) and blocks finishing while the gate still trips. A tool or config error
   surfaces a note and does not block, so a hiccup cannot wedge the agent.
+- `session_end.py` on `SessionEnd`: detaches this session from the observer daemon. It reads no
+  reason field and emits nothing; a `SessionEnd` hook's output is discarded anyway.
+
+Every one of the four also hands its payload to `auditr-observer hook <event> --client claude-code`
+on that command's stdin, before its own audit behaviour runs and independently of the environment
+variable that gates it: `AUDITOR_AUTOHOOK` and `AUDITOR_VERIFY_HOOK` turn the audit halves off and
+`AUDITOR_OBSERVER=0` turns the observer half off, and it does so before any process is started,
+so switching it off costs nothing per event. `auditr-observer` is resolved on PATH and nowhere
+else: there is no `uvx` fallback, because resolving a package inside a hook's one to three second
+budget cannot finish, and `session_start.py` says once on stderr when the client is not installed.
+The observer half holds no HTTP client, no port lookup and no spool of its own: those live once,
+in `auditr_observer.py` ([observer.md](observer.md)). Measured cost of the delegation: about 42 ms
+per hook, against the 200 ms budget the observer design gives it.
 
 ## Status line
 

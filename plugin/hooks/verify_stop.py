@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 
-from _common import auditr_available, emit, read_event
+from _common import auditr_available, emit, observe, read_event
 
 
 def emitted_scan_report(stdout: str) -> bool:
@@ -24,11 +24,18 @@ def emitted_scan_report(stdout: str) -> bool:
     return isinstance(data, dict) and ("files" in data or "totals" in data)
 
 
+#: two requests and a `git status`, against the shell-out and spec 13.1's 200 ms each
+OBSERVE_TIMEOUT = 2.0
+
+
 def main() -> None:
-    if os.environ.get("AUDITOR_VERIFY_HOOK") != "1" or not auditr_available():
-        return
     event = read_event()
     if event is None:
+        return
+    # the Stop path set is the only edit path Codex has and it closes Claude's Bash-edit hole,
+    # so it is posted whether or not the opt-in gate is on
+    observe("stop", event, OBSERVE_TIMEOUT)
+    if os.environ.get("AUDITOR_VERIFY_HOOK") != "1" or not auditr_available():
         return
     cwd = event.get("cwd") or "."
     floor = os.environ.get("AUDITOR_VERIFY_SEVERITY", "high")

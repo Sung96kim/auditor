@@ -10,9 +10,11 @@ import os
 import subprocess
 from pathlib import Path
 
-from _common import SEVERITY_RANK, auditr_available, emit_context, read_event
+from _common import SEVERITY_RANK, auditr_available, emit_context, observe, read_event
 
 SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".sh", ".bash"}
+#: the shell-out costs ~48 ms and the child holds spec 13.1's own 200 ms socket budget
+OBSERVE_TIMEOUT = 1.0
 
 
 def changed_file(event: dict) -> Path | None:
@@ -85,10 +87,13 @@ def summarize(result: dict, floor: int) -> str | None:
 
 
 def main() -> None:
-    if os.environ.get("AUDITOR_AUTOHOOK") == "0" or not auditr_available():
-        return
     event = read_event()
     if event is None:
+        return
+    # the observer half is not the audit half: AUDITOR_AUTOHOOK gates the audit, and
+    # AUDITOR_OBSERVER gates this, inside the client
+    observe("post-tool-use", event, OBSERVE_TIMEOUT)
+    if os.environ.get("AUDITOR_AUTOHOOK") == "0" or not auditr_available():
         return
     file = changed_file(event)
     if file is None:

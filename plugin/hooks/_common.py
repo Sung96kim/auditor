@@ -4,8 +4,11 @@ Dependency-free by design — hooks run outside the auditor venv, so nothing her
 `auditor` or any third-party package. Each hook lives in this directory, so `import _common`
 resolves against `sys.path[0]` when the hook is run as a script."""
 
+import contextlib
 import json
+import os
 import shutil
+import subprocess
 import sys
 
 SEVERITY_RANK = {"suggestion": 0, "low": 1, "medium": 2, "high": 3, "blocking": 4}
@@ -42,3 +45,40 @@ def emit_context(event_name: str, context: str) -> None:
             }
         }
     )
+
+
+#: the six values `auditr_observer._OFF` and `auditor.paths.OFF_VALUES` hold; a test pins the set
+_OFF = frozenset({"0", "f", "false", "n", "no", "off"})
+
+
+def observer_argv() -> list[str] | None:
+    """How to run `auditr-observer` here, or None when it is not installed (spec 13.1).
+
+    There is no `uvx` ladder: `uvx --from "auditr[observer-claude]"` resolves a ~300MB SDK extra
+    inside a one to three second hook budget, so it is killed every time and never fills a cache.
+    """
+    found = shutil.which("auditr-observer")
+    return [found] if found else None
+
+
+def observe(event: str, payload: dict, timeout: float) -> bool:
+    """Hand one hook payload to `auditr-observer hook <event>`, on its own stdin.
+
+    The one place a plugin hook talks to the observer: the transport, the spool and the
+    202-versus-400 rule all live in `auditr_observer.py`. False means no client is installed,
+    which is the one case worth a word to the user.
+    """
+    if os.environ.get("AUDITOR_OBSERVER", "").strip().lower() in _OFF:
+        return True
+    argv = observer_argv()
+    if argv is None:
+        return False
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            [*argv, "hook", event, "--client", "claude-code"],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    return True
