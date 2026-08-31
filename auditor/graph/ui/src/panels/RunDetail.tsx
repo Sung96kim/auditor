@@ -1,11 +1,9 @@
-import { useEffect, useState } from "react";
-import { getJson } from "../api/client";
-import { failed, initial, received, type PollState } from "../api/poll";
+import { useFetchOnce } from "../api/useFetchOnce";
 import type { RunDetailView } from "../api/types";
 import { TEXT, THEME } from "../theme";
 import { accepted, rejected } from "./runs";
 import { block, microLabel, mono, nested } from "./Panel";
-import { Failed, Loading } from "./States";
+import { Failed, Loading, Reconnecting } from "./States";
 
 const box: React.CSSProperties = {
   ...nested,
@@ -84,25 +82,9 @@ export interface RunDetailProps {
 
 /** Spec 12.1's C13. Fetched on a row click, never on the 3 s cycle (P3). */
 export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps) {
-  const [state, setState] = useState<PollState<RunDetailView>>(() =>
-    initial<RunDetailView>(),
+  const { state, retry } = useFetchOnce<RunDetailView>(
+    `${base}api/runs/${runId}?${new URLSearchParams({ repo })}`,
   );
-
-  useEffect(() => {
-    let alive = true;
-    const query = new URLSearchParams({ repo });
-    getJson<RunDetailView>(`${base}api/runs/${runId}?${query}`, "")
-      .then((got) => {
-        if (alive) setState((prev) => received(prev, got.value));
-      })
-      .catch((err) => {
-        if (alive) setState((prev) => failed(prev, String(err)));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [base, repo, runId]);
-
   const view = state.data;
   return (
     <div style={box} data-testid="RunDetail">
@@ -131,7 +113,10 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
       </div>
 
       {state.phase === "loading" ? <Loading what="this run" /> : null}
-      {state.phase === "error" ? <Failed error={state.error} onRetry={onClose} /> : null}
+      {state.phase === "error" ? <Failed error={state.error} onRetry={retry} /> : null}
+      {state.phase === "stale" ? (
+        <Reconnecting error={state.error} onRetry={retry} />
+      ) : null}
 
       {view ? (
         <>

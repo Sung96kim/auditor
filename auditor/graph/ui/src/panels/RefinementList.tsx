@@ -1,34 +1,17 @@
-import { useEffect, useState } from "react";
-import { getJson } from "../api/client";
-import { failed, initial, received, type PollState } from "../api/poll";
+import { useFetchOnce } from "../api/useFetchOnce";
 import type { RefinementRow, RefinementsView } from "../api/types";
 import { TEXT, THEME, TONE } from "../theme";
 import { REFINEMENT_STATUSES } from "./runs";
 import Panel, { block, microLabel, mono } from "./Panel";
-import { Empty, Failed, Loading } from "./States";
+import { Empty, Failed, Loading, Reconnecting } from "./States";
 
 const row: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
 
 /** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3). */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
-  const [state, setState] = useState<PollState<RefinementsView>>(() =>
-    initial<RefinementsView>(),
+  const { state, retry } = useFetchOnce<RefinementsView>(
+    `${base}api/refinements?${new URLSearchParams({ repo })}`,
   );
-
-  useEffect(() => {
-    let alive = true;
-    const query = new URLSearchParams({ repo });
-    getJson<RefinementsView>(`${base}api/refinements?${query}`, "")
-      .then((got) => {
-        if (alive) setState((prev) => received(prev, got.value));
-      })
-      .catch((err) => {
-        if (alive) setState((prev) => failed(prev, String(err)));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [base, repo]);
 
   const rows = state.data?.refinements.rows ?? [];
   const total = state.data?.refinements.refinement_count ?? rows.length;
@@ -58,11 +41,12 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
       }
     >
       {state.phase === "loading" ? <Loading what="refinements" /> : null}
-      {state.phase === "error" ? (
-        <Failed error={state.error} onRetry={() => setState(initial<RefinementsView>())} />
+      {state.phase === "error" ? <Failed error={state.error} onRetry={retry} /> : null}
+      {state.phase === "stale" ? (
+        <Reconnecting error={state.error} onRetry={retry} />
       ) : null}
 
-      {state.phase === "ready" && rows.length === 0 ? (
+      {(state.phase === "ready" || state.phase === "stale") && rows.length === 0 ? (
         <Empty what="refinements" hint="no refinement has been proposed for this repo yet" />
       ) : null}
 

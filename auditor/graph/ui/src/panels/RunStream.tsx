@@ -178,6 +178,7 @@ export default function RunStream({ live }: { live: LiveGraph }) {
 
       {open ? (
         <RunDetail
+          key={open}
           base={live.boot.base}
           repo={live.boot.repo}
           runId={open}

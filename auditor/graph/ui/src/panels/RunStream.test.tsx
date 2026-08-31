@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import RunStream from "./RunStream";
 import { initial } from "../api/poll";
 import { NO_RUNS, type LiveGraph } from "../api/useLiveGraph";
-import { cliRunRow, logReport, runRow } from "../api/wire.fixture";
+import { cliRunRow, logReport, runDetail, runRow } from "../api/wire.fixture";
 import type { RunRow, RunsView, Status } from "../api/types";
 
 const RUN = runRow({ trigger_kind: "watch" });
@@ -65,6 +65,27 @@ describe("the run stream", () => {
     fireEvent.click(first);
     expect(first.style.background).not.toBe("");
     expect(other.style.background).toBe("");
+  });
+
+  it("opening a second run never shows the first one's contents under the new id", async () => {
+    const detail = (prompt: string) =>
+      new Response(JSON.stringify({ ...runDetail(), prompt }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(detail(call++ === 0 ? "the first brief" : "the second brief"))),
+    );
+    const second = runRow({ run_id: "0000second00000", trigger_kind: "manual" });
+    render(<RunStream live={live(ready([RUN, second]))} />);
+    const [first, other] = screen.getAllByRole("row").slice(1);
+    fireEvent.click(first);
+    expect(await screen.findByText("the first brief")).not.toBeNull();
+    fireEvent.click(other);
+    expect(screen.queryByText("the first brief")).toBeNull();
+    expect(await screen.findByText("the second brief")).not.toBeNull();
   });
 
   it("a cli run renders, though it has no session, no branch and no commit to show", () => {

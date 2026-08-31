@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { getJson } from "../api/client";
-import { failed, initial, received, type PollState } from "../api/poll";
+import { useMemo, useState } from "react";
+import { useFetchOnce } from "../api/useFetchOnce";
 import type { FlowView } from "../api/types";
 import { TEXT, THEME } from "../theme";
 import Panel, { microLabel, mono } from "../panels/Panel";
-import { Empty, Failed, Loading } from "../panels/States";
+import { Empty, Failed, Loading, Reconnecting } from "../panels/States";
 import { flatten, layered, type Placed } from "./tree";
 
 const NODE_W = 180;
@@ -99,28 +98,16 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
   const [direction, setDirection] = useState<"out" | "in">("out");
   const [depth, setDepth] = useState(4);
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
-  const [state, setState] = useState<PollState<FlowView>>(() => initial<FlowView>(null));
-
-  useEffect(() => {
-    if (!symbol) return;
-    let alive = true;
-    const query = new URLSearchParams({
-      repo,
-      symbol,
-      direction,
-      depth: String(depth),
-    });
-    getJson<FlowView>(`${base}api/flow?${query}`, "")
-      .then((got) => {
-        if (alive) setState((prev) => received(prev, got.value));
-      })
-      .catch((err) => {
-        if (alive) setState((prev) => failed(prev, String(err)));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [base, repo, symbol, direction, depth]);
+  const query = new URLSearchParams({
+    repo,
+    symbol,
+    direction,
+    depth: String(depth),
+  });
+  const { state, retry } = useFetchOnce<FlowView>(
+    `${base}api/flow?${query}`,
+    Boolean(symbol),
+  );
 
   const rows = useMemo(() => {
     const root = state.data?.flow?.root;
@@ -214,7 +201,10 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
       ) : null}
       {symbol && state.phase === "loading" ? <Loading what="the flow walk" /> : null}
       {symbol && state.phase === "error" ? (
-        <Failed error={state.error} onRetry={() => setState(initial<FlowView>(null))} />
+        <Failed error={state.error} onRetry={retry} />
+      ) : null}
+      {symbol && state.phase === "stale" ? (
+        <Reconnecting error={state.error} onRetry={retry} />
       ) : null}
       {symbol && state.phase === "ready" && state.data?.flow === null ? (
         <Empty what="flow for that symbol" hint="the graph does not hold a node by that name" />
