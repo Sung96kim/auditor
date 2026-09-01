@@ -65,7 +65,7 @@ from auditor.graph.refine.namespace import (
     under_scope,
 )
 from auditor.graph.refine.prompts import SYSTEM_PROMPT_SHA
-from auditor.graph.refine.tiers import TierPolicy
+from auditor.graph.refine.tiers import TierPolicy, activation_tier
 from auditor.graph.refine.verify import FactVerifier, FileFacts, VerifyResult
 from auditor.roles import RoleClassifier
 from auditor.user_settings import STRANDED_RUNNING_FACTOR, LimitsConfig, UserSettings
@@ -1019,6 +1019,7 @@ class RefinementService:
             min_precision=self.user.observer.tuning.min_precision,
             runner=run.runner,
             model=run.model or "",
+            ceiling=activation_tier(run.runner, self.user.observer.tuning),
         )
 
     async def _conflict_rules(self, staged: StagedRun) -> ConflictRules:

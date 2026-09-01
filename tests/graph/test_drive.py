@@ -1,4 +1,7 @@
-"""Which runner a request resolves to, and what it says when none can drive it."""
+"""What `refine`, `evaluate` and `build_runner` do with the runner they were given.
+
+The choice ladder itself lives in `test_runner_select.py`, which spec 15 names for it.
+"""
 
 import os
 import subprocess
@@ -13,76 +16,10 @@ from auditor.graph.refine import drive
 from auditor.graph.refine.models import RunnerKind, RunStatus
 from auditor.graph.refine.runner import FakeRunner, RefinementJob, RunnerUnavailable
 from auditor.graph.refine.sdk_runner import SdkRunner
-from auditor.user_settings import RunnerConfig
 
 ANSWER = {"summary": "one edge", "proposed": 1, "stopped_because": "done"}
 
 CODE = drive.RunnerChoiceCode
-
-
-@pytest.mark.parametrize(
-    ("agent", "sdk", "hint", "code"),
-    [
-        ("auto", True, True, CODE.CLAUDE),
-        ("auto", True, False, CODE.PAUSED_AUTH),
-        ("auto", False, True, CODE.UNAVAILABLE_SDK),
-        ("auto", False, False, CODE.UNAVAILABLE_SDK),
-        ("claude", True, True, CODE.CLAUDE),
-        ("claude", True, False, CODE.PAUSED_AUTH),
-        ("claude", False, True, CODE.UNAVAILABLE_SDK),
-        ("codex", True, True, CODE.UNAVAILABLE_CODEX),
-        ("codex", False, False, CODE.UNAVAILABLE_CODEX),
-    ],
-)
-def test_the_choice_matrix(agent, sdk, hint, code):
-    choice = drive.select_runner(
-        RunnerConfig(agent=agent), sdk_available=sdk, auth_hint=hint
-    )
-    assert choice.code is code
-    assert choice.kind is (RunnerKind.CLAUDE if code is CODE.CLAUDE else None)
-
-
-@pytest.mark.parametrize(
-    ("code", "named"),
-    [
-        (CODE.UNAVAILABLE_SDK, "observer-claude"),
-        (CODE.PAUSED_AUTH, "log in"),
-        (CODE.UNAVAILABLE_CODEX, "S12"),
-    ],
-)
-def test_every_refusal_says_what_to_do_about_it(code, named):
-    """The code is what the wire carries; the detail is the sentence a human acts on."""
-    by_code = {
-        CODE.UNAVAILABLE_SDK: dict(agent="claude", sdk_available=False, auth_hint=True),
-        CODE.PAUSED_AUTH: dict(agent="claude", sdk_available=True, auth_hint=False),
-        CODE.UNAVAILABLE_CODEX: dict(agent="codex", sdk_available=True, auth_hint=True),
-    }[code]
-    agent = by_code.pop("agent")
-    choice = drive.select_runner(RunnerConfig(agent=agent), **by_code)
-    assert choice.code is code
-    assert named in choice.detail
-
-
-def test_a_requested_runner_overrides_the_configured_one():
-    config = RunnerConfig(agent="claude")
-    choice = drive.select_runner(
-        config, requested="codex", sdk_available=True, auth_hint=True
-    )
-    assert choice.code is CODE.UNAVAILABLE_CODEX
-
-
-def test_the_injected_flags_beat_the_module_level_ones(monkeypatch):
-    """A default argument would bind the flag by value at import and *call* `auth_hinted` once,
-    so every monkeypatch in these tests would be a no-op."""
-    monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
-    monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: True)
-    assert drive.select_runner(RunnerConfig()).code is CODE.CLAUDE
-    assert (
-        drive.select_runner(RunnerConfig(), sdk_available=False).code
-        is CODE.UNAVAILABLE_SDK
-    )
-    monkeypatch.setattr(drive, "SDK_AVAILABLE", False)
-    assert drive.select_runner(RunnerConfig()).code is CODE.UNAVAILABLE_SDK
 
 
 @pytest.mark.parametrize(
@@ -103,7 +40,7 @@ def test_no_signal_at_all_is_no_hint(tmp_path):
     assert drive.auth_hinted(env={}, home=tmp_path) is False
 
 
-def test_the_registry_holds_both_runners():
+def test_the_registry_holds_every_runner():
     assert drive.RUNNERS[RunnerKind.FAKE] is FakeRunner
     assert drive.RUNNERS[RunnerKind.CLAUDE] is SdkRunner
 

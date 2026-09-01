@@ -19,6 +19,7 @@ Runner = Literal["auto", "claude", "codex"]
 ClaudeModel = Literal["haiku", "sonnet"]
 Worktrees = Literal["main", "all"]
 TuningMode = Literal["propose", "off"]
+ActivationTier = Literal["A", "B", "C"]
 
 
 CONFIG_VERSION = 2
@@ -317,6 +318,10 @@ class TuningConfig(BaseModel):
         ge=0.0,
         lt=1.0,
         description="Measured precision a kind needs before going active; 1.0 is unreachable.",
+    )
+    activation_tiers: dict[Runner, ActivationTier] = Field(
+        default_factory=dict,
+        description="Highest tier a runner may activate at; empty uses the per-runner defaults.",
     )
 
 

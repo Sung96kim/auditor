@@ -34,6 +34,7 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.prompts import GRAPH_SERVER, RunAnswer
 from auditor.graph.refine.service import RefinementRefused, RefinementService
+from auditor.graph.refine.tiers import eval_model
 from auditor.user_settings import ClaudeModel, Runner
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,8 @@ class RefinementRunner(ABC):
             client=job.client,
             trigger=job.trigger,
             runner=self.kind,
-            model=job.model or self.service.user.observer.runner.model,
+            # per runner: `job.model` is a Claude tier, so a Codex row reads `codex_model`
+            model=eval_model(self.kind, self.service.user.observer.runner, job.model),
             session_id=job.session_id,
             agent_name=job.agent_name,
             detail=job.detail,

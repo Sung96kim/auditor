@@ -19,6 +19,9 @@ import auditr_observer
 from auditor.cli import observer as cli_observer
 from auditor.config import AuditorSettings
 from auditor.database import open_repo_index
+from auditor.graph.refine import drive
+from auditor.graph.refine.models import ClientKind, RunnerKind
+from auditor.graph.refine.runner import RunnerUnavailable
 from auditor.observer import daemon as daemon_module
 from auditor.observer.daemon import (
     LOGGED_REFUSALS,
@@ -932,3 +935,69 @@ def test_retiring_a_repo_drops_the_backoff_its_failed_build_left_behind(queue):
     assert key in daemon.unbuildable
     daemon.retire(key)
     assert daemon.unbuildable == {}
+
+
+def _service(tmp_path: Path, agent: str = "auto") -> SimpleNamespace:
+    """Just enough `RefinementService` for the runner choice: its user settings."""
+    user = UserSettings.model_validate({"observer": {"runner": {"agent": agent}}})
+    return SimpleNamespace(user=user, root=tmp_path, identity=str(tmp_path / ".git"))
+
+
+def test_a_daemon_with_no_runner_refuses_rather_than_building_a_fake(
+    queue, monkeypatch
+):
+    """P4: a fake here drives real runs against the real database and reports `runner=fake`."""
+    monkeypatch.setattr(drive, "SDK_AVAILABLE", False)
+    monkeypatch.setattr(drive, "CODEX_AVAILABLE", False)
+    with pytest.raises(RunnerUnavailable, match="auditr\\[observer\\]"):
+        _daemon(queue)._runner_for(_service(Path("/repo")))
+
+
+def test_a_daemon_with_a_runner_builds_the_one_the_ladder_chose(
+    queue, monkeypatch, tmp_path
+):
+    """The refusal is the only new arm: a resolved choice still reaches `build_runner`."""
+    monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
+    monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: True)
+    seen: list[RunnerKind] = []
+    monkeypatch.setattr(
+        daemon_module,
+        "build_runner",
+        lambda kind, service, proposer=None: seen.append(kind),
+    )
+    _daemon(queue)._runner_for(_service(tmp_path))
+    assert seen == [RunnerKind.CLAUDE]
+
+
+@pytest.mark.parametrize(
+    ("attached", "client"),
+    [
+        ((), ClientKind.CLAUDE_CODE),
+        ((("s1", ClientKind.CODEX, 10.0),), ClientKind.CODEX),
+        (
+            (("s1", ClientKind.CLAUDE_CODE, 10.0), ("s2", ClientKind.CODEX, 20.0)),
+            ClientKind.CODEX,
+        ),
+        (
+            (("s1", ClientKind.CODEX, 10.0), ("s2", ClientKind.CLAUDE_CODE, 20.0)),
+            ClientKind.CLAUDE_CODE,
+        ),
+    ],
+    ids=["none", "codex-only", "codex-newest", "claude-newest"],
+)
+def test_the_run_row_names_the_client_whose_session_is_newest(queue, attached, client):
+    """D6: `ClientKind.CODEX` existed and nothing ever wrote it (spec 9.5)."""
+    daemon = _daemon(queue)
+    for session_id, kind, seen in attached:
+        daemon.sessions.attach(
+            _session(session_id=session_id, client=kind, last_seen=seen)
+        )
+    assert daemon._client_for("/r/.git") is client
+
+
+def test_a_session_on_another_repo_never_names_this_repo_s_client(queue):
+    daemon = _daemon(queue)
+    daemon.sessions.attach(
+        _session(session_id="s1", identity="/other/.git", client=ClientKind.CODEX)
+    )
+    assert daemon._client_for("/r/.git") is ClientKind.CLAUDE_CODE

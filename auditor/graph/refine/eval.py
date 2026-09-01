@@ -60,7 +60,7 @@ from auditor.graph.refine.payloads import (
 )
 from auditor.graph.refine.runner import RefinementJob, RefinementRunner
 from auditor.graph.refine.service import RefinementRefused, RefinementService
-from auditor.graph.refine.tiers import TierPolicy
+from auditor.graph.refine.tiers import TierPolicy, activation_tier
 from auditor.graph.refine.verify import VerifyStatus
 from auditor.graph.resolve_edges import (
     NameBindings,
@@ -762,6 +762,7 @@ class EvalRun(BaseModel):
             min_precision=self.min_precision,
             runner=self.runner,
             model=self.model or "",
+            ceiling=activation_tier(self.runner, self.service.user.observer.tuning),
         )
         return EvalReport(
             runner=self.runner,

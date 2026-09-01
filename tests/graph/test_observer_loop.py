@@ -10,6 +10,7 @@ import pytest
 
 from auditor.graph.model import FactKind, UnresolvedReason, UnresolvedRow
 from auditor.graph.refine.models import (
+    ClientKind,
     NodePair,
     ProducerKind,
     Refinement,
@@ -22,7 +23,7 @@ from auditor.graph.refine.models import (
     RunUsage,
     TriggerKind,
 )
-from auditor.graph.refine.runner import FakeRun, FakeRunner
+from auditor.graph.refine.runner import FakeRun, FakeRunner, RunnerUnavailable
 from auditor.graph.refine.service import RefinementService
 from auditor.observer.assess import EditedFile
 from auditor.observer.budget import BudgetState
@@ -1115,3 +1116,53 @@ async def test_the_node_count_reader_is_the_number_the_graph_holds(
     """A COUNT rather than `len(await nodes())`, which decodes the whole graph for one number."""
     graph = refine_service.index.graph
     assert await graph.count_nodes() == len(await graph.nodes())
+
+
+def _refusing_loop(service: RefinementService, **kw) -> RepoLoop:
+    """A loop on a machine where spec 9.3's ladder reached its last rung."""
+
+    def refuse(_service, _proposer):
+        raise RunnerUnavailable(
+            "no runner is installed: pip install 'auditr[observer]'"
+        )
+
+    loop = _loop(service, **kw)
+    loop.runner_for = refuse
+    return loop
+
+
+async def test_a_repo_with_no_runner_reports_the_no_runner_kind(
+    refine_service: RefinementService,
+):
+    """P4: `runner_kind` had no failure path, so a refusal used to raise out of the gate."""
+    assert _refusing_loop(refine_service).runner_kind is RunnerKind.NONE
+
+
+async def test_a_refused_runner_pauses_the_loop_and_opens_no_row(
+    refine_service: RefinementService,
+):
+    """D7: the daemon turned every refusal into a fake, which opened real rows as `runner=fake`."""
+    loop = _refusing_loop(refine_service)
+    assert await loop.suspects() is False
+    assert loop.state is LoopState.PAUSED_AUTH
+    assert await _rows(refine_service) == []
+
+
+async def test_a_repo_with_no_runner_does_no_verify_work_at_all(
+    refine_service: RefinementService,
+):
+    """The `runner_kind is FAKE` short circuit covers `NONE` too, or an idle repo would query,
+    decide and then abort the batch it opened, every tick."""
+    loop = _refusing_loop(refine_service)
+    assert await loop.verify() is False
+    assert await _rows(refine_service) == []
+
+
+async def test_the_run_row_records_the_client_whose_session_triggered_it(
+    refine_service: RefinementService,
+):
+    """D6: every observer run said `claude-code`, so `ClientKind.CODEX` was never written."""
+    loop = _loop(refine_service)
+    loop.client_for = lambda _identity: ClientKind.CODEX
+    assert await loop.suspects() is True
+    assert [row.client for row in await _rows(refine_service)] == [ClientKind.CODEX]

@@ -30,7 +30,7 @@ from auditor.graph.payloads import (
 )
 from auditor.graph.query import GraphQuery, LogQuery
 from auditor.graph.refine.models import MODEL_RUNNERS, RunnerKind
-from auditor.graph.refine.tiers import TierPolicy
+from auditor.graph.refine.tiers import TierPolicy, activation_tier, eval_model
 from auditor.graph.viz import build_payload
 from auditor.observer.events import Event, EventQueue, EventRequest
 from auditor.observer.payloads import (
@@ -411,13 +411,10 @@ class Readers:
     def _model_for(self, runner: RunnerKind, settings: UserSettings) -> str:
         """The model this runner is pinned to, which `EvalsDB.latest` needs beside the runner.
 
-        A runner's own pin only: a Codex with no `codex_model` has no model, and lending it
-        Claude's would draw Claude's eval numbers under the Codex mark.
+        One resolver with the loop's gate and the run row: they disagreed, and a Codex run read
+        Claude's eval rows.
         """
-        pinned = settings.observer.runner
-        if runner is RunnerKind.CODEX:
-            return pinned.codex_model
-        return pinned.model
+        return eval_model(runner, settings.observer.runner)
 
     async def _runner_evals(
         self, index: IndexStore, settings: UserSettings
@@ -433,7 +430,11 @@ class Readers:
                 runners.append(RunnerEvalPayload(runner=runner, model=model))
                 continue
             policy = TierPolicy.of(
-                rows, min_precision=minimum, runner=runner, model=model
+                rows,
+                min_precision=minimum,
+                runner=runner,
+                model=model,
+                ceiling=activation_tier(runner, settings.observer.tuning),
             )
             runners.append(
                 RunnerEvalPayload(

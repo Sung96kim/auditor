@@ -291,6 +291,17 @@ async def test_a_run_records_the_codex_kind_an_estimate_and_the_brief_it_was_giv
     assert seen[0].model == ""
 
 
+async def test_a_codex_run_is_recorded_under_the_codex_model_never_a_claude_tier(
+    refine_service: RefinementService,
+):
+    """D5: `--runner codex --model sonnet` stamped `sonnet` on the row, and the gate read it."""
+    runner = _runner(refine_service, codex_factory(done()))
+    product = await runner.run(RefinementJob(scope="impl.py", model="sonnet"))
+    stored = await refine_service.index.runs.run(product.run.run_id)
+    assert stored.model == refine_service.user.observer.runner.codex_model
+    assert stored.model != "sonnet"
+
+
 async def test_a_proposal_the_turn_made_really_reaches_the_run(
     refine_service: RefinementService,
 ):

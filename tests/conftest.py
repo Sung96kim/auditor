@@ -29,6 +29,8 @@ def _isolated_auditor_home(tmp_path_factory, monkeypatch):
     test, so scans never touch — or depend on — the real user home."""
     home = tmp_path_factory.mktemp("auditor_home")
     monkeypatch.setenv("AUDITOR_HOME", str(home))
+    # the Codex auth hint reads `$CODEX_HOME/auth.json`, so a real login would decide `auto`
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex-home-absent"))
     return home
 
 

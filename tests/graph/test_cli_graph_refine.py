@@ -101,11 +101,19 @@ def test_the_brief_the_cli_prints_is_the_one_the_builder_builds(refine_repo):
     assert payload["run_id"] is None
 
 
-def test_a_codex_runner_is_refused_at_exit_one(refine_repo, claude_runner):
+def test_a_codex_runner_opens_a_real_run(refine_repo, codex_runner):
+    """The refusal this replaced said "the Codex runner lands in S12"; it has landed."""
+    payload = cli_json(_refine(refine_repo, ".", "--runner", "codex"))
+    assert payload["choice"] == "codex"
+    runs = cli_json(invoke("graph", "log", str(refine_repo), "--json"))["runs"]
+    assert [run["runner"] for run in runs] == ["codex"]
+
+
+def test_a_codex_runner_without_the_extra_names_it(refine_repo, monkeypatch):
+    monkeypatch.setattr(drive, "CODEX_AVAILABLE", False)
     result = _refine(refine_repo, ".", "--runner", "codex")
     assert result.exit_code == 1
-    assert "S12" in result.output
-    assert cli_json(invoke("graph", "log", str(refine_repo), "--json"))["runs"] == []
+    assert "auditr[observer-codex]" in one_line(result.output)
 
 
 @pytest.mark.parametrize(
@@ -136,7 +144,7 @@ def test_without_the_extra_the_refusal_names_it_and_prints_no_json(
     refine_repo, monkeypatch
 ):
     monkeypatch.setattr(drive, "SDK_AVAILABLE", False)
-    result = _refine(refine_repo)
+    result = _refine(refine_repo, ".", "--runner", "claude")
     assert result.exit_code == 1
     assert "auditr[observer-claude]" in one_line(result.output)
     assert result.stdout.strip() == ""
@@ -145,7 +153,7 @@ def test_without_the_extra_the_refusal_names_it_and_prints_no_json(
 def test_without_credentials_the_refusal_says_how_to_log_in(refine_repo, monkeypatch):
     monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
     monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: False)
-    result = _refine(refine_repo)
+    result = _refine(refine_repo, ".", "--runner", "claude")
     assert result.exit_code == 1
     assert "log in" in one_line(result.output)
 

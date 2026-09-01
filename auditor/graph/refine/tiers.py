@@ -5,7 +5,8 @@ eval suites have measured on this repo for this runner and model. With no eval r
 `resolve_ambiguous` and every tier B proposal behave as tier C, which is where every repo starts.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict
 
@@ -21,6 +22,7 @@ from auditor.graph.refine.models import (
     Stratum,
     Tier,
 )
+from auditor.user_settings import RunnerConfig, TuningConfig
 
 #: tier A kinds that need no measurement: none of them can add an edge (spec 10.3)
 ALWAYS_ACTIVE = frozenset(
@@ -40,11 +42,49 @@ _BOUNDED_FORMS = frozenset(BOUNDED_FORMS)
 _PRECISION_SUITES = frozenset(suite.value for suite in PRECISION_SUITES)
 
 
+#: the highest tier a runner may store `active` here before spec 10.4's go/no-go has been run for
+#: it. Claude's tier B numbers were measured in S7; Codex has none, so a Codex tier B proposal
+#: stays `pending` even where an eval row clears, until a user raises this in their own config.
+ACTIVATION_TIERS: Mapping[RunnerKind, Tier] = MappingProxyType(
+    {RunnerKind.CLAUDE: Tier.B, RunnerKind.CODEX: Tier.A}
+)
+#: what a runner nobody measured defaults to, which is what tier B already means for Claude
+DEFAULT_ACTIVATION = Tier.B
+
+
+def eval_model(
+    runner: RunnerKind, config: RunnerConfig, requested: str | None = None
+) -> str:
+    """The model a run of this runner is filed under, which every `(runner, model)` key needs.
+
+    One resolver for the loop's gate, the page's roster and the run row itself: they disagreed, so
+    a Codex run read Claude's eval rows and was stored under a Claude tier. ``requested`` is
+    `RefinementJob.model`, a Claude tier by type, so it binds Claude alone (spec 14).
+    """
+    if runner is RunnerKind.CODEX:
+        return config.codex_model
+    return requested or config.model
+
+
+def activation_tier(runner: RunnerKind, config: TuningConfig) -> Tier:
+    """The highest tier this runner's measured proposals may go active at (spec 10.4).
+
+    The user's own `activation_tiers` first, then the shipped per-runner default: a runner whose
+    accuracy nobody has measured here should not inherit the tier another runner earned.
+    """
+    named = config.activation_tiers.get(runner.value)
+    if named is not None:
+        return Tier(named)
+    return ACTIVATION_TIERS.get(runner, DEFAULT_ACTIVATION)
+
+
 class TierPolicy(BaseModel):
     """One repo's activation policy for one runner and model, per eval stratum."""
 
     model_config = ConfigDict(frozen=True)
 
+    #: the highest tier this runner may activate at here (spec 10.4)
+    ceiling: Tier = DEFAULT_ACTIVATION
     #: every ``(suite, stratum)`` this runner and model has an eval row for
     measured: frozenset[tuple[str, Stratum]] = frozenset()
     #: the subset of them that met the suite's own gate
@@ -58,6 +98,7 @@ class TierPolicy(BaseModel):
         min_precision: float,
         runner: RunnerKind,
         model: str,
+        ceiling: Tier = DEFAULT_ACTIVATION,
     ) -> "TierPolicy":
         """What this runner and model measured here, and which strata cleared their own gate.
 
@@ -66,6 +107,7 @@ class TierPolicy(BaseModel):
         """
         rows = [row for row in evals if row.runner is runner and row.model == model]
         return cls(
+            ceiling=ceiling,
             measured=frozenset((row.suite, row.stratum) for row in rows),
             proven=frozenset(
                 (row.suite, row.stratum)
@@ -117,6 +159,7 @@ class TierPolicy(BaseModel):
             return RefinementStatus.ACTIVE
         if (
             tier is Tier.B
+            and self.ceiling is Tier.B
             and self._cleared("add", stratum)
             and self._cleared("collision")
         ):

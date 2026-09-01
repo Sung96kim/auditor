@@ -64,9 +64,11 @@ class RunnerChoiceCode(StrEnum):
     """What came of asking for a runner: one runner, or one reason there is none."""
 
     CLAUDE = "claude"
+    CODEX = "codex"
     PAUSED_AUTH = "paused:auth"
     UNAVAILABLE_SDK = "unavailable:sdk"
     UNAVAILABLE_CODEX = "unavailable:codex"
+    UNAVAILABLE_NONE = "unavailable:none"
 
 
 class TriggerKind(StrEnum):
@@ -503,7 +505,8 @@ class Run(BaseModel):
 
 #: the runner each code that resolved to one names; every other code is a refusal with no runner
 _KIND_BY_CODE: dict[RunnerChoiceCode, RunnerKind] = {
-    RunnerChoiceCode.CLAUDE: RunnerKind.CLAUDE
+    RunnerChoiceCode.CLAUDE: RunnerKind.CLAUDE,
+    RunnerChoiceCode.CODEX: RunnerKind.CODEX,
 }
 
 

@@ -15,7 +15,8 @@ from auditor.graph.refine.models import (
     Stratum,
     Tier,
 )
-from auditor.graph.refine.tiers import TierPolicy
+from auditor.graph.refine.tiers import TierPolicy, activation_tier, eval_model
+from auditor.user_settings import RunnerConfig, TuningConfig
 
 
 def _add_edge() -> Proposal:
@@ -329,3 +330,64 @@ def test_each_suite_is_judged_by_its_own_gate(suite, lower, false_adds, clears):
     """P3: `add` and `decoy` clear on their Wilson bound, the two controls on no false add."""
     policy = _proven(_eval(suite, lower=lower, false_adds=false_adds))
     assert (policy.proven == policy.measured) is clears
+
+
+@pytest.mark.parametrize(
+    ("runner", "requested", "model"),
+    [
+        (RunnerKind.CLAUDE, None, "haiku"),
+        (RunnerKind.CLAUDE, "sonnet", "sonnet"),
+        (RunnerKind.CODEX, None, "gpt-5-mini"),
+        (RunnerKind.CODEX, "sonnet", "gpt-5-mini"),
+        (RunnerKind.FAKE, None, "haiku"),
+        (RunnerKind.NONE, None, "haiku"),
+    ],
+    ids=["claude", "claude-asked", "codex", "codex-asked", "fake", "none"],
+)
+def test_one_resolver_answers_every_reader_of_a_run_s_model(runner, requested, model):
+    """D5: the gate read `model` for every runner while the page read `codex_model` for Codex.
+
+    A Claude tier can be asked for, because that is what `RefinementJob.model` is typed as; a
+    Codex run reads `codex_model` whatever the flag said (spec 14).
+    """
+    config = RunnerConfig(model="haiku", codex_model="gpt-5-mini")
+    assert eval_model(runner, config, requested) == model
+
+
+@pytest.mark.parametrize(
+    ("runner", "named", "tier"),
+    [
+        (RunnerKind.CLAUDE, {}, Tier.B),
+        (RunnerKind.CODEX, {}, Tier.A),
+        (RunnerKind.CODEX, {"codex": "B"}, Tier.B),
+        (RunnerKind.CLAUDE, {"claude": "A"}, Tier.A),
+        (RunnerKind.FAKE, {}, Tier.B),
+    ],
+    ids=["claude", "codex", "codex-raised", "claude-lowered", "unnamed"],
+)
+def test_a_runner_activates_at_its_own_tier_until_a_user_says_otherwise(
+    runner, named, tier
+):
+    """Spec 10.4: Codex has no measured numbers here, so it does not inherit Claude's tier."""
+    assert activation_tier(runner, TuningConfig(activation_tiers=named)) is tier
+
+
+def test_a_codex_run_whose_eval_cleared_still_lands_pending_by_default():
+    """G4: the ceiling is the only thing between a proven Codex stratum and an active edge."""
+    rows = [
+        _eval("add").model_copy(update={"runner": RunnerKind.CODEX, "model": "gpt-5"}),
+        _eval("collision").model_copy(
+            update={"runner": RunnerKind.CODEX, "model": "gpt-5"}
+        ),
+    ]
+    under = dict(min_precision=0.95, runner=RunnerKind.CODEX, model="gpt-5")
+    capped = TierPolicy.of(rows, ceiling=Tier.A, **under)
+    raised = TierPolicy.of(rows, ceiling=Tier.B, **under)
+    assert (
+        capped.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.SAME_MODULE)
+        is RefinementStatus.PENDING
+    )
+    assert (
+        raised.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.SAME_MODULE)
+        is RefinementStatus.ACTIVE
+    )

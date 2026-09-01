@@ -509,7 +509,9 @@ async def test_the_refine_tool_reports_a_refusal_as_the_choice_detail(
     monkeypatch.setattr(drive, "SDK_AVAILABLE", False)
     async with Client(mcp) as client:
         with pytest.raises(ToolError, match="observer-claude"):
-            await client.call_tool("graph_refine", {"path": str(refine_repo)})
+            await client.call_tool(
+                "graph_refine", {"path": str(refine_repo), "runner": "claude"}
+            )
 
 
 def test_the_cli_and_the_tool_report_the_same_run(refine_repo: Path, claude_runner):

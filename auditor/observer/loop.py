@@ -43,9 +43,13 @@ from auditor.graph.refine.models import (
     TriggerKind,
     Verdict,
 )
-from auditor.graph.refine.runner import RefinementJob, RefinementRunner
+from auditor.graph.refine.runner import (
+    RefinementJob,
+    RefinementRunner,
+    RunnerUnavailable,
+)
 from auditor.graph.refine.service import RefinementRefused, RefinementService
-from auditor.graph.refine.tiers import TierPolicy
+from auditor.graph.refine.tiers import TierPolicy, activation_tier, eval_model
 from auditor.graph.scan import autoscan
 from auditor.observer.assess import (
     CachedFile,
@@ -109,6 +113,9 @@ class RepoLoop:
         now: Callable[[], float] = time.time,
         on_change: Callable[[], object] = lambda: None,
         status: Callable[[Path], tuple[str, ...] | None] = git_status_paths,
+        client_for: Callable[[str], ClientKind] = lambda _identity: (
+            ClientKind.CLAUDE_CODE
+        ),
     ) -> None:
         self.root = root
         self.index = index
@@ -120,6 +127,7 @@ class RepoLoop:
         self.now = now
         self.on_change = on_change
         self.status = status
+        self.client_for = client_for
         scheduling = self.user.observer.scheduling
         self.pauses = Pauses(
             errors=Backoff(
@@ -160,22 +168,36 @@ class RepoLoop:
         self._moved(LoopState.PAUSED_ERROR)
         return wait
 
+    def client(self) -> ClientKind:
+        """Which client's session triggered this repo's work, for the run row (spec 9.5).
+
+        Read from the sessions attached to this repo rather than hardcoded: `ClientKind.CODEX`
+        existed and nothing ever wrote it, so every Codex-triggered run said `claude-code`.
+        """
+        return self.client_for(self.service.identity)
+
     @property
     def runner_kind(self) -> RunnerKind:
         """Which runner this loop opens runs with, resolved once: a factory re-reads credentials."""
         if self._kind is None:
-            self._kind = self.runner_for(self.service, None).kind
+            try:
+                self._kind = self.runner_for(self.service, None).kind
+            except RunnerUnavailable:
+                # no runner here: the gate reads the no-runner row rather than Claude's
+                self._kind = RunnerKind.NONE
         return self._kind
 
     async def budget(self) -> BudgetState:
         """This repo's day, and whether this runner and model have ever been measured here."""
         spend = await self.index.runs.spend_since(window_start(self.now()))
         runner = self.user.observer.runner
+        model = eval_model(self.runner_kind, runner)
         policy = TierPolicy.of(
-            await self.index.evals.latest(self.runner_kind, runner.model),
+            await self.index.evals.latest(self.runner_kind, model),
             min_precision=self.user.observer.tuning.min_precision,
             runner=self.runner_kind,
-            model=runner.model,
+            model=model,
+            ceiling=activation_tier(self.runner_kind, self.user.observer.tuning),
         )
         return budget_state(
             spend,
@@ -537,8 +559,9 @@ class RepoLoop:
         The verify run's proposals are judged and never stored: the injected proposer is the seam
         an eval already uses, so a second opinion cannot insert a second copy of the correction.
         """
-        # a fake run proposes nothing, so it can only ever leave the rows it was opened for pending
-        if self.runner_kind is RunnerKind.FAKE or await self.verify_cooled():
+        # a fake proposes nothing and a repo with no runner opens nothing, so neither can
+        # answer a pending row: both would query, decide and then abort the batch they opened
+        if self.runner_kind in _NO_SECOND_OPINION or await self.verify_cooled():
             return False
         pending = await self.index.refinements.refinements(
             statuses=[RefinementStatus.PENDING],
@@ -637,11 +660,18 @@ class RepoLoop:
         async with self.slots.slot(self.service.identity):
             self._moved(LoopState.RUNNING)
             guard = await self._guard()
-            runner = self.runner_for(self.service, proposer)
+            try:
+                runner = self.runner_for(self.service, proposer)
+            except RunnerUnavailable as missing:
+                # spec 9.3's last rung: no runner is a pause, never a fake against a real db
+                logger.warning("no runner for this repo: %s", missing)
+                self.retries.aborted(targets)
+                self._moved(LoopState.PAUSED_AUTH)
+                return False
             job = RefinementJob(
                 trigger=trigger,
                 producer=ProducerKind.OBSERVER,
-                client=ClientKind.CLAUDE_CODE,
+                client=self.client(),
                 detail=TriggerDetail(
                     files=tuple(files), targets=tuple(targets), assessment=assessment
                 ),
@@ -673,6 +703,10 @@ class RepoLoop:
             self._moved(LoopState.OBSERVING)
             return landed
 
+
+#: the runners that cannot answer a pending row, so `verify` does no work for them: the fake
+#: proposes nothing, and a repo with no runner would open a batch only to abort it
+_NO_SECOND_OPINION = frozenset({RunnerKind.FAKE, RunnerKind.NONE})
 
 #: the terminal statuses that mean this run's targets were not answered (spec 8.5)
 _UNLANDED = frozenset(

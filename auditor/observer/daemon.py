@@ -24,8 +24,8 @@ from auditor.config import AuditorSettings, is_configured, load_config
 from auditor.database import IndexStore
 from auditor.graph.refine.drive import build_runner, select_runner
 from auditor.graph.refine.lock import flock_nb
-from auditor.graph.refine.models import ACTIVE_STATUSES, Proposer, RunnerKind
-from auditor.graph.refine.runner import RefinementRunner
+from auditor.graph.refine.models import ACTIVE_STATUSES, ClientKind, Proposer
+from auditor.graph.refine.runner import RefinementRunner, RunnerUnavailable
 from auditor.graph.refine.service import RefinementService
 from auditor.graph.viz import empty_payload, render_app_or_status
 from auditor.observer import MINUTE, OBSERVER_API_VERSION
@@ -644,6 +644,7 @@ class Daemon:
             service=service,
             feed=QueueFeed(cap=user.observer.limits.max_feed_events),
             runner_for=self._runner_for,
+            client_for=self._client_for,
             slots=self.slots,
             on_change=self.on_change,
         )
@@ -651,9 +652,32 @@ class Daemon:
     def _runner_for(
         self, service: RefinementService, proposer: Proposer | None = None
     ) -> RefinementRunner:
-        """The runner this daemon opens observer runs with, or the fake when none is available."""
+        """The runner this daemon opens observer runs with.
+
+        Raises:
+            RunnerUnavailable: no runner can drive this repo, with spec 9.3's reason in the
+                message. A `FakeRunner` here would drive real runs against the real database and
+                report `runner=fake`, which is what this refusal replaces (S12 P3).
+        """
         choice = select_runner(service.user.observer.runner)
-        return build_runner(choice.kind or RunnerKind.FAKE, service, proposer=proposer)
+        if choice.kind is None:
+            raise RunnerUnavailable(choice.detail)
+        return build_runner(choice.kind, service, proposer=proposer)
+
+    def _client_for(self, identity: str) -> ClientKind:
+        """Which client's live session this repo's runs belong to (spec 9.5).
+
+        The newest live session for the identity wins; with none attached, or with only expired
+        ones, the run is still the observer's own and the historical default stands.
+        """
+        matched = [
+            session
+            for session in self.sessions.live(now=self.now())
+            if session.identity == identity
+        ]
+        if not matched:
+            return ClientKind.CLAUDE_CODE
+        return max(matched, key=lambda session: session.last_seen).client
 
     async def _drive(self, loop: RepoLoop) -> None:
         """Spec 8.3's ladder for one repo: attach, then tick while the daemon still claims it.

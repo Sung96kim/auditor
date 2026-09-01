@@ -83,10 +83,11 @@ def test_a_sample_outside_the_range_is_exit_two(eval_repo, eval_runner, size):
     assert _eval(eval_repo, "--sample", size).exit_code == 2
 
 
-def test_a_codex_runner_is_refused_at_exit_one(eval_repo, eval_runner):
+def test_a_codex_runner_without_the_extra_names_it(eval_repo, monkeypatch):
+    monkeypatch.setattr(drive, "CODEX_AVAILABLE", False)
     result = _eval(eval_repo, "--runner", "codex")
     assert result.exit_code == 1
-    assert "S12" in result.output
+    assert "auditr[observer-codex]" in result.output
 
 
 def test_without_the_extra_the_refusal_names_it(eval_repo, monkeypatch):
