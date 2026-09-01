@@ -44,10 +44,16 @@ graph = []
 # installs them. `observer-claude` (and `observer`, which contains it) is what `graph refine`
 # needs. `observer-codex` also carries `mcp`, which brings `uvicorn`: Codex has no in-process MCP
 # transport, so the runner serves the graph tools over a loopback MCP server it owns, and those
-# two are what `codex_mcp.py` imports by name.
+# two are what `codex_mcp.py` imports by name, which is why both carry a major ceiling:
+# `StreamableHTTPSessionManager`, `Server(name, version=)` and `uvicorn.Config` are named APIs.
 observer-claude = ["claude-agent-sdk>=0.2,<0.3"]
-observer-codex = ["openai-codex==0.147.*", "mcp", "uvicorn"]
-observer = ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*", "mcp", "uvicorn"]
+observer-codex = ["openai-codex==0.147.*", "mcp>=1.9,<2", "uvicorn>=0.30,<1"]
+observer = [
+    "claude-agent-sdk>=0.2,<0.3",
+    "openai-codex==0.147.*",
+    "mcp>=1.9,<2",
+    "uvicorn>=0.30,<1",
+]
 # Opt-in vector layer; `model2vec` needs one online model fetch, so it stays out of CI too.
 vectors = ["sqlite-vec>=0.1.9,<0.2", "model2vec>=0.9,<0.10"]
 # Experimental: lets a client LLM orchestrate the tools in a sandbox so large intermediate

@@ -39,10 +39,18 @@ def test_graph_extra_is_an_empty_alias(pyproject: dict):
     ("extra", "expected"),
     [
         ("observer-claude", ["claude-agent-sdk>=0.2,<0.3"]),
-        ("observer-codex", ["openai-codex==0.147.*", "mcp", "uvicorn"]),
+        (
+            "observer-codex",
+            ["openai-codex==0.147.*", "mcp>=1.9,<2", "uvicorn>=0.30,<1"],
+        ),
         (
             "observer",
-            ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*", "mcp", "uvicorn"],
+            [
+                "claude-agent-sdk>=0.2,<0.3",
+                "openai-codex==0.147.*",
+                "mcp>=1.9,<2",
+                "uvicorn>=0.30,<1",
+            ],
         ),
         ("vectors", ["sqlite-vec>=0.1.9,<0.2", "model2vec>=0.9,<0.10"]),
     ],

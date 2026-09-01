@@ -89,6 +89,20 @@ async def test_a_caller_without_this_run_s_token_is_refused(bound):
     assert answer.status_code == 401
 
 
+async def test_a_non_ascii_bearer_is_refused_rather_than_raising(bound):
+    """`secrets.compare_digest` refuses non-ASCII `str`, so the check has to stay on bytes."""
+    async with (
+        GraphShim(bound) as shim,
+        httpx.AsyncClient(follow_redirects=True) as client,
+    ):
+        answer = await client.post(
+            shim.url,
+            json={},
+            headers={b"Authorization": "Bearer caf\u00e9".encode()},
+        )
+    assert answer.status_code == 401
+
+
 async def test_two_shims_over_one_table_mint_different_credentials(bound):
     """The whole access control on the loopback surface is that the bearer is this run's."""
     async with GraphShim(bound) as first, GraphShim(bound) as second:

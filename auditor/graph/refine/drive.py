@@ -199,7 +199,7 @@ def _default_factory(
     if issubclass(runner, CodexRunner):
         if not CODEX_AVAILABLE:
             raise RunnerUnavailable(NEEDS_CODEX_EXTRA)
-        return _codex_backend().CodexClient
+        return _codex_backend().CodexRunSession
     if not issubclass(runner, SdkRunner):
         return None
     if not SDK_AVAILABLE:

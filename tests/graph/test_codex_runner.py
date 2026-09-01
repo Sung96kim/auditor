@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -20,7 +22,7 @@ from graph._support import (
 )
 
 from auditor.graph.refine.client import ServerStatus
-from auditor.graph.refine.codex_home import CodexHome
+from auditor.graph.refine.codex_home import STALE_HOME_AGE_SEC, CodexHome
 from auditor.graph.refine.codex_runner import (
     APPROVAL_MODE,
     CALLS_PER_RUN,
@@ -232,6 +234,8 @@ def test_a_run_over_the_per_run_ceiling_is_aborted_after_the_turn():
         ("error 401 returned", RunStatus.FAILED, "paused:auth"),
         ("429 rate limit exceeded", RunStatus.ABORTED, "paused:ratelimit"),
         ("You have been rate limited", RunStatus.ABORTED, "paused:ratelimit"),
+        # M4: the code form, with no 429 beside it, the way its billing siblings arrive
+        ("rate_limit_exceeded", RunStatus.ABORTED, "paused:ratelimit"),
         ("insufficient quota", RunStatus.ABORTED, "paused:billing"),
         ("insufficient_quota", RunStatus.ABORTED, "paused:billing"),
         ("billing_hard_limit_reached", RunStatus.ABORTED, "paused:billing"),
@@ -334,7 +338,7 @@ def test_an_account_that_reported_no_window_pauses_nothing():
 
 
 def _writing_factory(homes: list[Path], written: list[dict[str, str]]):
-    """A factory that really writes the private home the way `CodexClient.__aenter__` does.
+    """A factory that really writes the private home the way `CodexRunSession.__aenter__` does.
 
     ``homes`` collects the leaf each run was given and ``written`` the `[mcp_servers.graph]`
     table its own `config.toml` ended up holding.
@@ -449,6 +453,21 @@ async def test_a_run_s_private_home_is_written_and_then_removed_with_the_run(
     assert not homes[0].exists()
     # the home holds a symlink to the user's real credentials, which the sweep must not follow
     assert (refine_service.root / "auth.json").is_file()
+
+
+async def test_a_run_sweeps_the_home_a_killed_run_left_behind(
+    refine_service: RefinementService,
+):
+    """M3: the `finally` cannot run for a SIGKILLed run, so the next run is what reaps it."""
+    parent = refine_service.root / "codex-home"
+    orphan = parent / "run-deadbeefdeadbeef"
+    orphan.mkdir(parents=True)
+    (orphan / "config.toml").write_text("", encoding="utf-8")
+    when = time.time() - STALE_HOME_AGE_SEC * 2
+    os.utime(orphan, (when, when))
+    runner = _runner(refine_service, _writing_factory([], []))
+    await runner.run(RefinementJob(scope="impl.py"))
+    assert not orphan.exists()
 
 
 async def test_a_session_that_loaded_another_run_s_shim_is_aborted(

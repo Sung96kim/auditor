@@ -23,6 +23,7 @@ from auditor.graph.refine.client import CodexFactory, ServerStatus
 from auditor.graph.refine.codex_home import (
     MANAGED_FILES,
     codex_home_dir,
+    reap_stale_homes,
     run_home,
     user_codex_home,
 )
@@ -63,19 +64,21 @@ CALLS_PER_RUN = 1
 MANAGED_KEYS = ("hooks", "mcp_servers", "mcpServers")
 
 
-#: what a failed turn's message has to contain to become one of spec 8.4's pauses. Ordered, and
-#: matched on the message alone: `TurnError` carries no code the loop can switch on.
 def _pattern(needle: str) -> re.Pattern[str]:
     """One pause needle as a pattern: a numeric code is anchored, a word stays a substring."""
     body = re.escape(needle)
     return re.compile(rf"(?<!\d){body}(?!\d)" if needle.isdigit() else body)
 
 
+#: what a failed turn's message has to contain to become one of spec 8.4's pauses. Ordered, and
+#: matched on the message alone: `TurnError` carries no code the loop can switch on.
 TURN_ERRORS: tuple[tuple[str, RunStatus, str], ...] = (
     ("unauthorized", RunStatus.FAILED, "paused:auth"),
     ("not logged in", RunStatus.FAILED, "paused:auth"),
     ("401", RunStatus.FAILED, "paused:auth"),
     ("rate limit", RunStatus.ABORTED, "paused:ratelimit"),
+    # the underscore form is the literal OpenAI error code, and arrives with no `429` beside it
+    ("rate_limit", RunStatus.ABORTED, "paused:ratelimit"),
     ("429", RunStatus.ABORTED, "paused:ratelimit"),
     ("quota", RunStatus.ABORTED, "paused:billing"),
     ("billing", RunStatus.ABORTED, "paused:billing"),
@@ -191,12 +194,10 @@ class CodexOptions(BaseModel):
             return "refused: no mcp servers, so there is no graph server to propose through"
         if names != {GRAPH_SERVER}:
             return f"refused: unexpected mcp servers {sorted(names)}"
-        foreign = [
-            status.handshake
+        if any(
+            status.handshake is not None and status.handshake != handshake
             for status in servers
-            if status.handshake is not None and status.handshake != handshake
-        ]
-        if foreign:
+        ):
             return (
                 f"refused: the {GRAPH_SERVER} server this session loaded is not this "
                 "run's shim"
@@ -398,6 +399,9 @@ class CodexRunner(RefinementRunner):
         self.managed_settings = managed_settings
 
     async def run(self, job: RefinementJob) -> RunProduct:
+        # the `finally` below cannot run for a run the OS killed, so each run sweeps what an
+        # earlier one left; age-bounded, so a run still holding its own home keeps it
+        reap_stale_homes(self.home)
         # before the row exists: a request that cannot become options must not open one to orphan
         home = run_home(self.home)
         options = CodexOptions.of(

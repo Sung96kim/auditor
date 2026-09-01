@@ -62,14 +62,14 @@ def manifest() -> dict[str, Any]:
     """The Codex manifest, derived from the Claude one so the two cannot drift on identity.
 
     Raises:
-        KeyError: the authored manifest lost a key no plugin can ship without.
+        ValueError: the authored manifest lost a key no plugin can ship without.
     """
     claude = json.loads(
         (SOURCE / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
     )
     missing = [key for key in REQUIRED_KEYS if not claude.get(key)]
     if missing:
-        raise KeyError(f"plugin/.claude-plugin/plugin.json declares no {missing}")
+        raise ValueError(f"plugin/.claude-plugin/plugin.json declares no {missing}")
     return {key: claude[key] for key in SHARED_KEYS if key in claude} | MANIFEST_EXTRA
 
 

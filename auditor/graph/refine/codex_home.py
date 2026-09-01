@@ -8,6 +8,8 @@ is text this module writes, which is what makes it testable with no SDK and no a
 import json
 import os
 import secrets
+import shutil
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -27,6 +29,9 @@ MANAGED_CONFIG = Path("/etc/codex/config.toml")
 MANAGED_HOOKS = Path("/etc/codex/hooks.json")
 #: the tier above the private home, in the order a refusal reports it
 MANAGED_FILES: tuple[Path, ...] = (MANAGED_CONFIG, MANAGED_HOOKS)
+#: how long a `run-*` leaf sits untouched before a later run treats it as orphaned. A run carries
+#: no wall-clock ceiling, so this is deliberately far past any real one.
+STALE_HOME_AGE_SEC = 24 * 60 * 60
 
 
 def codex_home_dir() -> Path:
@@ -42,6 +47,28 @@ def run_home(parent: Path | None = None) -> Path:
     """
     root = parent if parent is not None else codex_home_dir()
     return root / f"run-{secrets.token_hex(8)}"
+
+
+def reap_stale_homes(
+    parent: Path, *, older_than_sec: float = STALE_HOME_AGE_SEC
+) -> tuple[Path, ...]:
+    """Remove `run-*` homes a killed run left behind, and report which ones went.
+
+    Only leaves untouched for longer than `older_than_sec` go, so a run still holding its own
+    home is never swept out from under it. `rmtree` unlinks the `auth.json` symlink rather than
+    following it, so the user's real credentials survive.
+    """
+    cutoff = time.time() - older_than_sec
+    reaped: list[Path] = []
+    for leaf in sorted(parent.glob("run-*")):
+        try:
+            if not leaf.is_dir() or leaf.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(leaf, ignore_errors=True)
+        reaped.append(leaf)
+    return tuple(reaped)
 
 
 def user_codex_home(env: Mapping[str, str] | None = None) -> Path:

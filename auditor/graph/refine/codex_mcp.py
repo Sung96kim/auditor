@@ -101,9 +101,8 @@ class GraphShim:
 
         async def handle(scope: Any, receive: Any, send: Any) -> None:
             offered = dict(scope.get("headers") or ()).get(b"authorization", b"")
-            if not secrets.compare_digest(
-                offered.decode("utf-8", "replace"), f"Bearer {self.token}"
-            ):
+            # bytes, never the decoded header: `compare_digest` refuses non-ASCII `str`
+            if not secrets.compare_digest(offered, b"Bearer " + self.token.encode()):
                 await send(
                     {"type": "http.response.start", "status": 401, "headers": []}
                 )

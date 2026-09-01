@@ -104,6 +104,10 @@ holds
   `features.codex_hooks = false`;
 - `auth.json`: a symlink to your own Codex credentials, never a copy.
 
+A run killed outright by SIGKILL, an OOM or a power loss never reaches that removal, so each run
+first sweeps `run-*` homes left untouched for over 24 hours. The sweep removes the symlink, never
+what it points at.
+
 A run that ends `aborted` with `refused: unexpected mcp servers` means something above
 `CODEX_HOME` added a server: check `/etc/codex/config.toml`. One that ends `aborted` with
 `refused: the graph server this session loaded is not this run's shim` means the binary connected

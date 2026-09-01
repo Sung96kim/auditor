@@ -104,7 +104,7 @@ class _Thread:
             return _failed(exc)
 
 
-class CodexClient:
+class CodexRunSession:
     """The `AsyncCodex` behind `CodexSession`, with the run's loopback `graph` server under it.
 
     The order in `__aenter__` is the contract: the shim has to own a port before the config that

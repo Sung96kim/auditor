@@ -1,5 +1,7 @@
 """The private CODEX_HOME: the file it writes, the link it makes, and the homes it reads."""
 
+import os
+import time
 import tomllib
 from pathlib import Path
 
@@ -7,8 +9,10 @@ import pytest
 
 from auditor.graph.refine.codex_home import (
     BEARER_ENV,
+    STALE_HOME_AGE_SEC,
     CodexHome,
     codex_home_dir,
+    reap_stale_homes,
     run_home,
     user_codex_home,
 )
@@ -99,3 +103,63 @@ def test_two_runs_get_two_homes_under_the_one_parent(tmp_path):
 def test_a_run_home_defaults_under_the_observer_s_own_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
     assert run_home().parent == codex_home_dir()
+
+
+def _auth(tmp_path: Path) -> Path:
+    """A stand-in for the user's real `~/.codex/auth.json`, which the sweep must not follow."""
+    real = tmp_path / "user-auth.json"
+    real.write_text('{"token": "real"}', encoding="utf-8")
+    return real
+
+
+def _orphan(tmp_path: Path, *, auth: Path | None = None) -> Path:
+    """A written home, backdated past the sweep's age the way a killed run's would be."""
+    home = CodexHome(home=run_home(tmp_path), root=tmp_path, server_url=URL).write(
+        auth=auth if auth is not None else _auth(tmp_path)
+    )
+    return _aged(home, seconds=STALE_HOME_AGE_SEC * 2)
+
+
+def _aged(leaf: Path, *, seconds: float) -> Path:
+    """Backdate a home's mtime, which is what the sweep reads."""
+    when = time.time() - seconds
+    os.utime(leaf, (when, when))
+    return leaf
+
+
+def test_a_home_a_killed_run_left_behind_is_swept_by_the_next_run(tmp_path):
+    """M3: only the `finally` removes a home, and a SIGKILL never reaches it."""
+    orphan = _orphan(tmp_path)
+    assert reap_stale_homes(tmp_path) == (orphan,)
+    assert not orphan.exists()
+
+
+def test_a_home_a_live_run_is_still_holding_is_left_alone(tmp_path):
+    """The sweep runs at the head of every run, so a concurrent run's home must survive it."""
+    live = CodexHome(home=run_home(tmp_path), root=tmp_path, server_url=URL).write(
+        auth=_auth(tmp_path)
+    )
+    assert reap_stale_homes(tmp_path) == ()
+    assert (live / "config.toml").exists()
+
+
+def test_sweeping_a_home_never_follows_the_link_to_the_user_s_credentials(tmp_path):
+    """`rmtree` unlinks the symlink; following it would delete the real `auth.json`."""
+    auth = _auth(tmp_path)
+    orphan = _orphan(tmp_path, auth=auth)
+    reap_stale_homes(tmp_path)
+    assert not orphan.exists()
+    assert auth.read_text(encoding="utf-8") == '{"token": "real"}'
+
+
+def test_a_parent_no_run_has_ever_used_sweeps_nothing_and_raises_nothing(tmp_path):
+    assert reap_stale_homes(tmp_path / "never-made") == ()
+
+
+def test_a_stray_file_named_like_a_home_is_not_swept(tmp_path):
+    """Only directories are homes; anything else under the parent is not this sweep's to remove."""
+    stray = tmp_path / "run-not-a-dir"
+    stray.write_text("", encoding="utf-8")
+    _aged(stray, seconds=STALE_HOME_AGE_SEC * 2)
+    assert reap_stale_homes(tmp_path) == ()
+    assert stray.exists()

@@ -120,7 +120,7 @@ def test_an_authored_manifest_missing_its_identity_refuses_to_build(
         json.dumps({"name": "auditor"}), encoding="utf-8"
     )
     monkeypatch.setattr("scripts.build_codex_plugin.SOURCE", stub)
-    with pytest.raises(KeyError, match="version"):
+    with pytest.raises(ValueError, match="version"):
         manifest()
 
 

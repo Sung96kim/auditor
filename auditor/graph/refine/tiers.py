@@ -94,9 +94,9 @@ class TierPolicy(BaseModel):
     #: the highest tier this runner may activate at here (spec 10.4)
     ceiling: Tier = DEFAULT_ACTIVATION
     #: every ``(suite, stratum)`` this runner and model has an eval row for
-    measured: frozenset[tuple[str, Stratum]] = frozenset()
+    measured: frozenset[tuple[EvalSuite, Stratum]] = frozenset()
     #: the subset of them that met the suite's own gate
-    proven: frozenset[tuple[str, Stratum]] = frozenset()
+    proven: frozenset[tuple[EvalSuite, Stratum]] = frozenset()
 
     @classmethod
     def of(
@@ -114,12 +114,11 @@ class TierPolicy(BaseModel):
         `EvalsDB.latest` answers with; a later failing row un-proves a stratum (spec 10.3).
         """
         rows = [row for row in evals if row.runner is runner and row.model == model]
+        keyed = [(key, row) for row in rows if (key := _key(row)) is not None]
         return cls(
             ceiling=ceiling,
-            measured=frozenset((row.suite, row.stratum) for row in rows),
-            proven=frozenset(
-                (row.suite, row.stratum) for row in rows if _clears(row, min_precision)
-            ),
+            measured=frozenset(key for key, _ in keyed),
+            proven=frozenset(key for key, row in keyed if _clears(row, min_precision)),
         )
 
     def tier(
@@ -169,12 +168,27 @@ class TierPolicy(BaseModel):
         A control suite is stored under one stratum, ``all``, so "every stratum it measured" and
         "its one row" are the same question (spec 10.2).
         """
+        # `.value` is redundant on a `StrEnum` and kept anyway: it is what makes a bare string
+        # here raise rather than quietly answer False, which is M2's guarantee
         rows = {pair for pair in self.measured if pair[0] == suite.value}
         if not rows:
             return False
         if stratum is None:
             return rows <= self.proven
         return (suite.value, stratum) in self.proven
+
+
+def _key(row: EvalRow) -> tuple[EvalSuite, Stratum] | None:
+    """The ``(suite, stratum)`` a stored row measures, or ``None`` for a suite this build retired.
+
+    `EvalRow.suite` is a bare `str` on the way out of the database, and a policy cannot reason
+    about a suite whose gate it no longer carries, so an unknown one is dropped rather than kept
+    as a member nothing can ever query.
+    """
+    try:
+        return EvalSuite(row.suite), row.stratum
+    except ValueError:
+        return None
 
 
 def _clears(row: EvalRow, min_precision: float) -> bool:

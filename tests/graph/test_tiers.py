@@ -313,6 +313,20 @@ def test_a_control_suite_is_read_from_its_one_stratum():
     )
 
 
+def test_the_stored_keys_are_suite_members_so_a_typo_cannot_hide_in_them():
+    """L3: the gate reads `measured`, so an untyped set is where a misspelt suite would sit."""
+    policy = _proven(_eval("add"), _eval("decoy"))
+    assert {pair[0] for pair in policy.measured} == {EvalSuite.ADD, EvalSuite.DECOY}
+    with pytest.raises(ValidationError):
+        TierPolicy(measured=frozenset({("dcoy", Stratum.ALL)}))
+
+
+def test_a_row_naming_a_suite_this_build_retired_is_dropped_rather_than_stored():
+    """`EvalRow.suite` is a bare `str` out of the database, so `of` has to survive one."""
+    policy = _proven(_eval("add"), _eval("no-such-suite"))
+    assert {pair[0] for pair in policy.measured} == {EvalSuite.ADD}
+
+
 def test_the_latest_row_governs_so_a_regression_un_proves_a_stratum():
     """P1: `of` is handed the newest row per key, so a failing eval takes activation back."""
     proving = _proven(_eval("add"), _eval("collision", lower=0.0))

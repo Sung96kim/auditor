@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("openai_codex")
 
 from codex_cli_bin import bundled_path_dir  # noqa: E402
+from graph._support import TurnStatus as FakeTurnStatus  # noqa: E402
 from openai_codex import ApprovalMode, AsyncCodex, Sandbox  # noqa: E402
 from openai_codex._run import TurnResult  # noqa: E402
 from openai_codex.generated.v2_all import TurnStatus  # noqa: E402
@@ -19,7 +20,7 @@ from openai_codex.generated.v2_all import TurnStatus  # noqa: E402
 from auditor.graph.refine.codex_client import (  # noqa: E402
     MCP_STATUS,
     RATE_LIMITS,
-    CodexClient,
+    CodexRunSession,
     _failed,
     codex_config,
 )
@@ -140,8 +141,15 @@ def test_the_status_enum_is_not_a_string_mixin():
     assert str(TurnStatus.completed) != TurnStatus.completed.value
 
 
+def test_the_test_double_mirrors_the_sdk_enum_member_for_member():
+    """The CI-shaped venv only ever sees the double, so a drifted mirror hides C1 again."""
+    assert {m.name: m.value for m in FakeTurnStatus} == {
+        m.name: m.value for m in TurnStatus
+    }
+
+
 def test_a_session_used_before_it_was_entered_refuses_rather_than_raising_attributeerror():
     """`self._codex` is `AsyncCodex | None`, and nothing typechecks this repo (L5)."""
-    client = CodexClient(OPTIONS, tools=None)
+    client = CodexRunSession(OPTIONS, tools=None)
     with pytest.raises(CodexClientError):
         client._opened()
