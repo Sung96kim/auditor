@@ -98,7 +98,7 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
     <Panel
       title="Observer"
       testId="chrome"
-      trailing={data ? <Badge state={repoState(selected)} /> : null}
+      trailing={data ? <Badge state={repoState(selected, repo)} /> : null}
     >
       {status.phase === "loading" ? <Loading what="the daemon" /> : null}
       {status.phase === "error" ? <Failed error={status.error} onRetry={onRetry} /> : null}

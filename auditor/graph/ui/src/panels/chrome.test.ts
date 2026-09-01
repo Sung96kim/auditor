@@ -4,6 +4,7 @@ import {
   evalLines,
   limitMeter,
   panelMode,
+  graphTitle,
   repoLabel,
   repoState,
   selectedRepo,
@@ -121,20 +122,39 @@ describe("the rate-limit meter", () => {
 
 describe("the state badge and the switcher", () => {
   it("reads the selected repo's own loop state", () => {
-    expect(repoState(REPO)).toBe("observing");
+    expect(repoState(REPO, REPO.repo)).toBe("observing");
   });
 
   it("a repo with no loop built yet reads as not started, never as empty", () => {
-    expect(repoState({ ...REPO, state: "" })).toBe("not started");
+    expect(repoState({ ...REPO, state: "" }, REPO.repo)).toBe("not started");
   });
 
   it("no repo selected is its own word, because the daemon's page starts there", () => {
-    expect(repoState(null)).toBe("no repo");
+    expect(repoState(null, "")).toBe("no repo");
+  });
+
+  it("a repo the daemon serves but does not track says so, not the no-repo words", () => {
+    expect(repoState(null, "/w/repo3")).toBe("not tracked");
+    expect(repoState(null, "/w/repo3")).not.toBe(repoState(null, ""));
   });
 
   it("the switcher labels a repo by its directory, since the graph meta carries no repo", () => {
     expect(repoLabel(REPO)).toBe("auditor");
     expect(repoLabel({ ...REPO, repo: "/" })).toBe("/");
+  });
+});
+
+describe("the title the header draws over the graph", () => {
+  it("names the open repo out of the roster when the roster has answered", () => {
+    expect(graphTitle([REPO], REPO.repo)).toBe("auditor");
+  });
+
+  it("keeps the repo's own name when the roster cannot be read, not the app's name", () => {
+    expect(graphTitle([], REPO.repo)).toBe("auditor");
+  });
+
+  it("falls back to the app's name only when no repo is open at all", () => {
+    expect(graphTitle([REPO], "")).toBe("Codebase Graph");
   });
 });
 
@@ -256,8 +276,12 @@ describe("the badge's tone", () => {
   });
 
   it("a repo with no loop yet is idle, not a failure and not a working state", () => {
-    expect(stateTone(repoState(null))).toBe("idle");
-    expect(stateTone(repoState({ ...REPO, state: "" }))).toBe("idle");
+    expect(stateTone(repoState(null, ""))).toBe("idle");
+    expect(stateTone(repoState({ ...REPO, state: "" }, REPO.repo))).toBe("idle");
+  });
+
+  it("an untracked repo is a wait, so it does not read the same as an empty page", () => {
+    expect(stateTone(repoState(null, "/w/repo3"))).toBe("warn");
   });
 
   it("a wait and a failure are told apart, so every pause is not one colour", () => {

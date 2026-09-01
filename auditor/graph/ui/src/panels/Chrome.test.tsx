@@ -61,6 +61,13 @@ describe("the observer card", () => {
     expect(screen.getByTestId("chrome").firstElementChild?.textContent).toContain("no repo");
   });
 
+  it("a repo the roster does not hold reads apart from a page with no repo open", () => {
+    draw(STATUS, "/w/repo3");
+    const strip = screen.getByTestId("chrome").firstElementChild;
+    expect(strip?.textContent).toBe("Observernot tracked");
+    expect(strip?.textContent).not.toContain("no repo");
+  });
+
   it("a published budget exposes its reading, so the bar is a value and not a decoration", () => {
     draw(STATUS);
     const bars = screen.getAllByRole("progressbar");

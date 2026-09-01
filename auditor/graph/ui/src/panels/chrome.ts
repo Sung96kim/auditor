@@ -49,19 +49,27 @@ export function limitMeter(limits: RateLimit | null, now: number): Meter {
   };
 }
 
-/** Spec 12.1's state badge reads the selected repo's loop state, not the daemon's word. */
-export function repoState(repo: Repo | null): string {
-  if (repo === null) return "no repo";
-  return repo.state || "not started";
+/** Spec 12.1's state badge reads the selected repo's loop state, not the daemon's word.
+ *
+ * `requested` is the repo the URL names, which separates the daemon's own no-repo page from a
+ * bookmark naming a repo the roster does not hold. The second still serves that repo's graph,
+ * so answering both with the same two words left the badge contradicting the panels below it.
+ */
+export function repoState(repo: Repo | null, requested: string): string {
+  if (repo !== null) return repo.state || "not started";
+  return requested ? "not tracked" : "no repo";
 }
 
 /** The badge's colour, so a paused or detached loop is not the same green as a working one. */
 export type StateTone = "ok" | "busy" | "warn" | "bad" | "idle";
 
-/** `LoopState` as a tone. Auth and error pauses are failures; budget and rate limit are waits. */
+/** `LoopState` as a tone, plus the two words `repoState` adds. Auth and error pauses are
+ * failures, budget and rate limit are waits, and a repo the daemon does not track is a wait
+ * for an attach that has not happened. */
 export function stateTone(state: string): StateTone {
   if (state === "paused:auth" || state === "paused:error") return "bad";
   if (state.startsWith("paused")) return "warn";
+  if (state === "not tracked") return "warn";
   if (state === "running" || state === "building") return "busy";
   if (state === "observing") return "ok";
   return "idle";
@@ -138,8 +146,25 @@ export function vectorLabel(vectors: VectorStatus): string {
   return vectors.ready ? `vectors ready (${vectors.model})` : "vectors warming up";
 }
 
+/** A repo path as a reader's name for it: its last segment, since `graph.meta` carries none. */
+export function repoName(repo: string): string {
+  const tail = repo.split("/").filter(Boolean).pop();
+  return tail || repo;
+}
+
 /** The switcher's label. `graph.meta` carries no repo, so the name comes from `/api/status`. */
 export function repoLabel(repo: Repo): string {
-  const tail = repo.repo.split("/").filter(Boolean).pop();
-  return tail || repo.repo;
+  return repoName(repo.repo);
+}
+
+/** The header's title: the roster's name for the open repo, the bootstrap's own path when the
+ * roster cannot be read, and the app's name when no repo is open at all.
+ *
+ * The fallback matters because the graph is inlined and draws with no daemon at all: a dead
+ * `/api/status` used to rename a repo the page was plainly still showing.
+ */
+export function graphTitle(repos: Repo[], repo: string): string {
+  const found = selectedRepo(repos, repo);
+  if (found) return repoLabel(found);
+  return repo ? repoName(repo) : "Codebase Graph";
 }
