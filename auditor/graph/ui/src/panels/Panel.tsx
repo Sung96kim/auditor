@@ -16,6 +16,9 @@ export const mono: React.CSSProperties = {
   color: TEXT.body,
 };
 
+/** Mono text with no spaces to break at: an id, a path or a query wraps wherever it must. */
+export const wrapped: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
+
 /** A box nested inside a panel body: one step in on the radius, one step up on the surface. */
 export const nested: React.CSSProperties = {
   borderRadius: "8px",

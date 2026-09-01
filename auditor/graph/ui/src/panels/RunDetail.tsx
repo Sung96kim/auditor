@@ -3,7 +3,7 @@ import type { RunDetailView } from "../api/types";
 import { TEXT, THEME } from "../theme";
 import { accepted, rejected } from "./runs";
 import RefinementGroup from "./RefinementGroup";
-import { Clipped, Field, microLabel, mono, nested } from "./Panel";
+import { Clipped, Field, microLabel, mono, nested, wrapped } from "./Panel";
 import { Failed, Loading, Refused } from "./States";
 
 const box: React.CSSProperties = {
@@ -30,8 +30,6 @@ const verbatim: React.CSSProperties = {
   padding: "7px 8px",
   whiteSpace: "pre-wrap",
 };
-
-const line: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
 
 export interface RunDetailProps {
   base: string;
@@ -94,7 +92,7 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
               <span style={{ color: TEXT.label }}>no tool calls recorded</span>
             ) : (
               view.tool_trace.map((call, i) => (
-                <span key={`${call.tool}-${call.ts}-${i}`} style={line}>
+                <span key={`${call.tool}-${call.ts}-${i}`} style={wrapped}>
                   <span style={{ color: TEXT.strong }}>{call.tool}</span> {call.detail}
                 </span>
               ))
@@ -109,7 +107,7 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
               <span style={{ color: TEXT.label }}>none, S11 is what writes a tuning row</span>
             ) : (
               view.trials.map((trial) => (
-                <span key={trial.tuning_id} style={line}>
+                <span key={trial.tuning_id} style={wrapped}>
                   {trial.key} {trial.status}
                 </span>
               ))
@@ -117,7 +115,7 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
           </Field>
 
           <Field title="Assessment">
-            <span style={line}>
+            <span style={wrapped}>
               {view.assessment?.verdict
                 ? `${view.assessment.verdict.decision}: ${view.assessment.verdict.reason}`
                 : "no assessment recorded"}

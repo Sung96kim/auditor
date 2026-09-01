@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { RefinementRow } from "../api/types";
 import { TEXT } from "../theme";
 import { refinementTarget, type Targeted } from "./runs";
-import { mono } from "./Panel";
+import { wrapped } from "./Panel";
 
 /** One refinement as both surfaces draw it: its tier, its kind, and what it points at.
  *
@@ -20,7 +20,7 @@ export default function RefinementLine({
   trailing?: ReactNode;
 }) {
   return (
-    <span style={{ ...mono, overflowWrap: "anywhere" }}>
+    <span style={wrapped}>
       <span style={{ color: TEXT.label }}>[{row.tier}]</span> {row.kind}{" "}
       {refinementTarget(row)}
       {trailing}
