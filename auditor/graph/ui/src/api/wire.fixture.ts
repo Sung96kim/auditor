@@ -36,6 +36,7 @@ export function budget(over: Partial<Budget> = {}): Budget {
     runs: 3,
     max_cost_usd_per_day: 5,
     max_runs_per_day: 20,
+    priced: true,
     remaining_fraction: 0.75,
     low: false,
     exhausted: false,

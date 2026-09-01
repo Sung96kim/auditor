@@ -19,6 +19,7 @@ const BUDGET: Budget = {
   runs: 3,
   max_cost_usd_per_day: 2,
   max_runs_per_day: 40,
+  priced: true,
   remaining_fraction: 0.75,
   low: false,
   exhausted: false,
@@ -51,6 +52,44 @@ describe("the budget meter", () => {
   it("an exhausted budget is full and toned apart from a merely low one", () => {
     expect(budgetMeter({ ...BUDGET, exhausted: true, remaining_fraction: 0 }).tone).toBe("spent");
     expect(budgetMeter({ ...BUDGET, low: true }).tone).toBe("low");
+  });
+
+  it("an unpriced model counts the runs the bar is counting, not dollars nothing bounds", () => {
+    const meter = budgetMeter({
+      ...BUDGET,
+      priced: false,
+      spent_usd: 0.08,
+      runs: 6,
+      remaining_fraction: 0.85,
+    });
+    expect(meter.label).toBe("6 of 40 runs today");
+    expect(meter.fill).toBeCloseTo(0.15);
+  });
+
+  it("the caption's own two numbers are the fraction the bar draws, priced or not", () => {
+    const priced = budgetMeter({ ...BUDGET, spent_usd: 1.5, remaining_fraction: 0.25 });
+    expect(priced.label).toBe("$1.50 of $2.00");
+    expect(priced.fill).toBeCloseTo(1.5 / 2);
+    const runs = budgetMeter({
+      ...BUDGET,
+      priced: false,
+      runs: 30,
+      remaining_fraction: 0.25,
+    });
+    expect(runs.label).toBe("30 of 40 runs today");
+    expect(runs.fill).toBeCloseTo(30 / 40);
+  });
+
+  it("an unpriced ceiling that is spent says so in its own units", () => {
+    const meter = budgetMeter({
+      ...BUDGET,
+      priced: false,
+      runs: 40,
+      exhausted: true,
+      remaining_fraction: 0,
+    });
+    expect(meter.label).toBe("40 of 40 runs today, spent");
+    expect(meter.tone).toBe("spent");
   });
 });
 

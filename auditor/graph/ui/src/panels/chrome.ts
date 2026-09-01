@@ -9,15 +9,22 @@ export interface Meter {
   known: boolean;
 }
 
-/** The budget meter. A repo whose loop has not published yet has no budget, and says so. */
+/** The budget meter. A repo whose loop has not published yet has no budget, and says so.
+ *
+ * The bar and the caption read the same ceiling. `remaining_fraction` is measured against runs
+ * for an unpriced model and against dollars for a priced one, so a caption that always spoke
+ * dollars sat frozen at `$0.00` while the bar filled up.
+ */
 export function budgetMeter(budget: Budget | null): Meter {
   if (budget === null) {
     return { fill: 0, label: "no budget yet", tone: "ok", known: false };
   }
   const fill = Math.min(1, Math.max(0, 1 - budget.remaining_fraction));
-  const spent = `$${budget.spent_usd.toFixed(2)} of $${budget.max_cost_usd_per_day.toFixed(2)}`;
-  if (budget.exhausted) return { fill: 1, label: `${spent}, spent`, tone: "spent", known: true };
-  return { fill, label: spent, tone: budget.low ? "low" : "ok", known: true };
+  const used = budget.priced
+    ? `$${budget.spent_usd.toFixed(2)} of $${budget.max_cost_usd_per_day.toFixed(2)}`
+    : `${budget.runs} of ${budget.max_runs_per_day} runs today`;
+  if (budget.exhausted) return { fill: 1, label: `${used}, spent`, tone: "spent", known: true };
+  return { fill, label: used, tone: budget.low ? "low" : "ok", known: true };
 }
 
 /** The rate-limit meter, whose only interesting state is a pause with a time on it.

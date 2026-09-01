@@ -94,6 +94,7 @@ READS: dict[str, dict[tuple[str, str], frozenset[str]]] = {
                 "runs",
                 "max_cost_usd_per_day",
                 "max_runs_per_day",
+                "priced",
                 "remaining_fraction",
                 "low",
                 "exhausted",

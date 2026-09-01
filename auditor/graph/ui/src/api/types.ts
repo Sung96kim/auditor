@@ -26,6 +26,8 @@ export interface Budget {
   runs: number;
   max_cost_usd_per_day: number;
   max_runs_per_day: number;
+  /** false when the model has no price, which is what makes the ceiling runs and not dollars. */
+  priced: boolean;
   remaining_fraction: number;
   low: boolean;
   exhausted: boolean;
