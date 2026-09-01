@@ -123,6 +123,16 @@ describe("the observer card", () => {
     expect(model.style.textOverflow).toBe("ellipsis");
   });
 
+  it("the rows the poll already carried stay drawn while the evals fetch is still out", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    draw(STATUS);
+    expect(screen.getByText("no eval yet")).not.toBeNull();
+    expect(screen.queryByText(/^Loading /)).toBeNull();
+  });
+
   it("a failed evals fetch draws the error state, never a false no eval yet", async () => {
     vi.stubGlobal(
       "fetch",

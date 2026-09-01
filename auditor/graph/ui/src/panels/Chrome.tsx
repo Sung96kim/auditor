@@ -13,7 +13,7 @@ import {
   vectorLabel,
   type EvalLine,
 } from "./chrome";
-import { Failed, Loading, Reconnecting, Refused } from "./States";
+import { failing, Phases } from "./States";
 import Badge from "./Badge";
 import Bar from "./Bar";
 import Panel, { block, microLabel, mono } from "./Panel";
@@ -100,12 +100,7 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
       testId="chrome"
       trailing={data ? <Badge state={repoState(selected, repo)} /> : null}
     >
-      {status.phase === "loading" ? <Loading what="the daemon" /> : null}
-      {status.phase === "refused" ? <Refused error={status.error} /> : null}
-      {status.phase === "error" ? <Failed error={status.error} onRetry={onRetry} /> : null}
-      {status.phase === "stale" ? (
-        <Reconnecting error={status.error} onRetry={onRetry} />
-      ) : null}
+      <Phases state={status} what="the daemon" onRetry={onRetry} />
       {data ? (
         <>
           <select
@@ -137,14 +132,12 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
 
           <div style={block}>
             <span style={microLabel}>Latest eval</span>
-            {evals.state.phase === "refused" ? (
-              <Refused error={evals.state.error} />
-            ) : evals.state.phase === "error" ? (
-              // no confirmed answer at all: say so, never fall back to "no eval yet"
-              <Failed error={evals.state.error} onRetry={evals.retry} />
+            {failing(evals.state) ? (
+              // the roster rode in on the poll, so these rows draw before this fetch answers and
+              // survive a stale one; only a failure replaces them, which is why the two failure
+              // phases are the whole guard here and why `what` never renders at this call site
+              <Phases state={evals.state} what="the evals" onRetry={evals.retry} />
             ) : (
-              // no reconnect arm: the measurements are one fetch at a fixed URL, so there is no
-              // refetch over an answer for a banner to sit on
               evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
                 <EvalRow key={line.runner} line={line} />
               ))

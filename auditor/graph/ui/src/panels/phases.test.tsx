@@ -295,6 +295,17 @@ describe("the flow panel in every state its fetch can be in", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(FAILED);
   });
 
+  it("a failed refetch over a symbol the graph does not hold still says it holds none", async () => {
+    const set = serve("ok", "down");
+    set(flowView({ symbol: "build", flow: null }));
+    render(<FlowPanel base="/" repo="/w" />);
+    walk();
+    await screen.findByText("No flow for that symbol yet");
+    fireEvent.click(screen.getByRole("button", { name: "in" }));
+    expect(await screen.findByText(RECONNECTING)).not.toBeNull();
+    expect(screen.getByText("No flow for that symbol yet")).not.toBeNull();
+  });
+
   it("a failed refetch keeps the last walk under a reconnect banner", async () => {
     const set = serve("ok", "down");
     set(flowView());

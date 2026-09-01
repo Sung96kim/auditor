@@ -5,7 +5,7 @@ import { stream } from "./runs";
 import Panel, { mono } from "./Panel";
 import RunDetail from "./RunDetail";
 import StreamRow, { COLUMNS, head } from "./StreamRow";
-import { Empty, Failed, Loading, Reconnecting, Refused } from "./States";
+import { answered, Empty, Phases } from "./States";
 
 /** The one control shape the stream's two disclosures share: a dashed pill with a count in it. */
 function Chip({
@@ -49,7 +49,6 @@ export default function RunStream({ live }: { live: LiveGraph }) {
   const log = live.runs.data?.log;
   const rows = log?.runs ?? [];
   const { shown, collapsed, reasons } = stream(rows, live.showSkipped);
-  const answered = live.runs.phase === "ready" || live.runs.phase === "stale";
   // the server withholds skipped rows until asked, so its count is the only way to offer them
   const hidden = live.showSkipped ? collapsed.length : (log?.hidden_count ?? 0);
   return (
@@ -64,16 +63,9 @@ export default function RunStream({ live }: { live: LiveGraph }) {
         ) : null
       }
     >
-      {live.runs.phase === "loading" ? <Loading what="runs" /> : null}
-      {live.runs.phase === "refused" ? <Refused error={live.runs.error} /> : null}
-      {live.runs.phase === "error" ? (
-        <Failed error={live.runs.error} onRetry={live.retry} />
-      ) : null}
-      {live.runs.phase === "stale" ? (
-        <Reconnecting error={live.runs.error} onRetry={live.retry} />
-      ) : null}
+      <Phases state={live.runs} what="runs" onRetry={live.retry} />
 
-      {answered && shown.length === 0 ? (
+      {answered(live.runs) && shown.length === 0 ? (
         <Empty
           what="runs"
           hint="the observer has not started a refinement run for this repo yet"

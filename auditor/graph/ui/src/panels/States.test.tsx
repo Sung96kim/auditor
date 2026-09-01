@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { Empty, Failed, Loading, Reconnecting, Refused, reason } from "./States";
+import {
+  answered,
+  Empty,
+  failing,
+  Failed,
+  Loading,
+  Phases,
+  Reconnecting,
+  Refused,
+  reason,
+} from "./States";
+import { failed, initial, received } from "../api/poll";
 
 afterEach(cleanup);
 
@@ -81,5 +92,54 @@ describe("what a state box looks like, not only what it says", () => {
   it("loading shows a pending indicator, so a slow poll is not a line of text alone", () => {
     const { container } = render(<Loading what="the daemon" />);
     expect(container.querySelector(".state-track")).not.toBeNull();
+  });
+});
+
+const READY = received(initial<number>(), 1);
+
+describe("the ladder from a phase to its box, which six panels used to spell themselves", () => {
+  it("a one-shot surface handed a stale state draws nothing, so the flag is not a no-op", () => {
+    const { container } = render(
+      <Phases state={failed(READY, "gone")} what="runs" onRetry={vi.fn()} reconnects={false} />,
+    );
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("the same state on a polled surface is the reconnect banner", () => {
+    render(<Phases state={failed(READY, "gone")} what="runs" onRetry={vi.fn()} />);
+    expect(screen.getByText("Reconnecting to the observer")).not.toBeNull();
+  });
+
+  it("a first poll that is still out names what it is waiting for", () => {
+    render(<Phases state={initial<number>()} what="the evals" onRetry={vi.fn()} />);
+    expect(screen.getByText("Loading the evals")).not.toBeNull();
+  });
+
+  it("a refusal is drawn whether or not the surface reconnects, because it is the answer", () => {
+    render(
+      <Phases
+        state={failed(READY, "no repo named that", true)}
+        what="runs"
+        onRetry={vi.fn()}
+        reconnects={false}
+      />,
+    );
+    expect(screen.getByRole("alert").textContent).toContain("The observer refused this request");
+  });
+
+  it("an answer a failing refetch sits on is still an answer, and a refusal is not one", () => {
+    expect(answered(READY)).toBe(true);
+    expect(answered(failed(READY, "gone"))).toBe(true);
+    expect(answered(initial<number>())).toBe(false);
+    expect(answered(failed(initial<number>(), "gone"))).toBe(false);
+    expect(answered(failed(READY, "no repo named that", true))).toBe(false);
+  });
+
+  it("only the two failure phases are failing, which is the guard Chrome keeps", () => {
+    expect(failing(failed(READY, "no repo named that", true))).toBe(true);
+    expect(failing(failed(initial<number>(), "gone"))).toBe(true);
+    expect(failing(failed(READY, "gone"))).toBe(false);
+    expect(failing(READY)).toBe(false);
+    expect(failing(initial<number>())).toBe(false);
   });
 });
