@@ -169,7 +169,7 @@ describe("the refinement list in every state its fetch can be in", () => {
     expect(screen.queryByText(LOADING)).toBeNull();
   });
 
-  it("has no reconnect state, because one answer is all it ever asks for", async () => {
+  it("does not refetch when its URL has not moved, which is why it has no stale arm", async () => {
     const set = serve("ok");
     set(refinementsView());
     const fetcher = globalThis.fetch as ReturnType<typeof vi.fn>;

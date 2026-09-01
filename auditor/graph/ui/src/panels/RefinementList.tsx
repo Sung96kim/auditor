@@ -9,9 +9,9 @@ import { Empty, Phases } from "./States";
 
 /** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3).
  *
- * The reconnect arm stays on because `answered` lets the rows sit on a stale refetch, and a
- * panel that speaks for an answer it cannot refresh has to be able to say the answer went stale.
- * `useFetchOnce` keys on the URL, so a repo that changed in place is exactly that refetch.
+ * No reconnect arm: `repo` reaches this panel from the bootstrap `useLiveGraph` holds in a
+ * setter-less `useState`, so the URL is fixed for the life of the page and the only refetch is
+ * the Retry the failure arms draw themselves. `answered` still guards the rows either way.
  */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
   const { state, retry } = useFetchOnce<RefinementsView>(
@@ -45,7 +45,7 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
         ) : null
       }
     >
-      <Phases state={state} what="refinements" onRetry={retry} />
+      <Phases state={state} what="refinements" onRetry={retry} reconnects={false} />
 
       {answered(state) && rows.length === 0 ? (
         <Empty what="refinements" hint="no refinement has been proposed for this repo yet" />
