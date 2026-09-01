@@ -872,7 +872,7 @@ async def test_the_attach_sweep_gives_a_running_row_this_repo_s_own_longer_windo
 async def test_the_daemon_writes_the_graph_block_the_status_line_reads(
     refine_service: RefinementService, tmp_path
 ):
-    """C1: `graph` is the observer's block of `status.json`, written through `merge_status`."""
+    """C1: `graph` is the observer's block of `status.json`, written through `write_block`."""
     loop = _loop(refine_service)
     daemon = _daemon_for(loop, tmp_path)
     before = int(time.time())
@@ -967,9 +967,32 @@ async def test_a_quiet_repo_still_refreshes_the_block_before_it_reads_stale(
     expiry = refine_service.user.observer.scheduling.session_expiry_minutes * 60
     clock["now"] += expiry / 2 + 1
     await daemon.publisher.publish(loop)
-    assert (
-        json.loads(written.read_text())["graph"]["state"] == LoopState.OBSERVING.value
-    )
+    block = json.loads(written.read_text())["graph"]
+    assert block["state"] == LoopState.OBSERVING.value
+    # the stamp the status line ages is the clock the refresh was decided on, not the wall
+    assert block["written_at"] == int(clock["now"])
+
+
+async def test_an_unchanged_meter_leaves_the_page_tag_where_it_is(
+    refine_service: RefinementService, tmp_path
+):
+    """`on_change` is the router's tag counter, so a bump every tick is a 304 that never lands.
+
+    The forward half, that a moved meter moves the tag, is pinned by the state-change tests;
+    dropping the guard reads like a micro-optimisation and nothing else here would go red.
+    """
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    bumped: list[int] = []
+    daemon.on_change = lambda: bumped.append(1)
+    await loop.attach()
+    await daemon.publisher.publish(loop)
+    await daemon.publisher.publish(loop)
+    assert bumped == [1]
+    # a meter that did move still moves the tag, so the guard is not a bump that never fires
+    loop.state = LoopState.PAUSED_AUTH
+    await daemon.publisher.publish(loop)
+    assert bumped == [1, 1]
 
 
 async def test_a_block_that_could_not_be_written_is_not_recorded_as_written(
@@ -985,7 +1008,7 @@ async def test_a_block_that_could_not_be_written_is_not_recorded_as_written(
     def broken(*args: object, **kw: object) -> None:
         raise RuntimeError("the status file is not writable")
 
-    monkeypatch.setattr("auditor.observer.daemon.write_graph_status", broken)
+    monkeypatch.setattr("auditor.observer.daemon.write_block", broken)
     await daemon.publisher.publish(loop)
     assert daemon.publisher.blocks == {}
     monkeypatch.undo()

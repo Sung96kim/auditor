@@ -15,7 +15,7 @@ from auditor.models import (
     Severity,
     VerdictKind,
 )
-from auditor.status import _lock, merge_status, status_path, write_status
+from auditor.status import _lock, _merge_status, status_path, write_status
 
 
 def _result(sev: Severity) -> ScanResult:
@@ -62,7 +62,7 @@ def test_write_status_writes_nothing_under_root(tmp_path: Path):
 
 
 def test_merge_status_preserves_a_foreign_block(tmp_path: Path):
-    merge_status(tmp_path, "graph", {"nodes": 5})
+    _merge_status(tmp_path, "graph", {"nodes": 5})
     write_status(tmp_path, [_result(Severity.LOW)], configured=False)
     data = json.loads(status_path(tmp_path).read_text())
     assert data["graph"] == {"nodes": 5}
@@ -71,7 +71,7 @@ def test_merge_status_preserves_a_foreign_block(tmp_path: Path):
 
 def test_merge_status_replaces_only_its_own_block(tmp_path: Path):
     write_status(tmp_path, [_result(Severity.HIGH)], configured=True)
-    merge_status(tmp_path, "scan", {"severity": {}, "configured": False})
+    _merge_status(tmp_path, "scan", {"severity": {}, "configured": False})
     data = json.loads(status_path(tmp_path).read_text())
     assert data["scan"] == {"severity": {}, "configured": False}
 
@@ -83,7 +83,7 @@ def test_merge_status_breaks_a_stale_lock(tmp_path: Path):
     stale.write_text("")
     old = time.time() - 3600
     os.utime(stale, (old, old))
-    merge_status(tmp_path, "graph", {"nodes": 1})
+    _merge_status(tmp_path, "graph", {"nodes": 1})
     assert json.loads(status_path(tmp_path).read_text())["graph"] == {"nodes": 1}
     assert not stale.exists()
 
@@ -150,5 +150,5 @@ def test_tmp_file_is_per_process(tmp_path: Path, monkeypatch):
         return real(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "write_text", spy)
-    merge_status(tmp_path, "graph", {"nodes": 1})
+    _merge_status(tmp_path, "graph", {"nodes": 1})
     assert f"status.json.{os.getpid()}.tmp" in seen

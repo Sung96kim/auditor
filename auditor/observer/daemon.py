@@ -66,7 +66,7 @@ from auditor.paths import (
 )
 from auditor.payload import WirePayload
 from auditor.serve import open_url
-from auditor.status import write_graph_status
+from auditor.status import GraphStatusBlock, write_block
 from auditor.user_settings import (
     DEFAULT_JOIN_SECONDS,
     UserSettings,
@@ -353,8 +353,8 @@ class LoopHost:
 class RepoPublisher:
     """What each attached repo has published: its two meters, and its `graph` status block.
 
-    Both dicts are written only from the loop's own thread, so unlike `Readers._cached` they need
-    no lock, and an unchanged tick answers without reaching for the status file's. The clock and
+    One task per key writes these, and every write replaces a whole value, so the cross-thread
+    `meters_for` read needs no lock where `Readers._cached`'s check-then-set does. The clock and
     the change hook are callables because the daemon rebinds both after this object is built.
     """
 
@@ -390,7 +390,11 @@ class RepoPublisher:
                 max_utilization=loop.user.observer.budget.max_utilization,
                 paused=loop.state
                 in {LoopState.PAUSED_RATELIMIT, LoopState.PAUSED_AUTH},
-                resumes_at=loop.pauses.auth_until or loop.pauses.resumes_at,
+                resumes_at=(
+                    loop.pauses.auth_until
+                    if loop.pauses.auth_until is not None
+                    else loop.pauses.resumes_at
+                ),
             ),
         )
         if self.meters.get(key) != drawn:
@@ -401,11 +405,11 @@ class RepoPublisher:
     async def _write_block(self, loop: RepoLoop, key: str) -> None:
         """Write this repo's `graph` block, which is what the status line's segment renders.
 
-        On a change or a stale stamp, and off the event loop: `merge_status` takes a lock file
-        and can wait two seconds for a scan that is writing the other block. The stamp is the
-        second half because the status line reads the block as off once `written_at` is older
-        than `expiry_seconds`, and a repo can observe for a whole session without its node count,
-        its active refinements or its state moving at all (S9-4).
+        On a change or a stale stamp, and off the event loop: `write_block` takes a lock file and
+        can wait two seconds for a scan writing the other block. The stamp is the second half
+        because the status line reads the block as off once `written_at` is older than
+        `expiry_seconds`, and a quiet repo can observe for a whole session without its node count,
+        its refinements or its state moving (S9-4). One clock stamps it and ages it, never two.
         """
         nodes, refined = await asyncio.gather(
             loop.index.graph.count_nodes(),
@@ -419,12 +423,15 @@ class RepoPublisher:
             return
         try:
             await asyncio.to_thread(
-                write_graph_status,
+                write_block,
                 loop.root,
-                nodes=nodes,
-                refined=refined,
-                state=loop.state.value,
-                expiry_seconds=expiry,
+                GraphStatusBlock(
+                    written_at=int(now),
+                    nodes=nodes,
+                    refined=refined,
+                    state=loop.state.value,
+                    expiry_seconds=expiry,
+                ),
             )
         except Exception:  # the cache may not claim a write that did not happen (S9-18)
             _LOG.exception("could not write %s's graph status block", loop.root)
@@ -474,7 +481,8 @@ class Daemon:
         )
         #: one `RepoLoop` per attached repo, keyed by the spool key `consume` is handed (C-2)
         self.loops: dict[str, RepoLoop] = {}
-        #: `now` and `on_change` are both rebound on the daemon after it is built, so read them
+        #: read late: `serve` rebinds `on_change` once there is a router to bump and a test
+        #: rebinds `now`, so each thunk closes over `self` and is the one cycle the daemon has
         self.publisher = RepoPublisher(
             now=lambda: self.now(), on_change=lambda: self.on_change()
         )

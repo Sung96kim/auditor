@@ -69,7 +69,7 @@ uv run auditr scan .                          # run the working tree
 ```
 
 - Never `--all-extras`: it adds the `observer-*` and `vectors` SDK wheels, about 640 MB that nothing
-  in the suite imports.
+  in the suite imports, and it reddens `test_drive.py`'s missing-extra test.
 - `uv tool install .` puts the checkout on PATH.
 
 ### Containers

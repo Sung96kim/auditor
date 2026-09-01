@@ -32,7 +32,7 @@ uv run python -m auditor.graph.ui_inputs --write        # restamps dist/inputs.s
 ```
 
 - Never `--all-extras` locally: it adds only the observer and vectors SDK wheels, about 640 MB
-  that nothing in the suite imports.
+  that nothing in the suite imports, and it reddens `test_drive.py`'s missing-extra test.
 
 ## Layout rules
 

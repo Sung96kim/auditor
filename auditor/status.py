@@ -64,7 +64,7 @@ def _lock(path: Path) -> Iterator[None]:
                 path.unlink()
 
 
-def merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
+def _merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
     """Replace one top-level block of the repo's status file, keeping every other writer's block.
 
     Best effort: an unwritable home is swallowed, since this is only a cache. Takes the directory
@@ -91,8 +91,8 @@ class StatusBlock(BaseModel):
     """One writer's top-level block of the status file, which knows the key it goes under.
 
     The key is on the model rather than at the call site, so a block cannot be merged under
-    another writer's name, and a renamed field is a type error here instead of an empty segment
-    on the status line.
+    another writer's name or under none, and a renamed field is a type error here instead of an
+    empty segment on the status line.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -100,6 +100,13 @@ class StatusBlock(BaseModel):
     block: ClassVar[str]
 
     written_at: int = Field(default_factory=lambda: int(time.time()))
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # a nameless block raises inside `_merge_status`, on the path that swallows OSError, so
+        # the third writer would get a silent no-op; the definition is where it can still be loud
+        super().__init_subclass__(**kwargs)
+        if not getattr(cls, "block", ""):
+            raise TypeError(f"{cls.__name__} must set `block`")
 
 
 class ScanStatusBlock(StatusBlock):
@@ -128,7 +135,7 @@ class GraphStatusBlock(StatusBlock):
 
 def write_block(root: Path, payload: StatusBlock) -> Path:
     """Merge one writer's block into the repo's status file, under the key the model names."""
-    return merge_status(root, payload.block, payload.model_dump())
+    return _merge_status(root, payload.block, payload.model_dump())
 
 
 def write_status(root: Path, results: list[ScanResult], *, configured: bool) -> Path:
@@ -137,27 +144,3 @@ def write_status(root: Path, results: list[ScanResult], *, configured: bool) -> 
         for sev, n in r.counts.items():
             counts[sev.value] += n
     return write_block(root, ScanStatusBlock(severity=counts, configured=configured))
-
-
-def write_graph_status(
-    root: Path,
-    *,
-    nodes: int,
-    refined: int,
-    state: str,
-    expiry_seconds: int,
-) -> Path:
-    """Write the observer's own block of the status file, which the `graph` segment renders.
-
-    Kept as a function rather than folded into the model so the daemon still names its four
-    numbers at the call site, and so the one caller does not have to import the model.
-    """
-    return write_block(
-        root,
-        GraphStatusBlock(
-            nodes=nodes,
-            refined=refined,
-            state=state,
-            expiry_seconds=expiry_seconds,
-        ),
-    )

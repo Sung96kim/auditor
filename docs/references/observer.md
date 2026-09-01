@@ -118,9 +118,10 @@ $AUDITOR_HOME/
 - An adopted spool goes through the same gate `POST /sessions/attach` does before it gets a loop.
   A repo that never opted in is left with its spool on disk and no loop, so spooling an event at a
   daemon that is not running is not a way past the gate.
-- The daemon writes the `graph` block through `auditor.status.merge_status`, which
-  read-merge-replaces one block under a lock, so a concurrent `auditr scan` writing `scan` cannot
-  lose it and it cannot lose the scan's.
+- The daemon writes the `graph` block through `auditor.status.write_block`, which files the
+  frozen `GraphStatusBlock` under the key the model names and read-merge-replaces that one block
+  under a lock, so a concurrent `auditr scan` writing `scan` cannot lose it and it cannot lose
+  the scan's.
 
 ## The port
 
