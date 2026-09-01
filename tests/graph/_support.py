@@ -312,6 +312,16 @@ class ClaudeShaped(FakeRunner):
         super().__init__(service, client_factory, **kwargs)
 
 
+class CodexShaped(ClaudeShaped):
+    """The same fake, reporting itself as the Codex runner.
+
+    A subclass rather than a second copy: what a surface test wants is the choice logic and one
+    scripted run, and the only difference between the two runners at that level is the kind.
+    """
+
+    kind: ClassVar[RunnerKind] = RunnerKind.CODEX
+
+
 class EvalClaude(ClaudeShaped):
     """A Claude-shaped runner that answers each masked row from the row itself.
 
@@ -474,5 +484,155 @@ def fake_factory(
         if seen is not None:
             seen.append(options)
         return FakeClient(messages, tools)
+
+    return factory
+
+
+class Breakdown(BaseModel):
+    """`TokenUsageBreakdown`'s six counters, as a fake can build them with no SDK installed."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    total_tokens: int = 0
+
+
+class Usage(BaseModel):
+    """`ThreadTokenUsage`: the thread total, and this turn's own."""
+
+    total: Breakdown | None = None
+    last: Breakdown | None = None
+
+
+class TurnError(BaseModel):
+    message: str = ""
+
+
+class McpCall(BaseModel):
+    """One `McpToolCallThreadItem`, already unwrapped: a fake needs no `.root` to build."""
+
+    type: str = "mcpToolCall"
+    server: str = "graph"
+    tool: str = "propose"
+    arguments: Mapping[str, Any] = MappingProxyType({})
+    duration_ms: int = 0
+
+
+class Command(BaseModel):
+    """One `CommandExecutionThreadItem`."""
+
+    type: str = "commandExecution"
+    command: str = "rg needle"
+    duration_ms: int = 0
+
+
+class Rooted(BaseModel):
+    """A `ThreadItem` root model, so a test can prove the runner unwraps `.root`."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    root: Any
+
+
+class Turn(BaseModel):
+    """`TurnResult`'s shape, which is a plain dataclass, so a fake can be this small."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: str = "turn-1"
+    status: str = "completed"
+    error: TurnError | None = None
+    final_response: str | None = None
+    items: tuple[Any, ...] = ()
+    usage: Usage | None = None
+
+
+class FakeThread:
+    """A thread whose one turn is scripted, and which really calls the shim's bound tools."""
+
+    def __init__(self, turn: Any, tools: BoundTools) -> None:
+        self.id = "thread-1"
+        self.turn = turn
+        self.tools = tools
+        self.prompt: str | None = None
+
+    async def run(self, prompt: str) -> Any:
+        """Replay the turn, really calling the bound tools its mcp items name first."""
+        self.prompt = prompt
+        for item in getattr(self.turn, "items", ()):
+            inner = getattr(item, "root", item)
+            if getattr(inner, "type", "") == "mcpToolCall":
+                await self._call(inner)
+        if isinstance(self.turn, Exception):
+            raise self.turn
+        return self.turn
+
+    async def _call(self, item: Any) -> None:
+        """One scripted mcp call, through the run's own table, so a rename fails here too."""
+        bound = {tool.name: tool for tool in self.tools.tools()}.get(item.tool)
+        if bound is None:
+            raise AssertionError(
+                f"the script called {item.tool!r}, which this run does not expose"
+            )
+        await bound.handler(dict(item.arguments))
+
+
+class FakeCodex:
+    """A `CodexSession` over a scripted turn, one server list and one rate limit answer."""
+
+    def __init__(
+        self,
+        turn: Any,
+        tools: BoundTools,
+        *,
+        servers: tuple[str, ...] = ("graph",),
+        limit: Any = None,
+    ) -> None:
+        self.turn = turn
+        self.tools = tools
+        self._servers = servers
+        self._limit = limit
+        self.thread: FakeThread | None = None
+
+    async def __aenter__(self) -> "FakeCodex":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def servers(self) -> tuple[str, ...]:
+        return self._servers
+
+    async def rate_limit(self) -> Any:
+        return self._limit
+
+    async def thread_start(self, options: Any) -> FakeThread:
+        self.thread = FakeThread(self.turn, self.tools)
+        return self.thread
+
+
+def codex_factory(
+    turn: Any,
+    *,
+    servers: tuple[str, ...] = ("graph",),
+    limit: Any = None,
+    seen: list[Any] | None = None,
+    sessions: list["FakeCodex"] | None = None,
+) -> Callable[..., FakeCodex]:
+    """A Codex client factory over one scripted turn, recording the options it was handed.
+
+    Built per call the way the real one is, so the session it hands back really holds this run's
+    own tools and a renamed tool fails in the fake too.
+    """
+
+    def factory(options: Any, tools: Any) -> FakeCodex:
+        if seen is not None:
+            seen.append(options)
+        session = FakeCodex(turn, tools, servers=servers, limit=limit)
+        if sessions is not None:
+            sessions.append(session)
+        return session
 
     return factory

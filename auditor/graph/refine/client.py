@@ -29,3 +29,35 @@ class ClientSession(Protocol):
 #: arguments are the SDK runner's own models, which this module sits below and cannot name, so
 #: only the answer is pinned: it is the half every caller consumes.
 ClientFactory = Callable[..., ClientSession]
+
+
+class CodexThread(Protocol):
+    """The one member of a Codex thread a runner uses."""
+
+    async def run(self, prompt: str) -> Any: ...
+
+
+class CodexSession(Protocol):
+    """The four members of the Codex client a runner uses.
+
+    Two of them are RPCs the SDK gives no wrapper for, so the private `.request` call and its
+    response models live behind this seam rather than in the runner.
+    """
+
+    async def __aenter__(self) -> "CodexSession": ...
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any: ...
+
+    async def thread_start(self, options: Any) -> CodexThread: ...
+
+    #: every mcp server the binary loaded, by name, from `mcpServerStatus/list`
+    async def servers(self) -> tuple[str, ...]: ...
+
+    #: the account's primary rate limit window, or `None` when it reported none
+    async def rate_limit(self) -> Any: ...
+
+
+#: builds the Codex session one run talks through, from that run's options and its bound tools.
+#: The same two arguments `ClientFactory` takes, because the Codex factory does the same job: it
+#: is what stands the `graph` server up, on loopback rather than in process.
+CodexFactory = Callable[..., CodexSession]

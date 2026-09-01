@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
-from graph._support import ClaudeShaped
+from graph._support import ClaudeShaped, CodexShaped
 from pydantic import BaseModel, ConfigDict
 from typer.testing import CliRunner
 
@@ -507,4 +507,17 @@ def claude_runner(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     monkeypatch.setattr(drive, "SDK_AVAILABLE", True)
     monkeypatch.setattr(drive, "auth_hinted", lambda *a, **k: True)
     monkeypatch.setitem(drive.RUNNERS, RunnerKind.CLAUDE, ClaudeShaped)
+    return monkeypatch
+
+
+@pytest.fixture
+def codex_runner(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """A logged-in machine with the Codex extra, driving the scripted Codex-shaped runner.
+
+    The twin of `claude_runner`, for the same reason: without it the CLI and the MCP tests would
+    each grow their own copy of these three patches.
+    """
+    monkeypatch.setattr(drive, "CODEX_AVAILABLE", True)
+    monkeypatch.setattr(drive, "codex_auth_hinted", lambda *a, **k: True)
+    monkeypatch.setitem(drive.RUNNERS, RunnerKind.CODEX, CodexShaped)
     return monkeypatch
