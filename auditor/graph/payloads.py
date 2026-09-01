@@ -75,11 +75,12 @@ class NeighborsReport(WireRows[NeighborRow]):
 
 
 class SearchRow(WirePayload):
-    """One symbol whose id contains the search term."""
+    """One symbol the search matched: by id, or by how near its naming document ranks."""
 
     id: str
     kind: str
     rank: float
+    score: float = 0.0
 
 
 class SearchReport(WireRows[SearchRow]):

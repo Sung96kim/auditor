@@ -439,7 +439,7 @@ GRAPH_JSON_KEYS: dict[str, list[str]] = {
 }
 GRAPH_ROW_KEYS: dict[str, list[str]] = {
     "clusters": ["cluster_id", "label", "label_provenance", "member_count"],
-    "search": ["id", "kind", "rank"],
+    "search": ["id", "kind", "rank", "score"],
     "neighbors": ["direction", "edge", "hops", "id", "kind"],
     "related": ["id", "kind", "rank", "weight"],
 }

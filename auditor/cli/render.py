@@ -143,8 +143,9 @@ def render_graph_search(out: Console, payload: SearchReport) -> None:
     t.add_column("symbol")
     t.add_column("kind")
     t.add_column("rank", justify="right")
+    t.add_column("score", justify="right")
     for row in payload.root:
-        t.add_row(row.id, row.kind, str(row.rank))
+        t.add_row(row.id, row.kind, str(row.rank), str(row.score))
     out.print(t)
 
 

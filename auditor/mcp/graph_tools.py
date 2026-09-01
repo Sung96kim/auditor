@@ -99,8 +99,13 @@ async def graph_clusters(path: str = ".") -> list[dict]:
 
 @mcp.tool(annotations=READ_ONLY)
 async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict]:
-    """Find graph symbols whose id contains ``term`` (case-insensitive), highest-rank
-    first. Use to locate the exact symbol name before graph_usages/graph_neighbors.
+    """Find graph symbols by name, or by meaning when no name matches. Ids containing
+    ``term`` come first, highest-rank first; only when no id contains it does the page
+    become the symbols whose naming document ranks nearest to ``term`` in the graph
+    build's tf-idf + LSI space, each with its cosine as ``score``. So an exact name still
+    locates the node before graph_usages/graph_neighbors and an unknown name still returns
+    nothing, while a plain-English question ("the function that validates the webhook
+    signature") returns candidates.
     """
     async with tool_repo(path) as repo:
         return (await GraphQuery(repo.index).search(term, limit=limit)).model_dump(

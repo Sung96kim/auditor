@@ -1,5 +1,6 @@
-"""Read-side query API over the persisted graph (spec §10). Stdlib only."""
+"""Read-side query API over the persisted graph (spec §10). Ranked search needs numpy."""
 
+import heapq
 from collections import Counter
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
@@ -32,6 +33,7 @@ from auditor.graph.payloads import (
     UsagesPayload,
 )
 from auditor.graph.refine.models import RefinementStatus
+from auditor.graph.textsearch import score as text_scores
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -134,21 +136,38 @@ class GraphQuery:
         return NeighborsReport(tuple(out))
 
     async def search(self, term: str, limit: int = 20) -> SearchReport:
-        """Find symbols whose id contains ``term`` (case-insensitive), highest-rank first —
-        for locating the exact node before a usages/neighbors query."""
+        """Symbols whose id contains ``term``, highest-rank first, and only when none does, the
+        symbols whose naming document ranks nearest to it in the build's tf-idf + LSI space.
+
+        The name half is unchanged, so locating the exact node before a usages/neighbors query
+        returns exactly what it used to and "no symbol by that name" is still an answer. The
+        ranked half is what a plain-English question falls through to. An index built before the
+        fit was stored has no model and never ranks.
+        """
+        nodes = await self.index.graph.nodes()
+        kinds = {n["node_id"]: n["kind"] for n in nodes}
+        ranks = {n["node_id"]: (n.get("rank") or 0.0) for n in nodes}
         term_l = term.lower()
-        hits = [
-            n for n in await self.index.graph.nodes() if term_l in n["node_id"].lower()
-        ]
-        hits.sort(key=lambda n: (-(n.get("rank") or 0.0), n["node_id"]))
+        named = sorted(
+            (nid for nid in kinds if term_l in nid.lower()),
+            key=lambda nid: (-ranks[nid], nid),
+        )[:limit]
+        model = None if named else await self.index.graph.text_model()
+        scores = text_scores(model, term) if model is not None else {}
+        ranked = heapq.nsmallest(
+            limit,
+            (nid for nid in scores if nid in kinds),
+            key=lambda nid: (-scores[nid], nid),
+        )
         return SearchReport(
             tuple(
                 SearchRow(
-                    id=n["node_id"],
-                    kind=n["kind"],
-                    rank=round(n.get("rank") or 0.0, 6),
+                    id=node_id,
+                    kind=kinds[node_id],
+                    rank=round(ranks[node_id], 6),
+                    score=round(scores.get(node_id, 0.0), 6),
                 )
-                for n in hits[:limit]
+                for node_id in (*named, *ranked)
             )
         )
 
