@@ -5,13 +5,13 @@ are as of the commit these were captured against — re-verify with a fresh scan
 
 ## 1. False positive → skip-directive
 
-**Finding** (`auditor/status.py:33`, `PY-CORRECT-SWALLOWED-EXCEPTION`, medium):
+**Finding** (`auditor/status.py:85`, `PY-CORRECT-SWALLOWED-EXCEPTION`, medium):
 
 ```json
 {
   "rule_id": "PY-CORRECT-SWALLOWED-EXCEPTION",
   "severity": "medium",
-  "line": 33,
+  "line": 85,
   "message": "exception silently swallowed (no log, re-raise, or handling)",
   "evidence": "except OSError:"
 }
@@ -35,20 +35,19 @@ def _merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
             ...
             os.replace(tmp, out)
     except OSError:
-        pass  # best-effort cache — a read-only home must not fail the scan
+        pass
     return out
 ```
 
 **Reasoning**: the module docstring states this cache is optional — the status line reads it and
 nothing else, but the scan itself must never fail because the cache write failed (read-only fs,
-disk full, permissions). The `except OSError: pass` is deliberate and already explained by the
-inline comment; there's no caller who needs to observe this failure — `_merge_status` still
-returns the path either way. This is a genuine false positive, not a bug, and the shape
-(`try: write cache / except OSError: pass`) is stable — it won't turn into a real bug on a
-future edit without someone deliberately removing the comment too.
+disk full, permissions). The `except OSError: pass` is deliberate, and there is no caller who
+needs to observe this failure: `_merge_status` returns the path either way. This is a genuine
+false positive, not a bug, and the shape (`try: write cache / except OSError: pass`) is stable.
+The skip-directive is what carries the reason, since the bare `pass` states none of its own.
 
 **Verdict**: skip-directive, placed on the finding's reported line — the `except OSError:` line
-(33), not the `pass` line below it:
+(85), not the `pass` line below it:
 
 ```python
     except OSError:  # auditor: skip: PY-CORRECT-SWALLOWED-EXCEPTION
