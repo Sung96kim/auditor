@@ -1,16 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import {
-  answered,
-  Empty,
-  failing,
-  Failed,
-  Loading,
-  Phases,
-  Reconnecting,
-  Refused,
-  reason,
-} from "./States";
+import { Empty, Failed, Loading, Phases, Reconnecting, Refused, reason } from "./States";
 import { failed, initial, received } from "../api/poll";
 
 afterEach(cleanup);
@@ -127,19 +117,13 @@ describe("the ladder from a phase to its box, which six panels used to spell the
     expect(screen.getByRole("alert").textContent).toContain("The observer refused this request");
   });
 
-  it("an answer a failing refetch sits on is still an answer, and a refusal is not one", () => {
-    expect(answered(READY)).toBe(true);
-    expect(answered(failed(READY, "gone"))).toBe(true);
-    expect(answered(initial<number>())).toBe(false);
-    expect(answered(failed(initial<number>(), "gone"))).toBe(false);
-    expect(answered(failed(READY, "no repo named that", true))).toBe(false);
+  it("a surface that names nothing to wait for draws no first-poll box, which is the switch", () => {
+    const { container } = render(<Phases state={initial<number>()} onRetry={vi.fn()} />);
+    expect(container.innerHTML).toBe("");
   });
 
-  it("only the two failure phases are failing, which is the guard Chrome keeps", () => {
-    expect(failing(failed(READY, "no repo named that", true))).toBe(true);
-    expect(failing(failed(initial<number>(), "gone"))).toBe(true);
-    expect(failing(failed(READY, "gone"))).toBe(false);
-    expect(failing(READY)).toBe(false);
-    expect(failing(initial<number>())).toBe(false);
+  it("an answered poll draws no box at all, because the panel owns what its answer looks like", () => {
+    const { container } = render(<Phases state={READY} what="runs" onRetry={vi.fn()} />);
+    expect(container.innerHTML).toBe("");
   });
 });

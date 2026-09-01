@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { POLL_MS, failed, initial, received, retryDelay } from "./poll";
+import { POLL_MS, answered, failed, failing, initial, received, retryDelay } from "./poll";
 
 describe("the polled-surface state machine", () => {
   it("starts in LOADING with nothing to draw", () => {
@@ -77,5 +77,25 @@ describe("the polled-surface state machine", () => {
     const recovered = received(failed(failed(initial(1), "a"), "b"), 2);
     expect(recovered.attempts).toBe(0);
     expect(retryDelay(recovered.attempts)).toBe(POLL_MS);
+  });
+});
+
+const READY = received(initial<number>(), 1);
+
+describe("the two phase predicates every panel reads instead of the words themselves", () => {
+  it("an answer a failing refetch sits on is still an answer, and a refusal is not one", () => {
+    expect(answered(READY)).toBe(true);
+    expect(answered(failed(READY, "gone"))).toBe(true);
+    expect(answered(initial<number>())).toBe(false);
+    expect(answered(failed(initial<number>(), "gone"))).toBe(false);
+    expect(answered(failed(READY, "no repo named that", true))).toBe(false);
+  });
+
+  it("only the two failure phases are failing, which is the guard Chrome keeps", () => {
+    expect(failing(failed(READY, "no repo named that", true))).toBe(true);
+    expect(failing(failed(initial<number>(), "gone"))).toBe(true);
+    expect(failing(failed(READY, "gone"))).toBe(false);
+    expect(failing(READY)).toBe(false);
+    expect(failing(initial<number>())).toBe(false);
   });
 });

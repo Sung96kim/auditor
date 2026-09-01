@@ -1,16 +1,17 @@
+import { answered } from "../api/poll";
 import { useFetchOnce } from "../api/useFetchOnce";
 import type { RefinementRow, RefinementsView } from "../api/types";
 import { TEXT, THEME, TONE } from "../theme";
 import { REFINEMENT_STATUSES } from "./runs";
 import Panel, { block, microLabel, mono } from "./Panel";
 import RefinementLine from "./RefinementLine";
-import { answered, Empty, Phases } from "./States";
+import { Empty, Phases } from "./States";
 
 /** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3).
  *
- * There is no reconnect arm because there is no way to reach one: the URL is fixed for the life
- * of the page, so the only refetch is the Retry that the failure arms themselves draw, and a
- * banner over rows this panel can never refetch would be a state no reader could ever see.
+ * The reconnect arm stays on because `answered` lets the rows sit on a stale refetch, and a
+ * panel that speaks for an answer it cannot refresh has to be able to say the answer went stale.
+ * `useFetchOnce` keys on the URL, so a repo that changed in place is exactly that refetch.
  */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
   const { state, retry } = useFetchOnce<RefinementsView>(
@@ -44,7 +45,7 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
         ) : null
       }
     >
-      <Phases state={state} what="refinements" onRetry={retry} reconnects={false} />
+      <Phases state={state} what="refinements" onRetry={retry} />
 
       {answered(state) && rows.length === 0 ? (
         <Empty what="refinements" hint="no refinement has been proposed for this repo yet" />

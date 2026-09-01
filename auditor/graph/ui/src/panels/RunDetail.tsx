@@ -19,13 +19,12 @@ const box: React.CSSProperties = {
 
 /** Verbatim text the runner wrote or read: penned in, wrapped, and capped so it cannot run away. */
 const verbatim: React.CSSProperties = {
-  ...mono,
+  ...wrapped,
   background: THEME.bgPanel,
   border: `1px solid ${THEME.border}`,
   borderRadius: "6px",
   margin: 0,
   maxHeight: "120px",
-  overflowWrap: "anywhere",
   overflowY: "auto",
   padding: "7px 8px",
   whiteSpace: "pre-wrap",

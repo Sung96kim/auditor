@@ -1,4 +1,4 @@
-import type { PollState } from "../api/poll";
+import { failing, type PollState } from "../api/poll";
 import type { EvalsView, Status } from "../api/types";
 import { useFetchOnce } from "../api/useFetchOnce";
 import { TEXT, THEME, TONE } from "../theme";
@@ -13,7 +13,7 @@ import {
   vectorLabel,
   type EvalLine,
 } from "./chrome";
-import { failing, Phases } from "./States";
+import { Phases } from "./States";
 import Badge from "./Badge";
 import Bar from "./Bar";
 import Panel, { block, microLabel, mono } from "./Panel";
@@ -133,10 +133,9 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
           <div style={block}>
             <span style={microLabel}>Latest eval</span>
             {failing(evals.state) ? (
-              // the roster rode in on the poll, so these rows draw before this fetch answers and
-              // survive a stale one; only a failure replaces them, which is why the two failure
-              // phases are the whole guard here and why `what` never renders at this call site
-              <Phases state={evals.state} what="the evals" onRetry={evals.retry} />
+              // only a failure replaces the rows the poll already carried, and the measurements
+              // are one fetch at a fixed URL, so neither other arm is this surface's to draw
+              <Phases state={evals.state} onRetry={evals.retry} reconnects={false} />
             ) : (
               evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
                 <EvalRow key={line.runner} line={line} />

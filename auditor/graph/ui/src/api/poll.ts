@@ -58,6 +58,24 @@ export function failed<T>(
   };
 }
 
+/** Whether a surface has an answer to draw, which a failing refetch does not take away.
+ *
+ * Spelled once because it was spelled two ways: three panels read `ready` alone, and on the one
+ * of them that does refetch that skipped its own empty state while a poll was failing. A surface
+ * that sits on `stale` this way has to draw the reconnect banner, or it speaks for a stale answer.
+ */
+export function answered(state: PollState<unknown>): boolean {
+  return state.phase === "ready" || state.phase === "stale";
+}
+
+/** Whether a poll failed outright, which is the only thing that replaces content already drawn.
+ *
+ * Chrome's evals block keeps its own guard, but not its own copy of the phase words.
+ */
+export function failing(state: PollState<unknown>): boolean {
+  return state.phase === "refused" || state.phase === "error";
+}
+
 /** How long to wait before the next try, so a stopped daemon is not polled 20 times a minute. */
 export function retryDelay(attempts: number): number {
   if (attempts <= 0) return POLL_MS;

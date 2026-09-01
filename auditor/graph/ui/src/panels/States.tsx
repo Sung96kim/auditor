@@ -113,27 +113,13 @@ export function Failed({ error, onRetry }: { error: string; onRetry: () => void 
   );
 }
 
-/** Whether a surface has an answer to draw, which a failing refetch does not take away.
- *
- * Spelled once because it was spelled two ways: three panels read `ready` alone, and on the one
- * of them that does refetch that skipped its own empty state while a poll was failing.
- */
-export function answered(state: PollState<unknown>): boolean {
-  return state.phase === "ready" || state.phase === "stale";
-}
-
-/** Whether a poll failed outright, which is the only thing that replaces content already drawn.
- *
- * Chrome's evals block keeps its own guard, but not its own copy of the phase words.
- */
-export function failing(state: PollState<unknown>): boolean {
-  return state.phase === "refused" || state.phase === "error";
-}
-
 export interface PhasesProps {
   state: PollState<unknown>;
-  /** what the surface is waiting for, as `Loading` says it: "runs", "the daemon", "this run". */
-  what: string;
+  /** what the surface is waiting for, as `Loading` says it: "runs", "the daemon", "this run".
+   *
+   * Left off where the first poll is not this surface's to draw, which is the whole switch for
+   * that arm: the box cannot be drawn without the words that name what it is waiting for. */
+  what?: string;
   onRetry: () => void;
   /** false where the URL is fixed for the life of the page, so `stale` is unreachable there. */
   reconnects?: boolean;
@@ -145,10 +131,13 @@ export interface PhasesProps {
  * knows whether an answer it holds is empty, and each says it in its own words.
  */
 export function Phases({ state, what, onRetry, reconnects = true }: PhasesProps) {
-  if (state.phase === "loading") return <Loading what={what} />;
+  if (state.phase === "loading") return what === undefined ? null : <Loading what={what} />;
   if (state.phase === "refused") return <Refused error={state.error} />;
   if (state.phase === "error") return <Failed error={state.error} onRetry={onRetry} />;
-  if (state.phase === "stale" && reconnects)
-    return <Reconnecting error={state.error} onRetry={onRetry} />;
-  return null;
+  if (state.phase === "stale")
+    return reconnects ? <Reconnecting error={state.error} onRetry={onRetry} /> : null;
+  if (state.phase === "ready") return null;
+  // a sixth Phase is one typecheck error here rather than one silently blank panel
+  const unreachable: never = state.phase;
+  return unreachable;
 }

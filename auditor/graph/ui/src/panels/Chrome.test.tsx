@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Chrome from "./Chrome";
 import { initial, received } from "../api/poll";
+import { RequestError } from "../api/client";
 import {
   repo as aRepo,
   runnerEval,
@@ -142,6 +143,19 @@ describe("the observer card", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Could not reach the observer",
     );
+    expect(screen.queryByText("no eval yet")).toBeNull();
+  });
+
+  it("an evals request the daemon declined is an alert with no retry that could work", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new RequestError("no repo named that", 400))),
+    );
+    draw(STATUS);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The observer refused this request");
+    expect(alert.textContent).toContain("no repo named that");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByText("no eval yet")).toBeNull();
   });
 

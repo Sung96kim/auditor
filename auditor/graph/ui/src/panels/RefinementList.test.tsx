@@ -69,6 +69,40 @@ describe("the refinement list", () => {
     expect(screen.queryByText(/Loading refinements/)).toBeNull();
   });
 
+  it("a repo that changed under the panel keeps its rows and says the answer went stale", async () => {
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        call++ === 0
+          ? Promise.resolve(body([refinement()], 1, false))
+          : Promise.reject(new Error("connection refused")),
+      ),
+    );
+    const { rerender } = render(<RefinementList base="/" repo="/w" />);
+    await screen.findByText(/active \(1\)/);
+    rerender(<RefinementList base="/" repo="/w/other" />);
+    expect(await screen.findByText("Reconnecting to the observer")).not.toBeNull();
+    expect(screen.getByText(/active \(1\)/)).not.toBeNull();
+  });
+
+  it("a stale refetch over an empty ledger still says it is empty, beside the banner", async () => {
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        call++ === 0
+          ? Promise.resolve(body([], 0, false))
+          : Promise.reject(new Error("connection refused")),
+      ),
+    );
+    const { rerender } = render(<RefinementList base="/" repo="/w" />);
+    await screen.findByText("No refinements yet");
+    rerender(<RefinementList base="/" repo="/w/other" />);
+    await screen.findByText("Reconnecting to the observer");
+    expect(screen.getByText("No refinements yet")).not.toBeNull();
+  });
+
   it("a cluster relabel names its new label and its members, never a bare dash", async () => {
     serve(
       [
