@@ -16,11 +16,13 @@ from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
     DEFAULT_FLOW_DEPTH,
     DEFAULT_FLOW_LIMIT,
+    DEFAULT_SEARCH_LIMIT,
     QUEUE_ROW_LIMIT,
     CallForm,
     EdgeKind,
     UnresolvedReason,
     enum_values,
+    search_limit,
 )
 from auditor.graph.payloads import NeighborsReport, QueueRowPayload
 from auditor.graph.query import GraphQuery
@@ -98,19 +100,24 @@ async def graph_clusters(path: str = ".") -> list[dict]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def graph_search(term: str, path: str = ".", limit: int = 20) -> list[dict]:
+async def graph_search(
+    term: str, path: str = ".", limit: int = DEFAULT_SEARCH_LIMIT
+) -> list[dict]:
     """Find graph symbols by name, or by meaning when no name matches. Ids containing
     ``term`` come first, highest-rank first; only when no id contains it does the page
     become the symbols whose naming document ranks nearest to ``term`` in the graph
-    build's tf-idf + LSI space, each with its cosine as ``score``. So an exact name still
-    locates the node before graph_usages/graph_neighbors and an unknown name still returns
-    nothing, while a plain-English question ("the function that validates the webhook
-    signature") returns candidates.
-    """
+    build's tf-idf + LSI space, each with its cosine as ``score`` (a ranked row scores
+    above 0.05, so ``score`` 0.0 still means the name half). So an exact name still
+    locates the node before graph_usages/graph_neighbors, and a word the corpus never
+    fitted still returns nothing. A plain-English question ("how much money is left to
+    spend today") returns a ranked shortlist to skim, not a lookup: on this repo the
+    labelled answer is on a 20-row page for a third of the questions asked. Symbols with
+    too little text to fit, and module nodes, are reachable by name only. ``limit`` is 1
+    to 1000."""
     async with tool_repo(path) as repo:
-        return (await GraphQuery(repo.index).search(term, limit=limit)).model_dump(
-            mode="json"
-        )
+        return (
+            await GraphQuery(repo.index).search(term, limit=search_limit(limit))
+        ).model_dump(mode="json")
 
 
 @mcp.tool(annotations=READ_ONLY)

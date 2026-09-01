@@ -19,7 +19,7 @@ auditr graph flow auditor/cli/scan.py::scan .
 
 # find the exact symbol id by name, or ask in plain English when you do not know the name
 auditr graph search Blueprint .
-auditr graph search "decide whether a batch of edits is worth a run" .
+auditr graph search "how much money is left to spend today" .
 auditr graph neighbors get_user . --depth 2
 auditr graph related get_user .
 
@@ -83,13 +83,24 @@ auditr graph export . --format dot > graph.dot
   conceptually near this", not "what calls this". `--limit` defaults to 10.
 - `search` answers by name, and by meaning only when no name answers. Node ids containing the term
   come first, highest rank first, and when there are any they are the whole page, so an exact-name
-  lookup returns what it always returned and an unknown name still returns nothing. A term no id
-  contains falls through to the symbols whose naming document ranks nearest to it in the graph
-  build's tf-idf + LSI space, each carrying that cosine as `score` (`0.0` on a name match). So
-  `search Blueprint` still returns its two rows, and `search "the function that validates the
-  webhook signature"` returns candidates instead of nothing. `--limit` defaults to 20. An index
-  built before this ranking existed holds no fit, and `search` is the substring scan alone until
-  the next `graph build`.
+  lookup returns what it always returned. A term no id contains falls through to the symbols whose
+  naming document ranks nearest to it in the graph build's tf-idf + LSI space, each carrying that
+  cosine as `score`. A ranked row always scores above the 0.05 relevance floor, so `score: 0.0`
+  still means the row came from the name half. Three cases, kept apart:
+  - a name match suppresses ranking entirely, and `search Blueprint` returns its two rows;
+  - a word the build never fitted returns nothing at all: measured on this repo, `kubernetes` and
+    `webhook` are in no docstring and no id, and both answer with `[]`;
+  - a word the corpus does hold but no id carries is ranked, and the page is not empty. Measured:
+    `search serializer` returns a full 20 rows topping out at cosine 0.50, and this repo has no
+    serializer. The floor drops noise, not a weak topic, so an in-vocabulary miss looks like a
+    result.
+
+  Read the ranked half as a shortlist to skim, not as a lookup: on this repo's own graph the
+  labelled answer to a hand-written question is on a 20-row page for 13 of the 40 questions the
+  retrieval gate asks. Symbols the build marked text-sparse, and module nodes, carry no naming
+  document and never appear in the ranked half; find those by name. `--limit` is 1 to 1000 and
+  defaults to 20. An index built before this ranking existed holds no fit, and `search` is the
+  substring scan alone until the next `graph build`.
 - `concept` returns the whole membership of the cluster a term belongs to, matching the cluster
   label first and member names second, and prints the label, the member count and every member id.
   The MCP `graph_concept` tool caps its member list and reports `member_count` and `shown`.

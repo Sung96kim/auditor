@@ -2,10 +2,15 @@
 
 import json
 import sqlite3
+import struct
 
 from pydantic import BaseModel, ConfigDict, Field
 
 TEXT_MODEL_KIND = "tfidf_lsi"
+#: the one dtype name the fit writes and the query reads back; numpy stays out of this module
+TEXT_MODEL_DTYPE = "float32"
+#: bytes per stored value; "f" is the struct code for the dtype above, so neither can drift
+TEXT_MODEL_ITEMSIZE = struct.calcsize("f")
 
 
 class TextModel(BaseModel):
@@ -26,19 +31,32 @@ class TextModel(BaseModel):
 
     @property
     def usable(self) -> bool:
-        """Whether this model has both a vocabulary to look a query up in and documents to rank."""
-        return bool(self.node_ids) and bool(self.vocabulary) and self.components > 0
+        """Whether a query can be scored against this fit at all.
 
-    def row(self) -> tuple[str, str, str, int, bytes, bytes]:
-        """This model as the ``graph_text_model`` column tuple, minus the repo key."""
-        return (
-            TEXT_MODEL_KIND,
-            json.dumps(list(self.node_ids)),
-            json.dumps(self.vocabulary),
-            self.components,
-            self.projection,
-            self.doc_vectors,
-        )
+        Both blob lengths are checked against the shape the other fields declare, so a torn cache
+        row answers False here rather than raising out of the reshape at query time.
+        """
+        if not (self.node_ids and self.vocabulary and self.components > 0):
+            return False
+        row_bytes = TEXT_MODEL_ITEMSIZE * self.components
+        return len(self.projection) == row_bytes * len(self.vocabulary) and len(
+            self.doc_vectors
+        ) == row_bytes * len(self.node_ids)
+
+    def values(self) -> dict[str, str | int | bytes]:
+        """This model as ``graph_text_model`` column values, minus the repo key.
+
+        A mapping rather than a tuple so :meth:`BaseDB.insert_sql` orders it from the table
+        declaration and a reordered column cannot write a transposed row.
+        """
+        return {
+            "kind": TEXT_MODEL_KIND,
+            "node_ids": json.dumps(list(self.node_ids)),
+            "vocabulary": json.dumps(self.vocabulary),
+            "components": self.components,
+            "projection": self.projection,
+            "doc_vectors": self.doc_vectors,
+        }
 
     @classmethod
     def of_row(cls, row: sqlite3.Row) -> "TextModel":

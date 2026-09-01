@@ -27,9 +27,13 @@ check first: the graph libraries are core dependencies of `auditr`, so the CLI s
    - `graph search` / `graph concept`: locate by name/term. `search` takes a name *or* a
      plain-English description: ids containing the term come first and, when any do, they are the
      whole page; a term no id contains falls through to the symbols ranked nearest to it by the
-     build's tf-idf + LSI fit, each row carrying its cosine as `score`. `concept` finds the cluster
-     a term belongs to. To go from a symbol you already have to what is near it, `graph related`
-     walks name and usage similarity.
+     build's tf-idf + LSI fit, each row carrying its cosine as `score`. A name match suppresses
+     ranking, a word the build never fitted returns nothing, and a word the corpus holds but no id
+     carries *is* ranked, so an empty page means "not in the corpus", not "no such thing". Read a
+     ranked page as a shortlist to skim: a third of the retrieval gate's questions have their
+     labelled answer on it. Text-sparse symbols and module nodes are reachable by name only.
+     `concept` finds the cluster a term belongs to. To go from a symbol you already have to what
+     is near it, `graph related` walks name and usage similarity.
    - Every edge carries `provenance`, which is `deterministic` or `refined`. The query payloads
      do not expose it; `graph export --json` and `graph serve` are where it is visible. `refined`
      is two different numbers: on a cluster member it is a per-node 0 or 1 flag, and on a build

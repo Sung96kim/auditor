@@ -11,6 +11,7 @@ from auditor.graph.model import (
     MAX_FLOW_DEPTH,
     MAX_FLOW_LIMIT,
     MAX_LOG_ROWS,
+    MAX_SEARCH_LIMIT,
     QUEUE_ROW_LIMIT,
     CallForm,
     UnresolvedReason,
@@ -370,6 +371,15 @@ FlowLimit = Annotated[
         min=1,
         max=MAX_FLOW_LIMIT,
         help="Cap on nodes emitted; shallow levels complete first.",
+    ),
+]
+SearchLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit",
+        min=1,
+        max=MAX_SEARCH_LIMIT,
+        help="Cap on rows returned, by name or by rank.",
     ),
 ]
 FlowKinds = Annotated[

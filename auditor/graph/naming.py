@@ -8,7 +8,7 @@ from sklearn.preprocessing import normalize
 
 from auditor.graph.model import EdgeKind, GraphEdge, GraphNode
 from auditor.graph.stemming import STEM
-from auditor.graph.textmodel import TextModel
+from auditor.graph.textmodel import TEXT_MODEL_DTYPE, TextModel
 from auditor.graph.tokens import TEXT_FLOOR
 
 
@@ -31,14 +31,14 @@ def _text_model(
 ) -> TextModel:
     """Freeze the fit into blobs a query reads back: idf folded into the components, unit rows."""
     projection = np.ascontiguousarray(
-        svd.components_.T * vec.idf_[:, None], dtype=np.float32
+        svd.components_.T * vec.idf_[:, None], dtype=TEXT_MODEL_DTYPE
     )
     return TextModel(
         node_ids=node_ids,
         vocabulary={t: int(i) for t, i in vec.vocabulary_.items()},
         components=int(svd.components_.shape[0]),
         projection=projection.tobytes(),
-        doc_vectors=np.ascontiguousarray(reduced, dtype=np.float32).tobytes(),
+        doc_vectors=np.ascontiguousarray(reduced, dtype=TEXT_MODEL_DTYPE).tobytes(),
     )
 
 

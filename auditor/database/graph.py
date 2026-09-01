@@ -6,6 +6,7 @@ and clusters, and the unresolved queue."""
 # surface, not duplication; the substantive body was already extracted, clearing TWIN-METHODS)
 
 import json
+import logging
 import sqlite3
 from collections.abc import Sequence
 from typing import Any, ClassVar
@@ -21,6 +22,8 @@ from auditor.graph.model import (
     UnresolvedRow,
 )
 from auditor.graph.textmodel import TEXT_MODEL_KIND, TextModel
+
+logger = logging.getLogger(__name__)
 
 _SET_FACTS_SQL = (
     "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
@@ -354,8 +357,8 @@ class GraphDB(BaseDB):
 
         A build that fitted nothing clears the row rather than leaving the last build's fit to be
         ranked against node ids this build may no longer have. ``_ensure_repo`` is redundant when
-        :meth:`write_graph` ran first, and load-bearing when this is the only write on the
-        connection, as it is in the store's own tests.
+        :meth:`write_graph` ran first on this connection and load-bearing when it did not: nothing
+        enforces the order, and the repo row is this table's foreign key parent.
         """
         self._ensure_repo(conn)
         conn.execute(
@@ -364,19 +367,33 @@ class GraphDB(BaseDB):
         )
         if model is None:
             return
-        conn.execute(
-            "INSERT INTO graph_text_model (repo, kind, node_ids, vocabulary, components, "
-            "projection, doc_vectors) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (self.repo, *model.row()),
+        sql, binds = self.insert_sql(
+            "graph_text_model", {"repo": self.repo, **model.values()}
         )
+        conn.execute(sql, binds)
 
     async def text_model(self) -> TextModel | None:
-        """This repo's stored naming fit, or ``None`` when no build has written one yet."""
+        """This repo's stored naming fit, or ``None`` when no build has written a usable one.
+
+        A torn row answers ``None`` too, logged once: this table is a cache, so a query degrades
+        to the name half instead of raising, and the next ``graph build`` rewrites the row.
+        """
         row = await self._fetch_one(
             "SELECT * FROM graph_text_model WHERE repo = ? AND kind = ?",
             (TEXT_MODEL_KIND,),
         )
-        return TextModel.of_row(row) if row else None
+        if row is None:
+            return None
+        try:
+            model = TextModel.of_row(row)
+        except (TypeError, ValueError) as exc:
+            reason: object = exc
+        else:
+            if model.usable:
+                return model
+            reason = "the stored blobs do not match the shape the row declares"
+        logger.warning("ignoring a malformed %s fit: %s", TEXT_MODEL_KIND, reason)
+        return None
 
     async def replace(
         self,
@@ -386,6 +403,8 @@ class GraphDB(BaseDB):
     ) -> None:
         def op(conn: sqlite3.Connection) -> None:
             self.write_graph(conn, nodes, edges, clusters)
+            # a fit describes the node set it was built from, so replacing the nodes clears it
+            self.write_text_model(conn, None)
             conn.commit()
 
         await self._worker.run(op)

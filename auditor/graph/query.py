@@ -12,7 +12,12 @@ from auditor.graph.flow import (
     FlowPayload,
     build_flow,
 )
-from auditor.graph.model import LOG_ROW_LIMIT, GraphCluster, row_limit
+from auditor.graph.model import (
+    DEFAULT_SEARCH_LIMIT,
+    LOG_ROW_LIMIT,
+    GraphCluster,
+    row_limit,
+)
 from auditor.graph.payloads import (
     ClusterMember,
     ClustersReport,
@@ -33,6 +38,7 @@ from auditor.graph.payloads import (
     UsagesPayload,
 )
 from auditor.graph.refine.models import RefinementStatus
+from auditor.graph.textsearch import RELEVANCE_FLOOR
 from auditor.graph.textsearch import score as text_scores
 
 if TYPE_CHECKING:
@@ -135,28 +141,34 @@ class GraphQuery:
             frontier = nxt
         return NeighborsReport(tuple(out))
 
-    async def search(self, term: str, limit: int = 20) -> SearchReport:
+    async def search(
+        self, term: str, limit: int = DEFAULT_SEARCH_LIMIT
+    ) -> SearchReport:
         """Symbols whose id contains ``term``, highest-rank first, and only when none does, the
         symbols whose naming document ranks nearest to it in the build's tf-idf + LSI space.
 
         The name half is unchanged, so locating the exact node before a usages/neighbors query
-        returns exactly what it used to and "no symbol by that name" is still an answer. The
-        ranked half is what a plain-English question falls through to. An index built before the
-        fit was stored has no model and never ranks.
+        returns exactly what it used to and "no symbol by that name" is still an answer. A ranked
+        row scores at least ``RELEVANCE_FLOOR``, so ``score == 0.0`` still means the name half.
+        An index built before the fit was stored has no model and never ranks, and the nodes and
+        the fit are two reads, so a query racing a build may rank against the previous fit.
         """
         nodes = await self.index.graph.nodes()
         kinds = {n["node_id"]: n["kind"] for n in nodes}
         ranks = {n["node_id"]: (n.get("rank") or 0.0) for n in nodes}
         term_l = term.lower()
-        named = sorted(
+        # the tier gate reads the whole match set, not the truncated page: a `--limit` smaller
+        # than the number of name matches must not hand the question to the ranked half
+        matched = sorted(
             (nid for nid in kinds if term_l in nid.lower()),
             key=lambda nid: (-ranks[nid], nid),
-        )[:limit]
-        model = None if named else await self.index.graph.text_model()
+        )
+        named = matched[:limit]
+        model = None if matched else await self.index.graph.text_model()
         scores = text_scores(model, term) if model is not None else {}
         ranked = heapq.nsmallest(
             limit,
-            (nid for nid in scores if nid in kinds),
+            (nid for nid in scores if nid in kinds and scores[nid] >= RELEVANCE_FLOOR),
             key=lambda nid: (-scores[nid], nid),
         )
         return SearchReport(

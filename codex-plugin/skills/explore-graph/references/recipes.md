@@ -239,28 +239,40 @@ auditr graph concept <term> --json    # the concept cluster best matching the te
 `search` is name-first, meaning-second: every node id containing the term, highest-rank first, and
 when any id contains it that is the whole answer. A term no id contains falls through to the
 symbols whose naming document ranks nearest to it in the build's tf-idf + LSI space, with that
-cosine on each row as `score` (`0.0` means the row came from the name half). Use it to find the
-*exact* node id before a `usages`/`neighbors` call when you're not sure of the precise name, and
+cosine on each row as `score`. Every ranked row clears a 0.05 relevance floor, so `score: 0.0`
+does mean the row came from the name half. An empty page means the term is not in the fitted
+corpus at all: a word the corpus holds but no id carries is ranked rather than missed, and
+text-sparse symbols and module nodes have no naming document and are reachable by name only.
+Treat a ranked page as a shortlist to skim, not a lookup: measured against this repo's own
+40-question retrieval fixture, the labelled answer is on the 20-row page 13 times. Use it to find
+the *exact* node id before a `usages`/`neighbors` call when you're not sure of the precise name, and
 use it with a whole sentence when you don't know the name at all (`graph usages` also does its own
 fuzzy resolution — exact id, or a `.name`/`::name` suffix match — but ambiguous short names get
 reported under `"ambiguous": [...]` in `usages`, so `search` first if you want to pick the right
 one deliberately). Real example:
 
 ```json
-// auditr graph search find_root --json   (the name half; every score is 0.0)
+// auditr graph search find_root --json --limit 3   (the name half; every score is 0.0)
 [
-  {"id": "auditor/discovery.py::find_root", "kind": "function", "rank": 0.001956, "score": 0.0},
+  {"id": "auditor/discovery.py::find_root", "kind": "function", "rank": 0.001951, "score": 0.0},
   {"id": "plugin/statusline/auditor_status.py::_find_root", "kind": "function", "rank": 0.000325, "score": 0.0},
-  {"id": "auditr_observer.py::find_root", "kind": "function", "rank": 0.00023, "score": 0.0}
+  {"id": "auditr_observer.py::find_root", "kind": "function", "rank": 0.000229, "score": 0.0}
 ]
 
-// auditr graph search "wait for a quiet period before acting on a burst of file changes" --json --limit 3
+// auditr graph search "how much money is left to spend today" --json --limit 3
 [
-  {"id": "auditor/languages/python/detectors/style.py::FileSize", "kind": "class", "rank": 0.000204, "score": 0.595876},
-  {"id": "auditor/malware/clamav.py::clamscan_command", "kind": "function", "rank": 0.000239, "score": 0.595525},
-  {"id": "auditor/engine.py::ScanEngine._scan_files", "kind": "method", "rank": 0.000224, "score": 0.586948}
+  {"id": "auditor/observer/budget.py::BudgetState.remaining_fraction", "kind": "method", "rank": 0.000204, "score": 0.607921},
+  {"id": "auditor/observer/budget.py::budget_state", "kind": "function", "rank": 0.000238, "score": 0.585127},
+  {"id": "auditor/graph/refine/eval.py::EvalRun.ceiling", "kind": "method", "rank": 0.000204, "score": 0.58272}
 ]
 ```
+
+Both blocks are real runs against this repo's own graph, not illustrations, so they move when the
+corpus does: re-measure them in the commit that changes the code they rank over. The second query
+is entry 10 of `tests/graph/data/retrieval_queries.json` and its labelled answer is the first row.
+Queries the fit misses look no different on the way out, which is why the page is a shortlist:
+`"wait for a quiet period before acting on a burst of file changes"` answers with three plausible
+file-handling symbols and none of them is `observer/scheduling.py::debounced`, the labelled answer.
 
 `concept` is coarser — it finds the *cluster* a term belongs to (by label match first, then by
 counting members whose name contains the term), and returns the whole membership, not just the

@@ -1,9 +1,10 @@
-"""The retrieval gate (spec section 22): ranked search must beat the substring scan it replaced.
+"""The retrieval gate (spec section 22): what ranked search recovers from this repo's own graph.
 
-Builds this repo's own graph once, then scores the hand-labeled queries in
-``data/retrieval_queries.json`` two ways: the pre-slice substring scan, and the shipped
-``GraphQuery.search``. The margins between them are what this slice ships on. Marked ``slow``
-because that one build is about 50 s; CI runs the whole suite, `-m "not slow"` drops it locally.
+Builds the graph once, then scores the hand-labeled queries in ``data/retrieval_queries.json``
+with the shipped ``GraphQuery.search``. Two bars, because one cannot do both jobs: absolute
+recall and MRR carry drift headroom and catch a collapse, and a per-query snapshot carries none
+and catches a regression one query wide. Marked ``slow`` because that one build is about 50 s;
+CI runs the whole suite, `-m "not slow"` drops it locally.
 """
 
 import json
@@ -30,12 +31,34 @@ QUERIES = json.loads(
 #: so this is the only bound on the wait, and the lock lives in the throwaway home below
 BUILD_TIMEOUT = 600.0
 #: this slice's own bar, not spec section 22's: section 22's 10 points gate (c) embeddings against
-#: (b) tf-idf, a comparison this slice does not run. Measured here: +17.5 at k=5 (7 of 40 queries)
-#: and +30.0 at k=20 (12 of 40), against a substring baseline of 0 at every k. The floors are those
-#: minus roughly three and two queries of drift headroom, at 2.5 points per query on n = 40.
-FLOOR = {5: 10.0, 20: 25.0}
-#: measured 0.128; section 22 asks for MRR beside recall@5, so the gate pins it too
+#: (b) tf-idf, a comparison this slice does not run. Absolute recall rather than a margin, because
+#: the substring scan scores 0 at every k on this fixture by construction, which
+#: `test_the_substring_scan_answers_none_of_these_queries` keeps true. Measured here: 15.0 at k=5
+#: (6 of 40 queries) and 32.5 at k=20 (13 of 40). The floors are those minus two and three queries
+#: of drift headroom, at 2.5 points per query on n = 40, so they are a drift alarm and not a
+#: correctness gate: one query of headroom is wider than the whole effect of a weighting step.
+RECALL_FLOOR = {5: 10.0, 20: 25.0}
+#: measured 0.125; section 22 asks for MRR beside recall@5, so the gate pins it too
 MRR_FLOOR = 0.08
+#: the queries whose labelled answer a 20-row ranked page holds, measured at HEAD. This is the
+#: sensitivity half of the gate and carries no headroom on purpose: it fails when any one of them
+#: stops being answered, which the floors above cannot see. A gain is allowed; a loss is either a
+#: regression or a corpus shift, and a corpus shift is re-measured in the commit that causes it.
+RECOVERED_AT_20 = (
+    "compute the Wilson lower confidence bound for a proportion",
+    "append-only file the hook writes events into when the daemon is down",
+    "is this checkout the primary one rather than a linked copy",
+    "how much money is left to spend today",
+    "stop two processes from rebuilding at the same moment",
+    "add a missing column to a table that already exists",
+    "which other symbols reach this one and which it reaches",
+    "check a proposed answer against what the parser actually saw",
+    "choose which assistant back end will do the work",
+    "the instructions handed to the model before it answers",
+    "the test that pins the confidence bound arithmetic to the numbers the spec lists",
+    "the test proving a half-written line from a killed process is skipped instead of raised",
+    "the test that the give-up error carries the lock it waited on and the budget it spent",
+)
 
 
 @pytest.fixture(scope="session")
@@ -97,31 +120,67 @@ async def test_the_fixture_asks_for_test_nodes_as_well_as_production_ones(
 ):
     """A fixture with no test-role answer cannot price any policy that reorders test nodes."""
     roles = {n["node_id"]: n["role"] for n in await repo_query.index.graph.nodes()}
-    wanted = [q["q"] for q in QUERIES if any(roles[g] in TEST_ROLES for g in q["gold"])]
+    wanted = [
+        q["q"]
+        for q in QUERIES
+        if any(roles.get(g, "") in TEST_ROLES for g in q["gold"])
+    ]
     assert len(wanted) >= 5, f"only {len(wanted)} queries whose answer is a test node"
 
 
-async def test_ranked_search_beats_the_substring_scan_it_replaced(
-    repo_query: GraphQuery,
-):
-    """The gate: ranked recall and MRR must clear the floors this slice measured."""
-    ordered = [n["node_id"] for n in await repo_query.index.graph.nodes()]
-    hits = {k: {"substring": 0, "search": 0} for k in FLOOR}
+def test_the_substring_scan_answers_none_of_these_queries():
+    """Why the floors are absolute recall: every query is a sentence and no node id holds a space.
+
+    The scan `search` replaced therefore scores 0 at every k here, so a margin against it would be
+    the recall itself wearing another name. Adding a single-word query would break that.
+    """
+    assert all(" " in item["q"] for item in QUERIES)
+
+
+async def _pages(repo_query: GraphQuery) -> list[tuple[dict, list[str]]]:
+    """Each fixture query beside the 20-row page the shipped surface answers it with."""
+    return [
+        (item, [r.id for r in (await repo_query.search(item["q"], limit=20)).root])
+        for item in QUERIES
+    ]
+
+
+async def test_ranked_search_clears_the_recall_and_mrr_floors(repo_query: GraphQuery):
+    """The drift alarm: absolute recall at two depths and MRR, each with headroom."""
+    hits = {k: 0 for k in RECALL_FLOOR}
     reciprocal = 0.0
-    for item in QUERIES:
+    for item, found in await _pages(repo_query):
         gold = set(item["gold"])
-        substring = [n for n in ordered if item["q"].lower() in n.lower()]
-        found = [r.id for r in (await repo_query.search(item["q"], limit=20)).root]
         for k in hits:
-            hits[k]["substring"] += bool(gold & set(substring[:k]))
-            hits[k]["search"] += bool(gold & set(found[:k]))
+            hits[k] += bool(gold & set(found[:k]))
         reciprocal += next(
             (1 / i for i, nid in enumerate(found, 1) if nid in gold), 0.0
         )
     n = len(QUERIES)
-    margins = {k: (v["search"] - v["substring"]) / n * 100 for k, v in hits.items()}
+    recall = {k: v / n * 100 for k, v in hits.items()}
     mrr = reciprocal / n
-    assert all(margins[k] >= FLOOR[k] for k in FLOOR) and mrr >= MRR_FLOOR, (
-        f"recall margins {margins} against {FLOOR} and MRR {mrr:.3f} against {MRR_FLOOR}, "
+    assert (
+        all(recall[k] >= RECALL_FLOOR[k] for k in RECALL_FLOOR) and mrr >= MRR_FLOOR
+    ), (
+        f"recall {recall} against {RECALL_FLOOR} and MRR {mrr:.3f} against {MRR_FLOOR}, "
         f"over {n} queries; counts {hits}"
+    )
+
+
+async def test_every_question_this_fit_could_answer_is_still_answered(
+    repo_query: GraphQuery,
+):
+    """The sensitivity half: per query, so a lost answer cannot be paid for by a gained one.
+
+    Recall counts queries and the floors budget three of them, which is wider than the effect of
+    deleting a weighting step; a named query that stops being answered is not.
+    """
+    recovered = {
+        item["q"]
+        for item, found in await _pages(repo_query)
+        if set(item["gold"]) & set(found)
+    }
+    lost = sorted(set(RECOVERED_AT_20) - recovered)
+    assert not lost, (
+        f"{len(lost)} of {len(RECOVERED_AT_20)} answers left the page: {lost}"
     )

@@ -303,11 +303,26 @@ LOG_NOTE_FILES = 3
 #: the length of a day, for the rolling spend window and the retention cutoff, which are the two
 #: places that would otherwise each carry a literal and drift on the type
 DAY_SECONDS = 86_400.0
+#: default page and hard ceiling for `graph search`, shared so the CLI and the MCP tool cannot
+#: drift apart; the ceiling is the flow walk's, for the same "one page of answers" reason
+DEFAULT_SEARCH_LIMIT = 20
+MAX_SEARCH_LIMIT = 1000
 # Flow walk policy, same reason. MAX_FLOW_DEPTH also bounds the four recursions over the tree.
 DEFAULT_FLOW_LIMIT = 200
 DEFAULT_FLOW_DEPTH = 4
 MAX_FLOW_LIMIT = 1000
 MAX_FLOW_DEPTH = 64
+
+
+def search_limit(limit: int) -> int:
+    """Validate a ``graph search`` page size for a surface with no argument parser of its own.
+
+    Raises ValueError rather than clamping, worded the way :func:`enum_values` words its own: a
+    limit below 1 answers a real name match with a short page the caller reads as the whole truth.
+    """
+    if not 1 <= limit <= MAX_SEARCH_LIMIT:
+        raise ValueError(f"limit must be 1 to {MAX_SEARCH_LIMIT}, got {limit}")
+    return limit
 
 
 class StructuralResult(BaseModel):

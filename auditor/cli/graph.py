@@ -37,6 +37,7 @@ from auditor.cli.options import (
     FlowStopAt,
     FlowSymbol,
     GraphTarget,
+    SearchLimit,
 )
 from auditor.cli.render import (
     render_graph_build,
@@ -54,6 +55,7 @@ from auditor.graph.flow import FlowDirection, FlowOptions
 from auditor.graph.model import (
     DEFAULT_FLOW_DEPTH,
     DEFAULT_FLOW_LIMIT,
+    DEFAULT_SEARCH_LIMIT,
     EdgeKind,
     enum_values,
 )
@@ -208,10 +210,10 @@ def graph_clusters(
 def graph_search(
     term: str,
     target: GraphTarget = Path("."),
-    limit: int = 20,
+    limit: SearchLimit = DEFAULT_SEARCH_LIMIT,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Find symbols whose id contains the term (highest-rank first)."""
+    """Find symbols by name, or by meaning when no id contains the term (ranked, with a score)."""
     root = cli_root(target)
     present(
         run(_query(root, lambda q: q.search(term, limit=limit)), "searching…"),

@@ -285,12 +285,17 @@ def test_render_graph_clusters_sorted_by_size():
     assert out.index("large") < out.index("small")
 
 
-def test_render_graph_search_shows_symbol():
-    con, buf = _console()
+def test_render_graph_search_shows_symbol_and_its_score():
+    """The score column is the one thing the ranked tier added to this table."""
+    con, buf = _plain_console()
     render_graph_search(
-        con, SearchReport((SearchRow(id="m.py::Foo", kind="class", rank=0.5),))
+        con,
+        SearchReport((SearchRow(id="m.py::Foo", kind="class", rank=0.5, score=0.42),)),
     )
-    assert "m.py::Foo" in buf.getvalue()
+    out = buf.getvalue()
+    assert "m.py::Foo" in out
+    assert "score" in out
+    assert "0.42" in out
 
 
 def test_render_graph_usages_groups_and_counts():

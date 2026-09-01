@@ -22,7 +22,7 @@ from auditor.graph.model import (
     UnresolvedReason,
     UnresolvedRow,
 )
-from auditor.graph.naming import name_similar_edges
+from auditor.graph.naming import NamingPass, name_similar_edges
 from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.rank import pagerank
 from auditor.graph.refine.lock import rebuild_lock
@@ -101,15 +101,13 @@ def _protocol_method_ids(nodes: list[GraphNode]) -> set[str]:
 
 
 class SimilarityPass(BaseModel):
-    """The similarity half of a build: the name and usage edges, and the symbols carrying too
-    little text to cluster on (spec section 6 step 3)."""
+    """The similarity half of a build: the naming pass whole, and the usage edges beside it
+    (spec section 6 step 3)."""
 
     model_config = ConfigDict(frozen=True)
 
-    name_edges: tuple[GraphEdge, ...] = ()
+    naming: NamingPass = NamingPass()
     usage_edges: tuple[GraphEdge, ...] = ()
-    sparse: frozenset[str] = frozenset()
-    text_model: TextModel | None = None
 
     @classmethod
     def of(
@@ -125,10 +123,8 @@ class SimilarityPass(BaseModel):
         )
         report("computing usage similarity")
         return cls(
-            name_edges=naming.edges,
+            naming=naming,
             usage_edges=tuple(usage_similar_edges(symbols, knn_k=cfg.knn_k)),
-            sparse=naming.sparse,
-            text_model=naming.text_model,
         )
 
 
@@ -317,25 +313,25 @@ class GraphBuilder:
         # over `all_edges` would hand the detectors a graph missing an edge nothing replaced
         deterministic_edges = [
             *structural.edges,
-            *similar.name_edges,
+            *similar.naming.edges,
             *similar.usage_edges,
         ]
         all_edges = [
             *overlay.edges(structural.edges, {n.id for n in nodes}),
-            *similar.name_edges,
+            *similar.naming.edges,
             *similar.usage_edges,
         ]
 
         proto = _protocol_method_ids(nodes)
         merged = ClusterPass.of(
-            nodes, all_edges, cfg, report, sparse=similar.sparse, proto=proto
+            nodes, all_edges, cfg, report, sparse=similar.naming.sparse, proto=proto
         )
         # the queue's cluster rows describe the graph that ships, so a relabelled cluster stops
         # emitting `generic_label` and a moved node stops emitting `singleton_cluster`
         out_nodes, clusters = overlay.nodes(merged.nodes, merged.clusters)
         served = ClusterPass(nodes=out_nodes, clusters=clusters)
         unresolved = overlay.queue_rows(
-            [*structural.unresolved, *served.quality_rows(similar.sparse)]
+            [*structural.unresolved, *served.quality_rows(similar.naming.sparse)]
         )
 
         per_file: dict[str, list[Finding]] = {}
@@ -350,7 +346,7 @@ class GraphBuilder:
                     deterministic_edges,
                     cfg,
                     report,
-                    sparse=similar.sparse,
+                    sparse=similar.naming.sparse,
                     proto=proto,
                 )
                 if overlay.moved_findings
@@ -368,7 +364,7 @@ class GraphBuilder:
             findings=per_file,
             detect=cfg.detect,
             outcomes=overlay.outcomes,
-            text_model=similar.text_model,
+            text_model=similar.naming.text_model,
         )
         return await write.persist(index, snapshot)
 
