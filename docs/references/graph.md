@@ -17,8 +17,9 @@ auditr graph usages ComponentBlueprint .
 # read the code path out of an entry point, four hops deep
 auditr graph flow auditor/cli/scan.py::scan .
 
-# find the exact symbol id by substring, then its structural and semantic neighbors
+# find the exact symbol id by name, or ask in plain English when you do not know the name
 auditr graph search Blueprint .
+auditr graph search "decide whether a batch of edits is worth a run" .
 auditr graph neighbors get_user . --depth 2
 auditr graph related get_user .
 
@@ -80,7 +81,15 @@ auditr graph export . --format dot > graph.dot
   tagging each hit with its edge kind, direction and hop count.
 - `related` walks semantic edges (`name_similar`, `usage_similar`) instead, so it answers "what is
   conceptually near this", not "what calls this". `--limit` defaults to 10.
-- `search` matches a substring against node ids, highest rank first. `--limit` defaults to 20.
+- `search` answers by name, and by meaning only when no name answers. Node ids containing the term
+  come first, highest rank first, and when there are any they are the whole page, so an exact-name
+  lookup returns what it always returned and an unknown name still returns nothing. A term no id
+  contains falls through to the symbols whose naming document ranks nearest to it in the graph
+  build's tf-idf + LSI space, each carrying that cosine as `score` (`0.0` on a name match). So
+  `search Blueprint` still returns its two rows, and `search "the function that validates the
+  webhook signature"` returns candidates instead of nothing. `--limit` defaults to 20. An index
+  built before this ranking existed holds no fit, and `search` is the substring scan alone until
+  the next `graph build`.
 - `concept` returns the whole membership of the cluster a term belongs to, matching the cluster
   label first and member names second, and prints the label, the member count and every member id.
   The MCP `graph_concept` tool caps its member list and reports `member_count` and `shown`.

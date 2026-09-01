@@ -24,10 +24,12 @@ check first: the graph libraries are core dependencies of `auditr`, so the CLI s
      question is "what does this do end to end"; `usages` stays the find-references query.
    - `graph clusters`: cohesive concept groups; combine with the `GRAPH-GOD-CONCEPT` /
      `GRAPH-SCATTERED-CONCEPT` findings for *why* something is a hotspot, not just its size.
-   - `graph search` / `graph concept`: locate by name/term. `search` finds the exact symbol id,
-     `concept` finds the cluster a term belongs to. For a *meaning* rather than a name,
-     `graph related` is the semantic query: it walks name and usage similarity, not string
-     match.
+   - `graph search` / `graph concept`: locate by name/term. `search` takes a name *or* a
+     plain-English description: ids containing the term come first and, when any do, they are the
+     whole page; a term no id contains falls through to the symbols ranked nearest to it by the
+     build's tf-idf + LSI fit, each row carrying its cosine as `score`. `concept` finds the cluster
+     a term belongs to. To go from a symbol you already have to what is near it, `graph related`
+     walks name and usage similarity.
    - Every edge carries `provenance`, which is `deterministic` or `refined`. The query payloads
      do not expose it; `graph export --json` and `graph serve` are where it is visible. `refined`
      is two different numbers: on a cluster member it is a per-node 0 or 1 flag, and on a build
