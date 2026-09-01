@@ -22,6 +22,10 @@ MOUNT = "/mcp"
 LOOPBACK = "127.0.0.1"
 #: how long `__aenter__` waits for uvicorn to bind before giving up
 START_TIMEOUT = 5.0
+#: how long `__aexit__` waits for uvicorn to drain before cancelling it. Bounded on purpose: a
+#: `propose` handler can sit on the rebuild lock for `rebuild_lock_timeout_seconds`, and uvicorn's
+#: own default is to wait for an in-flight request forever.
+STOP_TIMEOUT = 5.0
 
 
 def _result(answer: Mapping[str, Any]) -> types.CallToolResult:
@@ -33,9 +37,13 @@ def _result(answer: Mapping[str, Any]) -> types.CallToolResult:
     return types.CallToolResult(content=blocks, isError=bool(answer.get("is_error")))
 
 
-def graph_server(tools: BoundTools) -> Server[Any, Any]:
-    """The lowlevel MCP server over one run's bound tools, in `BoundTools.tools()` order."""
-    server: Server[Any, Any] = Server(GRAPH_SERVER)
+def graph_server(tools: BoundTools, handshake: str) -> Server[Any, Any]:
+    """The lowlevel MCP server over one run's bound tools, in `BoundTools.tools()` order.
+
+    ``handshake`` rides out as the server version, which is the one field of `serverInfo` a run
+    can read back through `mcpServerStatus/list` to tell its own shim from another run's.
+    """
+    server: Server[Any, Any] = Server(GRAPH_SERVER, version=handshake)
     table = {bound.name: bound for bound in tools.tools()}
 
     @server.list_tools()
@@ -66,12 +74,14 @@ class GraphShim:
     """One run's `graph` server on an ephemeral loopback port, torn down with the run.
 
     The bearer credential is minted per run and travels by env var, so a stale `config.toml`
-    cannot reach a later run's tools.
+    cannot reach a later run's tools. The handshake is minted per run too and is not the
+    credential: it is echoed back in server status, where a secret has no business being.
     """
 
     def __init__(self, tools: BoundTools) -> None:
         self.tools = tools
         self.token = secrets.token_urlsafe(24)
+        self.handshake = secrets.token_hex(8)
         self.port = 0
         self._stack = contextlib.AsyncExitStack()
         self._server: uvicorn.Server | None = None
@@ -91,7 +101,9 @@ class GraphShim:
 
         async def handle(scope: Any, receive: Any, send: Any) -> None:
             offered = dict(scope.get("headers") or ()).get(b"authorization", b"")
-            if offered.decode() != f"Bearer {self.token}":
+            if not secrets.compare_digest(
+                offered.decode("utf-8", "replace"), f"Bearer {self.token}"
+            ):
                 await send(
                     {"type": "http.response.start", "status": 401, "headers": []}
                 )
@@ -102,18 +114,34 @@ class GraphShim:
         return handle
 
     async def __aenter__(self) -> "GraphShim":
+        try:
+            await self._start()
+        except BaseException:
+            # `async with` never calls `__aexit__` for an enter that raised, so a half-built
+            # shim would keep a listener and this run's credential alive
+            await self.__aexit__(None, None, None)
+            raise
+        return self
+
+    async def _start(self) -> None:
+        """Bring the session manager and the loopback listener up, in that order."""
         manager = StreamableHTTPSessionManager(
-            app=graph_server(self.tools), json_response=True, stateless=True
+            app=graph_server(self.tools, self.handshake),
+            json_response=True,
+            stateless=True,
         )
         await self._stack.enter_async_context(manager.run())
         config = uvicorn.Config(
-            self._app(manager), host=LOOPBACK, port=0, log_level="warning"
+            self._app(manager),
+            host=LOOPBACK,
+            port=0,
+            log_level="warning",
+            timeout_graceful_shutdown=STOP_TIMEOUT,
         )
         self._server = uvicorn.Server(config)
         self._task = asyncio.create_task(self._server.serve())
         await self._bound(self._server)
         self.port = self._server.servers[0].sockets[0].getsockname()[1]
-        return self
 
     async def _bound(self, server: uvicorn.Server) -> None:
         """Wait for uvicorn to own a socket, refusing rather than serving a port of zero."""
@@ -124,6 +152,20 @@ class GraphShim:
     async def __aexit__(self, *exc: Any) -> None:
         if self._server is not None:
             self._server.should_exit = True
-        if self._task is not None:
-            await self._task
-        await self._stack.aclose()
+        try:
+            if self._task is not None:
+                await self._stopped(self._task)
+        finally:
+            # the drain is cancellable, and a cancellation there must not leave the session
+            # manager running
+            await self._stack.aclose()
+
+    @staticmethod
+    async def _stopped(task: asyncio.Task[None]) -> None:
+        """Wait out the graceful drain, then cancel: a hung handler must not hold the run open.
+
+        Unshielded on purpose: a cancellation from outside has to reach uvicorn too, which is
+        what already released the port when a run was cancelled mid-turn.
+        """
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(task, STOP_TIMEOUT)

@@ -1,6 +1,8 @@
 """The Codex runner without the SDK: the option set, the turn mapping and the ceilings."""
 
+import asyncio
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +14,13 @@ from graph._support import (
     Rooted,
     Turn,
     TurnError,
+    TurnStatus,
     Usage,
     codex_factory,
 )
 
+from auditor.graph.refine.client import ServerStatus
+from auditor.graph.refine.codex_home import CodexHome
 from auditor.graph.refine.codex_runner import (
     APPROVAL_MODE,
     CALLS_PER_RUN,
@@ -121,17 +126,38 @@ def test_the_model_comes_from_codex_model_never_from_the_job(tmp_path):
     assert built.model == "gpt-5-mini"
 
 
+def _loaded(*names: str, handshake: str = "shim-1") -> tuple[ServerStatus, ...]:
+    """`mcpServerStatus/list` as this run would read it, `graph` answering ``handshake``."""
+    return tuple(
+        ServerStatus(name=name, handshake=handshake if name == "graph" else None)
+        for name in names
+    )
+
+
 @pytest.mark.parametrize(
     ("servers", "named"),
     [
         ((), "no mcp servers"),
-        (("graph", "user-thing"), "unexpected mcp servers"),
-        (("graph",), None),
+        (_loaded("graph", "user-thing"), "unexpected mcp servers"),
+        (_loaded("graph"), None),
     ],
+    ids=["none", "foreign", "ours"],
 )
 def test_the_session_is_refused_unless_graph_is_the_only_server(servers, named):
-    refused = OPTIONS.refusal(servers)
+    refused = OPTIONS.refusal(servers, handshake="shim-1")
     assert (named in refused) if named else (refused is None)
+
+
+def test_a_graph_server_that_is_another_run_s_shim_is_refused():
+    """Two concurrent runs each write a `config.toml`; names alone cannot tell them apart."""
+    servers = (ServerStatus(name="graph", handshake="shim-2"),)
+    assert "not this run's shim" in (OPTIONS.refusal(servers, handshake="shim-1") or "")
+
+
+def test_a_graph_server_that_has_not_answered_yet_is_not_refused():
+    """`McpServerStatus.serverInfo` is optional, so failing closed here would abort every run."""
+    servers = (ServerStatus(name="graph", handshake=None),)
+    assert OPTIONS.refusal(servers, handshake="shim-1") is None
 
 
 def test_usage_counts_cache_tokens_as_input_and_reasoning_as_output():
@@ -202,38 +228,89 @@ def test_a_run_over_the_per_run_ceiling_is_aborted_after_the_turn():
     ("message", "status", "word"),
     [
         ("Unauthorized: token expired", RunStatus.FAILED, "paused:auth"),
+        ("unauthorized_client", RunStatus.FAILED, "paused:auth"),
+        ("error 401 returned", RunStatus.FAILED, "paused:auth"),
         ("429 rate limit exceeded", RunStatus.ABORTED, "paused:ratelimit"),
+        ("You have been rate limited", RunStatus.ABORTED, "paused:ratelimit"),
         ("insufficient quota", RunStatus.ABORTED, "paused:billing"),
+        ("insufficient_quota", RunStatus.ABORTED, "paused:billing"),
+        ("billing_hard_limit_reached", RunStatus.ABORTED, "paused:billing"),
     ],
 )
 def test_a_failed_turn_maps_to_the_pause_words_the_loop_reads(message, status, word):
     assert paused_by(message) == (status, word)
-    ended = outcome(Turn(status="failed", error=TurnError(message=message)))
+    ended = outcome(Turn(status=TurnStatus.failed, error=TurnError(message=message)))
     assert ended.status is status
     assert ended.error == word
 
 
+@pytest.mark.parametrize(
+    "message",
+    ["read 4013 tokens", "wrote 429847 bytes", "4013", "42900"],
+    ids=["401-inside-a-count", "429-inside-a-count", "bare-4013", "bare-42900"],
+)
+def test_a_code_buried_in_a_longer_number_does_not_pause_the_repo(message):
+    """L6: only the numeric codes are anchored, and against digits, not word characters.
+
+    A word boundary would have taken `insufficient_quota` and `unauthorized_client` with it,
+    which is the shape these arrive in, so the table above pins both halves.
+    """
+    assert paused_by(message) is None
+
+
 def test_a_failed_turn_with_no_pause_word_is_a_plain_failure():
-    ended = outcome(Turn(status="failed", error=TurnError(message="disk on fire")))
+    ended = outcome(
+        Turn(status=TurnStatus.failed, error=TurnError(message="disk on fire"))
+    )
     assert ended.status is RunStatus.FAILED
     assert "disk on fire" in (ended.error or "")
 
 
-def test_an_interrupted_turn_is_aborted_not_failed():
-    assert outcome(Turn(status="interrupted")).status is RunStatus.ABORTED
+@pytest.mark.parametrize(
+    "status", [TurnStatus.interrupted, "interrupted"], ids=["enum", "wire-string"]
+)
+def test_an_interrupted_turn_is_aborted_not_failed(status):
+    """C1's other half: `str(TurnStatus.interrupted)` missed `STOPPED_STATUSES` too."""
+    assert outcome(Turn(status=status)).status is RunStatus.ABORTED
 
 
-def test_the_trace_unwraps_root_models_and_keeps_both_item_kinds():
-    items = (
+@pytest.mark.parametrize(
+    "status", [TurnStatus.completed, "completed"], ids=["enum", "wire-string"]
+)
+def test_a_completed_turn_is_read_off_the_enum_not_off_its_repr(status):
+    """C1: `str()` before `.value` made every real Codex turn `failed`, in both venvs."""
+    ended = outcome(done(status=status))
+    assert ended.status is RunStatus.SUCCEEDED
+    assert ended.summary == "one edge"
+
+
+def _items() -> tuple[Any, ...]:
+    """Two calls the runner keeps and one item kind it drops, in the order they happened."""
+    return (
         Rooted(
             root=McpCall(tool="propose", arguments={"kind": "add_edge"}, duration_ms=12)
         ),
-        Rooted(root=Command(command="rg needle", duration_ms=3)),
+        Rooted(root=Command(command="rg needle", duration_ms=3000)),
         Rooted(root=Turn()),
     )
-    trace = tool_trace(items)
+
+
+def test_the_trace_unwraps_root_models_and_keeps_both_item_kinds():
+    trace = tool_trace(_items())
     assert [call.tool for call in trace] == ["mcp__graph__propose", "Bash"]
     assert "12 ms" in trace[0].detail
+
+
+def test_each_call_is_stamped_where_it_ran_not_where_the_turn_was_mapped():
+    """One shared timestamp per run lost the ordering signal the trace exists to carry."""
+    trace = tool_trace(_items(), started_at=1000.0)
+    assert [call.ts for call in trace] == [1000.0, 1000.012]
+
+
+def test_a_turn_that_reported_no_start_falls_back_to_one_stamp():
+    """`Turn.startedAt` is optional, so the old behaviour is still the documented fallback."""
+    trace = tool_trace(_items())
+    assert len({call.ts for call in trace}) == 1
 
 
 @pytest.mark.parametrize(
@@ -254,6 +331,28 @@ def test_the_rate_limit_compares_a_percent_with_a_fraction_on_one_scale(
 def test_an_account_that_reported_no_window_pauses_nothing():
     """`RateLimitSnapshot.primary` is optional, so this arm is reachable in production."""
     assert rate_limited(None, max_utilization=0.5) is None
+
+
+def _writing_factory(homes: list[Path], written: list[dict[str, str]]):
+    """A factory that really writes the private home the way `CodexClient.__aenter__` does.
+
+    ``homes`` collects the leaf each run was given and ``written`` the `[mcp_servers.graph]`
+    table its own `config.toml` ended up holding.
+    """
+
+    def factory(options: CodexOptions, tools: Any) -> Any:
+        homes.append(options.home)
+        CodexHome(
+            home=options.home,
+            root=options.cwd,
+            server_url=f"http://127.0.0.1:{len(homes)}/mcp",
+            model=options.model,
+        ).write(auth=options.auth)
+        config = (options.home / "config.toml").read_text(encoding="utf-8")
+        written.append(tomllib.loads(config)["mcp_servers"]["graph"])
+        return codex_factory(done())(options, tools)
+
+    return factory
 
 
 def _runner(service: RefinementService, factory) -> CodexRunner:
@@ -322,6 +421,45 @@ async def test_a_proposal_the_turn_made_really_reaches_the_run(
     assert report.staged or report.rejected
     stored = await refine_service.index.runs.run(product.run.run_id)
     assert [call.tool for call in stored.tool_trace] == ["mcp__graph__propose"]
+
+
+async def test_two_interleaved_runs_never_share_one_private_home(
+    refine_service: RefinementService,
+):
+    """H2: one home meant run B's `config.toml` sent run A's binary at run B's shim."""
+    homes: list[Path] = []
+    written: list[dict[str, str]] = []
+    runner = _runner(refine_service, _writing_factory(homes, written))
+    await asyncio.gather(
+        runner.run(RefinementJob(scope="impl.py")),
+        runner.run(RefinementJob(scope="svc.py")),
+    )
+    assert len(set(homes)) == 2
+    assert len({entry["url"] for entry in written}) == 2
+
+
+async def test_a_run_s_private_home_is_written_and_then_removed_with_the_run(
+    refine_service: RefinementService,
+):
+    """A home per run is only isolation if the run really writes one and takes it away again."""
+    homes: list[Path] = []
+    runner = _runner(refine_service, _writing_factory(homes, []))
+    await runner.run(RefinementJob(scope="impl.py"))
+    assert homes[0].parent == refine_service.root / "codex-home"
+    assert not homes[0].exists()
+    # the home holds a symlink to the user's real credentials, which the sweep must not follow
+    assert (refine_service.root / "auth.json").is_file()
+
+
+async def test_a_session_that_loaded_another_run_s_shim_is_aborted(
+    refine_service: RefinementService,
+):
+    """The crossed-`config.toml` case: the name is right and the server is somebody else's."""
+    runner = _runner(refine_service, codex_factory(done(), answered="another-run"))
+    product = await runner.run(RefinementJob(scope="impl.py"))
+    stored = await refine_service.index.runs.run(product.run.run_id)
+    assert stored.status is RunStatus.ABORTED
+    assert "not this run's shim" in (stored.error or "")
 
 
 async def test_a_run_whose_session_loaded_a_foreign_server_is_aborted(

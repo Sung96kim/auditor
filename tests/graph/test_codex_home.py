@@ -8,8 +8,8 @@ import pytest
 from auditor.graph.refine.codex_home import (
     BEARER_ENV,
     CodexHome,
-    auth_hinted,
     codex_home_dir,
+    run_home,
     user_codex_home,
 )
 
@@ -84,14 +84,18 @@ def test_the_user_s_home_reads_codex_home_first_never_the_sdk_default(tmp_path, 
     assert (user_codex_home(env) == tmp_path / "elsewhere") is named
 
 
-def test_the_auth_hint_is_the_presence_of_that_home_s_auth_json(tmp_path):
-    env = {"CODEX_HOME": str(tmp_path / "ch")}
-    assert auth_hinted(env) is False
-    (tmp_path / "ch").mkdir()
-    (tmp_path / "ch" / "auth.json").write_text("{}", encoding="utf-8")
-    assert auth_hinted(env) is True
-
-
 def test_the_private_home_is_a_leaf_under_the_observer_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
     assert codex_home_dir().parent.name == "observer"
+
+
+def test_two_runs_get_two_homes_under_the_one_parent(tmp_path):
+    """H2: one shared `config.toml` let a second run send the first one at the wrong shim."""
+    homes = {run_home(tmp_path) for _ in range(2)}
+    assert len(homes) == 2
+    assert {home.parent for home in homes} == {tmp_path}
+
+
+def test_a_run_home_defaults_under_the_observer_s_own_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUDITOR_HOME", str(tmp_path))
+    assert run_home().parent == codex_home_dir()

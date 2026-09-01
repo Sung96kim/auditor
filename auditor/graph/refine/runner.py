@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from auditor.graph.payloads import CommitResult
 from auditor.graph.refine.brief import Brief
-from auditor.graph.refine.client import ClientFactory
+from auditor.graph.refine.client import ClientFactory, CodexFactory
 from auditor.graph.refine.models import (
     Checkout,
     ClientKind,
@@ -116,7 +116,7 @@ class RefinementRunner(ABC):
     def __init__(
         self,
         service: RefinementService,
-        client_factory: ClientFactory | None,
+        client_factory: ClientFactory | CodexFactory | None,
         *,
         proposer: Proposer | None = None,
     ) -> None:
@@ -208,7 +208,7 @@ class FakeRunner(RefinementRunner):
     def __init__(
         self,
         service: RefinementService,
-        client_factory: ClientFactory | None = None,
+        client_factory: ClientFactory | CodexFactory | None = None,
         *,
         proposer: Proposer | None = None,
         pretend: FakeRun | None = None,

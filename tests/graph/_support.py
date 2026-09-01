@@ -5,8 +5,10 @@ Graph-local on purpose. Driving a run needs `fastmcp` and `auditor.mcp`, and the
 """
 
 import asyncio
+import enum
 import io
 import re
+import secrets
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
@@ -20,7 +22,7 @@ from rich.console import Console
 
 from auditor.database import open_repo_index
 from auditor.graph.model import UnresolvedRow
-from auditor.graph.refine.client import ClientFactory
+from auditor.graph.refine.client import ClientFactory, ServerStatus
 from auditor.graph.refine.models import (
     Assessment,
     AssessmentDecision,
@@ -536,16 +538,30 @@ class Rooted(BaseModel):
     root: Any
 
 
+class TurnStatus(enum.Enum):
+    """The SDK's own status enum, member for member.
+
+    A plain `Enum` and not a `StrEnum`, because `openai_codex`'s is: a double handing back a
+    `str` lets code that stringifies before unwrapping `.value` pass here and fail on the SDK.
+    """
+
+    completed = "completed"
+    interrupted = "interrupted"
+    failed = "failed"
+    in_progress = "inProgress"
+
+
 class Turn(BaseModel):
     """`TurnResult`'s shape, which is a plain dataclass, so a fake can be this small."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     id: str = "turn-1"
-    status: str = "completed"
+    status: TurnStatus | str = TurnStatus.completed
     error: TurnError | None = None
-    final_response: str | None = None
+    started_at: int | None = None
     items: tuple[Any, ...] = ()
+    final_response: str | None = None
     usage: Usage | None = None
 
 
@@ -589,11 +605,17 @@ class FakeCodex:
         *,
         servers: tuple[str, ...] = ("graph",),
         limit: Any = None,
+        handshake: str | None = None,
+        answered: str | None = None,
     ) -> None:
         self.turn = turn
         self.tools = tools
         self._servers = servers
         self._limit = limit
+        #: this session's own shim, minted per session the way `GraphShim` mints it
+        self.handshake = secrets.token_hex(4) if handshake is None else handshake
+        #: what the `graph` entry answers with, so a test can hand back another run's shim
+        self._answered = answered
         self.thread: FakeThread | None = None
 
     async def __aenter__(self) -> "FakeCodex":
@@ -602,8 +624,12 @@ class FakeCodex:
     async def __aexit__(self, *exc: Any) -> None:
         return None
 
-    async def servers(self) -> tuple[str, ...]:
-        return self._servers
+    async def servers(self) -> tuple[ServerStatus, ...]:
+        answered = self.handshake if self._answered is None else self._answered
+        return tuple(
+            ServerStatus(name=name, handshake=answered if name == "graph" else None)
+            for name in self._servers
+        )
 
     async def rate_limit(self) -> Any:
         return self._limit
@@ -620,17 +646,21 @@ def codex_factory(
     limit: Any = None,
     seen: list[Any] | None = None,
     sessions: list["FakeCodex"] | None = None,
+    answered: str | None = None,
 ) -> Callable[..., FakeCodex]:
     """A Codex client factory over one scripted turn, recording the options it was handed.
 
     Built per call the way the real one is, so the session it hands back really holds this run's
-    own tools and a renamed tool fails in the fake too.
+    own tools and a renamed tool fails in the fake too. ``answered`` makes the `graph` entry
+    report another run's handshake, which is what a crossed `config.toml` looks like.
     """
 
     def factory(options: Any, tools: Any) -> FakeCodex:
         if seen is not None:
             seen.append(options)
-        session = FakeCodex(turn, tools, servers=servers, limit=limit)
+        session = FakeCodex(
+            turn, tools, servers=servers, limit=limit, answered=answered
+        )
         if sessions is not None:
             sessions.append(session)
         return session

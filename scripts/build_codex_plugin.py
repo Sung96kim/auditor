@@ -27,6 +27,9 @@ SHARED_KEYS = (
     "license",
     "keywords",
 )
+#: the subset a plugin is not a plugin without. Absent keys are dropped silently otherwise, and
+#: `--check` compares the mirror against the same derivation, so it would never notice.
+REQUIRED_KEYS = ("name", "version")
 #: `agents` and `hooks` are deliberately absent: Codex loads neither from a plugin (spec 19.3)
 MANIFEST_EXTRA = {
     "description": (
@@ -56,10 +59,17 @@ MCP_JSON: dict[str, Any] = {
 
 
 def manifest() -> dict[str, Any]:
-    """The Codex manifest, derived from the Claude one so the two cannot drift on identity."""
+    """The Codex manifest, derived from the Claude one so the two cannot drift on identity.
+
+    Raises:
+        KeyError: the authored manifest lost a key no plugin can ship without.
+    """
     claude = json.loads(
         (SOURCE / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
     )
+    missing = [key for key in REQUIRED_KEYS if not claude.get(key)]
+    if missing:
+        raise KeyError(f"plugin/.claude-plugin/plugin.json declares no {missing}")
     return {key: claude[key] for key in SHARED_KEYS if key in claude} | MANIFEST_EXTRA
 
 
@@ -105,19 +115,29 @@ def drift(target: Path = TARGET) -> list[str]:
     return found + _compared(SOURCE / "skills", target / "skills")
 
 
-def _compared(left: Path, right: Path) -> list[str]:
-    """Every file under `left` that `right` does not hold identically, and every extra one."""
+def _compared(left: Path, right: Path, prefix: str = "skills") -> list[str]:
+    """Every file under `left` that `right` does not hold identically, and every extra one.
+
+    Bytes, not stat signatures: `copytree` preserves mtimes, so `dircmp.diff_files` calls a
+    same-size edit equal, and `cmpfiles` reads the content instead. ``prefix`` keeps the report on
+    the path, not the bare basename.
+    """
     diff = filecmp.dircmp(left, right)
-    out = [f"skills/{name} only in plugin/" for name in diff.left_only]
-    out += [f"skills/{name} only in codex-plugin/" for name in diff.right_only]
-    out += [f"skills/{name} differs" for name in diff.diff_files]
+    out = [f"{prefix}/{name} only in plugin/" for name in diff.left_only]
+    out += [f"{prefix}/{name} only in codex-plugin/" for name in diff.right_only]
+    _, mismatch, errors = filecmp.cmpfiles(
+        left, right, diff.common_files, shallow=False
+    )
+    out += [f"{prefix}/{name} differs" for name in sorted(mismatch)]
+    out += [f"{prefix}/{name} could not be compared" for name in sorted(errors)]
     for name in diff.common_dirs:
-        out += _compared(left / name, right / name)
+        out += _compared(left / name, right / name, f"{prefix}/{name}")
     return out
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    summary = next(iter((__doc__ or "").splitlines()), "")
+    parser = argparse.ArgumentParser(description=summary)
     parser.add_argument(
         "--check", action="store_true", help="report drift instead of writing"
     )

@@ -68,9 +68,15 @@ uv run python -m auditor.graph.ui_inputs --write        # restamps dist/inputs.s
 ## Code conventions
 
 - Imports at module top, never inside a function; `tests/test_dogfood.py` fails on an inline
-  import in the package. The one sanctioned exception is `auditor/cli/lazy.py`, which defers the
-  `graph` sub-app so the fast commands never load numpy, scikit-learn or networkx. It carries the
-  scoped skip directive; do not add a second deferred import.
+  import in the package. Two deferred imports are sanctioned, both measured, both documented at
+  the site; do not add a third.
+  - `auditor/cli/lazy.py` defers the `graph` sub-app so the fast commands never load numpy,
+    scikit-learn or networkx. It carries the scoped skip directive.
+  - `auditor/graph/refine/drive.py::_codex_backend` defers `codex_client` through
+    `import_module`. `import openai_codex` costs 0.67-0.76 s cold, 530 ms of it in one generated
+    module, and `drive` is on the daemon's and every `graph refine` import path. The Claude side's
+    top-level `try/except ImportError` is not free either: it pays its own import on every
+    invocation.
 - Everything is typed. Records are pydantic v2 models, frozen where they are values; configuration
   is `pydantic-settings`.
 - Detectors, language auditors and reporters register by subclassing their ABC, so a package

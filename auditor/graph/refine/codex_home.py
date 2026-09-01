@@ -7,6 +7,8 @@ is text this module writes, which is what makes it testable with no SDK and no a
 
 import json
 import os
+import secrets
+from collections.abc import Mapping
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -28,23 +30,28 @@ MANAGED_FILES: tuple[Path, ...] = (MANAGED_CONFIG, MANAGED_HOOKS)
 
 
 def codex_home_dir() -> Path:
-    """The observer's private Codex home, a leaf beside `lock`, `daemon.json` and `log`."""
+    """Where every run's private home is made, a leaf beside `lock`, `daemon.json` and `log`."""
     return observer_dir() / "codex-home"
 
 
-def user_codex_home(env: dict[str, str] | None = None) -> Path:
+def run_home(parent: Path | None = None) -> Path:
+    """A home of this run's own, so two concurrent runs cannot overwrite one `config.toml`.
+
+    Named from a fresh token rather than the run id because the options a run needs are built
+    before its row exists, and a request that cannot become options must open no row.
+    """
+    root = parent if parent is not None else codex_home_dir()
+    return root / f"run-{secrets.token_hex(8)}"
+
+
+def user_codex_home(env: Mapping[str, str] | None = None) -> Path:
     """Where the user's own Codex home is, `CODEX_HOME` first.
 
     The SDK's `default_codex_home()` hardcodes `~/.codex` and never reads the env var, so it is
     deliberately not called here.
     """
-    named = (env if env is not None else dict(os.environ)).get("CODEX_HOME")
+    named = (env if env is not None else os.environ).get("CODEX_HOME")
     return Path(named) if named else Path.home() / ".codex"
-
-
-def auth_hinted(env: dict[str, str] | None = None) -> bool:
-    """Whether this machine looks logged in to Codex. A hint, not a check."""
-    return (user_codex_home(env) / "auth.json").is_file()
 
 
 class CodexHome(BaseModel):

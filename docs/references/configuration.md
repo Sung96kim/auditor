@@ -485,11 +485,12 @@ The rest of the loop's clocks:
   repo's day is bounded by `max_runs_per_day` instead of `max_cost_usd_per_day`, and every
   "fraction of the day" rule reads remaining runs.
 
-`observer.limits.max_turns` and `observer.budget.max_budget_usd_per_run` are enforced by the
-Claude runner only: the Codex turn API carries no turn count, no budget and no timeout. The Codex
-runner makes exactly one turn per run and checks the estimated cost after it, aborting the run
-when it passed `max_budget_usd_per_run`. `max_nodes_per_run` and `max_changes_per_run` bind both,
-because the brief carries them rather than the SDK.
+`observer.limits.max_turns` is enforced by the Claude runner only: the Codex turn API carries no
+turn count, no budget and no timeout, and the Codex runner makes exactly one turn per run.
+`observer.budget.max_budget_usd_per_run` binds both, but differently: Claude enforces it during
+the run, and Codex checks the estimated cost after its one turn and aborts the run when it passed.
+`max_nodes_per_run` and `max_changes_per_run` bind both, because the brief carries them rather
+than the SDK.
 
 `observer.tuning` (`TuningConfig`). `mode` (default `"propose"`) and `stopwords_max` (default `20`)
 govern knob-tuning proposals and have no reader today. The one the tier gate reads:
@@ -502,7 +503,12 @@ govern knob-tuning proposals and have no reader today. The one the tier gate rea
 - `activation_tiers` (default `{}`): the highest tier each runner may store `active`, as
   `{"codex": "B"}`. Empty uses the shipped per-runner defaults, which are `B` for Claude and `A`
   for Codex: spec 10.4's go/no-go has been run for Claude and not for Codex, so a measured Codex
-  stratum still lands `pending` until you raise it here.
+  stratum still lands `pending` until you raise it here. Keys are `claude` and `codex`, the two
+  names the gate looks up, and values are `A` or `B`. Anything else is a load error rather than a
+  setting that quietly does nothing: `auto` reaches no lookup, and no tier C proposal activates at
+  any ceiling. A config written before this carrying `"auto"` or `"C"` now fails to load and every
+  command says so. Both were already no-ops, so deleting the key restores what you had; `"C"`
+  becomes `"B"` if you meant the highest ceiling the gate can honour.
 
 ### `vectors` (`VectorsConfig`)
 

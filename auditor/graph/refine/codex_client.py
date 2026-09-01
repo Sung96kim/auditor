@@ -18,7 +18,7 @@ from openai_codex.generated.v2_all import (
     TurnStatus,
 )
 
-from auditor.graph.refine.client import CodexSession, CodexThread
+from auditor.graph.refine.client import CodexSession, CodexThread, ServerStatus
 from auditor.graph.refine.codex_home import BEARER_ENV, CodexHome
 from auditor.graph.refine.codex_mcp import GraphShim
 from auditor.graph.refine.codex_runner import (
@@ -26,6 +26,7 @@ from auditor.graph.refine.codex_runner import (
     EFFORT,
     EPHEMERAL,
     SANDBOX,
+    CodexClientError,
     CodexOptions,
     RateLimit,
 )
@@ -103,11 +104,12 @@ class _Thread:
             return _failed(exc)
 
 
-class _Client:
+class CodexClient:
     """The `AsyncCodex` behind `CodexSession`, with the run's loopback `graph` server under it.
 
     The order in `__aenter__` is the contract: the shim has to own a port before the config that
-    names it is written, and the config has to exist before the binary reads it.
+    names it is written, and the config has to exist before the binary reads it. The class is
+    the `CodexFactory`: its constructor already takes the two arguments one would be called with.
     """
 
     def __init__(self, options: CodexOptions, tools: BoundTools) -> None:
@@ -115,7 +117,23 @@ class _Client:
         self._shim = GraphShim(tools)
         self._codex: AsyncCodex | None = None
 
+    @property
+    def handshake(self) -> str:
+        """What this run's own shim answers with in `serverInfo.version`."""
+        return self._shim.handshake
+
     async def __aenter__(self) -> CodexSession:
+        try:
+            await self._start()
+        except BaseException:
+            # `async with` never calls `__aexit__` for an enter that raised, so the shim would
+            # otherwise keep a live loopback listener holding this run's credential
+            await self.__aexit__(None, None, None)
+            raise
+        return self
+
+    async def _start(self) -> None:
+        """The shim, then the config that names it, then the binary that reads the config."""
         await self._shim.__aenter__()
         CodexHome(
             home=self._options.home,
@@ -125,7 +143,6 @@ class _Client:
         ).write(auth=self._options.auth)
         self._codex = AsyncCodex(codex_config(self._options, self._shim.token))
         await self._codex.__aenter__()
-        return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
         try:
@@ -135,16 +152,30 @@ class _Client:
             await self._shim.__aexit__(exc_type, exc, tb)
         return None
 
-    async def servers(self) -> tuple[str, ...]:
-        """Every mcp server the binary loaded, by name. No wrapper exists for this RPC."""
-        answer = await self._codex._client.request(
+    def _opened(self) -> AsyncCodex:
+        """The client this session entered, refusing rather than raising `AttributeError`."""
+        if self._codex is None:
+            raise CodexClientError("this codex session was used before it was entered")
+        return self._codex
+
+    async def servers(self) -> tuple[ServerStatus, ...]:
+        """Every mcp server the binary loaded, with its handshake. No wrapper exists for this RPC."""
+        answer = await self._opened()._client.request(
             MCP_STATUS, {}, response_model=ListMcpServerStatusResponse
         )
-        return tuple(status.name for status in answer.data)
+        return tuple(
+            ServerStatus(
+                name=status.name,
+                handshake=None
+                if status.server_info is None
+                else status.server_info.version,
+            )
+            for status in answer.data
+        )
 
     async def rate_limit(self) -> RateLimit | None:
         """The account's primary window, or ``None``: the notification lands on an unread queue."""
-        answer = await self._codex._client.request(
+        answer = await self._opened()._client.request(
             RATE_LIMITS, None, response_model=GetAccountRateLimitsResponse
         )
         primary = answer.rate_limits.primary
@@ -156,7 +187,7 @@ class _Client:
         )
 
     async def thread_start(self, options: CodexOptions) -> CodexThread:
-        thread = await self._codex.thread_start(
+        thread = await self._opened().thread_start(
             sandbox=Sandbox[SANDBOX],
             approval_mode=ApprovalMode[APPROVAL_MODE],
             ephemeral=EPHEMERAL,
@@ -165,12 +196,3 @@ class _Client:
             base_instructions=options.system_prompt,
         )
         return _Thread(thread, options)
-
-
-def codex_client(options: CodexOptions, tools: BoundTools) -> CodexSession:
-    """The client one run talks through, with that run's own tools served under it.
-
-    A `CodexFactory` needs no instance state, so it is this function rather than a class holding
-    one `__call__`.
-    """
-    return _Client(options, tools)

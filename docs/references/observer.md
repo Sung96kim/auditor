@@ -90,18 +90,25 @@ auditr graph refine <scope> . --brief
 auditr graph refine <scope> . --runner codex --json
 ```
 
-Afterwards, four things are worth reading:
+Afterwards, two things are worth reading:
 
 - `auditr graph log . --json`: the row's `runner`, `status`, `usage.cost_usd` and
   `usage.cost_estimated`, which is always true for Codex.
-- `$AUDITOR_HOME/observer/codex-home/config.toml`: exactly one `[mcp_servers.graph]`, pointing at
-  a loopback URL, and `features.codex_hooks = false`.
-- `$AUDITOR_HOME/observer/codex-home/auth.json`: a symlink, never a copy.
 - `auditr graph refinements . --json`: what it staged, and whether the verifier agreed.
+
+Each run gets a home of its own, `$AUDITOR_HOME/observer/codex-home/run-<token>/`, removed when
+the run closes, so two concurrent runs cannot overwrite one `config.toml`. While it exists it
+holds
+
+- `config.toml`: exactly one `[mcp_servers.graph]`, pointing at that run's loopback URL, and
+  `features.codex_hooks = false`;
+- `auth.json`: a symlink to your own Codex credentials, never a copy.
 
 A run that ends `aborted` with `refused: unexpected mcp servers` means something above
 `CODEX_HOME` added a server: check `/etc/codex/config.toml`. One that ends `aborted` with
-`over_budget` means the estimate passed `observer.budget.max_budget_usd_per_run`.
+`refused: the graph server this session loaded is not this run's shim` means the binary connected
+to another run's server, or to none. One that ends `aborted` with `over_budget` means the estimate
+passed `observer.budget.max_budget_usd_per_run`.
 
 | event | what it does |
 |---|---|

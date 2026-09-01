@@ -98,15 +98,17 @@ mcp = [
 ]
 observer = [
     { name = "claude-agent-sdk" },
-    { name = "fastmcp" },
+    { name = "mcp" },
     { name = "openai-codex" },
+    { name = "uvicorn" },
 ]
 observer-claude = [
     { name = "claude-agent-sdk" },
 ]
 observer-codex = [
-    { name = "fastmcp" },
+    { name = "mcp" },
     { name = "openai-codex" },
+    { name = "uvicorn" },
 ]
 ts = [
     { name = "tree-sitter" },
@@ -124,10 +126,10 @@ requires-dist = [
     { name = "commitizen", marker = "extra == 'dev'" },
     { name = "fastmcp", marker = "extra == 'dev'" },
     { name = "fastmcp", marker = "extra == 'mcp'" },
-    { name = "fastmcp", marker = "extra == 'observer'" },
-    { name = "fastmcp", marker = "extra == 'observer-codex'" },
     { name = "fastmcp", extras = ["code-mode"], marker = "extra == 'code-mode'" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "mcp", marker = "extra == 'observer'" },
+    { name = "mcp", marker = "extra == 'observer-codex'" },
     { name = "model2vec", marker = "extra == 'vectors'", specifier = ">=0.9,<0.10" },
     { name = "networkx", specifier = ">=3" },
     { name = "numpy", specifier = ">=2.1" },
@@ -149,6 +151,8 @@ requires-dist = [
     { name = "tree-sitter-typescript", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "tree-sitter-typescript", marker = "extra == 'ts'", specifier = ">=0.23" },
     { name = "typer", specifier = ">=0.26,<0.27" },
+    { name = "uvicorn", marker = "extra == 'observer'" },
+    { name = "uvicorn", marker = "extra == 'observer-codex'" },
 ]
 provides-extras = ["mcp", "dev", "ts", "graph", "observer-claude", "observer-codex", "observer", "vectors", "code-mode"]
 

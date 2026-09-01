@@ -13,6 +13,7 @@ from graph._support import Init, Result, fake_factory, init_data
 
 from auditor.cli.helpers import load_settings, load_user, open_index
 from auditor.graph.refine import drive
+from auditor.graph.refine.codex_runner import CodexRunner
 from auditor.graph.refine.models import RunnerKind, RunStatus
 from auditor.graph.refine.runner import FakeRunner, RefinementJob, RunnerUnavailable
 from auditor.graph.refine.sdk_runner import SdkRunner
@@ -43,6 +44,25 @@ def test_no_signal_at_all_is_no_hint(tmp_path):
 def test_the_registry_holds_every_runner():
     assert drive.RUNNERS[RunnerKind.FAKE] is FakeRunner
     assert drive.RUNNERS[RunnerKind.CLAUDE] is SdkRunner
+    assert drive.RUNNERS[RunnerKind.CODEX] is CodexRunner
+    assert set(drive.RUNNERS) == set(RunnerKind) - {RunnerKind.NONE}
+
+
+def test_the_codex_hint_is_the_presence_of_that_home_s_auth_json(tmp_path):
+    """Both hints read one implementation, so neither can drift on what a credential is."""
+    env = {"CODEX_HOME": str(tmp_path / "ch")}
+    assert drive.codex_auth_hinted(env) is False
+    (tmp_path / "ch").mkdir()
+    (tmp_path / "ch" / "auth.json").write_text("{}", encoding="utf-8")
+    assert drive.codex_auth_hinted(env) is True
+
+
+def test_the_codex_hint_reads_no_environment_token():
+    """Codex has no `ANTHROPIC_API_KEY` twin, so a token must not stand in for a login."""
+    assert (
+        drive.codex_auth_hinted({"ANTHROPIC_API_KEY": "k", "CODEX_HOME": "/nope"})
+        is False
+    )
 
 
 def test_building_a_fake_runner_needs_no_client(refine_service):

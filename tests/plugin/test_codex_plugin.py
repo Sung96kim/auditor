@@ -1,11 +1,12 @@
 """The Codex plugin mirror: generated from `plugin/`, and red the moment it drifts."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from scripts.build_codex_plugin import MCP_JSON, build, drift, manifest
+from scripts.build_codex_plugin import MCP_JSON, REQUIRED_KEYS, build, drift, manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "plugin" / "skills"
@@ -72,3 +73,56 @@ def test_a_build_into_an_empty_directory_lands_clean(tmp_path: Path):
 @pytest.mark.parametrize("name", [".codex-plugin/plugin.json", ".mcp.json"])
 def test_the_generated_json_is_committed_and_parses(name):
     assert json.loads((TARGET / name).read_text(encoding="utf-8"))
+
+
+def _same_size_edit(mirror: Path) -> Path:
+    """Rewrite one mirrored file with different bytes of the same length and the same mtime.
+
+    Type, size and mtime are the whole of a shallow compare's signature, and `copytree` copies
+    the mtime across, so this is the shape that read as identical.
+    """
+    edited = next((mirror / "skills").rglob("*/SKILL.md"))
+    stamp = edited.stat()
+    edited.write_bytes(b"X" * stamp.st_size)
+    os.utime(edited, (stamp.st_atime, stamp.st_mtime))
+    return edited
+
+
+def test_a_same_size_edit_with_a_matching_mtime_is_still_caught(tmp_path: Path):
+    """M4: `copytree` preserves mtimes, so a shallow compare read the mirror as identical."""
+    mirror = tmp_path / "mirror"
+    build(mirror)
+    edited = _same_size_edit(mirror)
+    source = SOURCE / edited.relative_to(mirror / "skills")
+    assert (edited.stat().st_size, edited.stat().st_mtime) == (
+        source.stat().st_size,
+        source.stat().st_mtime,
+    )
+    assert drift(mirror) != []
+
+
+def test_a_drift_report_names_the_path_not_just_the_basename(tmp_path: Path):
+    """Nine skills share several filenames, so `skills/SKILL.md differs` names no file."""
+    mirror = tmp_path / "mirror"
+    build(mirror)
+    edited = _same_size_edit(mirror)
+    named = edited.relative_to(mirror).as_posix()
+    assert [line for line in drift(mirror) if line == f"{named} differs"]
+
+
+def test_an_authored_manifest_missing_its_identity_refuses_to_build(
+    monkeypatch, tmp_path
+):
+    """L11: an absent key was dropped silently, and `--check` compared the same derivation."""
+    stub = tmp_path / "plugin"
+    (stub / ".claude-plugin").mkdir(parents=True)
+    (stub / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "auditor"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("scripts.build_codex_plugin.SOURCE", stub)
+    with pytest.raises(KeyError, match="version"):
+        manifest()
+
+
+def test_the_required_keys_are_the_ones_a_plugin_is_identified_by():
+    assert set(REQUIRED_KEYS) == {"name", "version"}

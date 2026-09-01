@@ -347,6 +347,19 @@ def _job(scope: str, runner: str | None, model: str | None) -> RefinementJob:
         raise _bad_option(exc) from exc
 
 
+def _refuse_claude_model(runner: str | None, model: str | None) -> None:
+    """Exit 2 rather than accept a `--model` the Codex runner would silently drop.
+
+    `--model` is a Claude tier by type, and a Codex run reads `observer.runner.codex_model`, so
+    the pair asks for two different models at once.
+    """
+    if runner == "codex" and model is not None:
+        raise typer.BadParameter(
+            "--model names a Claude tier, and --runner codex reads "
+            "observer.runner.codex_model instead"
+        )
+
+
 def _bad_option(exc: ValidationError) -> typer.BadParameter:
     """One refused job field as the flag that carried it, naming the values it accepts.
 
@@ -382,6 +395,7 @@ def graph_refine(
     can run or the run did not succeed, 2 on a bad option."""
     root = cli_root(target)
     job = _job(scope, runner, model)
+    _refuse_claude_model(runner, model)
     if brief:
         if runner is not None or model is not None:
             raise typer.BadParameter(
@@ -419,6 +433,7 @@ def graph_eval(
     Exits 1 when no runner can run or a run did not close, 2 on a bad option."""
     root = cli_root(target)
     job = _job("", runner, model)
+    _refuse_claude_model(runner, model)
     suites = _suites(suite)
     try:
         report = run(

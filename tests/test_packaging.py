@@ -39,10 +39,10 @@ def test_graph_extra_is_an_empty_alias(pyproject: dict):
     ("extra", "expected"),
     [
         ("observer-claude", ["claude-agent-sdk>=0.2,<0.3"]),
-        ("observer-codex", ["openai-codex==0.147.*", "fastmcp"]),
+        ("observer-codex", ["openai-codex==0.147.*", "mcp", "uvicorn"]),
         (
             "observer",
-            ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*", "fastmcp"],
+            ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*", "mcp", "uvicorn"],
         ),
         ("vectors", ["sqlite-vec>=0.1.9,<0.2", "model2vec>=0.9,<0.10"]),
     ],
@@ -92,3 +92,12 @@ def test_built_wheel_ships_the_observer_client(tmp_path: Path):
     assert "auditor/cli/lazy.py" in names
     for extra in _WHEEL_EXTRAS:
         assert f"Provides-Extra: {extra}\n".encode() in metadata, extra
+
+
+@pytest.mark.parametrize("package", ["mcp", "uvicorn"])
+def test_the_codex_extra_names_what_the_loopback_shim_imports(
+    pyproject: dict, package: str
+):
+    """It rode in on `fastmcp` before, so a `fastmcp` that dropped either broke the runner."""
+    codex = _names(pyproject["project"]["optional-dependencies"]["observer-codex"])
+    assert package in codex

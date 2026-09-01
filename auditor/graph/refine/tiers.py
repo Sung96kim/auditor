@@ -15,6 +15,7 @@ from auditor.graph.refine.models import (
     BOUNDED_FORMS,
     PRECISION_SUITES,
     EvalRow,
+    EvalSuite,
     Proposal,
     RefinementKind,
     RefinementStatus,
@@ -45,11 +46,18 @@ _PRECISION_SUITES = frozenset(suite.value for suite in PRECISION_SUITES)
 #: the highest tier a runner may store `active` here before spec 10.4's go/no-go has been run for
 #: it. Claude's tier B numbers were measured in S7; Codex has none, so a Codex tier B proposal
 #: stays `pending` even where an eval row clears, until a user raises this in their own config.
+#: Every kind is named: `FAKE` and `NONE` inheriting `B` gave the unmeasured a higher ceiling
+#: than the Codex runner deliberately holds at `A`.
 ACTIVATION_TIERS: Mapping[RunnerKind, Tier] = MappingProxyType(
-    {RunnerKind.CLAUDE: Tier.B, RunnerKind.CODEX: Tier.A}
+    {
+        RunnerKind.CLAUDE: Tier.B,
+        RunnerKind.CODEX: Tier.A,
+        RunnerKind.FAKE: Tier.A,
+        RunnerKind.NONE: Tier.A,
+    }
 )
-#: what a runner nobody measured defaults to, which is what tier B already means for Claude
-DEFAULT_ACTIVATION = Tier.B
+#: what a `RunnerKind` the table forgets defaults to, which is the floor rather than Claude's tier
+DEFAULT_ACTIVATION = Tier.A
 
 
 def eval_model(
@@ -110,21 +118,9 @@ class TierPolicy(BaseModel):
             ceiling=ceiling,
             measured=frozenset((row.suite, row.stratum) for row in rows),
             proven=frozenset(
-                (row.suite, row.stratum)
-                for row in rows
-                if cls._clears(row, min_precision)
+                (row.suite, row.stratum) for row in rows if _clears(row, min_precision)
             ),
         )
-
-    @staticmethod
-    def _clears(row: EvalRow, min_precision: float) -> bool:
-        """Whether one stratum met its gate: a precision suite on its Wilson lower bound, a
-        control on having produced no false add, and neither on a run of no trials (spec 10.2)."""
-        if row.metrics.n <= 0:
-            return False
-        if row.suite in _PRECISION_SUITES:
-            return row.metrics.lower_bound_95 >= min_precision
-        return row.metrics.false_add_rate == 0.0
 
     def tier(
         self, proposal: Proposal, *, row: UnresolvedRow | None, verified: bool
@@ -155,27 +151,37 @@ class TierPolicy(BaseModel):
         """
         if tier is Tier.A and kind in ALWAYS_ACTIVE:
             return RefinementStatus.ACTIVE
-        if tier is Tier.A and self._cleared("decoy"):
+        if tier is Tier.A and self._cleared(EvalSuite.DECOY):
             return RefinementStatus.ACTIVE
         if (
             tier is Tier.B
             and self.ceiling is Tier.B
-            and self._cleared("add", stratum)
-            and self._cleared("collision")
+            and self._cleared(EvalSuite.ADD, stratum)
+            and self._cleared(EvalSuite.COLLISION)
         ):
             return RefinementStatus.ACTIVE
         return RefinementStatus.PENDING
 
-    def _cleared(self, suite: str, stratum: Stratum | None = None) -> bool:
+    def _cleared(self, suite: EvalSuite, stratum: Stratum | None = None) -> bool:
         """Whether a suite's gate is met here: the stratum matching the proposal, or every
         stratum the suite measured when there is none to match.
 
         A control suite is stored under one stratum, ``all``, so "every stratum it measured" and
         "its one row" are the same question (spec 10.2).
         """
-        rows = {pair for pair in self.measured if pair[0] == suite}
+        rows = {pair for pair in self.measured if pair[0] == suite.value}
         if not rows:
             return False
         if stratum is None:
             return rows <= self.proven
-        return (suite, stratum) in self.proven
+        return (suite.value, stratum) in self.proven
+
+
+def _clears(row: EvalRow, min_precision: float) -> bool:
+    """Whether one stratum met its gate: a precision suite on its Wilson lower bound, a control
+    on having produced no false add, and neither on a run of no trials (spec 10.2)."""
+    if row.metrics.n <= 0:
+        return False
+    if row.suite in _PRECISION_SUITES:
+        return row.metrics.lower_bound_95 >= min_precision
+    return row.metrics.false_add_rate == 0.0

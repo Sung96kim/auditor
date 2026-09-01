@@ -37,10 +37,10 @@ jobs:
       # that nothing in the suite imports, and `vectors` needs an online model fetch.
       - run: uv sync --extra dev --extra mcp --extra ts
 
-      # The Codex plugin mirrors `plugin/skills`, so a release always ships a fresh copy.
-      - run: uv run python scripts/build_codex_plugin.py
-
-      # Gate: never release red code.
+      # Gate: never release red code. The Codex mirror is checked, never rewritten: a repair
+      # here would ride into `cz bump`'s `git commit -a` unreviewed, and would disarm the one
+      # test that exists to catch a stale mirror.
+      - run: uv run python scripts/build_codex_plugin.py --check
       - run: uv run ruff check auditor plugin auditr_observer.py tests scripts
       - run: uv run ruff format --check auditor plugin auditr_observer.py tests scripts
       - run: uv run pytest -q

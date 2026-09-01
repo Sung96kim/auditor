@@ -42,11 +42,12 @@ ts = [
 graph = []
 # Each agent SDK bundles a ~300MB x86_64-only CLI binary, so they stay opt-in and CI never
 # installs them. `observer-claude` (and `observer`, which contains it) is what `graph refine`
-# needs. `observer-codex` also carries `fastmcp`: Codex has no in-process MCP transport, so the
-# runner serves the graph tools over a loopback MCP server it owns.
+# needs. `observer-codex` also carries `mcp`, which brings `uvicorn`: Codex has no in-process MCP
+# transport, so the runner serves the graph tools over a loopback MCP server it owns, and those
+# two are what `codex_mcp.py` imports by name.
 observer-claude = ["claude-agent-sdk>=0.2,<0.3"]
-observer-codex = ["openai-codex==0.147.*", "fastmcp"]
-observer = ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*", "fastmcp"]
+observer-codex = ["openai-codex==0.147.*", "mcp", "uvicorn"]
+observer = ["claude-agent-sdk>=0.2,<0.3", "openai-codex==0.147.*", "mcp", "uvicorn"]
 # Opt-in vector layer; `model2vec` needs one online model fetch, so it stays out of CI too.
 vectors = ["sqlite-vec>=0.1.9,<0.2", "model2vec>=0.9,<0.10"]
 # Experimental: lets a client LLM orchestrate the tools in a sandbox so large intermediate

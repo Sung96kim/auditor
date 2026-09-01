@@ -131,6 +131,23 @@ def test_an_unknown_option_value_is_exit_two(refine_repo, option, value, named):
     assert cli_json(invoke("graph", "log", str(refine_repo), "--json"))["runs"] == []
 
 
+@pytest.mark.parametrize("command", ["refine", "eval"])
+def test_a_claude_model_asked_of_the_codex_runner_is_exit_two(refine_repo, command):
+    """`--model` is a Claude tier and a Codex run reads `codex_model`, so it changed nothing."""
+    result = invoke(
+        "graph",
+        command,
+        *([".", str(refine_repo)] if command == "refine" else [str(refine_repo)]),
+        "--runner",
+        "codex",
+        "--model",
+        "sonnet",
+    )
+    assert result.exit_code == 2
+    assert "codex_model" in one_line(result.output)
+    assert cli_json(invoke("graph", "log", str(refine_repo), "--json"))["runs"] == []
+
+
 @pytest.mark.parametrize("option", ["--runner", "--model"])
 def test_brief_refuses_the_options_it_would_ignore(refine_repo, option):
     """Two flags that are individually valid and jointly meaningless: `--brief` opens no run."""

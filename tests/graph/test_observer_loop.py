@@ -1138,6 +1138,32 @@ async def test_a_repo_with_no_runner_reports_the_no_runner_kind(
     assert _refusing_loop(refine_service).runner_kind is RunnerKind.NONE
 
 
+async def test_a_login_between_ticks_takes_effect_without_a_daemon_restart(
+    refine_service: RefinementService,
+):
+    """H2: a cached `NONE` left the gate keyed on no runner and `verify` off for good."""
+    loop = _refusing_loop(refine_service)
+    assert loop.runner_kind is RunnerKind.NONE
+    loop.runner_for = lambda service, proposer: FakeRunner(service, None)
+    assert loop.runner_kind is RunnerKind.FAKE
+
+
+async def test_a_runner_that_answered_once_is_not_re_resolved(
+    refine_service: RefinementService,
+):
+    """The half worth caching: a factory re-reads credentials, and the answer does not change."""
+    loop = _loop(refine_service)
+    asked: list[int] = []
+
+    def once(service, proposer):
+        asked.append(1)
+        return FakeRunner(service, None)
+
+    loop.runner_for = once
+    assert (loop.runner_kind, loop.runner_kind) == (RunnerKind.FAKE, RunnerKind.FAKE)
+    assert len(asked) == 1
+
+
 async def test_a_refused_runner_pauses_the_loop_and_opens_no_row(
     refine_service: RefinementService,
 ):

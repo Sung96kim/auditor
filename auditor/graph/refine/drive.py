@@ -15,8 +15,8 @@ from typing import Any
 
 from auditor.config import AuditorSettings
 from auditor.database import IndexStore
-from auditor.graph.refine.client import ClientFactory
-from auditor.graph.refine.codex_home import auth_hinted as codex_auth_hinted
+from auditor.graph.refine.client import ClientFactory, CodexFactory
+from auditor.graph.refine.codex_home import user_codex_home
 from auditor.graph.refine.codex_runner import CodexRunner
 from auditor.graph.refine.eval import EvalRun
 from auditor.graph.refine.models import (
@@ -76,6 +76,8 @@ FELL_BACK = "no Claude runner here, so Codex drives and costs are estimated: "
 #: presence, not import: `import openai_codex` costs 0.67-0.76 s cold, 530 ms of it in one
 #: generated module, and this module is on the daemon's and every `graph refine` import path
 CODEX_AVAILABLE = find_spec("openai_codex") is not None
+#: the env vars that stand in for a Claude credential file; Codex has no such pair
+CLAUDE_TOKENS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
 
 RUNNERS: dict[RunnerKind, type[RefinementRunner]] = {
     RunnerKind.FAKE: FakeRunner,
@@ -85,14 +87,23 @@ RUNNERS: dict[RunnerKind, type[RefinementRunner]] = {
 
 
 def auth_hinted(env: Mapping[str, str] = os.environ, home: Path | None = None) -> bool:
-    """Whether this machine looks logged in to Claude.
+    """Whether this machine looks logged in to Claude. ``home`` is the user's, not `$AUDITOR_HOME`."""
+    credential = (home or Path.home()) / ".claude" / ".credentials.json"
+    return _hinted(credential, CLAUDE_TOKENS, env)
+
+
+def codex_auth_hinted(env: Mapping[str, str] = os.environ) -> bool:
+    """Whether this machine looks logged in to Codex, reading `CODEX_HOME` first."""
+    return _hinted(user_codex_home(env) / "auth.json", (), env)
+
+
+def _hinted(credential: Path, tokens: Sequence[str], env: Mapping[str, str]) -> bool:
+    """One credential hint: a token in the environment, or the CLI's own credential file.
 
     A hint, not a check: no auth RPC exists without a run, so a real failure is mapped from the
-    run's own first messages instead. ``home`` is the user's home, not ``$AUDITOR_HOME``.
+    run's own first messages instead. Both runners read it through here so neither can drift.
     """
-    if env.get("ANTHROPIC_API_KEY") or env.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        return True
-    return ((home or Path.home()) / ".claude" / ".credentials.json").exists()
+    return any(env.get(name) for name in tokens) or credential.is_file()
 
 
 def select_runner(
@@ -167,7 +178,7 @@ def build_runner(
     kind: RunnerKind,
     service: RefinementService,
     *,
-    client_factory: ClientFactory | None = None,
+    client_factory: ClientFactory | CodexFactory | None = None,
     proposer: Proposer | None = None,
 ) -> RefinementRunner:
     """One runner of the given kind, with its client injected or built here."""
@@ -177,7 +188,9 @@ def build_runner(
     )
 
 
-def _default_factory(runner: type[RefinementRunner]) -> ClientFactory | None:
+def _default_factory(
+    runner: type[RefinementRunner],
+) -> ClientFactory | CodexFactory | None:
     """The client this runner talks through when the caller injected none.
 
     Keyed on the class, not the kind: a test that registers a fake under `claude` wants the choice
@@ -186,7 +199,7 @@ def _default_factory(runner: type[RefinementRunner]) -> ClientFactory | None:
     if issubclass(runner, CodexRunner):
         if not CODEX_AVAILABLE:
             raise RunnerUnavailable(NEEDS_CODEX_EXTRA)
-        return _codex_backend().codex_client
+        return _codex_backend().CodexClient
     if not issubclass(runner, SdkRunner):
         return None
     if not SDK_AVAILABLE:
@@ -211,7 +224,7 @@ async def refine(
     user: UserSettings,
     *,
     job: RefinementJob,
-    client_factory: ClientFactory | None = None,
+    client_factory: ClientFactory | CodexFactory | None = None,
 ) -> RefinePayload:
     """Run one model-driven refinement and report what it did.
 
@@ -264,7 +277,7 @@ async def evaluate(
     seed: int,
     dry_run: bool = False,
     on_plan: Callable[[EvalPlan], None] | None = None,
-    client_factory: ClientFactory | None = None,
+    client_factory: ClientFactory | CodexFactory | None = None,
 ) -> EvalReport:
     """Measure this checkout's accuracy for one runner and model, and store what it measured.
 
@@ -293,7 +306,7 @@ async def evaluate(
 
 def _eval_runner(
     kind: RunnerKind,
-    client_factory: ClientFactory | None,
+    client_factory: ClientFactory | CodexFactory | None,
     service: RefinementService,
     proposer: Proposer,
 ) -> RefinementRunner:

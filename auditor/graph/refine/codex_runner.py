@@ -8,6 +8,8 @@ testable if they live here. `codex_client.py` is the one module that builds a re
 import asyncio
 import json
 import logging
+import re
+import shutil
 import time
 import tomllib
 from collections.abc import Mapping, Sequence
@@ -17,10 +19,11 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict
 
 from auditor.graph.refine.brief import Brief
-from auditor.graph.refine.client import CodexFactory
+from auditor.graph.refine.client import CodexFactory, ServerStatus
 from auditor.graph.refine.codex_home import (
     MANAGED_FILES,
     codex_home_dir,
+    run_home,
     user_codex_home,
 )
 from auditor.graph.refine.models import (
@@ -58,8 +61,16 @@ CALLS_PER_RUN = 1
 #: what a managed file above `CODEX_HOME` has to declare before it refuses a run. Content, not
 #: existence: the Claude twin refuses only a managed file that declares hooks (`sdk_runner.py`).
 MANAGED_KEYS = ("hooks", "mcp_servers", "mcpServers")
+
+
 #: what a failed turn's message has to contain to become one of spec 8.4's pauses. Ordered, and
 #: matched on the message alone: `TurnError` carries no code the loop can switch on.
+def _pattern(needle: str) -> re.Pattern[str]:
+    """One pause needle as a pattern: a numeric code is anchored, a word stays a substring."""
+    body = re.escape(needle)
+    return re.compile(rf"(?<!\d){body}(?!\d)" if needle.isdigit() else body)
+
+
 TURN_ERRORS: tuple[tuple[str, RunStatus, str], ...] = (
     ("unauthorized", RunStatus.FAILED, "paused:auth"),
     ("not logged in", RunStatus.FAILED, "paused:auth"),
@@ -68,6 +79,12 @@ TURN_ERRORS: tuple[tuple[str, RunStatus, str], ...] = (
     ("429", RunStatus.ABORTED, "paused:ratelimit"),
     ("quota", RunStatus.ABORTED, "paused:billing"),
     ("billing", RunStatus.ABORTED, "paused:billing"),
+)
+#: the same table as patterns. Only the numeric codes are anchored, and against digits rather
+#: than word characters: "4013 tokens" must not pause on auth, while `insufficient_quota` and
+#: `unauthorized_client` are the shapes these codes actually arrive in.
+_NEEDLES: tuple[tuple[re.Pattern[str], RunStatus, str], ...] = tuple(
+    (_pattern(needle), status, word) for needle, status, word in TURN_ERRORS
 )
 #: the turn statuses that mean the run stopped for a reason outside itself
 STOPPED_STATUSES = frozenset({"interrupted"})
@@ -160,18 +177,30 @@ class CodexOptions(BaseModel):
             max_utilization=user.observer.budget.max_utilization,
         )
 
-    def refusal(self, servers: Sequence[str]) -> str | None:
+    def refusal(self, servers: Sequence[ServerStatus], *, handshake: str) -> str | None:
         """Why the session the binary opened is not the one that was asked for (Invariant 4).
 
         Read from `mcpServerStatus/list`, which is the Codex twin of the Claude CLI's own
-        `system/init` answer: the private `config.toml` is what we wrote, but `-c` overrides merge
-        with the user's servers and `/etc/codex/*` sits above the home.
+        `system/init` answer. Names are not enough: a `graph` that answered another run's
+        handshake is another run's shim, which this run's token cannot reach. A server that
+        answered nothing yet is not refused: `serverInfo` is optional, and failing closed on it
+        would abort every run rather than the crossed one.
         """
-        names = set(servers)
+        names = {status.name for status in servers}
         if not names:
             return "refused: no mcp servers, so there is no graph server to propose through"
         if names != {GRAPH_SERVER}:
             return f"refused: unexpected mcp servers {sorted(names)}"
+        foreign = [
+            status.handshake
+            for status in servers
+            if status.handshake is not None and status.handshake != handshake
+        ]
+        if foreign:
+            return (
+                f"refused: the {GRAPH_SERVER} server this session loaded is not this "
+                "run's shim"
+            )
         return None
 
 
@@ -202,12 +231,17 @@ def _added(breakdown: Any, *names: str) -> int:
     return sum(int(getattr(breakdown, name, 0) or 0) for name in names)
 
 
-def tool_trace(items: Sequence[Any]) -> tuple[ToolCall, ...]:
+def tool_trace(
+    items: Sequence[Any], *, started_at: float | None = None
+) -> tuple[ToolCall, ...]:
     """The MCP calls and shell commands this turn made, as trace rows (Invariant 2).
 
     `TurnResult.items` are root models over a seventeen member union, so every entry is unwrapped
-    through `.root` before it is asked what it is.
+    through `.root` before it is asked what it is. ``started_at`` is the turn's own start in Unix
+    seconds; without one every row carries the instant the finished turn was mapped.
     """
+    mapped = time.time()
+    elapsed = 0.0
     trace: list[ToolCall] = []
     for item in items:
         inner = getattr(item, "root", item)
@@ -222,21 +256,34 @@ def tool_trace(items: Sequence[Any]) -> tuple[ToolCall, ...]:
             shown = str(getattr(inner, "command", ""))
         else:
             continue
+        spent = int(getattr(inner, "duration_ms", 0) or 0)
         trace.append(
             ToolCall(
                 tool=name,
-                ts=time.time(),
-                detail=f"{getattr(inner, 'duration_ms', 0) or 0} ms; {shown[:DETAIL_CHARS]}",
+                ts=mapped if started_at is None else started_at + elapsed,
+                detail=f"{spent} ms; {shown[:DETAIL_CHARS]}",
             )
         )
+        elapsed += spent / 1000.0
     return tuple(trace)
+
+
+def turn_started(turn: Any) -> float | None:
+    """When the turn began, in Unix seconds, or ``None`` when the SDK reported no start."""
+    raw = getattr(turn, "started_at", None)
+    return None if raw is None else float(raw)
 
 
 def paused_by(message: str) -> tuple[RunStatus, str] | None:
     """The pause a failed turn's message asks for, or ``None`` when it asks for none."""
     low = message.lower()
     return next(
-        ((status, word) for needle, status, word in TURN_ERRORS if needle in low), None
+        (
+            (status, word)
+            for pattern, status, word in _NEEDLES
+            if pattern.search(low) is not None
+        ),
+        None,
     )
 
 
@@ -274,8 +321,9 @@ def from_turn(
     attribution = RunAttribution(
         usage=usage, tool_trace=tuple(trace), sdk_session_id=thread_id
     )
-    status = str(getattr(turn, "status", "") or "")
-    status = getattr(status, "value", status)
+    # unwrap first: `TurnStatus` is a plain Enum, so `str()` on it is "TurnStatus.completed"
+    raw = getattr(turn, "status", "")
+    status = str(getattr(raw, "value", raw) or "")
     if status != "completed":
         message = str(getattr(getattr(turn, "error", None), "message", "") or status)
         paused = paused_by(message)
@@ -344,32 +392,39 @@ class CodexRunner(RefinementRunner):
         managed_settings: Sequence[Path] = MANAGED_FILES,
     ) -> None:
         super().__init__(service, client_factory, proposer=proposer)
+        #: the parent every run makes its own home under, never a home two runs share
         self.home = home if home is not None else codex_home_dir()
         self.auth = auth if auth is not None else user_codex_home() / "auth.json"
         self.managed_settings = managed_settings
 
     async def run(self, job: RefinementJob) -> RunProduct:
         # before the row exists: a request that cannot become options must not open one to orphan
+        home = run_home(self.home)
         options = CodexOptions.of(
-            job, self.service.user, self.service.root, home=self.home, auth=self.auth
+            job, self.service.user, self.service.root, home=home, auth=self.auth
         )
         refused = managed_refusal(self.managed_settings)
         run, brief = await self._open(job)
-        if refused is not None:
-            return await self._close(
-                run, brief, RunOutcome.of(RunStatus.ABORTED, error=refused)
-            )
-        tools = BoundTools(
-            service=self.service, run_id=run.run_id, proposer=self.proposer
-        )
         try:
-            outcome = await self._converse(options, tools, brief)
-        except asyncio.CancelledError:
-            await self._close(
-                run, brief, self._stopped(tools, RunStatus.ABORTED, "cancelled")
+            if refused is not None:
+                return await self._close(
+                    run, brief, RunOutcome.of(RunStatus.ABORTED, error=refused)
+                )
+            tools = BoundTools(
+                service=self.service, run_id=run.run_id, proposer=self.proposer
             )
-            raise
-        return await self._close(run, brief, outcome)
+            try:
+                outcome = await self._converse(options, tools, brief)
+            except asyncio.CancelledError:
+                await self._close(
+                    run, brief, self._stopped(tools, RunStatus.ABORTED, "cancelled")
+                )
+                raise
+            return await self._close(run, brief, outcome)
+        finally:
+            # sync on purpose: an await here would raise straight back out under cancellation
+            # and leave the home behind, and this is two small files
+            shutil.rmtree(home, ignore_errors=True)
 
     async def _converse(
         self, options: CodexOptions, tools: BoundTools, brief: Brief
@@ -382,7 +437,9 @@ class CodexRunner(RefinementRunner):
         prices = self.service.user.observer.runner.codex_prices
         try:
             async with self._factory()(options, tools) as client:
-                denied = options.refusal(await client.servers())
+                denied = options.refusal(
+                    await client.servers(), handshake=client.handshake
+                )
                 if denied is not None:
                     return self._stopped(tools, RunStatus.ABORTED, denied)
                 paused = rate_limited(
@@ -392,12 +449,15 @@ class CodexRunner(RefinementRunner):
                     return self._stopped(tools, RunStatus.ABORTED, paused)
                 thread = await client.thread_start(options)
                 turn = await thread.run(brief.render())
+                calls = tool_trace(
+                    getattr(turn, "items", ()), started_at=turn_started(turn)
+                )
                 return from_turn(
                     turn,
                     options=options,
                     prices=prices,
                     thread_id=getattr(thread, "id", None),
-                    trace=tools.trace + list(tool_trace(getattr(turn, "items", ()))),
+                    trace=tools.trace + list(calls),
                 )
         except asyncio.CancelledError:
             raise
@@ -416,7 +476,11 @@ class CodexRunner(RefinementRunner):
         )
 
     def _factory(self) -> CodexFactory:
-        """The injected factory, refusing a runner built without one before any run happens."""
+        """The injected factory, refusing a runner built without one before any client is made.
+
+        Called from `_converse`, so the refusal lands on a row the run already opened: Invariant 2
+        wants even this refusal recorded rather than raised past the caller.
+        """
         if self.client_factory is None:
             raise CodexClientError("this runner was built with no client factory")
         return self.client_factory

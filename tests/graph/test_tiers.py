@@ -1,11 +1,16 @@
 """Spec 9.2's tier column and spec 10.3's activation table."""
 
+from typing import get_args
+
 import pytest
+from pydantic import ValidationError
 
 from auditor.graph.model import CallForm, EdgeKind, UnresolvedRow
 from auditor.graph.refine.models import (
+    MODEL_RUNNERS,
     EvalMetrics,
     EvalRow,
+    EvalSuite,
     Proposal,
     RefinementKind,
     RefinementPayload,
@@ -15,8 +20,13 @@ from auditor.graph.refine.models import (
     Stratum,
     Tier,
 )
-from auditor.graph.refine.tiers import TierPolicy, activation_tier, eval_model
-from auditor.user_settings import RunnerConfig, TuningConfig
+from auditor.graph.refine.tiers import (
+    ACTIVATION_TIERS,
+    TierPolicy,
+    activation_tier,
+    eval_model,
+)
+from auditor.user_settings import ModelRunner, RunnerConfig, TuningConfig
 
 
 def _add_edge() -> Proposal:
@@ -59,9 +69,14 @@ def _eval(
     )
 
 
-def _proven(*rows: EvalRow) -> TierPolicy:
+def _proven(*rows: EvalRow, ceiling: Tier = Tier.B) -> TierPolicy:
+    """A policy over these rows. The ceiling is named because the default is the floor, `A`."""
     return TierPolicy.of(
-        rows, min_precision=0.95, runner=RunnerKind.CLAUDE, model="haiku"
+        rows,
+        min_precision=0.95,
+        runner=RunnerKind.CLAUDE,
+        model="haiku",
+        ceiling=ceiling,
     )
 
 
@@ -361,9 +376,10 @@ def test_one_resolver_answers_every_reader_of_a_run_s_model(runner, requested, m
         (RunnerKind.CODEX, {}, Tier.A),
         (RunnerKind.CODEX, {"codex": "B"}, Tier.B),
         (RunnerKind.CLAUDE, {"claude": "A"}, Tier.A),
-        (RunnerKind.FAKE, {}, Tier.B),
+        (RunnerKind.FAKE, {}, Tier.A),
+        (RunnerKind.NONE, {}, Tier.A),
     ],
-    ids=["claude", "codex", "codex-raised", "claude-lowered", "unnamed"],
+    ids=["claude", "codex", "codex-raised", "claude-lowered", "fake", "none"],
 )
 def test_a_runner_activates_at_its_own_tier_until_a_user_says_otherwise(
     runner, named, tier
@@ -391,3 +407,45 @@ def test_a_codex_run_whose_eval_cleared_still_lands_pending_by_default():
         raised.status(RefinementKind.ADD_EDGE, Tier.B, stratum=Stratum.SAME_MODULE)
         is RefinementStatus.ACTIVE
     )
+
+
+def test_every_runner_kind_names_its_own_ceiling():
+    """L10: an unmeasured kind falling through to `B` outranked the Codex runner's own `A`."""
+    assert set(ACTIVATION_TIERS) == set(RunnerKind)
+    assert ACTIVATION_TIERS[RunnerKind.CODEX] is Tier.A
+
+
+def test_the_settings_key_domain_is_the_one_the_gate_looks_up():
+    """M1: `activation_tiers` typed on `Runner` admitted `auto`, which no lookup can reach."""
+    assert set(get_args(ModelRunner)) == {runner.value for runner in MODEL_RUNNERS}
+
+
+@pytest.mark.parametrize(
+    "named",
+    [{"auto": "B"}, {"fake": "A"}, {"codex": "C"}, {"claude": "D"}],
+    ids=["auto", "fake", "tier-c", "unknown-tier"],
+)
+def test_an_activation_tier_the_gate_cannot_honour_is_refused_loudly(named):
+    """A silently inert key reads as a setting that took effect and did not."""
+    with pytest.raises(ValidationError):
+        TuningConfig(activation_tiers=named)
+
+
+def test_the_gate_reads_the_suite_enum_rather_than_a_copy_of_its_text():
+    """M2: hand-copied literals matched nothing after a rename, and failed closed invisibly.
+
+    The gate keys on `EvalSuite`, so a rename follows it. The type is the guarantee, and a bare
+    string no longer reaches the lookup at all.
+    """
+    policy = TierPolicy.of(
+        [_eval(EvalSuite.DECOY.value)],
+        min_precision=0.95,
+        runner=RunnerKind.CLAUDE,
+        model="haiku",
+    )
+    assert (
+        policy.status(RefinementKind.RESOLVE_AMBIGUOUS, Tier.A)
+        is RefinementStatus.ACTIVE
+    )
+    with pytest.raises(AttributeError):
+        policy._cleared(EvalSuite.DECOY.value)

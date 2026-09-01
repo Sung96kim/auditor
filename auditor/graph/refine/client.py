@@ -7,6 +7,8 @@ both need this name, so it lives below both and imports nothing from the package
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol
 
+from pydantic import BaseModel, ConfigDict
+
 
 class ClientSession(Protocol):
     """The four members of the SDK client a runner uses.
@@ -37,6 +39,19 @@ class CodexThread(Protocol):
     async def run(self, prompt: str) -> Any: ...
 
 
+class ServerStatus(BaseModel):
+    """One mcp server the binary loaded, with as much identity as a refusal needs.
+
+    ``handshake`` is the `serverInfo.version` the server answered with, which is how a run tells
+    its own loopback shim from another concurrent run's; ``None`` means it never connected.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    handshake: str | None = None
+
+
 class CodexSession(Protocol):
     """The four members of the Codex client a runner uses.
 
@@ -44,14 +59,17 @@ class CodexSession(Protocol):
     response models live behind this seam rather than in the runner.
     """
 
+    #: what this session's own shim answers with, so a refusal can compare the two
+    handshake: str
+
     async def __aenter__(self) -> "CodexSession": ...
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any: ...
 
     async def thread_start(self, options: Any) -> CodexThread: ...
 
-    #: every mcp server the binary loaded, by name, from `mcpServerStatus/list`
-    async def servers(self) -> tuple[str, ...]: ...
+    #: every mcp server the binary loaded, from `mcpServerStatus/list`
+    async def servers(self) -> tuple[ServerStatus, ...]: ...
 
     #: the account's primary rate limit window, or `None` when it reported none
     async def rate_limit(self) -> Any: ...

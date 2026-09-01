@@ -211,8 +211,11 @@ auditr graph refine auditor/cli --brief
   reason. A fallback from Claude to Codex says so, because the cost model changes with it: Claude
   reports what a run cost and Codex reports only tokens, so a Codex run's `cost_usd` is derived
   from a price table and stamped estimated. `--model` takes `haiku` or `sonnet` and applies to the
-  Claude runner alone; the Codex model is `observer.runner.codex_model`. An unknown value for
-  either exits 2 naming the valid set.
+  Claude runner alone; the Codex model is `observer.runner.codex_model`. `--runner codex` together
+  with `--model` exits 2 rather than dropping the flag. The check is on the flags: reaching the
+  Codex runner through `observer.runner.agent` or through `auto`'s fallback still ignores
+  `--model`, and the run row records the Codex model either way. An unknown value for either
+  exits 2 naming the valid set.
 - Four refusals, all exit 1 with one line: the runner asked for is not installed
   (`pip install 'auditr[observer-claude]'` or `'auditr[observer-codex]'`), neither is
   (`'auditr[observer]'`), or the runner that is installed has no credentials, in which case the
@@ -316,6 +319,8 @@ auditr graph eval --dry-run
 
 - An eval masks known-true edges of this repo's own deterministic graph, presents them to a runner
   as unresolved rows, and judges every proposal against the ground truth.
+- `--runner` and `--model` mean what they do for `refine`, refusal included: `--runner codex
+  --model <tier>` exits 2, because a Codex eval is filed under `observer.runner.codex_model`.
 - Four suites ship. `add` masks a resolved `calls` edge of tier B's own shape. `decoy` presents the
   same truths as `ambiguous_name` rows offering the true destination among up to three wrong ones.
   `collision` presents the queue's externally bound rows, where the only right answer is

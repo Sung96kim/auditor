@@ -29,6 +29,12 @@ _BANNED = (
     "[observer",
     "[vectors",
 )
+#: the one job allowed an opt-in extra, and the one file it buys. Everything else stays on the
+#: explicit three, because the observer SDKs bundle ~640MB of CLI binaries.
+_CODEX_JOB = "codex-shapes"
+_CODEX_SYNC = "uv sync --extra dev --extra mcp --extra observer-codex"
+_CODEX_TEST = "uv run pytest -q tests/graph/test_codex_client.py"
+_MIRROR_CHECK = "uv run python scripts/build_codex_plugin.py --check"
 
 
 def _jobs(workflow: str) -> dict:
@@ -36,13 +42,11 @@ def _jobs(workflow: str) -> dict:
     return yaml.safe_load((_WORKFLOWS / workflow).read_text())["jobs"]
 
 
-def _run_steps(workflow: str) -> list[str]:
-    return [
-        step["run"]
-        for job in _jobs(workflow).values()
-        for step in job["steps"]
-        if "run" in step
-    ]
+def _run_steps(workflow: str, job: str | None = None) -> list[str]:
+    """Every `run:` line in a workflow, or in one of its jobs."""
+    jobs = _jobs(workflow)
+    chosen = [jobs[job]] if job is not None else list(jobs.values())
+    return [step["run"] for one in chosen for step in one["steps"] if "run" in step]
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
@@ -53,11 +57,46 @@ def test_suite_job_syncs_explicit_extras(workflow: str):
 @pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
 @pytest.mark.parametrize("banned", _BANNED)
 def test_no_run_step_pulls_the_opt_in_extras(workflow: str, banned: str):
-    """A multi-line ``run: |`` block hides its later lines from any prefix filter, so scan it all."""
-    steps = _run_steps(workflow)
+    """A multi-line ``run: |`` block hides its later lines from any prefix filter, so scan it all.
+
+    `codex-shapes` is exempt by name: it is the one job that exists to install the Codex extra,
+    and its own tests below pin how narrow it stays.
+    """
+    jobs = {name: job for name, job in _jobs(workflow).items() if name != _CODEX_JOB}
+    steps = [
+        step["run"] for job in jobs.values() for step in job["steps"] if "run" in step
+    ]
     assert steps
     for step in steps:
         assert banned not in step, step
+
+
+def test_one_ci_job_installs_the_codex_extra_so_the_real_sdk_shapes_are_pinned():
+    """`test_codex_client.py` `importorskip`s the extra, so without this leg it never runs."""
+    assert _CODEX_SYNC in _run_steps("ci.yml", _CODEX_JOB)
+
+
+def test_the_codex_job_runs_that_one_file_and_nothing_else():
+    """The extra is ~640MB; a whole second suite run on top of it buys nothing."""
+    assert [
+        step for step in _run_steps("ci.yml", _CODEX_JOB) if step.startswith("uv run")
+    ] == [_CODEX_TEST]
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
+def test_the_codex_mirror_is_checked_and_never_rewritten_in_a_workflow(workflow: str):
+    """A write step before pytest disarms the drift test and rides into `cz bump`'s `commit -a`."""
+    steps = _run_steps(workflow)
+    assert not any(
+        "build_codex_plugin.py" in step and "--check" not in step for step in steps
+    ), steps
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
+def test_the_gate_checks_the_mirror_before_it_runs_the_suite(workflow: str):
+    steps = _run_steps(workflow)
+    assert _MIRROR_CHECK in steps
+    assert steps.index(_MIRROR_CHECK) < steps.index("uv run pytest -q")
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])

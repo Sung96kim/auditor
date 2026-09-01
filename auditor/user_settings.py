@@ -19,7 +19,10 @@ Runner = Literal["auto", "claude", "codex"]
 ClaudeModel = Literal["haiku", "sonnet"]
 Worktrees = Literal["main", "all"]
 TuningMode = Literal["propose", "off"]
-ActivationTier = Literal["A", "B", "C"]
+#: the runner names the tier gate looks up; `auto` resolves to one of these before it is read
+ModelRunner = Literal["claude", "codex"]
+#: only the tiers `TierPolicy.status` can honour: nothing it stores reads a ceiling of `C`
+ActivationTier = Literal["A", "B"]
 
 
 CONFIG_VERSION = 2
@@ -319,7 +322,7 @@ class TuningConfig(BaseModel):
         lt=1.0,
         description="Measured precision a kind needs before going active; 1.0 is unreachable.",
     )
-    activation_tiers: dict[Runner, ActivationTier] = Field(
+    activation_tiers: dict[ModelRunner, ActivationTier] = Field(
         default_factory=dict,
         description="Highest tier a runner may activate at; empty uses the per-runner defaults.",
     )

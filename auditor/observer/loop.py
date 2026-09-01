@@ -178,13 +178,17 @@ class RepoLoop:
 
     @property
     def runner_kind(self) -> RunnerKind:
-        """Which runner this loop opens runs with, resolved once: a factory re-reads credentials."""
+        """Which runner this loop opens runs with, cached once it has answered with one.
+
+        A refusal is never cached: `_run` re-asks every tick, so a login between ticks opens runs
+        again, and a `NONE` kept here would leave the gate and `verify` switched off for good.
+        """
         if self._kind is None:
             try:
                 self._kind = self.runner_for(self.service, None).kind
             except RunnerUnavailable:
                 # no runner here: the gate reads the no-runner row rather than Claude's
-                self._kind = RunnerKind.NONE
+                return RunnerKind.NONE
         return self._kind
 
     async def budget(self) -> BudgetState:

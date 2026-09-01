@@ -21,6 +21,8 @@ jobs:
       # Explicit extras, never --all-extras: the observer SDKs bundle ~640MB of CLI binaries
       # that nothing in the suite imports, and `vectors` needs an online model fetch.
       - run: uv sync --extra dev --extra mcp --extra ts
+      # Checked, never rewritten: a repair step would disarm the drift test a few lines below.
+      - run: uv run python scripts/build_codex_plugin.py --check
       - run: uv run ruff check auditor plugin auditr_observer.py tests scripts
       - run: uv run ruff format --check auditor plugin auditr_observer.py tests scripts
       - run: uv run pytest -q
@@ -28,6 +30,21 @@ jobs:
         run: |
           npm i -g @anthropic-ai/claude-code || true
           claude plugin validate ./plugin --strict || echo "validate unavailable in CI — skipping"
+
+  codex-shapes:
+    # The only job that installs `observer-codex`, and it runs one file: `test_codex_client.py`
+    # is where the real `TurnResult`, `Sandbox` and `ApprovalMode` shapes are pinned, and the
+    # suite job deliberately skips it. Scoped to that file so the ~640MB extra buys one thing.
+    name: codex sdk shapes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --extra dev --extra mcp --extra observer-codex
+      - run: uv run pytest -q tests/graph/test_codex_client.py
 
   ui:
     name: ui (pnpm build + vitest)
