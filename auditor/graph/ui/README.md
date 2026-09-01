@@ -72,13 +72,15 @@ pnpm test
 
 - `src/`, the app's root. `main.tsx` mounts it, `App.tsx` reads `window.__AUDITOR_GRAPH__` or
   falls back to `sample.ts`, `types.ts` mirrors the `build_payload` contract, `theme.ts` holds the
-  colour tokens and `a11y.ts` the shared key handler.
+  colour tokens, `a11y.ts` the shared key handler and `layout.ts` the breakpoint below which the
+  live column stacks under the graph instead of taking 340 px off it.
 - `src/api/`, the daemon's wire. `bootstrap.ts` reads the injected flag, `types.ts` declares every
-  shape the page reads, `client.ts` is one conditional GET, `poll.ts` the four-state machine and
+  shape the page reads, `client.ts` is one conditional GET, `poll.ts` the five-state machine and
   `useLiveGraph.ts` the 3 s cycle.
 - `src/components/`, the graph itself. The sigma canvas, the 3D and text views, the explorer, the
   detail panel and the top bar.
 - `src/graph/`, pure functions over the payload. Building, filtering, selection, ranking.
 - `src/panels/`, the live column. The observer chrome, the run stream and its detail, the
-  refinement list, the runner marks and the four shared state components.
+  refinement list, the runner marks and the five shared state components: empty, loading,
+  reconnecting, failed, and the refusal a 4xx earns, which offers no retry that could work.
 - `src/flow/`, the flow walk. The panel, and the layout that flattens and places it.

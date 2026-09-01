@@ -166,7 +166,9 @@ thread rather than pinning one.
   on a same-origin `POST` and the server refuses any request that carries one, so nothing on the
   page can write.
 - `/api/status`'s `state` is the daemon's own word, `running` or `restarting`; the per-repo state
-  badge reads `repos[i].state` instead, which is that repo's `LoopState`. `idle_seconds` is the gap
+  badge reads `repos[i].state` instead, which is that repo's `LoopState`. The badge adds two words
+  of its own for a repo with no roster row: `no repo` when the URL names none, and `not tracked`
+  when it names one the daemon serves a graph for but has never attached. `idle_seconds` is the gap
   before the request being served, measured from the daemon's start until something arrives. A read
   is never activity: no `GET` or `HEAD` moves it, whatever the route, so no page fetch and no
   status call can hold the daemon open past the idle window. Only a write does.
@@ -178,7 +180,10 @@ thread rather than pinning one.
   empty string and no numbers on either route, rather than another runner's.
 - `vectors` is still at its default and stays there until S13. Both meters are real, and they are
   per repo: `budget` and `limits` ride on each `repos[]` entry, carrying what that repo's own loop
-  published, so two repos cannot overwrite one another's numbers.
+  published, so two repos cannot overwrite one another's numbers. The budget bar and its caption
+  both follow `budget.priced`: dollars against `max_cost_usd_per_day` when it is true, runs against
+  `max_runs_per_day` when it is false, which is the same ceiling `remaining_fraction` is measured
+  from.
 
 ## What the loop does
 
