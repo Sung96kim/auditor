@@ -9,8 +9,9 @@ import yaml
 _WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 _SUITE_SYNC = "uv sync --extra dev --extra mcp --extra ts"
 # Every tree ruff must see. `plugin` is here because its stdlib scripts ship to users and were
-# outside CI's scope long enough for an unformatted file to merge.
-_LINT_PATHS = "auditor plugin auditr_observer.py tests"
+# outside CI's scope long enough for an unformatted file to merge; `scripts` for the same reason,
+# since `build_codex_plugin.py` is what `release.yml` runs.
+_LINT_PATHS = "auditor plugin auditr_observer.py tests scripts"
 _LINT = f"uv run ruff check {_LINT_PATHS}"
 _FORMAT = f"uv run ruff format --check {_LINT_PATHS}"
 _UI_STEPS = (

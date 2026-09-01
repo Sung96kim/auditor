@@ -483,9 +483,25 @@ def _claude_event(payload: dict[str, object]) -> HookRead:
     )
 
 
-#: one reader per client; S12 adds `codex` here and touches no plugin script
+def _codex_event(payload: dict[str, object]) -> HookRead:
+    """The two fields a Codex hook payload carries that this client can use.
+
+    No `agent_id` and no path: the only `tool_name` Codex ever dispatches is `Bash`, whose
+    `tool_input` is `{command}`, so a Codex edit is only ever seen through Stop's git status
+    (spec 19.1, 19.3).
+    """
+    return HookRead(
+        cwd=_text(payload, "cwd"),
+        session_id=_text(payload, "session_id"),
+        agent_id="",
+        path="",
+    )
+
+
+#: one reader per client; every branch below is client agnostic, so this is the whole difference
 _READERS: dict[str, Callable[[dict[str, object]], HookRead]] = {
-    "claude-code": _claude_event
+    "claude-code": _claude_event,
+    "codex": _codex_event,
 }
 
 
@@ -542,7 +558,7 @@ def _emit(
 def _hook(event: str, client: str, payload: dict[str, object]) -> int:
     """One hook event, whatever the client. Never raises and never signals failure."""
     reader = _READERS.get(client)
-    if reader is None:  # `codex` is declared and arrives in S12
+    if reader is None:  # a client the parser admits and this build has no reader for
         return 0
     read = reader(payload)
     cwd = Path(read.cwd or ".")

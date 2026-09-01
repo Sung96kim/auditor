@@ -1,0 +1,352 @@
+# Query recipes
+
+Source of truth: `auditor/graph/query.py` (`GraphQuery` — `related`/`neighbors`/`search`/
+`usages`/`clusters`/`concept`/`flow`), `auditor/graph/flow.py` (`build_flow`),
+`auditor/graph/cache.py` (`GraphCache`),
+`auditor/mcp/graph_tools.py` (the `graph_*` MCP tools + docstrings), `auditor/cli/graph.py` (CLI
+subcommands), `auditor/graph/detectors.py` (`GRAPH-*` rules). All example output below is real,
+captured 2026-08-23 against this repo at 3,880 nodes / 36,736 edges. Node ids and counts differ on
+your repo and drift on this one as it changes; the shape does not.
+
+## Is symbol X dead?
+
+```
+auditr graph usages <symbol> --json
+```
+
+Read `used_by` — grouped by structural edge kind (`contains`, `calls`, `overrides`, `inherits`,
+`imports`, ...), each with a full `count` and a rank-ordered `sample`. A genuinely unused symbol
+resolves (has a node) but has an **empty `used_by` dict** — `GraphQuery.usages`'s `summarize()`
+only adds a key when at least one edge of that kind exists, so a dead symbol's `used_by` is
+literally `{}`, and `total_in` is `0`. Contrast with a real (non-dead) symbol:
+
+```json
+{
+  "symbol": "find_root",
+  "resolved": "auditor/discovery.py::find_root",
+  "kind": "function",
+  "used_by": {
+    "contains": {"count": 1, "sample": ["auditor/discovery.py"]},
+    "calls": {"count": 31, "sample": ["auditor/engine.py::audit_target", "auditor/cli/scan.py::_diff_report_only", "..."]}
+  },
+  "depends_on": {},
+  "total_in": 32,
+  "total_out": 0
+}
+```
+
+`used_by.calls.count == 31` (plus the `contains` edge from its own module) — nowhere close to
+dead. If you instead get `"used_by": {}, "total_in": 0"`, don't delete yet:
+
+1. **The graph is static and repo-partitioned.** It won't see dynamic dispatch — string-based
+   lookups, `getattr`, decorator/plugin registries — or any usage outside this repo. Grep the
+   symbol name as a **string literal** across the repo before trusting the empty result:
+   `rg '"<symbol>"' .` / `rg "'<symbol>'" .`.
+2. Check whether it's a public API entry point (exported, used by a consumer repo you can't see
+   from here).
+3. Only then treat it as confirmed dead. This mirrors the auto cross-file rule `PY-DEAD-SYMBOL`
+   (private module-level symbols with zero repo references) — see `judge-findings`'s
+   `references/judging.md` "dead-code" section for the full verdict rubric; this recipe is just
+   the query mechanics.
+
+## Blast radius of changing Y
+
+```
+auditr graph usages <symbol> --json      # preferred — full counts, no silent truncation
+auditr graph neighbors <symbol> --depth 2 --json   # structural neighborhood, hop-labeled
+```
+
+`graph_usages`'s own docstring is explicit about which to reach for: "Prefer this over
+graph_neighbors for 'how is X used' — neighbors truncates silently with no totals." `neighbors`
+is for browsing a local structural neighborhood (each hit tagged with `edge` kind, `direction`
+in/out, and `hops`); `usages` is for "how many things break if I change this" — it gives you the
+real denominator (`total_in`/`total_out`) plus a sample, so you know whether the sample is the
+whole story or a fraction of it.
+
+Real high-blast-radius example from this repo — `GRAPH-GOD-CONCEPT`'s bottleneck detector already
+flagged `AuditContext` (103 dependents) and `Finding` (193 dependents) as load-bearing; confirmed
+via `usages`:
+
+```
+auditr graph usages AuditContext --json
+# → total_in: 103 — a change here needs the widest possible test coverage before merging.
+```
+
+For a symbol you're about to change: run `usages`, look at `total_in` for a rough blast-radius
+number, then skim the `sample` (rank-ordered, so the highest-rank callers surface first) to see
+*what kind* of code depends on it — a handful of test fixtures is a different risk profile than
+30 production call sites across unrelated modules.
+
+## Read the architecture from an entry point
+
+```
+auditr graph flow <symbol> [--in] [--depth N] [--stop-at GLOB] --json
+```
+
+One call replaces a chain of `neighbors` queries. It walks `calls` and `callback_arg` outward from
+a symbol, expands a base method's overriders and a registry module's members as `dispatches_to`,
+and prints a tree plus the ordered list of modules the path touches. Start here when the question
+is "what does this command actually do" rather than "who uses this symbol".
+
+Real output, this repo, `auditr graph flow auditor/cli/scan.py::scan .` at the default depth of 4
+(149 nodes in the 2026-08-23 snapshot above), trimmed here to four of `scan`'s branches:
+
+```
+auditor/cli/scan.py::scan flow (out)
+modules  auditor/cli/scan.py · auditor/baseline.py · auditor/cli/helpers.py · auditor/cli/summary.py
+· auditor/config.py · auditor/discovery.py · auditor/engine.py · auditor/malware/tools.py ·
+auditor/status.py · auditor/cli/apps.py · auditor/registry.py · auditor/models.py · auditor/serve.py
+· auditor/database/base.py · auditor/database/store.py · auditor/paths.py ·
+auditor/malware/passes.py · auditor/ignores.py · auditor/plugins.py · auditor/fingerprints.py ·
+auditor/roles.py · auditor/crossfile.py · auditor/languages/base.py
+scan auditor/cli/scan.py  ? render
+├── → Baseline.from_results auditor/baseline.py
+│   └── → finding_fingerprint auditor/baseline.py
+├── → check_format auditor/cli/helpers.py
+│   ├── → fail auditor/cli/helpers.py  ↺ seen
+│   ├── → Registry.formats auditor/registry.py
+│   └── → Registry.reporter auditor/registry.py
+├── → _diff_report_only auditor/cli/scan.py
+│   ├── → fail auditor/cli/helpers.py  ↺ seen
+│   ├── → load_config auditor/config.py
+│   │   ├── → merged_config_dict auditor/config.py  ↺ seen
+│   │   ├── → unknown_config_keys auditor/config.py  ↺ seen
+│   │   ├── → PluginLoader.load_config_modules auditor/plugins.py
+│   │   ├── → PluginLoader.load_entry_points auditor/plugins.py
+│   │   └── → PluginLoader.load_local auditor/plugins.py
+│   ├── → default_base_ref auditor/discovery.py
+│   │   └── → _git auditor/discovery.py  ? run
+│   ├── → find_root auditor/discovery.py  ↺ seen ⊕ 48 hub
+│   └── → git_changed_files auditor/discovery.py
+│       └── → _git auditor/discovery.py  ↺ seen ? run
+├── → find_root auditor/discovery.py  ⊕ 48 elided
+```
+
+`find_root` shows both hub labels in one tree: `elided` where the hub rule cut it, `hub` on the
+occurrence the `↺ seen` rule had already stopped.
+
+The `modules` line is the answer to the architecture question. The tree tells you where each hop
+went.
+
+Reverse it to find the callers of a shared entry point, which is the same question `usages` answers
+one hop at a time:
+
+```
+auditr graph flow auditor/engine.py::audit_target . --in --depth 1
+```
+
+```
+auditor/engine.py::audit_target flow (in)
+modules  auditor/engine.py · auditor/cli/graph.py · auditor/cli/report.py · auditor/cli/scan.py ·
+auditor/mcp/graph_tools.py · auditor/mcp/scan_tools.py
+audit_target auditor/engine.py  ? register
+├── → _autoscan auditor/cli/graph.py
+├── → report auditor/cli/report.py  ? render
+├── → scan auditor/cli/scan.py  ? render
+├── → finding_evidence_at auditor/engine.py
+├── → graph_build auditor/mcp/graph_tools.py  ? run ? register
+├── → finding_detail auditor/mcp/scan_tools.py  ? cached ? resolve
+├── → report auditor/mcp/scan_tools.py
+└── → scan auditor/mcp/scan_tools.py
+```
+
+That is the CLI side and the MCP side of the same entry point in one call.
+
+Reading the markers:
+
+- `⊕ N elided`: a hub the walk refused to expand. A node is a hub when either count reaches
+  `graph.flow_hub_fan_in` (40 by default): the symbols that reach it, dispatch children included,
+  or the children it would emit. `--expand-hubs` opens it. `⊕ N hub` is the same fan on a node
+  that expanded anyway: the start symbol, anything under `--expand-hubs`, and a hub sitting on the
+  last level `--depth` reached. Both counts skip test callers, so `--include-tests` only ever
+  widens the tree. In JSON the mark is one `hub` object,
+  `{"count": N, "kind": "fan_in", "collapsed": true}`.
+- `graph usages` is not the hub measure and will report a larger number: it counts all eight
+  structural kinds and includes test callers, while the hub fan counts production `calls` and
+  `callback_arg` plus dispatch children. Here `find_root` is 48 to the hub rule and 53 to
+  `usages`; `Detector.make_finding` is 128 against 131.
+- `↺ seen`: already shown elsewhere in this tree. `↺ cycle`: the node is its own ancestor.
+- `⊣ stop`: a `--stop-at` glob matched this module. The path reached it; the tree stops there.
+- `? name`: a call the resolver could not place, dimmed when the name comes from outside the repo
+  (`re.search`, `subprocess.run`).
+- `→` follows a `calls` edge, `⇢` a `callback_arg`, `↳` a `dispatches_to` hop through an override
+  or a registry.
+
+Keep a large tree readable with `--stop-at`, which stops expanding inside matching modules but
+still shows that the path reached them:
+
+```
+auditr graph flow auditor/engine.py::audit_target . --stop-at 'auditor/database/*' --depth 4
+```
+
+MCP: `graph_flow(symbol, path, direction, depth, limit, kinds, include_tests, expand_hubs,
+stop_at)` returns the same payload with the same knobs. `graph export
+--flow <symbol>` renders it as Graphviz DOT, left to right, one rank per depth.
+
+## Hotspots / god-concepts
+
+```
+auditr graph clusters --json
+```
+
+Lists concept clusters (`cluster_id`, `label`, `member_count`), largest first — a quick "what are
+the big cohesive areas of this codebase" overview. Real output, this repo:
+
+```json
+[
+  {"cluster_id": 0, "label": "path", "member_count": 226},
+  {"cluster_id": 1, "label": "database", "member_count": 211},
+  {"cluster_id": 2, "label": "ctx", "member_count": 211}
+]
+```
+
+For *why* something is a hotspot, not just its size, the graph build also runs two advisory
+detectors (`GRAPH-*`, always `suggestion` severity, `candidate` verdict — see `auditor/graph/
+detectors.py`) whose findings live in the normal finding stream (`scan`/`aggregate`), not a
+separate graph command:
+
+- **`GRAPH-GOD-CONCEPT`** — two distinct shapes, same rule id:
+  - *high fan-out*: `"{name} has high fan-out (N) — too many responsibilities; consider
+    decomposing it."` — this symbol calls/references/contains too much (log-space outlier vs the
+    repo's fan-out distribution).
+  - *bottleneck*: `"{name} is a bottleneck (N dependents) — changes here have wide
+    blast-radius."` — real example from this repo: `"AuditContext is a bottleneck (103
+    dependents) — changes here have wide blast-radius."` This is the load-bearing-code signal;
+    cross-check the count with `graph usages` (above) before treating a change here as routine.
+  - Which shape fired is stored on the finding as `subkind` (`fan_out` or `bottleneck`), so
+    `graph_overview` splits its two hub lists on the field. The `-f json` scan stream below does
+    not carry it, which is why this recipe reads the message.
+- **`GRAPH-SCATTERED-CONCEPT`** — a concept cluster whose members are spread across many modules
+  instead of living together. Real example: `"concept 'reporters' is scattered across 7 modules
+  (9 symbols) — consider consolidating."` Points at fragmentation, the opposite problem from
+  god-concept.
+- **`GRAPH-NAMING-INCONSISTENCY`** (`style` category) — verbs used inconsistently across
+  same-shaped functions; see `judge-findings`'s `references/judging.md` "style" section for the
+  verdict rubric.
+
+Pull these via a normal scan/aggregate scoped to the `GRAPH-` prefix, e.g.
+`auditr scan . --rule GRAPH-GOD-CONCEPT --rule GRAPH-SCATTERED-CONCEPT -f json` (repeat `--rule`
+per id) — or read them straight out of an `aggregate-report` rollup, they show up under
+"Candidates to judge" like any other suggestion-severity candidate.
+
+## Locate by name/term
+
+```
+auditr graph search <term> --json     # symbol ids containing the term, highest-rank first
+auditr graph concept <term> --json    # the concept cluster best matching the term
+```
+
+`search` is substring-over-node-id — use it to find the *exact* node id before a `usages`/
+`neighbors` call when you're not sure of the precise name (`graph usages` also does its own
+fuzzy resolution — exact id, or a `.name`/`::name` suffix match — but ambiguous short names get
+reported under `"ambiguous": [...]` in `usages`, so `search` first if you want to pick the right
+one deliberately). Real example:
+
+```json
+[
+  {"id": "auditor/discovery.py::find_root", "kind": "function", "rank": 0.00383},
+  {"id": "tests/test_discovery.py::test_find_root", "kind": "function", "rank": 0.0}
+]
+```
+
+`concept` is coarser — it finds the *cluster* a term belongs to (by label match first, then by
+counting members whose name contains the term), and returns the whole membership, not just the
+matching node. Use it when you're asking "what part of the codebase handles X" rather than
+"where exactly is symbol X."
+
+## What the graph could not resolve
+
+```
+auditr graph unresolved --json                       # whole queue, worst first
+auditr graph unresolved --reason ambiguous_name      # names with a real candidate set
+auditr graph unresolved --call-form self --call-form bare
+auditr graph unresolved --no-external                # drop the non-repo-import rows
+```
+
+Each row is a fact the deterministic resolver refused to turn into an edge, plus the evidence.
+The first row of `auditr graph unresolved . --json --limit 3` on this repo (lists trimmed):
+
+```json
+{
+  "node_id": "auditor/cli/report.py::report",
+  "name": "render",
+  "reason": "ambiguous_name",
+  "fact_kind": "callee",
+  "receiver_root": null,
+  "call_form": "bare",
+  "priority": 1,
+  "externally_bound": false,
+  "candidates": [
+    "auditor/reporters/base.py::Reporter.render",
+    "auditor/reporters/base.py::render",
+    "auditor/reporters/html_reporter.py::HtmlReporter.render"
+  ],
+  "definers": [
+    "auditor/database/base.py::Column.render",
+    "auditor/database/base.py::Index.render",
+    "auditor/reporters/base.py::Reporter.render"
+  ],
+  "resolution_path": [
+    "auditor/reporters/__init__.py",
+    "auditor/reporters/base.py"
+  ],
+  "definers_count": 9,
+  "candidates_count": 6
+}
+```
+
+- Use it as the counterweight to a dead-code call. An empty `used_by` plus a queue row naming that
+  symbol means the graph lost the edge, not that the symbol is unused.
+- `externally_bound: true` means the calling module imports that name or receiver from outside the
+  repo (`re.search`, `subprocess.run`). Those rows sort last; skip them, or pass `--no-external`.
+- `call_form` is the tractability signal: `bare` and `self` rows are answerable by reading one file,
+  `attr` rows usually are not.
+- `definers` and `candidates` are capped id lists; `definers_count` and `candidates_count` carry the
+  true totals.
+- `--reason` and `--call-form` are validated: an unknown value is an error, not an empty page. An
+  empty result says whether a filter matched nothing or the queue was never built.
+- The queue is rebuilt by every `graph build` and is empty before the first one.
+
+## Reading the output: `used_by` vs `depends_on`, edge kinds, staleness
+
+- **`used_by`** (incoming structural edges) = who depends on this symbol — what breaks if you
+  change it. **`depends_on`** (outgoing) = what this symbol needs — its own dependencies. Both
+  are keyed by edge kind, each `{count, sample}`.
+- **Structural edge kinds** (`_STRUCTURAL` in `query.py`, what `usages`/`neighbors` walk): `calls`,
+  `overrides`, `inherits`, `references_type`, `callback_arg`, `registered_in`, `contains`,
+  `imports`. **Semantic edge kinds** (`_SEMANTIC`, what `related` walks instead): `name_similar`,
+  `usage_similar` — these are similarity, not "used by"; `related` answers "what's conceptually
+  near this" not "what calls this."
+- **Ambiguous names**: if a bare name matches several nodes, `usages` picks the highest-rank one
+  as `resolved`/`primary` and lists the rest under `ambiguous` — check that list before trusting
+  a short/common symbol name resolved to the node you meant.
+- **Staleness / when to rebuild**: both `graph build` (CLI) and `graph_build` (MCP, `scan=True`
+  default) run a forced incremental scan before building, so a plain rebuild after code changes
+  is already fresh — you don't need `--rebuild` for routine "I just edited some files" staleness.
+  `--rebuild` (CLI) / re-registering facts is only needed to **discard cached graph facts and
+  re-extract from scratch**, which matters after upgrading auditor itself (facts are keyed by
+  file content, so an extractor change won't retroactively re-derive facts already cached under
+  the same content hash). `graph serve` similarly reuses the existing build unless it's missing
+  or `--rebuild` is passed.
+
+## Dependencies
+
+`numpy`, `scikit-learn`, `snowballstemmer` and `networkx` are core dependencies of `auditr`, so
+there is nothing to install and no availability check to run first.
+
+- CLI: `auditor/cli/__init__.py` mounts the `graph` sub-app through `auditor/cli/lazy.py`, which
+  imports `auditor/cli/graph.py` on the first subcommand. Help is fast; the first real graph
+  command in a process pays ~0.65 s of import.
+- MCP: `auditor/mcp/graph_tools.py` registers the `graph_*` tools unconditionally.
+- `auditr[graph]` still resolves: the extra survives as an empty alias for older install commands.
+
+## Visuals: `serve` / `export`
+
+- `auditr graph serve` — opens the interactive graph UI in a browser (`--rebuild` to force a
+  fresh scan+build first, `--no-open` to skip auto-opening the tab). CLI-only, no MCP
+  equivalent — the MCP tools return data for an agent to reason over, not a browser UI.
+- `auditr graph export --format dot|svg [--cluster <id>] [--symbol <name>] [--depth N]` — a
+  Graphviz DOT (or rendered SVG, via the system `dot` binary) of the whole graph, one cluster
+  (`--cluster`), or a symbol's ego-graph (`--symbol`, `--depth` hops around it). Useful for
+  dropping a visual into a PR description or design doc instead of describing the shape in
+  prose.

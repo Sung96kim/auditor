@@ -14,6 +14,7 @@ import pytest
 import auditr_observer
 from auditor import discovery
 from auditor.discovery import FileDiscovery, find_root, git_status_paths, parse_status_z
+from auditor.graph.refine.models import ClientKind
 from auditor.observer.events import CLIENT_SPOOL_GLOB, MAX_EVENT_PATHS
 from auditor.paths import repo_dir_from_key, repo_dir_key
 
@@ -727,16 +728,86 @@ def test_the_client_flag_defaults_to_the_wires_own_spelling():
     assert set(auditr_observer._CLIENTS) == {"claude-code", "codex"}
 
 
-def test_a_codex_hook_is_accepted_and_does_nothing_yet(
+def _codex_payload(**over: object) -> dict[str, object]:
+    """A Codex `Stop` payload: no `tool_input`, no `agent_id`, and a `turn_id` we do not read."""
+    body: dict[str, object] = {
+        "hook_event_name": "Stop",
+        "session_id": "s1",
+        "turn_id": "t1",
+        "cwd": "/repo",
+        "transcript_path": "/tmp/rollout.jsonl",
+        "model": "gpt-5.1-codex",
+        "permission_mode": "never",
+        "stop_hook_active": False,
+        "last_assistant_message": "done",
+    }
+    body.update(over)
+    return body
+
+
+def test_the_codex_reader_takes_the_two_fields_that_payload_carries():
+    read = auditr_observer._codex_event(_codex_payload(cwd="/repo"))
+    assert (read.cwd, read.session_id) == ("/repo", "s1")
+    assert (read.agent_id, read.path) == ("", "")
+
+
+def test_a_codex_payload_of_the_wrong_shape_still_reads():
+    """Every field is read as a string or as "", so a number never reaches `Path()`."""
+    read = auditr_observer._codex_event({"cwd": 7, "session_id": None})
+    assert (read.cwd, read.session_id) == ("", "")
+
+
+def test_a_codex_session_start_attaches_the_session_under_its_own_client(
+    git_repo: Path, wired: Path, daemon_router, monkeypatch: pytest.MonkeyPatch
+):
+    """`ClientKind.CODEX` exists and, until this reader, was never written by anything."""
+    ran: list[str] = []
+    monkeypatch.setattr(auditr_observer, "_run", lambda verb: ran.append(verb))
+    auditr_observer._hook("session-start", "codex", _codex_payload(cwd=str(git_repo)))
+    assert ran == ["ensure"]
+    attached = daemon_router.deps.sessions.live(now=0.0)
+    assert [(s.session_id, s.client) for s in attached] == [("s1", ClientKind.CODEX)]
+
+
+def test_a_codex_stop_posts_the_whole_git_status_path_set(
+    git_repo: Path, tmp_path: Path, wired: Path
+):
+    """Codex has no per-edit hook, so Stop is the only edit path it has (spec 19.3)."""
+    (git_repo / "new_module.py").write_text("x = 1\n", encoding="utf-8")
+    auditr_observer._hook("stop", "codex", _codex_payload(cwd=str(git_repo)))
+    landed = tmp_path / "repos" / repo_dir_key(git_repo) / "spool.jsonl"
+    body = json.loads(landed.read_text().strip())
+    assert body["client"] == "codex"
+    assert "new_module.py" in body["paths"]
+
+
+def test_a_codex_post_tool_use_posts_nothing_because_there_is_no_path(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """S12 adds the reader; until then the verb parses and the event goes nowhere."""
+    """The only `tool_name` Codex dispatches is `Bash`; this branch is unreachable for it."""
     posted: list[str] = []
     monkeypatch.setattr(
         auditr_observer, "_post", lambda path, body, timeout: posted.append(path)
     )
-    assert auditr_observer._hook("stop", "codex", _payload(cwd=str(git_repo))) == 0
+    assert auditr_observer._hook("post-tool-use", "codex", _codex_payload()) == 0
     assert posted == []
+
+
+@pytest.mark.parametrize(
+    "event", ["session-start", "post-tool-use", "stop", "session-end"]
+)
+def test_every_codex_event_exits_zero_whatever_happens(
+    event: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Codex runs the hook command straight from `hooks.json` with no wrapper script to swallow
+    a non-zero exit, so this is a contract rather than an accident."""
+
+    def boom(*args: object) -> int:
+        raise RuntimeError("the graph observer is not the session's problem")
+
+    monkeypatch.setattr(auditr_observer, "_hook", boom)
+    monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+    assert auditr_observer.main(["hook", event, "--client", "codex"]) == 0
 
 
 @pytest.mark.parametrize(
