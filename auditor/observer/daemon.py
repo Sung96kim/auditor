@@ -414,11 +414,9 @@ class RepoPublisher:
     async def _write_block(self, loop: RepoLoop, key: str) -> None:
         """Write this repo's `graph` block, which is what the status line's segment renders.
 
-        On a change or a stale stamp, and off the event loop: `write_block` takes a lock file and
-        can wait two seconds for a scan writing the other block. The stamp is the second half
-        because the status line reads the block as off once `written_at` is older than
-        `expiry_seconds`, and a quiet repo can observe for a whole session without its node count,
-        its refinements or its state moving (S9-4). One clock stamps it and ages it, never two.
+        On a change or a half-expired stamp, and off the event loop, because `write_block`
+        takes a lock file. A quiet repo can observe a whole session without moving and the
+        status line reads it as off past `expiry_seconds`, so one clock stamps it and ages it.
         """
         nodes, refined = await asyncio.gather(
             loop.index.graph.count_nodes(),
@@ -490,8 +488,7 @@ class Daemon:
         )
         #: one `RepoLoop` per attached repo, keyed by the spool key `consume` is handed (C-2)
         self.loops: dict[str, RepoLoop] = {}
-        #: read late: `serve` rebinds `on_change` once there is a router to bump and a test
-        #: rebinds `now`, so each thunk closes over `self` and is the one cycle the daemon has
+        #: thunks, not values: `serve` rebinds `on_change` and a test rebinds `now`; the one cycle
         self.publisher = RepoPublisher(
             now=lambda: self.now(), on_change=lambda: self.on_change()
         )
