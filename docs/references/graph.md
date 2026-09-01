@@ -205,12 +205,18 @@ auditr graph refine auditor/cli --brief
   `auditr graph refine . /other/repo`. The scope is a repo-relative path prefix; `.`, `./` and `""`
   all mean the whole repo. A run may only propose corrections whose every endpoint is under its
   scope, so a cross-directory edge needs a wider run.
-- `--runner` takes `auto`, `claude` or `codex`; `auto` and `claude` both resolve to the Claude
-  runner and `codex` is refused, naming the release it lands in. `--model` takes `haiku` or
-  `sonnet`. An unknown value for either exits 2 naming the valid set.
-- Three refusals, all exit 1 with one line: the extra is not installed
-  (`pip install 'auditr[observer-claude]'`), no Claude credentials were found, or the Codex runner
-  was asked for.
+- `--runner` takes `auto`, `claude` or `codex`. `auto` takes the Claude runner when
+  `claude-agent-sdk` is installed and this machine looks logged in, then the Codex runner when
+  `openai-codex` is installed and `$CODEX_HOME/auth.json` exists, and otherwise refuses with the
+  reason. A fallback from Claude to Codex says so, because the cost model changes with it: Claude
+  reports what a run cost and Codex reports only tokens, so a Codex run's `cost_usd` is derived
+  from a price table and stamped estimated. `--model` takes `haiku` or `sonnet` and applies to the
+  Claude runner alone; the Codex model is `observer.runner.codex_model`. An unknown value for
+  either exits 2 naming the valid set.
+- Four refusals, all exit 1 with one line: the runner asked for is not installed
+  (`pip install 'auditr[observer-claude]'` or `'auditr[observer-codex]'`), neither is
+  (`'auditr[observer]'`), or the runner that is installed has no credentials, in which case the
+  line names the command to run to log in.
 - The SDK ships its own `claude` binary. The runner uses the `claude` on your PATH when there is
   one and falls back to that bundle otherwise.
 - The run is bounded by `observer.limits.max_nodes_per_run` (queue rows in the brief),

@@ -34,6 +34,75 @@ reads that client's own hook JSON on stdin and posts what it means. It is the on
 observer's transport, kill switch, Stage 0 filter and spool exist; the Claude plugin's scripts
 shell out to it and hold none of them.
 
+Codex has no plugin-loaded hooks, so its two events are installed by hand. Copy this into
+`~/.codex/hooks.json`, or into a trusted project's `.codex/hooks.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "auditr-observer hook session-start --client codex" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "auditr-observer hook stop --client codex" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Two events, not four, and that is the whole story Codex can tell:
+
+- There is no `SessionEnd`, so a Codex session is reaped by expiry rather than detached.
+- There is no per-edit hook. The only `tool_name` Codex dispatches is `Bash`, whose `tool_input`
+  is a command and never a path, so `PostToolUse` has nothing to post. Every Codex edit reaches
+  the daemon through the `Stop` batch's `git status` set instead, which means the observer sees a
+  Codex turn's edits when the turn ends rather than as they happen.
+- `features.codex_hooks` is a feature flag and can be off. With it off a Codex session produces no
+  events at all and the daemon simply never hears about that repo; `codex features list` says
+  which state a machine is in.
+- `AUDITOR_OBSERVER=0` switches the whole client off, Codex included, and every verb still exits
+  0. That matters more here than on the Claude side: Codex runs the command straight out of
+  `hooks.json` with no wrapper script to swallow a failure.
+
+### Verifying the Codex runner against a real account
+
+Nothing in the test suite or the dogfood starts a Codex session, so the first real run is a
+deliberate act. It costs money and it writes to your graph. Before it:
+
+```bash
+# 1. see what the runner would be given, with no session opened
+auditr graph refine <scope> . --brief
+
+# 2. pin a model, so the run is priced rather than run-bounded
+#    (edit observer.runner.codex_model in the user config)
+
+# 3. one run, one turn, read-only sandbox
+auditr graph refine <scope> . --runner codex --json
+```
+
+Afterwards, four things are worth reading:
+
+- `auditr graph log . --json`: the row's `runner`, `status`, `usage.cost_usd` and
+  `usage.cost_estimated`, which is always true for Codex.
+- `$AUDITOR_HOME/observer/codex-home/config.toml`: exactly one `[mcp_servers.graph]`, pointing at
+  a loopback URL, and `features.codex_hooks = false`.
+- `$AUDITOR_HOME/observer/codex-home/auth.json`: a symlink, never a copy.
+- `auditr graph refinements . --json`: what it staged, and whether the verifier agreed.
+
+A run that ends `aborted` with `refused: unexpected mcp servers` means something above
+`CODEX_HOME` added a server: check `/etc/codex/config.toml`. One that ends `aborted` with
+`over_budget` means the estimate passed `observer.budget.max_budget_usd_per_run`.
+
 | event | what it does |
 |---|---|
 | `session-start` | `ensure` (starts a daemon if there is none), then `POST /sessions/attach` with a 3 s budget |

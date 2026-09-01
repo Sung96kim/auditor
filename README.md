@@ -49,8 +49,10 @@ pip install "auditr[mcp,ts]"      # or into the active environment
   tool orchestration.
 - `observer-claude` pulls `claude-agent-sdk`, which bundles its own 342 MB `claude` binary.
   `observer` is the superset: it adds the Codex SDK and enables `graph refine` the same way.
-- `observer-codex` pulls the Codex SDK and nothing imports it: `graph refine --runner codex` is
-  refused. See [graph](docs/references/graph.md).
+- `observer-codex` pulls the Codex SDK, whose own bundled `codex` binary is 246 MB, plus `fastmcp`
+  for the loopback MCP server the Codex runner serves its graph tools through. It enables
+  `auditr graph refine --runner codex` and `auditr graph eval --runner codex`. See
+  [graph](docs/references/graph.md) and [codex plugin](docs/references/codex-plugin.md).
 - `vectors` pulls `sqlite-vec` and `model2vec` and nothing reads it; `model2vec` also needs one
   online model fetch. See [configuration](docs/references/configuration.md).
 - `graph` is an empty alias, kept so an existing `auditr[graph]` command or `uv tool` receipt keeps

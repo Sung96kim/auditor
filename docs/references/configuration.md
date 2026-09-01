@@ -473,13 +473,23 @@ The rest of the loop's clocks:
 `observer.runner` (`RunnerConfig`):
 
 - `agent` (default `"auto"`): `auto`, `claude` or `codex`. The default for `graph refine --runner`
-  and `graph eval --runner`; `codex` is refused today.
+  and `graph eval --runner`. `auto` tries Claude, then Codex, then refuses.
 - `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses and the
-  default for `--model`.
-- `codex_model` (default `""`) and `codex_prices` (default `{}`): the Codex model override and its
-  price table. `codex_model` is the model the daemon's `/api/evals` looks the Codex runner's latest
-  eval row up under, falling back to `model` when it is empty. `codex_prices` has no reader today,
-  since the Codex runner is refused.
+  default for `--model`. It does not reach the Codex runner.
+- `codex_model` (default `""`): the Codex model. Empty means the user's own Codex default, in
+  which case the run has no model to file an eval row under and `/api/evals` shows the Codex mark
+  with no model.
+- `codex_prices` (default `{}`): per-model `{input, output}` in USD per million tokens, merged
+  over the shipped table. The shipped table names `gpt-5.1-codex`, `gpt-5.1-codex-mini`,
+  `gpt-5-codex`, `gpt-5` and `gpt-5-mini`. A model neither table names is not an error: that
+  repo's day is bounded by `max_runs_per_day` instead of `max_cost_usd_per_day`, and every
+  "fraction of the day" rule reads remaining runs.
+
+`observer.limits.max_turns` and `observer.budget.max_budget_usd_per_run` are enforced by the
+Claude runner only: the Codex turn API carries no turn count, no budget and no timeout. The Codex
+runner makes exactly one turn per run and checks the estimated cost after it, aborting the run
+when it passed `max_budget_usd_per_run`. `max_nodes_per_run` and `max_changes_per_run` bind both,
+because the brief carries them rather than the SDK.
 
 `observer.tuning` (`TuningConfig`). `mode` (default `"propose"`) and `stopwords_max` (default `20`)
 govern knob-tuning proposals and have no reader today. The one the tier gate reads:
@@ -489,6 +499,10 @@ govern knob-tuning proposals and have no reader today. The one the tier gate rea
   `graph eval` row per suite and stratum, so a later failing eval takes activation back. At 0.95 a
   flawless run needs 73 trials to clear it. 1.0 is refused: `wilson_lower(n, n)` is below 1.0 for
   every finite `n`, so no run of any size could ever meet it. See [graph.md](graph.md).
+- `activation_tiers` (default `{}`): the highest tier each runner may store `active`, as
+  `{"codex": "B"}`. Empty uses the shipped per-runner defaults, which are `B` for Claude and `A`
+  for Codex: spec 10.4's go/no-go has been run for Claude and not for Codex, so a measured Codex
+  stratum still lands `pending` until you raise it here.
 
 ### `vectors` (`VectorsConfig`)
 

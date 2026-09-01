@@ -45,6 +45,8 @@ claude mcp add auditor -- uv run --directory /path/to/auditor auditr-mcp
 - <img src="../../assets/codex-color.svg" height="16" alt="Codex"> Codex:
   `codex mcp add auditor -- auditr-mcp`, or an entry in `~/.codex/config.toml` (a project-scoped
   `.codex/config.toml` works in trusted projects).
+  The Codex plugin ships the same server config, so installing `codex-plugin/` registers it with
+  no `codex mcp add` at all. See [codex-plugin.md](codex-plugin.md).
 
 ```toml
 [mcp_servers.auditor]

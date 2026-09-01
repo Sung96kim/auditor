@@ -171,7 +171,9 @@ uv tool install auditr              # CLI/CI-only, no MCP, pure Python repo
 
   Verify with `claude mcp list`.
 - **Codex CLI**: `codex mcp add auditor -- auditor-mcp`, or a `[mcp_servers.auditor]` block in
-  `~/.codex/config.toml` / `.codex/config.toml` (`command = "auditor-mcp"`, `args = []`).
+  `~/.codex/config.toml` / `.codex/config.toml` (`command = "auditor-mcp"`, `args = []`). For the
+  observer, also copy the two-event `~/.codex/hooks.json` block from
+  `docs/references/observer.md`: Codex loads no plugin hooks.
 
 ## Worked onboarding walkthrough
 
