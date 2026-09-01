@@ -71,17 +71,19 @@ def test_the_day_the_window_rolls_is_the_day_retention_counts():
         (RunnerKind.CLAUDE, "", {}, True),
         (RunnerKind.FAKE, "", {}, False),
         (RunnerKind.NONE, "", {}, False),
-        (RunnerKind.CODEX, "gpt-5", {}, False),
+        (RunnerKind.CODEX, "gpt-5", {}, True),
+        (RunnerKind.CODEX, "o9-imaginary", {}, False),
         (RunnerKind.CODEX, "", {"gpt-5": _PRICE}, False),
-        (RunnerKind.CODEX, "gpt-5", {"gpt-5": _PRICE}, True),
+        (RunnerKind.CODEX, "o9-imaginary", {"o9-imaginary": _PRICE}, True),
     ],
     ids=[
         "claude",
         "fake",
         "none",
+        "codex-shipped-table",
         "codex-unpriced",
         "codex-other-model",
-        "codex-priced",
+        "codex-user-priced",
     ],
 )
 def test_only_a_runner_that_reports_a_cost_is_bounded_in_dollars(
