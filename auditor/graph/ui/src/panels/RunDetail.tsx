@@ -4,7 +4,7 @@ import { TEXT, THEME } from "../theme";
 import { accepted, rejected } from "./runs";
 import RefinementGroup from "./RefinementGroup";
 import { Clipped, Field, microLabel, mono, nested } from "./Panel";
-import { Failed, Loading, Reconnecting, Refused } from "./States";
+import { Failed, Loading, Refused } from "./States";
 
 const box: React.CSSProperties = {
   ...nested,
@@ -40,7 +40,12 @@ export interface RunDetailProps {
   onClose: () => void;
 }
 
-/** Spec 12.1's C13. Fetched on a row click, never on the 3 s cycle (P3). */
+/** Spec 12.1's C13. Fetched on a row click, never on the 3 s cycle (P3).
+ *
+ * No reconnect arm either: `RunStream` mounts this keyed on the open run, so choosing another
+ * row remounts it with nothing held. That is the right behaviour, since run A's prompt under a
+ * banner headed run B would be worse, and it leaves the reconnect state unreachable here.
+ */
 export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps) {
   const { state, retry } = useFetchOnce<RunDetailView>(
     `${base}api/runs/${runId}?${new URLSearchParams({ repo })}`,
@@ -77,9 +82,6 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
       {state.phase === "loading" ? <Loading what="this run" /> : null}
       {state.phase === "refused" ? <Refused error={state.error} /> : null}
       {state.phase === "error" ? <Failed error={state.error} onRetry={retry} /> : null}
-      {state.phase === "stale" ? (
-        <Reconnecting error={state.error} onRetry={retry} />
-      ) : null}
 
       {view ? (
         <>

@@ -4,9 +4,14 @@ import { TEXT, THEME, TONE } from "../theme";
 import { REFINEMENT_STATUSES } from "./runs";
 import Panel, { block, microLabel, mono } from "./Panel";
 import RefinementLine from "./RefinementLine";
-import { Empty, Failed, Loading, Reconnecting, Refused } from "./States";
+import { Empty, Failed, Loading, Refused } from "./States";
 
-/** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3). */
+/** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3).
+ *
+ * There is no reconnect arm because there is no way to reach one: the URL is fixed for the life
+ * of the page, so the only refetch is the Retry that the failure arms themselves draw, and a
+ * banner over rows this panel can never refetch would be a state no reader could ever see.
+ */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
   const { state, retry } = useFetchOnce<RefinementsView>(
     `${base}api/refinements?${new URLSearchParams({ repo })}`,
@@ -42,11 +47,8 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
       {state.phase === "loading" ? <Loading what="refinements" /> : null}
       {state.phase === "refused" ? <Refused error={state.error} /> : null}
       {state.phase === "error" ? <Failed error={state.error} onRetry={retry} /> : null}
-      {state.phase === "stale" ? (
-        <Reconnecting error={state.error} onRetry={retry} />
-      ) : null}
 
-      {(state.phase === "ready" || state.phase === "stale") && rows.length === 0 ? (
+      {state.phase === "ready" && rows.length === 0 ? (
         <Empty what="refinements" hint="no refinement has been proposed for this repo yet" />
       ) : null}
 

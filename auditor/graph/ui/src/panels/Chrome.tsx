@@ -143,14 +143,11 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
               // no confirmed answer at all: say so, never fall back to "no eval yet"
               <Failed error={evals.state.error} onRetry={evals.retry} />
             ) : (
-              <>
-                {evals.state.phase === "stale" ? (
-                  <Reconnecting error={evals.state.error} onRetry={evals.retry} />
-                ) : null}
-                {evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
-                  <EvalRow key={line.runner} line={line} />
-                ))}
-              </>
+              // no reconnect arm: the measurements are one fetch at a fixed URL, so there is no
+              // refetch over an answer for a banner to sit on
+              evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
+                <EvalRow key={line.runner} line={line} />
+              ))
             )}
           </div>
 

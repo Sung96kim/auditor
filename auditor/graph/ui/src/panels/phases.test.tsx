@@ -11,9 +11,13 @@ import {
   flowView,
   refinementsView,
   runDetail,
+  runRow,
   runsView,
   status as aStatus,
 } from "../api/wire.fixture";
+
+/** Two rows, so opening the second remounts the detail the first one left behind. */
+const TWO = [runRow(), runRow({ run_id: "0000second00000", trigger_kind: "manual" })];
 import type { Status } from "../api/types";
 
 /** The four states the plan pins, in the words the shared components draw them in. */
@@ -165,15 +169,15 @@ describe("the refinement list in every state its fetch can be in", () => {
     expect(screen.queryByText(LOADING)).toBeNull();
   });
 
-  it("a failed refetch keeps the rows under a reconnect banner", async () => {
-    const set = serve("ok", "down");
+  it("has no reconnect state, because one answer is all it ever asks for", async () => {
+    const set = serve("ok");
     set(refinementsView());
+    const fetcher = globalThis.fetch as ReturnType<typeof vi.fn>;
     const { rerender } = render(<RefinementList base="/" repo="/w" />);
     await screen.findByText(/active \(1\)/);
-    rerender(<RefinementList base="/" repo="/w/other" />);
-    await waitFor(() => expect(screen.getByText(RECONNECTING)).not.toBeNull());
-    expect(screen.getByText(/active \(1\)/)).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Retry now" })).not.toBeNull();
+    rerender(<RefinementList base="/" repo="/w" />);
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(RECONNECTING)).toBeNull();
   });
 });
 
@@ -200,16 +204,17 @@ describe("run detail in every state its fetch can be in", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("a failed refetch keeps the run under a reconnect banner", async () => {
+  it("a second row opened under a dead daemon is a first-load failure, not a reconnect", async () => {
     const set = serve("ok", "down");
     set(runDetail());
-    const { rerender } = render(
-      <RunDetail base="/" repo="/w" runId="r1" onClose={vi.fn()} />,
-    );
+    render(<RunStream live={graph(received(initial(null), runsView({ runs: TWO })) as never)} />);
+    const [first, other] = screen.getAllByRole("row").slice(1);
+    fireEvent.click(first);
     await screen.findByText(/walk the changed pairs/);
-    rerender(<RunDetail base="/" repo="/w/other" runId="r1" onClose={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText(RECONNECTING)).not.toBeNull());
-    expect(screen.getByText(/walk the changed pairs/)).not.toBeNull();
+    fireEvent.click(other);
+    expect((await screen.findByRole("alert")).textContent).toContain(FAILED);
+    expect(screen.queryByText(RECONNECTING)).toBeNull();
+    expect(screen.queryByText(/walk the changed pairs/)).toBeNull();
   });
 });
 
