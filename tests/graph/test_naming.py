@@ -20,7 +20,8 @@ def test_similar_names_linked_sparse_excluded():
         _n("c", ["write", "invoice", "payment", "charge"]),  # unrelated
         _n("d", ["x"]),  # text-sparse
     ]
-    edges, sparse = name_similar_edges(nodes, threshold=0.3, knn_k=8)
+    naming = name_similar_edges(nodes, threshold=0.3, knn_k=8)
+    edges, sparse = naming.edges, naming.sparse
     pairs = {frozenset((e.src, e.dst)) for e in edges}
     assert frozenset(("a", "b")) in pairs  # related linked
     assert frozenset(("a", "c")) not in pairs  # unrelated not linked
@@ -36,7 +37,7 @@ def test_stemming_links_morphological_variants():
         _n("b", ["reviewer", "submissions", "approval", "comments"]),
         _n("c", ["payment", "charge", "invoice", "refund"]),
     ]
-    edges, _ = name_similar_edges(nodes, threshold=0.3, knn_k=8)
+    edges = name_similar_edges(nodes, threshold=0.3, knn_k=8).edges
     pairs = {frozenset((e.src, e.dst)) for e in edges}
     assert frozenset(("a", "b")) in pairs
     assert frozenset(("a", "c")) not in pairs
@@ -46,12 +47,15 @@ def test_deterministic():
     nodes = [_n(str(i), ["read", "user", f"f{i % 3}"]) for i in range(12)]
     a = name_similar_edges(nodes)
     b = name_similar_edges(nodes)
-    assert [(e.src, e.dst, round(e.weight, 6)) for e in a[0]] == [
-        (e.src, e.dst, round(e.weight, 6)) for e in b[0]
+    assert [(e.src, e.dst, round(e.weight, 6)) for e in a.edges] == [
+        (e.src, e.dst, round(e.weight, 6)) for e in b.edges
     ]
 
 
 def test_empty_and_singleton_safe():
-    assert name_similar_edges([]) == ([], set())
+    empty = name_similar_edges([])
+    assert (
+        empty.edges == () and empty.sparse == frozenset() and empty.text_model is None
+    )
     one = name_similar_edges([_n("a", ["read", "user", "account", "profile"])])
-    assert one[0] == []
+    assert one.edges == () and one.text_model is None

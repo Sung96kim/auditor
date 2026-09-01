@@ -78,6 +78,30 @@ GOD_CONCEPTS = (
 )
 
 
+# six documents with real prose, so tf-idf has a vocabulary and LSI has components to keep: the
+# one-module fixtures are two functions wide, which floors `n_components` below 2 and fits nothing
+TEXT_MAIN = (
+    "def read_user_account(uid):\n"
+    '    """Load the stored account profile for one user record."""\n'
+    "    return uid\n\n"
+    "def fetch_user_profile(uid):\n"
+    '    """Fetch the saved profile record belonging to a user account."""\n'
+    "    return uid\n\n"
+    "def charge_invoice_payment(amount):\n"
+    '    """Charge a payment against an outstanding invoice balance."""\n'
+    "    return amount\n\n"
+    "def refund_invoice_payment(amount):\n"
+    '    """Refund a payment already charged to an invoice balance."""\n'
+    "    return amount\n\n"
+    "def render_status_line(text):\n"
+    '    """Draw the one line summary shown in the editor status bar."""\n'
+    "    return text\n\n"
+    "def compress_status_counts(counts):\n"
+    '    """Shorten the counts drawn in the editor summary line."""\n'
+    "    return counts\n"
+)
+
+
 #: a bare call the resolver cannot place: `caller.main` calls a name `helper` defines
 QUEUED_HELPER = "def read_event():\n    return {}\n"
 QUEUED_CALLER = "def main():\n    return read_event()\n"
@@ -174,6 +198,12 @@ def _write_graph_repo(
 def graph_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The default one-module repo: two similarly named functions, graph config on."""
     return _write_graph_repo(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def graph_repo_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A repo wide enough to fit: six documented functions across three vocabularies."""
+    return _write_graph_repo(tmp_path, monkeypatch, module_source=TEXT_MAIN)
 
 
 @pytest.fixture

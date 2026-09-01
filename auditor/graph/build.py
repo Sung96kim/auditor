@@ -33,6 +33,7 @@ from auditor.graph.refine.models import (
 )
 from auditor.graph.refine.overlay import Overlay, anchor_truth
 from auditor.graph.resolve_edges import resolve_structural
+from auditor.graph.textmodel import TextModel
 from auditor.graph.usage import usage_similar_edges
 from auditor.languages.python.detectors.graph_rules import (
     GOD_CONCEPT_RULE,
@@ -108,6 +109,7 @@ class SimilarityPass(BaseModel):
     name_edges: tuple[GraphEdge, ...] = ()
     usage_edges: tuple[GraphEdge, ...] = ()
     sparse: frozenset[str] = frozenset()
+    text_model: TextModel | None = None
 
     @classmethod
     def of(
@@ -115,7 +117,7 @@ class SimilarityPass(BaseModel):
     ) -> "SimilarityPass":
         """Name and usage similarity over the symbol nodes, both driven by the same knobs."""
         report("computing naming similarity")
-        name_edges, sparse = name_similar_edges(
+        naming = name_similar_edges(
             symbols,
             threshold=cfg.name_similarity_threshold,
             knn_k=cfg.knn_k,
@@ -123,9 +125,10 @@ class SimilarityPass(BaseModel):
         )
         report("computing usage similarity")
         return cls(
-            name_edges=tuple(name_edges),
+            name_edges=naming.edges,
             usage_edges=tuple(usage_similar_edges(symbols, knn_k=cfg.knn_k)),
-            sparse=frozenset(sparse),
+            sparse=naming.sparse,
+            text_model=naming.text_model,
         )
 
 
@@ -241,10 +244,12 @@ class GraphWrite(BaseModel):
     detect: bool = False
     outcomes: tuple[RefinementOutcome, ...] = ()
     decided_at: float = Field(default_factory=time.time)
+    text_model: TextModel | None = None
 
     def apply(self, conn: sqlite3.Connection, index: IndexStore) -> None:
         """The whole build write, on one open connection (spec section 6 step 8)."""
         index.graph.write_graph(conn, self.nodes, self.edges, self.clusters)
+        index.graph.write_text_model(conn, self.text_model)
         index.graph.write_unresolved(conn, self.unresolved)
         index.refinements.write_outcomes(conn, self.outcomes, self.decided_at)
         if not self.detect:
@@ -363,6 +368,7 @@ class GraphBuilder:
             findings=per_file,
             detect=cfg.detect,
             outcomes=overlay.outcomes,
+            text_model=similar.text_model,
         )
         return await write.persist(index, snapshot)
 

@@ -20,6 +20,7 @@ from auditor.graph.model import (
     NodeKind,
     UnresolvedRow,
 )
+from auditor.graph.textmodel import TEXT_MODEL_KIND, TextModel
 
 _SET_FACTS_SQL = (
     "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
@@ -132,6 +133,16 @@ class GraphDB(BaseDB):
                     not_null=True,
                     default="'deterministic'",
                 ),
+            ),
+        ),
+        "graph_text_model": Table(
+            cols=(
+                Column(name="kind", type="TEXT", not_null=True, primary_key=True),
+                Column(name="node_ids", type="TEXT", not_null=True),
+                Column(name="vocabulary", type="TEXT", not_null=True),
+                Column(name="components", type="INTEGER", not_null=True),
+                Column(name="projection", type="BLOB", not_null=True),
+                Column(name="doc_vectors", type="BLOB", not_null=True),
             ),
         ),
         "graph_unresolved": Table(
@@ -333,6 +344,39 @@ class GraphDB(BaseDB):
             "VALUES (?, ?, ?, ?, ?)",
             clu_rows,
         )
+
+    def write_text_model(
+        self,
+        conn: sqlite3.Connection,
+        model: TextModel | None,
+    ) -> None:
+        """Swap this repo's stored naming fit on an open connection, without committing.
+
+        A build that fitted nothing clears the row rather than leaving the last build's fit to be
+        ranked against node ids this build may no longer have. ``_ensure_repo`` is redundant when
+        :meth:`write_graph` ran first, and load-bearing when this is the only write on the
+        connection, as it is in the store's own tests.
+        """
+        self._ensure_repo(conn)
+        conn.execute(
+            "DELETE FROM graph_text_model WHERE repo = ? AND kind = ?",
+            (self.repo, TEXT_MODEL_KIND),
+        )
+        if model is None:
+            return
+        conn.execute(
+            "INSERT INTO graph_text_model (repo, kind, node_ids, vocabulary, components, "
+            "projection, doc_vectors) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (self.repo, *model.row()),
+        )
+
+    async def text_model(self) -> TextModel | None:
+        """This repo's stored naming fit, or ``None`` when no build has written one yet."""
+        row = await self._fetch_one(
+            "SELECT * FROM graph_text_model WHERE repo = ? AND kind = ?",
+            (TEXT_MODEL_KIND,),
+        )
+        return TextModel.of_row(row) if row else None
 
     async def replace(
         self,
