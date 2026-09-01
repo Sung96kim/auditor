@@ -95,11 +95,29 @@ describe("the chrome every card in the column is drawn with", () => {
     ]);
   });
 
-  it("the column keeps its width when the panels beside it grow", () => {
+  it("beside the canvas the column keeps its width when the panels in it grow", () => {
     const { container } = render(<Panels live={answered("/w")} />);
     const column = container.querySelector("aside") as HTMLElement;
     expect(column.style.flexShrink).toBe("0");
     expect(column.style.width).toBe("340px");
+  });
+
+  it("under the canvas it is a full-width shelf, taking no width off the graph at all", () => {
+    const { container } = render(<Panels live={answered("/w")} narrow />);
+    const column = container.querySelector("aside") as HTMLElement;
+    expect(column.style.width).toBe("100%");
+    expect(column.style.flexBasis).toBe("");
+    expect(column.style.maxHeight).toBe("45%");
+  });
+
+  it("both layouts scroll inside themselves rather than growing the page", () => {
+    for (const narrow of [false, true]) {
+      cleanup();
+      const { container } = render(<Panels live={answered("/w")} narrow={narrow} />);
+      const column = container.querySelector("aside") as HTMLElement;
+      expect(column.style.overflowY).toBe("auto");
+      expect(column.style.minHeight).toBe("0px");
+    }
   });
 
   it("a failed first poll still says which panel failed, rather than swapping the card for an error", () => {

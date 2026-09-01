@@ -9,12 +9,19 @@ import FlowPanel from "../flow/FlowPanel";
 const column: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flexGrow: 0,
   flexShrink: 0,
   gap: "12px",
   minHeight: 0,
   overflowY: "auto",
-  width: "340px",
 };
+
+/** A rail beside the canvas, which is what there is room for above the breakpoint. */
+const RAIL: React.CSSProperties = { ...column, flexBasis: "340px", width: "340px" };
+
+/** A shelf under the canvas. 340 px taken out of a 640 px window is the canvas's whole width,
+ * and the canvas reaching zero is what used to take the entire page into the error boundary. */
+const SHELF: React.CSSProperties = { ...column, maxHeight: "45%", width: "100%" };
 
 /** Spec 12.1's right-hand column, and the one component `App.tsx` has to know about.
  *
@@ -22,11 +29,17 @@ const column: React.CSSProperties = {
  * `pnpm dev` draw the inlined graph with no live chrome at all, and the daemon's no-repo page
  * draws the switcher over an explicit empty state rather than a stream nothing will ever poll.
  */
-export default function Panels({ live }: { live: LiveGraph }) {
+export default function Panels({
+  live,
+  narrow = false,
+}: {
+  live: LiveGraph;
+  narrow?: boolean;
+}) {
   const mode = panelMode(live.boot);
   if (mode === "static") return null;
   return (
-    <aside className="anim-panels" style={column}>
+    <aside className="anim-panels" style={narrow ? SHELF : RAIL}>
       <Chrome
         status={live.status}
         base={live.boot.base}

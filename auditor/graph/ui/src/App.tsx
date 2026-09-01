@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { GraphPayload, NodeType } from "./types";
 import { THEME } from "./theme";
 import { onEnterOrSpace } from "./a11y";
+import { NARROW, useMediaQuery } from "./layout";
 import { sample } from "./sample";
 import GraphCanvas from "./components/GraphCanvas";
 import Graph3D from "./components/Graph3D";
@@ -11,6 +12,7 @@ import TypeFilter from "./components/TypeFilter";
 import Controls from "./components/Controls";
 import type { FilterState } from "./components/Controls";
 import DetailPanel from "./components/DetailPanel";
+import ErrorBoundary from "./components/ErrorBoundary";
 import TopBar from "./components/TopBar";
 import type { View } from "./graph/buildGraph";
 import { applyFilters } from "./graph/filter";
@@ -87,6 +89,8 @@ const collapseBtnStyle: React.CSSProperties = {
 
 export default function App() {
   const live = useLiveGraph();
+  // below the breakpoint the live column stacks under the graph rather than taking its width
+  const narrow = useMediaQuery(NARROW);
   const data: GraphPayload = window.__AUDITOR_GRAPH__ ?? sample;
 
   const [view, setView] = useState<View>({ mode: "overview" });
@@ -230,35 +234,335 @@ export default function App() {
       />
 
       {/* ── Body ── */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0, gap: "12px", padding: "12px" }}>
-        {/* ── Left: Explorer panel ── */}
-        <div
-          className="anim-sidebar"
-          style={{
-            position: "relative",
-            width: sidebarOpen ? sidebarWidth : 34,
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            backgroundColor: THEME.bgPanel,
-            border: `1px solid ${THEME.border}`,
-            borderRadius: "12px",
-            minHeight: 0,
-            overflow: "hidden",
-            transition: "width 240ms cubic-bezier(0.4,0,0.2,1)",
-          }}
-        >
-          {/* full content, fixed width so it doesn't reflow while the panel animates; fades out */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: narrow ? "column" : "row",
+          minHeight: 0,
+          gap: "12px",
+          padding: "12px",
+        }}
+      >
+        {/* the graph and its two side panels, which stay a row at every width */}
+        <div style={{ display: "flex", flex: 1, gap: "12px", minHeight: 0, minWidth: 0 }}>
+          {/* ── Left: Explorer panel ── */}
           <div
+            className="anim-sidebar"
             style={{
-              width: sidebarWidth,
-              flex: 1,
-              minHeight: 0,
+              position: "relative",
+              width: sidebarOpen ? sidebarWidth : 34,
+              flexShrink: 0,
               display: "flex",
               flexDirection: "column",
-              opacity: sidebarOpen ? 1 : 0,
-              pointerEvents: sidebarOpen ? "auto" : "none",
-              transition: "opacity 160ms ease",
+              backgroundColor: THEME.bgPanel,
+              border: `1px solid ${THEME.border}`,
+              borderRadius: "12px",
+              minHeight: 0,
+              overflow: "hidden",
+              transition: "width 240ms cubic-bezier(0.4,0,0.2,1)",
+            }}
+          >
+            {/* full content, fixed width so it doesn't reflow while the panel animates; fades out */}
+            <div
+              style={{
+                width: sidebarWidth,
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                opacity: sidebarOpen ? 1 : 0,
+                pointerEvents: sidebarOpen ? "auto" : "none",
+                transition: "opacity 160ms ease",
+              }}
+            >
+              <div
+                style={{
+                  padding: "12px 14px 10px",
+                  flexShrink: 0,
+                  borderBottom: `1px solid ${THEME.border}`,
+                }}
+              >
+                <SectionHeader
+                  label="Explorer"
+                  trailing={
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          color: "#64748b",
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        {filteredPayload.nodes.length} nodes
+                      </span>
+                      <button
+                        onClick={() => setSidebarOpen(false)}
+                        title="Collapse"
+                        className="collapse-btn"
+                        style={collapseBtnStyle}
+                      >
+                        ‹
+                      </button>
+                    </div>
+                  }
+                />
+              </div>
+              <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                <TypeFilter types={filters.types} onToggle={handleTypeToggle} />
+                <Explorer
+                  nodes={filteredPayload.nodes}
+                  query={searchQuery}
+                  onQueryChange={setSearchQuery}
+                  onSelect={handleFocus}
+                  selectedNodeId={selectedNodeId}
+                />
+              </div>
+            </div>
+            {/* expand affordance — overlays when collapsed, fades in */}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              title="Expand Explorer"
+              className="collapse-btn"
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "transparent",
+                border: "none",
+                color: "#94a3b8",
+                cursor: "pointer",
+                fontSize: "15px",
+                opacity: sidebarOpen ? 0 : 1,
+                pointerEvents: sidebarOpen ? "none" : "auto",
+                transition: "opacity 160ms ease",
+              }}
+            >
+              ›
+            </button>
+          </div>
+
+          {/* ── Canvas ── */}
+          <div
+            style={{
+              flex: 1,
+              position: "relative",
+              minHeight: 0,
+              minWidth: 0,
+              borderRadius: "12px",
+              overflow: "hidden",
+              border: `1px solid ${THEME.border}`,
+            }}
+          >
+            {/* the renderer gets a boundary of its own: a throw out of sigma is the graph's
+                failure, and it used to take the operator panels beside it down with the page */}
+            <ErrorBoundary>
+              {dim === "text" ? (
+                <GraphText
+                  payload={filteredPayload}
+                  view={view}
+                  selectedNodeId={selectedNodeId}
+                  depth={filters.depth}
+                />
+              ) : dim === "3d" ? (
+                <Graph3D
+                  payload={filteredPayload}
+                  onSelect={handleSelect}
+                  onBackground={handleBackground}
+                />
+              ) : (
+                <GraphCanvas
+                  payload={filteredPayload}
+                  view={view}
+                  onSelect={handleSelect}
+                  onDrill={handleDrill}
+                  onFocus={handleFocus}
+                  onBackground={handleBackground}
+                  selectedNodeId={selectedNodeId}
+                  overlayOn={filters.overlayOn}
+                  refinedNodes={refinedNodes}
+                  refinedEdges={refinedEdges}
+                  unconfirmedEdges={unconfirmedEdges}
+                />
+              )}
+            </ErrorBoundary>
+
+            {/* 2D / 3D view toggle (top-right) */}
+            <div
+              style={{
+                position: "absolute",
+                top: "12px",
+                right: "12px",
+                display: "flex",
+                gap: "2px",
+                padding: "3px",
+                background: "rgba(14,18,27,0.92)",
+                backdropFilter: "blur(10px)",
+                border: `1px solid ${THEME.border}`,
+                borderRadius: "10px",
+                zIndex: 10,
+              }}
+            >
+              {(["2d", "3d", "text"] as const).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDim(d)}
+                  title={
+                    d === "3d"
+                      ? "3D view (POC)"
+                      : d === "text"
+                      ? "Text view (outline / DOT / JSON)"
+                      : "2D view"
+                  }
+                  style={{
+                    background: dim === d ? THEME.accent : "transparent",
+                    color: dim === d ? "#0b0e15" : "#94a3b8",
+                    border: "none",
+                    borderRadius: "7px",
+                    cursor: "pointer",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    padding: "4px 12px",
+                  }}
+                >
+                  {d.toUpperCase()}
+                </button>
+              ))}
+            </div>
+
+            {/* Floating Controls overlay (same chrome as side panels) */}
+            <div
+              className="anim-controls"
+              style={{
+                position: "absolute",
+                top: "12px",
+                left: "12px",
+                width: "210px",
+                background: "rgba(14,18,27,0.92)",
+                backdropFilter: "blur(10px)",
+                border: `1px solid ${THEME.border}`,
+                borderRadius: "12px",
+                zIndex: 10,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  padding: "12px 14px 10px",
+                  borderBottom: `1px solid ${THEME.border}`,
+                }}
+              >
+                <SectionHeader
+                  label="Controls"
+                  trailing={
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      {controlsOpen && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={handleReset}
+                          onKeyDown={onEnterOrSpace(handleReset)}
+                          className="link-reset"
+                          style={{
+                            fontSize: "11px",
+                            color: THEME.accent,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Reset
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setControlsOpen((o) => !o)}
+                        title={controlsOpen ? "Collapse" : "Expand"}
+                        className="collapse-btn"
+                        style={collapseBtnStyle}
+                      >
+                        {controlsOpen ? "▾" : "▸"}
+                      </button>
+                    </div>
+                  }
+                />
+              </div>
+              <div
+                style={{
+                  maxHeight: controlsOpen ? "600px" : "0px",
+                  opacity: controlsOpen ? 1 : 0,
+                  overflow: "hidden",
+                  transition:
+                    "max-height 260ms cubic-bezier(0.4,0,0.2,1), opacity 180ms ease",
+                }}
+              >
+                <Controls
+                  availableLangs={availableLangs}
+                  filters={filters}
+                  onLangToggle={handleLangToggle}
+                  onTypeToggle={handleTypeToggle}
+                  onDepthChange={handleDepthChange}
+                  onOverlayToggle={handleOverlayToggle}
+                />
+              </div>
+            </div>
+
+            {/* Hint line (canvas modes only) */}
+            {dim !== "text" && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "12px",
+                left: "50%",
+                transform: "translateX(-50%)",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                color: "#475569",
+                fontSize: "11px",
+                fontFamily: "monospace",
+                pointerEvents: "none",
+                zIndex: 5,
+                background: "rgba(14,18,27,0.6)",
+                border: `1px solid ${THEME.border}`,
+                borderRadius: "999px",
+                padding: "4px 12px",
+                backdropFilter: "blur(6px)",
+              }}
+            >
+              <svg
+                aria-hidden="true"
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <circle cx="11" cy="11" r="2.5" />
+              </svg>
+              {dim === "3d"
+                ? "Drag to orbit · scroll to zoom · click a node to inspect · right-drag to pan"
+                : "Click to select · double-click to focus · drag to move · scroll to zoom"}
+            </div>
+            )}
+          </div>
+
+          {/* ── Right: Detail panel ── */}
+          <div
+            className="anim-detail-panel"
+            style={{
+              width: detailWidth,
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              backgroundColor: THEME.bgPanel,
+              border: `1px solid ${THEME.border}`,
+              borderRadius: "12px",
+              minHeight: 0,
+              overflow: "hidden",
             }}
           >
             <div
@@ -268,304 +572,22 @@ export default function App() {
                 borderBottom: `1px solid ${THEME.border}`,
               }}
             >
-              <SectionHeader
-                label="Explorer"
-                trailing={
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <span
-                      style={{
-                        fontSize: "11px",
-                        color: "#64748b",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {filteredPayload.nodes.length} nodes
-                    </span>
-                    <button
-                      onClick={() => setSidebarOpen(false)}
-                      title="Collapse"
-                      className="collapse-btn"
-                      style={collapseBtnStyle}
-                    >
-                      ‹
-                    </button>
-                  </div>
-                }
-              />
+              <SectionHeader label="Node Detail" />
             </div>
-            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <TypeFilter types={filters.types} onToggle={handleTypeToggle} />
-              <Explorer
-                nodes={filteredPayload.nodes}
-                query={searchQuery}
-                onQueryChange={setSearchQuery}
-                onSelect={handleFocus}
-                selectedNodeId={selectedNodeId}
-              />
-            </div>
-          </div>
-          {/* expand affordance — overlays when collapsed, fades in */}
-          <button
-            onClick={() => setSidebarOpen(true)}
-            title="Expand Explorer"
-            className="collapse-btn"
-            style={{
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "transparent",
-              border: "none",
-              color: "#94a3b8",
-              cursor: "pointer",
-              fontSize: "15px",
-              opacity: sidebarOpen ? 0 : 1,
-              pointerEvents: sidebarOpen ? "none" : "auto",
-              transition: "opacity 160ms ease",
-            }}
-          >
-            ›
-          </button>
-        </div>
-
-        {/* ── Canvas ── */}
-        <div
-          style={{
-            flex: 1,
-            position: "relative",
-            minHeight: 0,
-            borderRadius: "12px",
-            overflow: "hidden",
-            border: `1px solid ${THEME.border}`,
-          }}
-        >
-          {dim === "text" ? (
-            <GraphText
-              payload={filteredPayload}
-              view={view}
-              selectedNodeId={selectedNodeId}
-              depth={filters.depth}
-            />
-          ) : dim === "3d" ? (
-            <Graph3D
-              payload={filteredPayload}
-              onSelect={handleSelect}
-              onBackground={handleBackground}
-            />
-          ) : (
-            <GraphCanvas
-              payload={filteredPayload}
-              view={view}
-              onSelect={handleSelect}
-              onDrill={handleDrill}
+            <DetailPanel
+              key={selectedNodeId ?? "__empty__"}
+              node={selectedNode}
+              allNodes={data.nodes}
+              edges={data.edges}
+              onSelectNeighbor={handleSelect}
               onFocus={handleFocus}
-              onBackground={handleBackground}
-              selectedNodeId={selectedNodeId}
-              overlayOn={filters.overlayOn}
-              refinedNodes={refinedNodes}
-              refinedEdges={refinedEdges}
-              unconfirmedEdges={unconfirmedEdges}
             />
-          )}
-
-          {/* 2D / 3D view toggle (top-right) */}
-          <div
-            style={{
-              position: "absolute",
-              top: "12px",
-              right: "12px",
-              display: "flex",
-              gap: "2px",
-              padding: "3px",
-              background: "rgba(14,18,27,0.92)",
-              backdropFilter: "blur(10px)",
-              border: `1px solid ${THEME.border}`,
-              borderRadius: "10px",
-              zIndex: 10,
-            }}
-          >
-            {(["2d", "3d", "text"] as const).map((d) => (
-              <button
-                key={d}
-                onClick={() => setDim(d)}
-                title={
-                  d === "3d"
-                    ? "3D view (POC)"
-                    : d === "text"
-                    ? "Text view (outline / DOT / JSON)"
-                    : "2D view"
-                }
-                style={{
-                  background: dim === d ? THEME.accent : "transparent",
-                  color: dim === d ? "#0b0e15" : "#94a3b8",
-                  border: "none",
-                  borderRadius: "7px",
-                  cursor: "pointer",
-                  fontSize: "11px",
-                  fontWeight: 700,
-                  letterSpacing: "0.04em",
-                  padding: "4px 12px",
-                }}
-              >
-                {d.toUpperCase()}
-              </button>
-            ))}
           </div>
 
-          {/* Floating Controls overlay (same chrome as side panels) */}
-          <div
-            className="anim-controls"
-            style={{
-              position: "absolute",
-              top: "12px",
-              left: "12px",
-              width: "210px",
-              background: "rgba(14,18,27,0.92)",
-              backdropFilter: "blur(10px)",
-              border: `1px solid ${THEME.border}`,
-              borderRadius: "12px",
-              zIndex: 10,
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                padding: "12px 14px 10px",
-                borderBottom: `1px solid ${THEME.border}`,
-              }}
-            >
-              <SectionHeader
-                label="Controls"
-                trailing={
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    {controlsOpen && (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={handleReset}
-                        onKeyDown={onEnterOrSpace(handleReset)}
-                        className="link-reset"
-                        style={{
-                          fontSize: "11px",
-                          color: THEME.accent,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Reset
-                      </span>
-                    )}
-                    <button
-                      onClick={() => setControlsOpen((o) => !o)}
-                      title={controlsOpen ? "Collapse" : "Expand"}
-                      className="collapse-btn"
-                      style={collapseBtnStyle}
-                    >
-                      {controlsOpen ? "▾" : "▸"}
-                    </button>
-                  </div>
-                }
-              />
-            </div>
-            <div
-              style={{
-                maxHeight: controlsOpen ? "600px" : "0px",
-                opacity: controlsOpen ? 1 : 0,
-                overflow: "hidden",
-                transition:
-                  "max-height 260ms cubic-bezier(0.4,0,0.2,1), opacity 180ms ease",
-              }}
-            >
-              <Controls
-                availableLangs={availableLangs}
-                filters={filters}
-                onLangToggle={handleLangToggle}
-                onTypeToggle={handleTypeToggle}
-                onDepthChange={handleDepthChange}
-                onOverlayToggle={handleOverlayToggle}
-              />
-            </div>
-          </div>
-
-          {/* Hint line (canvas modes only) */}
-          {dim !== "text" && (
-          <div
-            style={{
-              position: "absolute",
-              bottom: "12px",
-              left: "50%",
-              transform: "translateX(-50%)",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              color: "#475569",
-              fontSize: "11px",
-              fontFamily: "monospace",
-              pointerEvents: "none",
-              zIndex: 5,
-              background: "rgba(14,18,27,0.6)",
-              border: `1px solid ${THEME.border}`,
-              borderRadius: "999px",
-              padding: "4px 12px",
-              backdropFilter: "blur(6px)",
-            }}
-          >
-            <svg
-              aria-hidden="true"
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <circle cx="11" cy="11" r="2.5" />
-            </svg>
-            {dim === "3d"
-              ? "Drag to orbit · scroll to zoom · click a node to inspect · right-drag to pan"
-              : "Click to select · double-click to focus · drag to move · scroll to zoom"}
-          </div>
-          )}
-        </div>
-
-        {/* ── Right: Detail panel ── */}
-        <div
-          className="anim-detail-panel"
-          style={{
-            width: detailWidth,
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            backgroundColor: THEME.bgPanel,
-            border: `1px solid ${THEME.border}`,
-            borderRadius: "12px",
-            minHeight: 0,
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              padding: "12px 14px 10px",
-              flexShrink: 0,
-              borderBottom: `1px solid ${THEME.border}`,
-            }}
-          >
-            <SectionHeader label="Node Detail" />
-          </div>
-          <DetailPanel
-            key={selectedNodeId ?? "__empty__"}
-            node={selectedNode}
-            allNodes={data.nodes}
-            edges={data.edges}
-            onSelectNeighbor={handleSelect}
-            onFocus={handleFocus}
-          />
         </div>
 
         {/* Spec 12.1's live column. Returns null in static mode, so this line is unconditional. */}
-        <Panels live={live} />
+        <Panels live={live} narrow={narrow} />
       </div>
     </div>
   );

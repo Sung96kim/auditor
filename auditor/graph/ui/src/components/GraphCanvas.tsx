@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Sigma from "sigma";
 import type { NodeHoverDrawingFunction } from "sigma/rendering";
 import { animateNodes } from "sigma/utils";
@@ -53,6 +53,16 @@ export const EDGE_PROGRAMS = {
   [EDGE_TYPES.drawn]: EdgeCurvedArrowProgram,
   [EDGE_TYPES.provisional]: createEdgeCurveProgram({ arrowHead: null }),
 };
+
+/** Whether a container is worth building a renderer in.
+ *
+ * Exported so both answers can be held to something: jsdom has no WebGL, so the positive arm
+ * cannot be reached by rendering the component, and a guard that never lets go would turn the
+ * canvas off everywhere with nothing to say so.
+ */
+export function hasRoom(box: { clientWidth: number; clientHeight: number }): boolean {
+  return box.clientWidth > 0 && box.clientHeight > 0;
+}
 
 const drawDarkNodeHover: NodeHoverDrawingFunction = (context, data, settings) => {
   const size = settings.labelSize;
@@ -146,6 +156,8 @@ export default function GraphCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
+  //: null until the container has been measured once; false while it has no room to draw in
+  const [room, setRoom] = useState<boolean | null>(null);
 
   const onSelectRef = useRef(onSelect);
   const onDrillRef = useRef(onDrill);
@@ -212,9 +224,27 @@ export default function GraphCanvas({
     rafRef.current = requestAnimationFrame(tick);
   }
 
+  /** The container's own room, watched, because a zero-width one is not sigma's to survive.
+   *
+   * Sigma throws `Container has no width` from inside its render loop, and a throw from there
+   * is a render error: the root boundary answers it by replacing the whole page, panels that
+   * have nothing to do with the graph included. So the canvas is measured before it is built,
+   * and a container with no room gets a sentence instead of a renderer.
+   */
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const measure = () => setRoom(hasRoom(container));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || room !== true) return;
 
     const oldPositions = new Map<string, { x: number; y: number }>();
     if (graphRef.current) {
@@ -694,7 +724,7 @@ export default function GraphCanvas({
       sigmaRef.current = null;
       graphRef.current = null;
     };
-  }, [payload, view]);
+  }, [payload, view, room]);
 
   useEffect(() => {
     const sigma = sigmaRef.current;
@@ -749,15 +779,41 @@ export default function GraphCanvas({
           backgroundColor: THEME.bgCanvas,
         }}
       />
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(0,0,0,0.55) 100%)",
-          pointerEvents: "none",
-          borderRadius: "0.5rem",
-        }}
-      />
+      {room === false ? (
+        <div
+          role="status"
+          style={{
+            alignItems: "center",
+            background: THEME.bgCanvas,
+            color: "#94a3b8",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: "12px",
+            gap: "6px",
+            inset: 0,
+            justifyContent: "center",
+            padding: "12px",
+            position: "absolute",
+            textAlign: "center",
+          }}
+        >
+          <span style={{ color: "#c8d3e0", fontSize: "13px" }}>
+            No room to draw the graph
+          </span>
+          <span>widen the window, or collapse a panel beside it</span>
+        </div>
+      ) : (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(0,0,0,0.55) 100%)",
+            pointerEvents: "none",
+            borderRadius: "0.5rem",
+          }}
+        />
+      )}
     </div>
   );
 }
