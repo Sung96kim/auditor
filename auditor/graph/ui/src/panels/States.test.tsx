@@ -118,8 +118,16 @@ describe("the ladder from a phase to its box, which six panels used to spell the
   });
 
   it("a surface that names nothing to wait for draws no first-poll box, which is the switch", () => {
-    const { container } = render(<Phases state={initial<number>()} onRetry={vi.fn()} />);
+    const { container } = render(
+      <Phases state={initial<number>()} what={undefined} onRetry={vi.fn()} />,
+    );
     expect(container.innerHTML).toBe("");
+  });
+
+  it("a surface that forgets to name one does not compile, so it cannot go blank by mistake", () => {
+    // @ts-expect-error `what` is required: `undefined` is a choice, an absent prop is a slip
+    const forgotten = <Phases state={initial<number>()} onRetry={vi.fn()} />;
+    expect(render(forgotten).container.innerHTML).toBe("");
   });
 
   it("an answered poll draws no box at all, because the panel owns what its answer looks like", () => {

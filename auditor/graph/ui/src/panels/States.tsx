@@ -117,11 +117,12 @@ export interface PhasesProps {
   state: PollState<unknown>;
   /** what the surface is waiting for, as `Loading` says it: "runs", "the daemon", "this run".
    *
-   * Left off where the first poll is not this surface's to draw, which is the whole switch for
-   * that arm: the box cannot be drawn without the words that name what it is waiting for. */
-  what?: string;
+   * `undefined` where the first poll is not this surface's to draw, which is the whole switch for
+   * that arm. Required, so that leaving it off is a typecheck error and not a blank panel. */
+  what: string | undefined;
   onRetry: () => void;
-  /** false where the URL is fixed for the life of the page, so `stale` is unreachable there. */
+  /** false where `stale` cannot reach the call site: a URL fixed for the life of the page, or a
+   * guard above it that admits only the two failure phases. */
   reconnects?: boolean;
 }
 
@@ -137,7 +138,7 @@ export function Phases({ state, what, onRetry, reconnects = true }: PhasesProps)
   if (state.phase === "stale")
     return reconnects ? <Reconnecting error={state.error} onRetry={onRetry} /> : null;
   if (state.phase === "ready") return null;
-  // a sixth Phase is one typecheck error here rather than one silently blank panel
-  const unreachable: never = state.phase;
-  return unreachable;
+  // a sixth Phase is one typecheck error here, and a stale build blanks rather than leaks it
+  state.phase satisfies never;
+  return null;
 }

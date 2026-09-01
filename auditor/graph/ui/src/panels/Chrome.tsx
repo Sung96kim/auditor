@@ -133,9 +133,13 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
           <div style={block}>
             <span style={microLabel}>Latest eval</span>
             {failing(evals.state) ? (
-              // only a failure replaces the rows the poll already carried, and the measurements
-              // are one fetch at a fixed URL, so neither other arm is this surface's to draw
-              <Phases state={evals.state} onRetry={evals.retry} reconnects={false} />
+              // only a failure replaces the rows the poll already carried, and at a fixed URL
+              <Phases
+                state={evals.state}
+                what={undefined}
+                onRetry={evals.retry}
+                reconnects={false}
+              />
             ) : (
               evalLines(data.evals, evals.state.data?.runners ?? []).map((line) => (
                 <EvalRow key={line.runner} line={line} />
