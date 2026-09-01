@@ -103,6 +103,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
 addopts = "--import-mode=importlib --ignore=tests/fixtures"
+markers = ["slow: builds this repo's own graph (about 50 s); drop with -m 'not slow'"]
 
 [tool.auditor]
 extends = "strict"
