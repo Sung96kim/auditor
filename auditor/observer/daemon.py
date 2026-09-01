@@ -488,7 +488,7 @@ class Daemon:
         )
         #: one `RepoLoop` per attached repo, keyed by the spool key `consume` is handed (C-2)
         self.loops: dict[str, RepoLoop] = {}
-        #: thunks, not values: `serve` rebinds `on_change` and a test rebinds `now`; the one cycle
+        #: thunks for `now` and `on_change` close over `self`; the one cycle the daemon has
         self.publisher = RepoPublisher(
             now=lambda: self.now(), on_change=lambda: self.on_change()
         )

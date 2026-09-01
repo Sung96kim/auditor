@@ -133,7 +133,7 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
           <div style={block}>
             <span style={microLabel}>Latest eval</span>
             {failing(evals.state) ? (
-              // only a failure replaces the rows the poll already carried, and at a fixed URL
+              // failure replaces rows; measurements are one fetch at a fixed URL, not drawn here
               <Phases
                 state={evals.state}
                 what={undefined}
