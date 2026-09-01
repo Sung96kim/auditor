@@ -55,6 +55,12 @@ describe("the run detail", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("the clipped run id carries the whole id, so the page never loses it", async () => {
+    serve();
+    const shown = await screen.findByTitle("3f2a1b9c44de4c7f");
+    expect(shown.textContent).toBe("3f2a1b9c\u2026");
+  });
+
   it("a prompt is penned in and scrolls, so a long one cannot stretch the column", async () => {
     serve();
     const prompt = await screen.findByText(/walk the call graph/);

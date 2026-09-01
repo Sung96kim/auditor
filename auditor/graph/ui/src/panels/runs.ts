@@ -31,10 +31,15 @@ export function runTone(status: string): RunTone {
   return RUN_TONES[status] ?? "idle";
 }
 
-/** The duration column: wall time, or the word for a run that has not stopped yet. */
+/** The duration column: wall time, the word for a run still going, or nothing yet to time.
+ *
+ * `finished_at` is null for a `queued` row too, so reading its absence as "running" put that
+ * word beside a `queued` status in the next column along.
+ */
 export function durationLabel(row: RunRow): string {
   const seconds = duration(row);
-  return seconds === null ? "running" : `${seconds.toFixed(1)}s`;
+  if (seconds !== null) return `${seconds.toFixed(1)}s`;
+  return row.status === "running" ? "running" : "-";
 }
 
 export interface Stream {

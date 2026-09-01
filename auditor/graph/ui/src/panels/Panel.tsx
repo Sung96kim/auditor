@@ -72,6 +72,26 @@ export function Field({ title, children }: { title: string; children: React.Reac
   );
 }
 
+/** An id drawn short, with the whole of it on the element so the page never loses it.
+ *
+ * `ellipsis` is off for a commit sha, where seven characters is the convention and a trailing
+ * mark would read as part of the hash. Everywhere else a clipped id says that it is clipped.
+ */
+export function Clipped({
+  value,
+  width,
+  ellipsis = true,
+}: {
+  value: string | null;
+  width: number;
+  ellipsis?: boolean;
+}) {
+  if (!value) return <>-</>;
+  const short = value.slice(0, width);
+  const clipped = short !== value && ellipsis;
+  return <span title={value}>{clipped ? `${short}\u2026` : short}</span>;
+}
+
 export interface PanelProps {
   title: string;
   /** The right-hand side of the header strip: a count, a badge, a control. */

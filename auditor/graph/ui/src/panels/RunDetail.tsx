@@ -3,7 +3,7 @@ import type { RunDetailView } from "../api/types";
 import { TEXT, THEME } from "../theme";
 import { accepted, rejected } from "./runs";
 import RefinementGroup from "./RefinementGroup";
-import { Field, microLabel, mono, nested } from "./Panel";
+import { Clipped, Field, microLabel, mono, nested } from "./Panel";
 import { Failed, Loading, Reconnecting } from "./States";
 
 const box: React.CSSProperties = {
@@ -50,7 +50,9 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
     <div style={box} data-testid="RunDetail">
       <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
         <span style={microLabel}>Run</span>
-        <span style={{ ...mono, color: TEXT.strong }}>{runId.slice(0, 8)}</span>
+        <span style={{ ...mono, color: TEXT.strong }}>
+          <Clipped value={runId} width={8} />
+        </span>
         <button
           type="button"
           aria-label="Close run detail"

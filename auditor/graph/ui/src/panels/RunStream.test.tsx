@@ -89,6 +89,32 @@ describe("the run stream", () => {
     expect(await screen.findByText("the second brief")).not.toBeNull();
   });
 
+  it("a clipped session id says it is clipped and carries the whole of it", () => {
+    render(
+      <RunStream live={live(ready([runRow({ session_id: "vr-session-8812" })]))} />,
+    );
+    const cell = screen.getByTitle("vr-session-8812");
+    expect(cell.textContent).toBe("vr-sessi\u2026");
+  });
+
+  it("a commit sha keeps its conventional seven, and the whole sha is still on the page", () => {
+    render(
+      <RunStream live={live(ready([runRow({ commit_sha: "7c7f6dbfa1129e" })]))} />,
+    );
+    const cell = screen.getByTitle("7c7f6dbfa1129e");
+    expect(cell.textContent).toBe("7c7f6db");
+  });
+
+  it("a run that is queued is not timed as running, whatever the duration column has", () => {
+    render(
+      <RunStream
+        live={live(ready([runRow({ status: "queued", finished_at: null })]))}
+      />,
+    );
+    const row = screen.getByRole("row", { name: /queued/ });
+    expect(row.textContent).not.toContain("running");
+  });
+
   it("a cli run renders, though it has no session, no branch and no commit to show", () => {
     render(<RunStream live={live(ready([cliRunRow()]))} />);
     const row = screen.getByRole("row", { name: /manual/ });

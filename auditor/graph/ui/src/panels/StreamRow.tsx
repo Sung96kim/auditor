@@ -3,7 +3,7 @@ import { onEnterOrSpace } from "../a11y";
 import type { RunRow } from "../api/types";
 import { TEXT, THEME, TONE } from "../theme";
 import { costLabel, durationLabel, runTone } from "./runs";
-import { microLabel, mono } from "./Panel";
+import { Clipped, microLabel, mono } from "./Panel";
 import RunnerMark from "./RunnerMark";
 
 export const cell: React.CSSProperties = {
@@ -27,11 +27,6 @@ export const head: React.CSSProperties = {
   paddingBottom: "6px",
 };
 
-/** Four of the ten columns are nullable on the wire: a `cli` run has no session and no checkout. */
-function short(value: string | null, width: number): string {
-  return value ? value.slice(0, width) : "-";
-}
-
 export interface Column {
   label: string;
   style: React.CSSProperties;
@@ -52,11 +47,16 @@ export const COLUMNS: Column[] = [
     style: { ...cell, lineHeight: 0 },
     cell: (row) => <RunnerMark runner={row.runner} size={13} />,
   },
-  { label: "session", style: numeric, cell: (row) => short(row.session_id, 8) },
+  // four of the ten columns are nullable: a `cli` run has no session and no checkout
+  { label: "session", style: numeric, cell: (row) => <Clipped value={row.session_id} width={8} /> },
   {
     label: "branch@commit",
     style: numeric,
-    cell: (row) => `${row.branch ?? "-"}@${short(row.commit_sha, 7)}`,
+    cell: (row) => (
+      <>
+        {row.branch ?? "-"}@<Clipped value={row.commit_sha} width={7} ellipsis={false} />
+      </>
+    ),
   },
   { label: "model", style: cell, cell: (row) => row.model ?? "-" },
   { label: "cost", style: numeric, cell: (row) => costLabel(row) },

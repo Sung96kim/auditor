@@ -49,8 +49,14 @@ describe("the duration column's word for a run that has not stopped", () => {
     expect(durationLabel(row())).toBe("30.0s");
   });
 
-  it("an open run says it is running rather than showing a dash or a zero", () => {
-    expect(durationLabel(row({ finished_at: 0 }))).toBe("running");
+  it("a started run that has not stopped says it is running, not a dash or a zero", () => {
+    expect(durationLabel(row({ status: "running", finished_at: 0 }))).toBe("running");
+  });
+
+  it("a run that never started is timed as nothing, never as running", () => {
+    for (const status of ["queued", "skipped", "rejected"]) {
+      expect(durationLabel(row({ status, finished_at: 0 }))).toBe("-");
+    }
   });
 });
 
