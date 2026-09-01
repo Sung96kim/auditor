@@ -303,8 +303,11 @@ flowchart TB
   before its own audit half runs; `plugin/hooks/_common.py` is that one seam.
 - `plugin/statusline/auditor_status.py` re-implements `discovery.find_root`, `paths.repo_identity`,
   `paths.repo_dir_key` and `paths.auditor_home` in stdlib only, then reads the `scan` and `graph`
-  blocks of `$AUDITOR_HOME/repos/<key>/status.json`. `tests/plugin/test_statusline.py` pins each
-  pair, and the `graph` block's eight state words against `LoopState`.
+  blocks of `$AUDITOR_HOME/repos/<key>/status.json`. Both blocks are written through frozen
+  `StatusBlock` models in `auditor/status.py`, each of which names its own key.
+  `tests/plugin/test_statusline.py` pins each pair, the `graph` block's eight state words against
+  `LoopState`, the `scan` block's five severity words against `Severity`, and each model's field
+  names against the keys the reader pulls off that block.
 
 ## Cross-cutting behavior
 

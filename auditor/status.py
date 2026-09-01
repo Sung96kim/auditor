@@ -11,6 +11,9 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import ClassVar
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from auditor.models import ScanResult, Severity
 from auditor.paths import ensure_repo_dir, read_json_dict, repo_dir
@@ -84,20 +87,56 @@ def merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
     return out
 
 
+class StatusBlock(BaseModel):
+    """One writer's top-level block of the status file, which knows the key it goes under.
+
+    The key is on the model rather than at the call site, so a block cannot be merged under
+    another writer's name, and a renamed field is a type error here instead of an empty segment
+    on the status line.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    block: ClassVar[str]
+
+    written_at: int = Field(default_factory=lambda: int(time.time()))
+
+
+class ScanStatusBlock(StatusBlock):
+    """What `auditr scan` leaves behind: the rolled-up counts and whether a config was found."""
+
+    block: ClassVar[str] = "scan"
+
+    severity: dict[str, int]
+    configured: bool
+
+
+class GraphStatusBlock(StatusBlock):
+    """What the observer leaves behind, which the `graph` segment renders.
+
+    `expiry_seconds` rides on the block because the status line is stdlib and cannot read the
+    user settings that hold `session_expiry_minutes`; past it the segment reads as off.
+    """
+
+    block: ClassVar[str] = "graph"
+
+    nodes: int
+    refined: int
+    state: str
+    expiry_seconds: int
+
+
+def write_block(root: Path, payload: StatusBlock) -> Path:
+    """Merge one writer's block into the repo's status file, under the key the model names."""
+    return merge_status(root, payload.block, payload.model_dump())
+
+
 def write_status(root: Path, results: list[ScanResult], *, configured: bool) -> Path:
     counts = {sev.value: 0 for sev in Severity}
     for r in results:
         for sev, n in r.counts.items():
             counts[sev.value] += n
-    return merge_status(
-        root,
-        "scan",
-        {
-            "severity": counts,
-            "configured": configured,
-            "written_at": int(time.time()),
-        },
-    )
+    return write_block(root, ScanStatusBlock(severity=counts, configured=configured))
 
 
 def write_graph_status(
@@ -110,17 +149,15 @@ def write_graph_status(
 ) -> Path:
     """Write the observer's own block of the status file, which the `graph` segment renders.
 
-    `expiry_seconds` rides on the block because the status line is stdlib and cannot read the
-    user settings that hold `session_expiry_minutes`; past it the segment reads as off.
+    Kept as a function rather than folded into the model so the daemon still names its four
+    numbers at the call site, and so the one caller does not have to import the model.
     """
-    return merge_status(
+    return write_block(
         root,
-        "graph",
-        {
-            "nodes": nodes,
-            "refined": refined,
-            "state": state,
-            "expiry_seconds": expiry_seconds,
-            "written_at": int(time.time()),
-        },
+        GraphStatusBlock(
+            nodes=nodes,
+            refined=refined,
+            state=state,
+            expiry_seconds=expiry_seconds,
+        ),
     )

@@ -13,7 +13,15 @@ from auditor.discovery import find_root
 from auditor.models import Severity
 from auditor.observer.scheduling import LoopState
 from auditor.paths import auditor_home, ensure_repo_dir, observer_dir, repo_dir_key
-from auditor.status import merge_status, write_graph_status, write_status
+from auditor.status import (
+    GraphStatusBlock,
+    ScanStatusBlock,
+    StatusBlock,
+    merge_status,
+    write_block,
+    write_graph_status,
+    write_status,
+)
 
 SCRIPT = (
     Path(__file__).resolve().parents[2] / "plugin" / "statusline" / "auditor_status.py"
@@ -400,6 +408,66 @@ def test_a_torn_graph_block_degrades_that_segment_alone(tmp_path, block):
     assert proc.returncode == 0
     assert "Traceback" not in proc.stderr
     assert "1 blocking" in proc.stdout
+
+
+def _keys_read(function: str, holder: str) -> set[str]:
+    """Every literal key the status line pulls off one block, read out of its own source.
+
+    An `ast` walk rather than a `grep`, so a key inside a comment or a docstring is not one, and
+    so the nested severity keys (`sev.get(...)`) are not mistaken for the block's own.
+    """
+    tree = ast.parse(SCRIPT.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == function:
+            return {
+                call.args[0].value
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "get"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == holder
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+            }
+    raise AssertionError(f"the status line has no {function}")
+
+
+@pytest.mark.parametrize(
+    ("model", "function", "holder"),
+    [
+        (GraphStatusBlock, "_graph", "block"),
+        (ScanStatusBlock, "_scan", "scan"),
+    ],
+    ids=["graph", "scan"],
+)
+def test_each_block_model_names_every_key_the_status_line_reads(
+    model: type[StatusBlock], function: str, holder: str
+):
+    """The writer is typed and the reader is stdlib, so nothing but this closes the loop.
+
+    A field renamed on one side alone is not an error anywhere: `merge_status` takes a dict, and
+    the reader's `.get` returns `None` and renders the segment as off. Sets both ways, so a key
+    the reader stopped reading fails as loudly as a field the writer stopped writing.
+    """
+    assert _keys_read(function, holder) == set(model.model_fields)
+
+
+def test_the_scan_block_carries_every_severity_the_status_line_adds_up():
+    """`severity` is a `dict[str, int]`, so its own vocabulary is the one the model cannot type."""
+    assert _keys_read("_scan", "sev") == {sev.value for sev in Severity}
+
+
+def test_a_block_is_written_under_the_key_its_own_model_names(tmp_path):
+    """`merge_status`'s `str` argument is the one way to file a block under another writer."""
+    assert (GraphStatusBlock.block, ScanStatusBlock.block) == ("graph", "scan")
+    write_block(
+        tmp_path,
+        GraphStatusBlock(nodes=1, refined=0, state="observing", expiry_seconds=60),
+    )
+    write_block(tmp_path, ScanStatusBlock(severity={"high": 1}, configured=True))
+    data = json.loads((ensure_repo_dir(tmp_path) / "status.json").read_text())
+    assert set(data) == {"graph", "scan"}
 
 
 def test_statusline_reads_what_write_graph_status_wrote(tmp_path):
