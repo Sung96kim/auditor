@@ -102,8 +102,7 @@ class StatusBlock(BaseModel):
     written_at: int = Field(default_factory=lambda: int(time.time()))
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        # a nameless block raises inside `_merge_status`, on the path that swallows OSError, so
-        # the third writer would get a silent no-op; the definition is where it can still be loud
+        # otherwise a nameless block is an `AttributeError` at its first write, not at definition
         super().__init_subclass__(**kwargs)
         if not getattr(cls, "block", ""):
             raise TypeError(f"{cls.__name__} must set `block`")

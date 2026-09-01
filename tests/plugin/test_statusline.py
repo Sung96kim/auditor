@@ -5,9 +5,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 from _support import result_with
+from pydantic import BaseModel
 
 from auditor.discovery import find_root
 from auditor.models import Severity
@@ -469,9 +471,15 @@ def test_a_block_is_written_under_the_key_its_own_model_names(tmp_path):
     assert set(data) == {"graph", "scan"}
 
 
+class _Keyless(BaseModel):
+    """A payload `write_block` will read `block` off, that `StatusBlock` never guarded."""
+
+    written_at: int = 0
+
+
 def test_a_writer_that_names_no_block_is_a_definition_error(tmp_path):
-    """`write_block` reads the key off the model, and a missing one would raise inside the
-    best-effort merge, where the swallowed OSError turns a third writer into a silent no-op."""
+    """`write_block` reads the key off the model, so a missing one is an `AttributeError` at the
+    first write; this moves it to the definition, before any writer can reach it."""
     with pytest.raises(TypeError, match="must set `block`"):
 
         class Nameless(StatusBlock):
@@ -481,6 +489,13 @@ def test_a_writer_that_names_no_block_is_a_definition_error(tmp_path):
     assert set(json.loads((ensure_repo_dir(tmp_path) / "status.json").read_text())) == {
         "scan"
     }
+
+
+def test_a_payload_with_no_key_fails_at_the_write_before_anything_is_merged(tmp_path):
+    """What the definition-time guard buys: the same mistake, one class definition earlier."""
+    with pytest.raises(AttributeError, match="block"):
+        write_block(tmp_path, cast(StatusBlock, _Keyless()))
+    assert not (ensure_repo_dir(tmp_path) / "status.json").exists()
 
 
 def test_statusline_reads_the_graph_block_the_daemon_writes(tmp_path):
