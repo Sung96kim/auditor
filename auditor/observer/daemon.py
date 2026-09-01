@@ -690,9 +690,8 @@ class Daemon:
             _LOG.info("loop for %s cancelled at shutdown", loop.root)
         finally:
             loop.detach()
-            # a tick already inside `publish` when `retire` ran puts its meters back, and this
-            # is the moment nothing will publish for the key again unless a new loop owns it
-            if self.loops.get(key) is not loop:
+            # a retire mid-`publish` puts the meters back, and only an unclaimed key stays dropped
+            if self.loops.get(key) is None:
                 self.publisher.forget(key)
             self.ended.append((key, loop))
 

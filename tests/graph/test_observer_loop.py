@@ -1036,6 +1036,28 @@ async def test_a_repo_retired_mid_publish_leaves_nothing_behind_when_its_driver_
     assert daemon.publisher.blocks == {}
 
 
+async def test_a_re_adopted_key_keeps_the_meters_of_the_loop_that_owns_it_now(
+    refine_service: RefinementService, tmp_path
+):
+    """`retire` frees the key at once and `ensure_loop` rebuilds as soon as it is free.
+
+    The old driver can still be parked inside its tick when that happens, so its end may only
+    drop a key nothing claims: the loop that re-adopted it keeps the meters it just published.
+    """
+    parked = _loop(refine_service)
+    daemon = _daemon_for(parked, tmp_path)
+    key = repo_dir_key(parked.root)
+    await parked.attach()
+    await daemon.publisher.publish(parked)
+    daemon.retire(key)
+    adopted = _loop(refine_service)
+    daemon.loops[key] = adopted
+    await daemon.publisher.publish(adopted)
+    await daemon._drive(parked)
+    assert daemon.publisher.meters_for(key).budget is not None
+    assert key in daemon.publisher.blocks
+
+
 async def test_a_block_that_could_not_be_written_is_not_recorded_as_written(
     refine_service: RefinementService, tmp_path, monkeypatch
 ):

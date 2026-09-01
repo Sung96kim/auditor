@@ -122,9 +122,9 @@ $AUDITOR_HOME/
   frozen `GraphStatusBlock` under the key the model names and read-merge-replaces that one block
   under a lock, so a concurrent `auditr scan` writing `scan` cannot lose it and it cannot lose
   the scan's.
-- A retired repo's meters and block stamp are dropped when its key is retired and again when its
-  driver ends, so a row the switcher still lists cannot draw a live budget bar under an empty
-  state badge.
+- A retired repo's meters and block stamp are dropped when its key is retired, and again when its
+  driver ends if nothing has claimed the key since, so a row the switcher still lists cannot draw
+  a live budget bar under an empty state badge, and a re-adopted key keeps its new loop's meters.
 
 ## The port
 
