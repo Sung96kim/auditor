@@ -995,6 +995,47 @@ async def test_an_unchanged_meter_leaves_the_page_tag_where_it_is(
     assert bumped == [1, 1]
 
 
+async def test_a_retired_repo_stops_publishing_the_meters_its_row_draws(
+    refine_service: RefinementService, tmp_path
+):
+    """`Readers.repos` lists every repo the index knows and `loop_state` already answers "".
+
+    Without eviction the switcher row drew a budget bar and a rate-limit bar that read as
+    current beside an empty badge, and both dicts grew for the daemon's whole life.
+    """
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    key = repo_dir_key(loop.root)
+    await loop.attach()
+    await daemon.publisher.publish(loop)
+    assert daemon.publisher.meters_for(key).budget is not None
+    assert key in daemon.publisher.blocks
+    daemon.retire(key)
+    assert daemon.publisher.meters_for(key).budget is None
+    assert daemon.publisher.blocks == {}
+
+
+async def test_a_repo_retired_mid_publish_leaves_nothing_behind_when_its_driver_ends(
+    refine_service: RefinementService, tmp_path
+):
+    """`reconcile` retires on the drain thread while a tick is already inside `publish`.
+
+    That tick finishes after the retirement and puts the meters straight back, so the driver's
+    own end is the second place the key is dropped: nothing publishes for it after that.
+    """
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    key = repo_dir_key(loop.root)
+    await loop.attach()
+    # between the meters push and the block write, which is where a drain-thread retire lands
+    daemon.on_change = lambda: daemon.retire(key)
+    await daemon.publisher.publish(loop)
+    assert key in daemon.publisher.blocks
+    await daemon._drive(loop)
+    assert daemon.publisher.meters == {}
+    assert daemon.publisher.blocks == {}
+
+
 async def test_a_block_that_could_not_be_written_is_not_recorded_as_written(
     refine_service: RefinementService, tmp_path, monkeypatch
 ):

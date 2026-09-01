@@ -376,6 +376,15 @@ class RepoPublisher:
         """One repo's own budget and rate limit meters, empty until its loop has published."""
         return self.meters.get(key, Metered())
 
+    def forget(self, key: str) -> None:
+        """Drop a retired repo's meters and block stamp, so its row stops reading as live.
+
+        `Readers.repos` still lists the repo and `loop_state` already answers "", so meters left
+        behind would draw a live budget bar beside an empty badge.
+        """
+        self.meters.pop(key, None)
+        self.blocks.pop(key, None)
+
     async def publish(self, loop: RepoLoop) -> None:
         """Push this loop's two meters, then write its block; this is what `/api/status` reads.
 
@@ -560,8 +569,9 @@ class Daemon:
 
     def retire(self, key: str) -> None:
         """Let this repo's driver finish: it stops as soon as its key is no longer claimed."""
-        # a repo that stopped existing keeps no backoff either (L5)
+        # a repo that stopped existing keeps no backoff, and publishes no meters, either (L5)
         self.unbuildable.pop(key, None)
+        self.publisher.forget(key)
         held = self.loops.pop(key, None)
         if held is not None:
             _LOG.info("retiring the loop for %s", held.root)
@@ -680,6 +690,10 @@ class Daemon:
             _LOG.info("loop for %s cancelled at shutdown", loop.root)
         finally:
             loop.detach()
+            # a tick already inside `publish` when `retire` ran puts its meters back, and this
+            # is the moment nothing will publish for the key again unless a new loop owns it
+            if self.loops.get(key) is not loop:
+                self.publisher.forget(key)
             self.ended.append((key, loop))
 
     def adopt_home(self) -> int:
