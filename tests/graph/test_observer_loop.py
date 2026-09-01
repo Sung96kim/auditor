@@ -728,14 +728,14 @@ async def test_the_meter_a_loop_publishes_is_its_own_and_names_the_auth_deadline
     daemon = _daemon_for(loop, tmp_path)
     loop.pauses.apply(pause_of("paused:auth", now=1_000.0))
     loop._moved(LoopState.PAUSED_AUTH)
-    await daemon._publish(loop)
-    drawn = daemon.repo_meters(repo_dir_key(loop.root))
+    await daemon.publisher.publish(loop)
+    drawn = daemon.publisher.meters_for(repo_dir_key(loop.root))
     assert drawn.budget.max_cost_usd_per_day == 2.0
     assert (drawn.limits.paused, drawn.limits.resumes_at) == (
         True,
         loop.pauses.auth_until,
     )
-    assert daemon.repo_meters("some-other-repo").budget is None
+    assert daemon.publisher.meters_for("some-other-repo").budget is None
 
 
 async def test_the_budget_the_meter_draws_is_the_one_the_tick_acted_on(
@@ -746,8 +746,8 @@ async def test_the_budget_the_meter_draws_is_the_one_the_tick_acted_on(
     daemon = _daemon_for(loop, tmp_path)
     await loop.tick(poll=0.0)
     loop.budget = _raises
-    await daemon._publish(loop)
-    assert daemon.repo_meters(repo_dir_key(loop.root)).budget is not None
+    await daemon.publisher.publish(loop)
+    assert daemon.publisher.meters_for(repo_dir_key(loop.root)).budget is not None
 
 
 async def _raises() -> BudgetState:
@@ -877,7 +877,7 @@ async def test_the_daemon_writes_the_graph_block_the_status_line_reads(
     daemon = _daemon_for(loop, tmp_path)
     before = int(time.time())
     await loop.attach()
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     block = json.loads(status_path(loop.root).read_text())["graph"]
     assert block["state"] == LoopState.OBSERVING.value
     # `len(await nodes())` and not `count_nodes()`: the reader under test on both sides of an
@@ -927,7 +927,7 @@ async def test_the_block_counts_the_refinements_the_build_applies_and_no_others(
             status=RefinementStatus.REJECTED,
         )
     )
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     assert json.loads(status_path(loop.root).read_text())["graph"]["refined"] == 2
 
 
@@ -938,11 +938,11 @@ async def test_an_unchanged_tick_takes_no_status_lock(
     loop = _loop(refine_service)
     daemon = _daemon_for(loop, tmp_path)
     await loop.attach()
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     written = status_path(loop.root)
     # a second writer clears the block; an unchanged publish must not put it back
     written.write_text(json.dumps({"scan": {"severity": {}}}))
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     assert "graph" not in json.loads(written.read_text())
 
 
@@ -961,12 +961,12 @@ async def test_a_quiet_repo_still_refreshes_the_block_before_it_reads_stale(
     clock = {"now": 1_000.0}
     daemon.now = lambda: clock["now"]
     await loop.attach()
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     written = status_path(loop.root)
     written.write_text(json.dumps({"scan": {"severity": {}}}))
     expiry = refine_service.user.observer.scheduling.session_expiry_minutes * 60
     clock["now"] += expiry / 2 + 1
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     assert (
         json.loads(written.read_text())["graph"]["state"] == LoopState.OBSERVING.value
     )
@@ -986,10 +986,10 @@ async def test_a_block_that_could_not_be_written_is_not_recorded_as_written(
         raise RuntimeError("the status file is not writable")
 
     monkeypatch.setattr("auditor.observer.daemon.write_graph_status", broken)
-    await daemon._publish(loop)
-    assert daemon.blocks == {}
+    await daemon.publisher.publish(loop)
+    assert daemon.publisher.blocks == {}
     monkeypatch.undo()
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     assert "graph" in json.loads(status_path(loop.root).read_text())
 
 
@@ -999,10 +999,28 @@ async def test_a_state_change_rewrites_the_block(
     loop = _loop(refine_service)
     daemon = _daemon_for(loop, tmp_path)
     await loop.attach()
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     loop.state = LoopState.RUNNING
-    await daemon._publish(loop)
+    await daemon.publisher.publish(loop)
     assert json.loads(status_path(loop.root).read_text())["graph"]["state"] == "running"
+
+
+async def test_the_publisher_reads_the_clock_and_the_hook_the_daemon_got_after_it_was_built(
+    refine_service: RefinementService, tmp_path
+):
+    """Both are rebound on the daemon: `serve` hands the router's tag counter over once there is
+    a router, and a test moves the clock the same way. A publisher that captured either at
+    construction would bump nothing and stamp the block off the wall clock, and every existing
+    assertion here would still pass."""
+    loop = _loop(refine_service)
+    daemon = _daemon_for(loop, tmp_path)
+    bumped: list[int] = []
+    daemon.on_change = lambda: bumped.append(1)
+    daemon.now = lambda: 5_000.0
+    await loop.attach()
+    await daemon.publisher.publish(loop)
+    assert bumped == [1]
+    assert daemon.publisher.blocks[repo_dir_key(loop.root)][1] == 5_000.0
 
 
 async def test_the_node_count_reader_is_the_number_the_graph_holds(

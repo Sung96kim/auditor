@@ -350,6 +350,88 @@ class LoopHost:
         loop.create_task(drain())
 
 
+class RepoPublisher:
+    """What each attached repo has published: its two meters, and its `graph` status block.
+
+    Both dicts are written only from the loop's own thread, so unlike `Readers._cached` they need
+    no lock, and an unchanged tick answers without reaching for the status file's. The clock and
+    the change hook are callables because the daemon rebinds both after this object is built.
+    """
+
+    def __init__(
+        self,
+        *,
+        now: Callable[[], float],
+        on_change: Callable[[], object],
+    ) -> None:
+        self.now = now
+        self.on_change = on_change
+        #: each repo's own meters, pushed by its loop rather than pulled across threads (H-9)
+        self.meters: dict[str, Metered] = {}
+        #: the last `graph` block written per repo and when it was written, so an unchanged
+        #: tick takes no lock and a quiet repo still refreshes before the block reads stale
+        self.blocks: dict[str, tuple[tuple[int, int, str], float]] = {}
+
+    def meters_for(self, key: str) -> Metered:
+        """One repo's own budget and rate limit meters, empty until its loop has published."""
+        return self.meters.get(key, Metered())
+
+    async def publish(self, loop: RepoLoop) -> None:
+        """Push this loop's two meters, then write its block; this is what `/api/status` reads.
+
+        The tick's own budget rather than a second read of it, so the page draws the number the
+        loop acted on; a meter that moved is a page change, so the ETag moves with it (M8, M10).
+        """
+        key = repo_dir_key(loop.root)
+        budget = loop.last_budget or await loop.budget()
+        drawn = Metered(
+            budget=BudgetPayload.of(budget),
+            limits=RateLimitPayload(
+                max_utilization=loop.user.observer.budget.max_utilization,
+                paused=loop.state
+                in {LoopState.PAUSED_RATELIMIT, LoopState.PAUSED_AUTH},
+                resumes_at=loop.pauses.auth_until or loop.pauses.resumes_at,
+            ),
+        )
+        if self.meters.get(key) != drawn:
+            self.meters[key] = drawn
+            self.on_change()
+        await self._write_block(loop, key)
+
+    async def _write_block(self, loop: RepoLoop, key: str) -> None:
+        """Write this repo's `graph` block, which is what the status line's segment renders.
+
+        On a change or a stale stamp, and off the event loop: `merge_status` takes a lock file
+        and can wait two seconds for a scan that is writing the other block. The stamp is the
+        second half because the status line reads the block as off once `written_at` is older
+        than `expiry_seconds`, and a repo can observe for a whole session without its node count,
+        its active refinements or its state moving at all (S9-4).
+        """
+        nodes, refined = await asyncio.gather(
+            loop.index.graph.count_nodes(),
+            loop.index.refinements.count(statuses=sorted(ACTIVE_STATUSES)),
+        )
+        block = (nodes, refined, loop.state.value)
+        expiry = loop.user.observer.scheduling.session_expiry_minutes * 60
+        now = self.now()
+        held = self.blocks.get(key)
+        if held is not None and held[0] == block and now - held[1] < expiry / 2:
+            return
+        try:
+            await asyncio.to_thread(
+                write_graph_status,
+                loop.root,
+                nodes=nodes,
+                refined=refined,
+                state=loop.state.value,
+                expiry_seconds=expiry,
+            )
+        except Exception:  # the cache may not claim a write that did not happen (S9-18)
+            _LOG.exception("could not write %s's graph status block", loop.root)
+            return
+        self.blocks[key] = (block, now)
+
+
 class Daemon:
     """The one background process per home: it drains, sweeps and decides when to stop.
 
@@ -392,11 +474,10 @@ class Daemon:
         )
         #: one `RepoLoop` per attached repo, keyed by the spool key `consume` is handed (C-2)
         self.loops: dict[str, RepoLoop] = {}
-        #: each repo's own meters, pushed by its loop rather than pulled across threads (H-9)
-        self.meters: dict[str, Metered] = {}
-        #: the last `graph` block written per repo and when it was written, so an unchanged
-        #: tick takes no lock and a quiet repo still refreshes before the block reads stale
-        self.blocks: dict[str, tuple[tuple[int, int, str], float]] = {}
+        #: `now` and `on_change` are both rebound on the daemon after it is built, so read them
+        self.publisher = RepoPublisher(
+            now=lambda: self.now(), on_change=lambda: self.on_change()
+        )
         #: repos whose loop would not build, and when each may be tried again
         self.unbuildable: dict[str, Backoff] = {}
         #: drivers that ended, handed over for `reconcile` to unclaim: a `deque`
@@ -424,10 +505,6 @@ class Daemon:
         """What one repo's loop is doing, or "" for a key no loop owns yet."""
         held = self.loops.get(key)
         return held.state.value if held is not None else ""
-
-    def repo_meters(self, key: str) -> Metered:
-        """One repo's own budget and rate limit meters, empty until its loop has published."""
-        return self.meters.get(key, Metered())
 
     def reconcile(self) -> None:
         """Give every live session's repo, and every adopted spool, a loop; retire the rest.
@@ -582,75 +659,20 @@ class Daemon:
                         await loop.attach()
                         attached = True
                     loop.pauses.recovered()
-                    await self._publish(loop)
+                    await self.publisher.publish(loop)
                 except asyncio.CancelledError:
                     raise
                 except Exception as failure:
                     # `attached` is untouched, so a raised attach retries the attach and not a tick
                     wait = loop.failed(failure)
                     _LOG.exception("loop for %s stopped; retrying in %.0fs", key, wait)
-                    await self._publish(loop)
+                    await self.publisher.publish(loop)
                     await asyncio.sleep(wait)
         except asyncio.CancelledError:
             _LOG.info("loop for %s cancelled at shutdown", loop.root)
         finally:
             loop.detach()
             self.ended.append((key, loop))
-
-    async def _publish(self, loop: RepoLoop) -> None:
-        """Push this loop's two meters onto the daemon, which is what `/api/status` reads (H-9).
-
-        The tick's own budget rather than a second read of it, so the page draws the number the
-        loop acted on; a meter that moved is a page change, so the ETag moves with it (M8, M10).
-        """
-        key = repo_dir_key(loop.root)
-        budget = loop.last_budget or await loop.budget()
-        drawn = Metered(
-            budget=BudgetPayload.of(budget),
-            limits=RateLimitPayload(
-                max_utilization=loop.user.observer.budget.max_utilization,
-                paused=loop.state
-                in {LoopState.PAUSED_RATELIMIT, LoopState.PAUSED_AUTH},
-                resumes_at=loop.pauses.auth_until or loop.pauses.resumes_at,
-            ),
-        )
-        if self.meters.get(key) != drawn:
-            self.meters[key] = drawn
-            self.on_change()
-        await self._publish_status(loop, key)
-
-    async def _publish_status(self, loop: RepoLoop, key: str) -> None:
-        """Write this repo's `graph` block, which is what the status line's segment renders.
-
-        On a change or a stale stamp, and off the event loop: `merge_status` takes a lock file
-        and can wait two seconds for a scan that is writing the other block. The stamp is the
-        second half because the status line reads the block as off once `written_at` is older
-        than `expiry_seconds`, and a repo can observe for a whole session without its node count,
-        its active refinements or its state moving at all (S9-4).
-        """
-        nodes, refined = await asyncio.gather(
-            loop.index.graph.count_nodes(),
-            loop.index.refinements.count(statuses=sorted(ACTIVE_STATUSES)),
-        )
-        block = (nodes, refined, loop.state.value)
-        expiry = loop.user.observer.scheduling.session_expiry_minutes * 60
-        now = self.now()
-        held = self.blocks.get(key)
-        if held is not None and held[0] == block and now - held[1] < expiry / 2:
-            return
-        try:
-            await asyncio.to_thread(
-                write_graph_status,
-                loop.root,
-                nodes=nodes,
-                refined=refined,
-                state=loop.state.value,
-                expiry_seconds=expiry,
-            )
-        except Exception:  # the cache may not claim a write that did not happen (S9-18)
-            _LOG.exception("could not write %s's graph status block", loop.root)
-            return
-        self.blocks[key] = (block, now)
 
     def adopt_home(self) -> int:
         """Spec 8.1's start-time drain: every spool under this home becomes a pending key.
@@ -788,7 +810,7 @@ def serve(settings: UserSettings | None = None) -> int:
             gate=gate,
             open_page=open_url if settings.observer.open_browser else lambda url: None,
             loop_state=daemon.loop_state,
-            meters=daemon.repo_meters,
+            meters=daemon.publisher.meters_for,
             drained=lambda: daemon.drained,
         ),
         started_at=time.time(),

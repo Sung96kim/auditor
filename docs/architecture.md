@@ -24,7 +24,8 @@ Paths are relative to the repo root.
 - `auditor/observer/` holds the daemon and the change assessment. `assess.py` classifies an edit
   batch against the graph and `budget.py` turns a window's spend into day-ceiling state; both are
   pure. The process is `daemon.py` (the singleton flock, `daemon.json`, the idle timer, the restart
-  exec), `server.py` (stdlib `ThreadingHTTPServer` on loopback, transport only), `routes.py` (one
+  exec, and `RepoPublisher`, which owns every attached repo's meters and its `graph` status
+  block), `server.py` (stdlib `ThreadingHTTPServer` on loopback, transport only), `routes.py` (one
   method and path to one `Reply`, routing only), `events.py`, `sessions.py`, `scheduling.py` (spec
   8.4's "one run per repo, two globally"), `loop.py` and `payloads.py`. One rule holds the design
   together: the spool is the truth and the in-memory set is only the wakeup, so `POST /events`
