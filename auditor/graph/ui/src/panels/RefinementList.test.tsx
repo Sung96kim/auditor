@@ -69,6 +69,47 @@ describe("the refinement list", () => {
     expect(screen.queryByText(/Loading refinements/)).toBeNull();
   });
 
+  it("a cluster relabel names its new label and its members, never a bare dash", async () => {
+    serve(
+      [
+        refinement({
+          kind: "relabel_cluster",
+          tier: "B",
+          status: "pinned",
+          src: null,
+          dst: null,
+          members: ["pkg/core.py::Engine", "pkg/core.py::boot"],
+          payload: { label: "engine startup" },
+        }),
+      ],
+      1,
+      false,
+    );
+    expect((await screen.findByText(/relabel_cluster/)).textContent).toBe(
+      "[B] relabel_cluster engine startup: pkg/core.py::Engine, pkg/core.py::boot",
+    );
+    expect(screen.queryByText(/relabel_cluster -$/)).toBeNull();
+  });
+
+  it("a move names the node it moved and where it moved to", async () => {
+    serve(
+      [
+        refinement({
+          kind: "move_node",
+          src: null,
+          dst: null,
+          node_id: "pkg/util.py::fmt",
+          members: ["pkg/core.py::Engine"],
+        }),
+      ],
+      1,
+      false,
+    );
+    expect((await screen.findByText(/move_node/)).textContent).toBe(
+      "[A] move_node pkg/util.py::fmt to pkg/core.py::Engine",
+    );
+  });
+
   it("a drifted row is marked in its own tone, not in a parenthesis in the same grey", async () => {
     serve([refinement({ drifted: true })], 1, false);
     const mark = await screen.findByText("drifted");

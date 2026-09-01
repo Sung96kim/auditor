@@ -3,9 +3,8 @@ import type { RefinementRow, RefinementsView } from "../api/types";
 import { TEXT, THEME, TONE } from "../theme";
 import { REFINEMENT_STATUSES } from "./runs";
 import Panel, { block, microLabel, mono } from "./Panel";
+import RefinementLine from "./RefinementLine";
 import { Empty, Failed, Loading, Reconnecting } from "./States";
-
-const row: React.CSSProperties = { ...mono, overflowWrap: "anywhere" };
 
 /** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3). */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
@@ -56,11 +55,13 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
             {status} ({group.length})
           </span>
           {group.map((held) => (
-            <span key={held.refinement_id} style={row}>
-              <span style={{ color: TEXT.label }}>[{held.tier}]</span> {held.kind}{" "}
-              {held.src ?? held.node_id ?? "-"}
-              {held.drifted ? <span style={{ color: TONE.warn }}> drifted</span> : null}
-            </span>
+            <RefinementLine
+              key={held.refinement_id}
+              row={held}
+              trailing={
+                held.drifted ? <span style={{ color: TONE.warn }}> drifted</span> : null
+              }
+            />
           ))}
         </div>
       ))}

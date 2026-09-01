@@ -45,6 +45,7 @@ const CASES: [string, object, string, string][] = [
   ["runRow", wire.runRow(), "RunsView", "RunRowPayload"],
   ["cliRunRow", wire.cliRunRow(), "RunsView", "RunRowPayload"],
   ["logReport", wire.logReport(), "RunsView", "LogReport"],
+  ["refinementPayload", wire.refinementPayload(), "RefinementsView", "RefinementPayload"],
   ["refinementRow", wire.refinementRow(), "RefinementsView", "RefinementRowPayload"],
   ["refinementsReport", wire.refinementsView().refinements, "RefinementsView", "RefinementsReport"],
   ["toolCall", wire.toolCall(), "RunDetailView", "ToolCall"],

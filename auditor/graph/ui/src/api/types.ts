@@ -94,6 +94,12 @@ export interface RunRow {
   finished_at: number | null;
 }
 
+/** What a refinement carries beyond its target. Only the new cluster label is drawn: it is the
+ * one field without which a `relabel_cluster` row names nothing at all. */
+export interface RefinementPayload {
+  label: string | null;
+}
+
 export interface RefinementRow {
   refinement_id: string;
   run_id: string;
@@ -105,6 +111,9 @@ export interface RefinementRow {
   edge_kind: string | null;
   node_id: string | null;
   from_dst: string | null;
+  /** the cluster a relabel renames, or the parents a move gives a node: never null, only empty. */
+  members: string[];
+  payload: RefinementPayload;
   reason: string;
   confidence: number;
   drifted: boolean;

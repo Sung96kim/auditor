@@ -94,12 +94,72 @@ describe("what a run detail does when its own fetch fails", () => {
 });
 
 describe("what a run detail says when a row has no edge to show", () => {
-  it("a node refinement names its node, rather than drawing a dash moving to a dash", async () => {
+  it("a node refinement names its kind and its node, rather than drawing a dash", async () => {
     serve();
     expect((await screen.findByText(/cli\/main.py::_hidden/)).textContent).toContain(
-      "[C] cli/main.py::_hidden",
+      "[C] annotate_node cli/main.py::_hidden",
     );
     expect(screen.queryByText(/- to -/)).toBeNull();
+  });
+
+  it("an added edge names its source, and is told apart from a confirm on the same pair", async () => {
+    const pair = { src: "pkg/dispatch.py::relay", dst: "pkg/util.py::slugify" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              runDetail({
+                refinements: [
+                  refinementRow({ refinement_id: "r-1", kind: "add_edge", ...pair }),
+                  refinementRow({ refinement_id: "r-2", kind: "confirm_edge", ...pair }),
+                ],
+              }),
+            ),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    render(<RunDetail base="/" repo="/w" runId="3f2a1b9c44de4c7f" onClose={vi.fn()} />);
+    const added = await screen.findByText(/add_edge/);
+    expect(added.textContent).toBe(
+      "[A] add_edge pkg/dispatch.py::relay to pkg/util.py::slugify",
+    );
+    expect(screen.getByText(/confirm_edge/).textContent).toBe(
+      "[A] confirm_edge pkg/dispatch.py::relay to pkg/util.py::slugify",
+    );
+  });
+
+  it("a cluster relabel in the accepted list names its label and its members", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              runDetail({
+                refinements: [
+                  refinementRow({
+                    kind: "relabel_cluster",
+                    src: null,
+                    dst: null,
+                    members: ["pkg/core.py::Engine", "pkg/core.py::boot"],
+                    payload: { label: "engine startup" },
+                  }),
+                ],
+              }),
+            ),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    render(<RunDetail base="/" repo="/w" runId="3f2a1b9c44de4c7f" onClose={vi.fn()} />);
+    expect((await screen.findByText(/relabel_cluster/)).textContent).toBe(
+      "[A] relabel_cluster engine startup: pkg/core.py::Engine, pkg/core.py::boot",
+    );
   });
 
   it("an empty tuning list reads inline, like every other empty group in the box", async () => {

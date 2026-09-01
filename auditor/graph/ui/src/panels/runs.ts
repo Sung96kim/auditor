@@ -1,4 +1,4 @@
-import type { RunRow } from "../api/types";
+import type { RefinementRow, RunRow } from "../api/types";
 
 /** Wall time in seconds, or null while the run is still open. Derived: no field carries it. */
 export function duration(row: RunRow): number | null {
@@ -111,4 +111,29 @@ export function rejected<T extends { status: string }>(rows: T[]): T[] {
 /** Neither list's business, and four of the eight statuses land here rather than disappearing. */
 export function otherStatuses<T extends { status: string }>(rows: T[]): T[] {
   return grouped(rows, "other");
+}
+
+/** The fields a refinement's target is read out of, taken from the wire shape, not restated. */
+export type Targeted = Pick<
+  RefinementRow,
+  "kind" | "src" | "dst" | "from_dst" | "node_id" | "members" | "payload"
+>;
+
+/** What one refinement points at, in each of the shapes spec 5.4 allows.
+ *
+ * An edge reads `src to dst`, a retarget `src: old to new`, a moved node its new parents, a
+ * relabelled cluster its new label and its members. Every one of the eight kinds fills in at
+ * least one of these, so the row never comes out as a dash with nothing behind it.
+ */
+export function refinementTarget(row: Targeted): string {
+  if (row.src && row.dst) {
+    return row.from_dst
+      ? `${row.src}: ${row.from_dst} to ${row.dst}`
+      : `${row.src} to ${row.dst}`;
+  }
+  const members = row.members.join(", ");
+  if (row.node_id) return members ? `${row.node_id} to ${members}` : row.node_id;
+  const label = row.payload.label;
+  if (label) return members ? `${label}: ${members}` : label;
+  return members || "no target recorded";
 }

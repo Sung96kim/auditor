@@ -49,6 +49,8 @@ _REFINEMENT_ROW = frozenset(
         "edge_kind",
         "node_id",
         "from_dst",
+        "members",
+        "payload",
         "reason",
         "confidence",
         "drifted",
@@ -128,6 +130,8 @@ READS: dict[str, dict[tuple[str, str], frozenset[str]]] = {
             {"rows", "refinement_count", "truncated"}
         ),
         ("RefinementRowPayload", "RefinementRow"): _REFINEMENT_ROW,
+        # only the label: it is the one field a `relabel_cluster` row names nothing without
+        ("RefinementPayload", "RefinementPayload"): frozenset({"label"}),
     },
     "RunDetailView": {
         ("RunDetailView", "RunDetailView"): frozenset(

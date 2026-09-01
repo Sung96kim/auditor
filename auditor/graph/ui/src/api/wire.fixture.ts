@@ -15,6 +15,7 @@ import type {
   HubMark,
   LogReport,
   RateLimit,
+  RefinementPayload,
   RefinementRow,
   RefinementsReport,
   RefinementsView,
@@ -161,6 +162,12 @@ export function runsView(over: Partial<LogReport> = {}): RunsView {
   return { log: logReport(over) };
 }
 
+export function refinementPayload(
+  over: Partial<RefinementPayload> = {},
+): RefinementPayload {
+  return { label: null, ...over };
+}
+
 export function refinementRow(over: Partial<RefinementRow> = {}): RefinementRow {
   return {
     refinement_id: "r-1",
@@ -173,6 +180,8 @@ export function refinementRow(over: Partial<RefinementRow> = {}): RefinementRow 
     edge_kind: "calls",
     node_id: null,
     from_dst: null,
+    members: [],
+    payload: refinementPayload(),
     reason: "the call is dispatched through a registry",
     confidence: 0.9,
     drifted: false,
