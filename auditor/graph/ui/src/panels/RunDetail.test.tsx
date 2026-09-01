@@ -67,6 +67,8 @@ describe("the run detail", () => {
     expect(prompt.style.maxHeight).toBe("120px");
     expect(prompt.style.overflowY).toBe("auto");
     expect(prompt.style.whiteSpace).toBe("pre-wrap");
+    // the shared `wrapped` treatment, not a second hand-spelled copy of it
+    expect(prompt.style.overflowWrap).toBe("anywhere");
   });
 
   it("a trace line wraps inside the panel rather than pushing it sideways", async () => {
