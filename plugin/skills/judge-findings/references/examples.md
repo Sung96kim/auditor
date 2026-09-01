@@ -24,7 +24,7 @@ The site:
 """Writes the compact status cache the Claude Code plugin's status line reads. ...
 one block per writer, under $AUDITOR_HOME, never inside the repository ..."""
 
-def merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
+def _merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
     try:
         directory = ensure_repo_dir(root)   # $AUDITOR_HOME/repos/<repo_dir_key>/
     except OSError:
@@ -42,7 +42,7 @@ def merge_status(root: Path, block: str, payload: dict[str, object]) -> Path:
 **Reasoning**: the module docstring states this cache is optional — the status line reads it and
 nothing else, but the scan itself must never fail because the cache write failed (read-only fs,
 disk full, permissions). The `except OSError: pass` is deliberate and already explained by the
-inline comment; there's no caller who needs to observe this failure — `merge_status` still
+inline comment; there's no caller who needs to observe this failure — `_merge_status` still
 returns the path either way. This is a genuine false positive, not a bug, and the shape
 (`try: write cache / except OSError: pass`) is stable — it won't turn into a real bug on a
 future edit without someone deliberately removing the comment too.
