@@ -54,6 +54,18 @@ describe("the polled-surface state machine", () => {
     expect(state.data).toBeNull();
   });
 
+  it("a refusal is its own phase, whether or not there is data under it", () => {
+    expect(failed(initial<number>(), "bad limit", true).phase).toBe("refused");
+    const over = failed(initial(1), "bad limit", true);
+    expect(over.phase).toBe("refused");
+    expect(over.data).toBe(1);
+  });
+
+  it("an ordinary failure is unchanged, so only a refusal takes the new phase", () => {
+    expect(failed(initial(1), "network down", false).phase).toBe("stale");
+    expect(failed(initial<number>(), "network down").phase).toBe("error");
+  });
+
   it("repeated failures back off instead of polling a dead daemon every 3 s", () => {
     expect(retryDelay(0)).toBe(POLL_MS);
     const delays = [1, 2, 3, 4, 9].map(retryDelay);

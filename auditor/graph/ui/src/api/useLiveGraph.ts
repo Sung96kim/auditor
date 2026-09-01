@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getJson } from "./client";
+import { getJson, isRefusal } from "./client";
 import { failed, initial, received, retryDelay, type PollState } from "./poll";
 import { readBootstrap, type Bootstrap } from "./bootstrap";
 import type { RunsView, Status } from "./types";
@@ -61,7 +61,7 @@ export function useLiveGraph(): LiveGraph {
         }
       } catch (err) {
         attempts.current.status += 1;
-        if (alive) setStatus((prev) => failed(prev, String(err)));
+        if (alive) setStatus((prev) => failed(prev, String(err), isRefusal(err)));
       }
       if (boot.repo) {
         const query = new URLSearchParams({ repo: boot.repo });
@@ -75,7 +75,7 @@ export function useLiveGraph(): LiveGraph {
           }
         } catch (err) {
           attempts.current.runs += 1;
-          if (alive) setRuns((prev) => failed(prev, String(err)));
+          if (alive) setRuns((prev) => failed(prev, String(err), isRefusal(err)));
         }
       }
       // the backoff is read from the worse of the two surfaces, or a dead daemon is polled

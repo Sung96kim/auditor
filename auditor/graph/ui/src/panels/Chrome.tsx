@@ -13,7 +13,7 @@ import {
   vectorLabel,
   type EvalLine,
 } from "./chrome";
-import { Failed, Loading, Reconnecting } from "./States";
+import { Failed, Loading, Reconnecting, Refused } from "./States";
 import Badge from "./Badge";
 import Bar from "./Bar";
 import Panel, { block, microLabel, mono } from "./Panel";
@@ -101,6 +101,7 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
       trailing={data ? <Badge state={repoState(selected, repo)} /> : null}
     >
       {status.phase === "loading" ? <Loading what="the daemon" /> : null}
+      {status.phase === "refused" ? <Refused error={status.error} /> : null}
       {status.phase === "error" ? <Failed error={status.error} onRetry={onRetry} /> : null}
       {status.phase === "stale" ? (
         <Reconnecting error={status.error} onRetry={onRetry} />
@@ -136,7 +137,9 @@ export default function Chrome({ status, base, repo, onChooseRepo, onRetry }: Ch
 
           <div style={block}>
             <span style={microLabel}>Latest eval</span>
-            {evals.state.phase === "error" ? (
+            {evals.state.phase === "refused" ? (
+              <Refused error={evals.state.error} />
+            ) : evals.state.phase === "error" ? (
               // no confirmed answer at all: say so, never fall back to "no eval yet"
               <Failed error={evals.state.error} onRetry={evals.retry} />
             ) : (

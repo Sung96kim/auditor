@@ -1,5 +1,9 @@
-/** The state every polled surface is in, so EMPTY, LOADING and ERROR are one vocabulary. */
-export type Phase = "loading" | "ready" | "stale" | "error";
+/** The state every polled surface is in, so EMPTY, LOADING and ERROR are one vocabulary.
+ *
+ * `refused` is the daemon answering and declining. It is kept apart from `error` and `stale`
+ * because those two invite a retry and a 4xx cannot be retried into a different answer.
+ */
+export type Phase = "loading" | "ready" | "stale" | "error" | "refused";
 
 export interface PollState<T> {
   phase: Phase;
@@ -35,10 +39,18 @@ export function received<T>(prev: PollState<T>, value: T | null): PollState<T> {
   };
 }
 
-/** A failed poll never blanks the panel: it reconnects over the last good data when there is any. */
-export function failed<T>(prev: PollState<T>, message: string): PollState<T> {
+/** A failed poll never blanks the panel: it reconnects over the last good data when there is any.
+ *
+ * `permanent` is a refusal the daemon answered with, which is neither a first-load failure nor
+ * a connection that went away, whether or not there is data underneath it to keep drawing.
+ */
+export function failed<T>(
+  prev: PollState<T>,
+  message: string,
+  permanent = false,
+): PollState<T> {
   return {
-    phase: prev.data === null ? "error" : "stale",
+    phase: permanent ? "refused" : prev.data === null ? "error" : "stale",
     data: prev.data,
     error: message,
     attempts: prev.attempts + 1,

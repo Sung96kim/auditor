@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { Empty, Failed, Loading, Reconnecting, reason } from "./States";
+import { Empty, Failed, Loading, Reconnecting, Refused, reason } from "./States";
 
 afterEach(cleanup);
 
@@ -30,6 +30,21 @@ describe("the four states every polled surface renders through", () => {
     expect(screen.getByRole("alert").textContent).toContain("Could not reach the observer");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a request the daemon answered and declined", () => {
+  it("names the request rather than the connection, and offers no retry that cannot work", () => {
+    render(<Refused error="Error: limit must be a whole number, not 'abc'" />);
+    const box = screen.getByRole("alert");
+    expect(box.textContent).toContain("The observer refused this request");
+    expect(box.textContent).toContain("limit must be a whole number, not 'abc'");
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("does not borrow the reconnect's words, which promise an outage that will pass", () => {
+    render(<Refused error="no repo named that" />);
+    expect(screen.getByRole("alert").textContent).not.toContain("Reconnecting");
   });
 });
 

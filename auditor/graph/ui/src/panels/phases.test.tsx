@@ -20,6 +20,22 @@ import type { Status } from "../api/types";
 const LOADING = /Loading /;
 const FAILED = "Could not reach the observer";
 const RECONNECTING = "Reconnecting to the observer";
+const REFUSED = "The observer refused this request";
+
+/** A daemon that answers with a status rather than failing to answer at all. */
+function declines(status: number, error: string): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    ),
+  );
+}
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -194,6 +210,51 @@ describe("run detail in every state its fetch can be in", () => {
     rerender(<RunDetail base="/" repo="/w/other" runId="r1" onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(RECONNECTING)).not.toBeNull());
     expect(screen.getByText(/walk the changed pairs/)).not.toBeNull();
+  });
+});
+
+describe("a request the daemon refused, which is not an outage", () => {
+  it("the run stream keeps its rows and offers no retry that could never succeed", () => {
+    serve("never");
+    const ready = received(initial(runsView()), runsView());
+    const state = failed(ready, "limit must be a whole number, not 'abc'", true);
+    render(<RunStream live={graph(state as never)} />);
+    const box = screen.getByRole("alert");
+    expect(box.textContent).toContain(REFUSED);
+    expect(box.textContent).toContain("limit must be a whole number, not 'abc'");
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+    expect(screen.getAllByRole("row").length).toBeGreaterThan(1);
+  });
+
+  it("a 400 on a panel's own fetch reads as a refusal, never as a reconnect", async () => {
+    declines(400, "no repo named that");
+    render(<RefinementList base="/" repo="/w" />);
+    expect((await screen.findByRole("alert")).textContent).toContain(REFUSED);
+    expect(screen.queryByText(RECONNECTING)).toBeNull();
+    expect(screen.queryByText(FAILED)).toBeNull();
+  });
+
+  it("a 503 is still an outage with a retry, so the two are not the same box", async () => {
+    declines(503, "the index is rebuilding");
+    render(<RefinementList base="/" repo="/w" />);
+    expect((await screen.findByRole("alert")).textContent).toContain(FAILED);
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
+  });
+
+  it("run detail says which request was refused rather than blaming the connection", async () => {
+    declines(404, "no run r1 in this repo's ledger");
+    render(<RunDetail base="/" repo="/w" runId="r1" onClose={vi.fn()} />);
+    const box = await screen.findByRole("alert");
+    expect(box.textContent).toContain(REFUSED);
+    expect(box.textContent).toContain("no run r1 in this repo's ledger");
+  });
+
+  it("a refused flow walk says so under the controls that would change it", async () => {
+    declines(400, "symbol must not be empty");
+    render(<FlowPanel base="/" repo="/w" />);
+    fireEvent.change(screen.getByLabelText("Symbol"), { target: { value: "build" } });
+    expect((await screen.findByRole("alert")).textContent).toContain(REFUSED);
+    expect(screen.getByLabelText("Depth")).not.toBeNull();
   });
 });
 

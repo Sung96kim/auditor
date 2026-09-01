@@ -4,7 +4,7 @@ import { TEXT, THEME, TONE } from "../theme";
 import { REFINEMENT_STATUSES } from "./runs";
 import Panel, { block, microLabel, mono } from "./Panel";
 import RefinementLine from "./RefinementLine";
-import { Empty, Failed, Loading, Reconnecting } from "./States";
+import { Empty, Failed, Loading, Reconnecting, Refused } from "./States";
 
 /** Spec 12.1's C14. Fetched on panel open, never on the 3 s cycle (P3). */
 export default function RefinementList({ base, repo }: { base: string; repo: string }) {
@@ -40,6 +40,7 @@ export default function RefinementList({ base, repo }: { base: string; repo: str
       }
     >
       {state.phase === "loading" ? <Loading what="refinements" /> : null}
+      {state.phase === "refused" ? <Refused error={state.error} /> : null}
       {state.phase === "error" ? <Failed error={state.error} onRetry={retry} /> : null}
       {state.phase === "stale" ? (
         <Reconnecting error={state.error} onRetry={retry} />

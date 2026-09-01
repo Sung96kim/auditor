@@ -90,6 +90,17 @@ export function Reconnecting({ error, onRetry }: { error: string; onRetry: () =>
   );
 }
 
+/** The daemon answered and declined. No retry is offered, because none of them can succeed:
+ * the request is what it turned down, and the reader has to change it or go back. */
+export function Refused({ error }: { error: string }) {
+  return (
+    <div style={toned("bad")} role="alert">
+      <span style={{ ...title, color: TONE.bad }}>The observer refused this request</span>
+      <span style={{ color: TEXT.body }}>{reason(error)}</span>
+    </div>
+  );
+}
+
 /** The first poll failed, so there is nothing to keep drawing. */
 export function Failed({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (

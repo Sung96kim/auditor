@@ -4,7 +4,7 @@ import { useFetchOnce } from "../api/useFetchOnce";
 import type { FlowView } from "../api/types";
 import { TEXT, THEME } from "../theme";
 import Panel, { microLabel, mono } from "../panels/Panel";
-import { Empty, Failed, Loading, Reconnecting } from "../panels/States";
+import { Empty, Failed, Loading, Reconnecting, Refused } from "../panels/States";
 import WalkNode, { NODE_H, NODE_W, type Origin } from "./WalkNode";
 import { flatten, layered, type Placed } from "./tree";
 
@@ -145,6 +145,7 @@ export default function FlowPanel({ base, repo }: { base: string; repo: string }
         <Empty what="flow" hint="search for a symbol to walk its callers or its callees" />
       ) : null}
       {symbol && state.phase === "loading" ? <Loading what="the flow walk" /> : null}
+      {symbol && state.phase === "refused" ? <Refused error={state.error} /> : null}
       {symbol && state.phase === "error" ? (
         <Failed error={state.error} onRetry={retry} />
       ) : null}

@@ -5,7 +5,7 @@ import { stream } from "./runs";
 import Panel, { mono } from "./Panel";
 import RunDetail from "./RunDetail";
 import StreamRow, { COLUMNS, head } from "./StreamRow";
-import { Empty, Failed, Loading, Reconnecting } from "./States";
+import { Empty, Failed, Loading, Reconnecting, Refused } from "./States";
 
 /** The one control shape the stream's two disclosures share: a dashed pill with a count in it. */
 function Chip({
@@ -65,6 +65,7 @@ export default function RunStream({ live }: { live: LiveGraph }) {
       }
     >
       {live.runs.phase === "loading" ? <Loading what="runs" /> : null}
+      {live.runs.phase === "refused" ? <Refused error={live.runs.error} /> : null}
       {live.runs.phase === "error" ? (
         <Failed error={live.runs.error} onRetry={live.retry} />
       ) : null}

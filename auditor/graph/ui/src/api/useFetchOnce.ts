@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getJson } from "./client";
+import { getJson, isRefusal } from "./client";
 import { failed, initial, received, type PollState } from "./poll";
 
 export interface Fetched<T> {
@@ -26,7 +26,7 @@ export function useFetchOnce<T>(url: string, enabled = true): Fetched<T> {
         if (alive) setState((prev) => received(prev, got.value));
       })
       .catch((err) => {
-        if (alive) setState((prev) => failed(prev, String(err)));
+        if (alive) setState((prev) => failed(prev, String(err), isRefusal(err)));
       });
     return () => {
       alive = false;

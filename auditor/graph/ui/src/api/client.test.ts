@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { getJson } from "./client";
+import { RequestError, getJson, isRefusal } from "./client";
 
 function answer(init: {
   status: number;
@@ -57,6 +57,20 @@ describe("the conditional GET the poll is built on", () => {
       },
     } as unknown as Response)));
     await expect(getJson("/api/status", "")).rejects.toThrow("Bad Gateway");
+  });
+
+  it("a 4xx carries its status, so the page can tell a refusal from an outage", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => answer({ status: 400, body: { error: "bad limit" } })));
+    const thrown = await getJson("/api/runs?limit=abc", "").catch((err) => err);
+    expect(thrown).toBeInstanceOf(RequestError);
+    expect(thrown.status).toBe(400);
+    expect(isRefusal(thrown)).toBe(true);
+  });
+
+  it("a 5xx and a dead socket are not refusals, because retrying either one can work", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => answer({ status: 503, body: { error: "down" } })));
+    expect(isRefusal(await getJson("/api/status", "").catch((err) => err))).toBe(false);
+    expect(isRefusal(new TypeError("Failed to fetch"))).toBe(false);
   });
 
   it("a 200 with no ETag header leaves the held tag empty rather than sending `null`", async () => {

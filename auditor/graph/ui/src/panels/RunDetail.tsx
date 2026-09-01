@@ -4,7 +4,7 @@ import { TEXT, THEME } from "../theme";
 import { accepted, rejected } from "./runs";
 import RefinementGroup from "./RefinementGroup";
 import { Clipped, Field, microLabel, mono, nested } from "./Panel";
-import { Failed, Loading, Reconnecting } from "./States";
+import { Failed, Loading, Reconnecting, Refused } from "./States";
 
 const box: React.CSSProperties = {
   ...nested,
@@ -75,6 +75,7 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
       </div>
 
       {state.phase === "loading" ? <Loading what="this run" /> : null}
+      {state.phase === "refused" ? <Refused error={state.error} /> : null}
       {state.phase === "error" ? <Failed error={state.error} onRetry={retry} /> : null}
       {state.phase === "stale" ? (
         <Reconnecting error={state.error} onRetry={retry} />
