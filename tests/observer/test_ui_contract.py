@@ -346,7 +346,9 @@ def test_the_runner_marks_are_exactly_the_enum_the_wire_serves():
     exactly `RunnerKind`, or a runner value falls through to "unknown runner X" unnoticed.
     """
     served = set(
-        json.loads((SCHEMAS / "RunDetailView.json").read_text())["$defs"]["RunnerKind"]["enum"]
+        json.loads((SCHEMAS / "RunDetailView.json").read_text())["$defs"]["RunnerKind"][
+            "enum"
+        ]
     )
     text = RUNNER_MARK_TS.read_text()
     marks_block = text.split("export const MARKS", 1)[1].split("\n};\n", 1)[0]
