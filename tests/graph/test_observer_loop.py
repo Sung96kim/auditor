@@ -22,9 +22,12 @@ from auditor.graph.refine.models import (
     RunStatus,
     RunUsage,
     TriggerKind,
+    TuningStatus,
 )
 from auditor.graph.refine.runner import FakeRun, FakeRunner, RunnerUnavailable
-from auditor.graph.refine.service import RefinementService
+from auditor.graph.refine.service import RefinementService, RunRegistry
+from auditor.graph.refine.trial import TuningService
+from auditor.graph.refine.tuning import TuningLedger
 from auditor.observer.assess import EditedFile
 from auditor.observer.budget import BudgetState
 from auditor.observer.daemon import Daemon, IdleTimer
@@ -34,6 +37,7 @@ from auditor.observer.scheduling import EventFeed, LoopState, pause_of
 from auditor.observer.sessions import SessionBook
 from auditor.paths import repo_dir_key
 from auditor.status import status_path
+from auditor.user_settings import UserSettings
 
 _IMPL_WITH_A_NEW_CALL = (
     "from base import Base\nclass Impl(Base):\n    def run(self):\n"
@@ -1192,3 +1196,62 @@ async def test_the_run_row_records_the_client_whose_session_triggered_it(
     loop.client_for = lambda _identity: ClientKind.CODEX
     assert await loop.suspects() is True
     assert [row.client for row in await _rows(refine_service)] == [ClientKind.CODEX]
+
+
+async def _proposed(service: RefinementService, token: str = "load") -> int:
+    """One pending proposal for the loop's work item 5 to find."""
+    row = await TuningService(service=service).propose(
+        "stopwords", token, "the loop should measure this"
+    )
+    return row.tuning_id
+
+
+async def test_the_ladder_measures_one_pending_proposal_per_pass(
+    refine_service: RefinementService,
+):
+    """Spec 8.3 item 5: the slot S8c left returning 0 now runs a trial and lands its metrics."""
+    tuning_id = await _proposed(refine_service)
+    loop = _loop(refine_service)
+    assert await loop.tuning() == 1
+    ledger = TuningLedger(index=refine_service.index)
+    row = await ledger.row(str(tuning_id))
+    assert row.status is TuningStatus.PENDING
+    assert row.metrics.measured_at > 0
+    assert await loop.tuning() == 0
+
+
+async def test_a_measured_proposal_is_not_measured_twice(
+    refine_service: RefinementService,
+):
+    """The trial is tens of seconds; a ladder that re-measured every pass would never idle."""
+    await _proposed(refine_service)
+    loop = _loop(refine_service)
+    assert [await loop.tuning(), await loop.tuning()] == [1, 0]
+
+
+async def test_a_trial_reads_building_on_the_badge_and_leaves_it_observing(
+    refine_service: RefinementService,
+):
+    """`running` means a paid model run everywhere else on this badge, and a trial is a $0 local
+    rebuild (M9)."""
+    await _proposed(refine_service)
+    loop = _loop(refine_service)
+    seen: list[LoopState] = []
+    moved = loop._moved
+    loop._moved = lambda state: (seen.append(state), moved(state))[1]
+    assert await loop.tuning() == 1
+    assert seen == [LoopState.BUILDING, LoopState.OBSERVING]
+    assert loop.state is LoopState.OBSERVING
+
+
+async def test_tuning_off_skips_the_slot_entirely(refine_service: RefinementService):
+    """`observer.tuning.mode = "off"` is checked before the query, so an off repo costs nothing."""
+    await _proposed(refine_service)
+    off = RefinementService(
+        refine_service.index,
+        refine_service.root,
+        refine_service.settings,
+        UserSettings.model_validate({"observer": {"tuning": {"mode": "off"}}}),
+        registry=RunRegistry(),
+    )
+    assert await _loop(off).tuning() == 0

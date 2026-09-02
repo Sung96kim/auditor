@@ -42,6 +42,8 @@ from auditor.cli.options import (
     RefineModel,
     RefineRunner,
     RowLimit,
+    TuningId,
+    TuningToken,
 )
 from auditor.cli.render import (
     render_graph_brief,
@@ -51,6 +53,8 @@ from auditor.cli.render import (
     render_graph_refine,
     render_graph_refinement,
     render_graph_refinements,
+    render_graph_tuning,
+    render_graph_tuning_row,
     render_graph_unresolved,
 )
 from auditor.config import AuditorSettings
@@ -68,6 +72,8 @@ from auditor.graph.payloads import (
     QueueRowPayload,
     RefinementRowPayload,
     RefinementsReport,
+    TuningReport,
+    TuningRowPayload,
 )
 from auditor.graph.query import LogQuery
 from auditor.graph.refine import drive
@@ -78,6 +84,8 @@ from auditor.graph.refine.models import (
     Refinement,
     RefinementStatus,
     RunStatus,
+    TuningRow,
+    TuningStatus,
 )
 from auditor.graph.refine.payloads import (
     BriefPayload,
@@ -91,6 +99,8 @@ from auditor.graph.refine.service import (
     RefinementRefused,
     RefinementService,
 )
+from auditor.graph.refine.trial import TuningService
+from auditor.graph.refine.tuning import TuningLedger, TuningRefused
 from auditor.user_settings import UserSettings
 
 
@@ -258,6 +268,140 @@ def refinements_prune(
     except RefinementRefused as exc:
         fail(str(exc))
     present(payload, render_graph_prune, as_json=json_)
+
+
+tuning_app = typer.Typer(
+    no_args_is_help=True, help="Inspect and steer the proposed graph knob changes."
+)
+
+
+async def _tuning_rows(root: Path, cap: int) -> TuningReport:
+    """This checkout's proposals, oldest first, with the cap the accept will check."""
+    async with await open_index(root) as index:
+        rows = await TuningLedger(index=index).rows()
+    return TuningReport(
+        rows=tuple(TuningRowPayload.of(r) for r in rows),
+        active=sum(1 for r in rows if r.status is TuningStatus.ACTIVE),
+        cap=cap,
+    )
+
+
+async def _tuning_move(
+    root: Path, act: Callable[[TuningLedger], Awaitable[TuningRow]]
+) -> TuningRowPayload:
+    """One hand transition through the ledger, so the CLI and the daemon share the rules."""
+    async with await open_index(root) as index:
+        return TuningRowPayload.of(await act(TuningLedger(index=index)))
+
+
+async def _tuning_word(root: Path, ident: str) -> str:
+    """The confirmation word stored on the row, so omitting `--token` can print it."""
+    async with await open_index(root) as index:
+        return (await TuningLedger(index=index).row(ident)).token
+
+
+def _tuning_transition(
+    target: Path,
+    ident: str,
+    token: str | None,
+    json_: bool,
+    act: Callable[[TuningLedger, str], Awaitable[TuningRow]],
+) -> None:
+    """Run one transition, or print the word it needs when `--token` was left off.
+
+    `refinements accept` takes no confirmation because it moves one recorded correction; a knob
+    moves every cluster in the repo, so this one is deliberately harder to do by accident (P9).
+    """
+    root = cli_root(target)
+    try:
+        if token is None:
+            word = run(_tuning_word(root, ident), "reading…")
+            fail(f"repeat the confirmation word to confirm: --token {word}")
+        payload = run(
+            _tuning_move(root, lambda ledger: act(ledger, token)), "updating…"
+        )
+    except TuningRefused as exc:
+        fail(str(exc))
+    present(payload, render_graph_tuning_row, as_json=json_)
+
+
+@tuning_app.command("list")
+def tuning_list(
+    target: GraphTarget = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """The knob changes proposed for this checkout, with the trial each one measured."""
+    root = cli_root(target)
+    cap = load_user(root).observer.tuning.stopwords_max
+    present(
+        run(_tuning_rows(root, cap), "reading tuning…"),
+        render_graph_tuning,
+        as_json=json_,
+    )
+
+
+@tuning_app.command("accept")
+def tuning_accept(
+    ident: TuningId,
+    target: GraphTarget = Path("."),
+    token: TuningToken = None,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Activate a measured proposal. The next `graph build` reads it."""
+    cap = load_user(cli_root(target)).observer.tuning.stopwords_max
+    _tuning_transition(
+        target,
+        ident,
+        token,
+        json_,
+        lambda ledger, word: ledger.accept(ident, token=word, cap=cap),
+    )
+
+
+@tuning_app.command("revert")
+def tuning_revert(
+    ident: TuningId,
+    target: GraphTarget = Path("."),
+    token: TuningToken = None,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Take a knob back out. The row stays, with its reason and its trial."""
+    _tuning_transition(
+        target,
+        ident,
+        token,
+        json_,
+        lambda ledger, word: ledger.revert(ident, token=word),
+    )
+
+
+async def _tuning_measure(root: Path, ident: str) -> TuningRowPayload:
+    """One trial in this process, for a checkout with no observer attached."""
+    async with await open_index(root) as index:
+        service = RefinementService(index, root, load_settings(root), load_user(root))
+        tuning = TuningService(service=service)
+        row = await tuning.ledger.row(ident)
+        await tuning.measure(row.tuning_id)
+        return TuningRowPayload.of(await tuning.ledger.row(str(row.tuning_id)))
+
+
+@tuning_app.command("measure")
+def tuning_measure(
+    ident: TuningId,
+    target: GraphTarget = Path("."),
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Run this proposal's trial here and now, rather than waiting for the observer.
+
+    One facts-only rebuild that is never written, so the stored graph is what the last real build
+    left. Expect tens of seconds on a repo this size.
+    """
+    root = cli_root(target)
+    try:
+        payload = run(_tuning_measure(root, ident), "measuring trial…")
+    except TuningRefused as exc:
+        fail(str(exc))
+    present(payload, render_graph_tuning_row, as_json=json_)
 
 
 async def _log(root: Path, spec: LogFilter) -> LogReport:
@@ -485,3 +629,4 @@ def register(app: typer.Typer) -> None:
     app.command("eval")(graph_eval)
     app.command("log")(graph_log)
     app.add_typer(refinements_app, name="refinements")
+    app.add_typer(tuning_app, name="tuning")

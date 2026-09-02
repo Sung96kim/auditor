@@ -67,6 +67,7 @@ _SUBCOMMANDS = (
     "refine",
     "eval",
     "refinements",
+    "tuning",
     "log",
 )
 

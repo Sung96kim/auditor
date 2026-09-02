@@ -41,6 +41,10 @@ WARNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("graph", "refinements", "revert"),
         ("graph", "search"),
         ("graph", "serve"),
+        ("graph", "tuning", "accept"),
+        ("graph", "tuning", "list"),
+        ("graph", "tuning", "measure"),
+        ("graph", "tuning", "revert"),
         ("graph", "unresolved"),
         ("graph", "usages"),
         ("ignore", "add"),
@@ -155,6 +159,7 @@ def test_a_silent_command_prints_no_notice(bad_config, path):
         ("graph", "unresolved", "{repo}"),
         ("graph", "log", "{repo}"),
         ("graph", "refinements", "list", "{repo}"),
+        ("graph", "tuning", "list", "{repo}"),
     ],
 )
 def test_a_config_loading_command_warns_exactly_once(bad_config, argv):

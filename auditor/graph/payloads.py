@@ -4,6 +4,7 @@ They live beside the graph rather than under ``auditor/cli`` so the CLI renderer
 tools read the same shape and neither imports the other.
 """
 
+import json
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -42,6 +43,9 @@ from auditor.graph.refine.models import (
     Tier,
     TriggerDetail,
     TriggerKind,
+    TuningMetrics,
+    TuningRow,
+    TuningStatus,
     Verdict,
 )
 from auditor.payload import WirePayload, WireRows
@@ -190,6 +194,54 @@ class QueueRowPayload(UnresolvedRow):
 
 class QueueReport(WireRows[QueueRowPayload]):
     """``graph unresolved``."""
+
+
+class TuningRowPayload(WirePayload):
+    """One tuning proposal as every surface shows it: the value decoded out of its JSON string,
+    the confirmation word beside it, and the verdict the guards reached."""
+
+    tuning_id: int
+    key: str
+    value: str
+    status: TuningStatus
+    token: str
+    reason: str
+    run_id: str
+    created_at: float
+    metrics: TuningMetrics = TuningMetrics()
+    measured: bool = False
+    passed: bool = False
+    refused: str = ""
+
+    @classmethod
+    def of(cls, row: TuningRow) -> "TuningRowPayload":
+        """One `graph_tuning` row flattened, with the guard verdict beside the numbers.
+
+        `measured` is `measured_at`, not a zero test on a metric: a trial that ran and scored
+        zeroes has to read differently from one that never ran (S11 E4).
+        """
+        return cls(
+            tuning_id=row.tuning_id,
+            key=row.key,
+            value=str(json.loads(row.value_json)),
+            status=row.status,
+            token=row.token,
+            reason=row.reason,
+            run_id=row.run_id,
+            created_at=row.created_at,
+            metrics=row.metrics,
+            measured=bool(row.metrics.measured_at),
+            passed=bool(row.metrics.measured_at and not row.metrics.refused),
+            refused=row.metrics.refused,
+        )
+
+
+class TuningReport(WirePayload):
+    """``auditr graph tuning list``: this checkout's proposals, oldest first."""
+
+    rows: tuple[TuningRowPayload, ...] = ()
+    active: int = 0
+    cap: int = 0
 
 
 class GraphBuildReport(WirePayload):

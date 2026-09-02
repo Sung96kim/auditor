@@ -49,6 +49,8 @@ from auditor.graph.payloads import (
     RelatedReport,
     RunRowPayload,
     SearchReport,
+    TuningReport,
+    TuningRowPayload,
     UsagesPayload,
 )
 from auditor.graph.refine.models import (
@@ -283,6 +285,9 @@ def _proposed_values(payload: RefinementRowPayload) -> list[tuple[str, str]]:
 #: the log prepends its own `when`
 _REFINEMENT_COLUMNS = ("id", "kind", "tier", "status", "target")
 
+#: one tuning proposal, in the order a human decides on it (spec 11, 12.2)
+_TUNING_COLUMNS = ("id", "stopword", "status", "token", "trial")
+
 #: the decisions view, which only the log has
 _RUN_COLUMNS = ("when", "producer", "runner", "trigger", "status", "n", "summary")
 
@@ -348,6 +353,72 @@ def _refinement_note(row: RefinementRowPayload) -> str:
     proposed = " ".join(f"{k}={v}" for k, v in _proposed_values(row))
     note = f"{proposed} {escape(row.reason)}".strip()
     return f"{drift}[dim]{note}[/]"
+
+
+def render_graph_tuning(out: Console, payload: TuningReport) -> None:
+    """`graph tuning list`: one row per proposal, with the confirmation word an accept repeats."""
+    if not payload.rows:
+        out.print(
+            "[dim](no tuning proposals; an agent records one with the propose_tuning tool)[/]"
+        )
+        return
+    t = _headed_table(_TUNING_COLUMNS)
+    for row in payload.rows:
+        t.add_row(*_tuning_cells(row))
+        t.add_row(*_note_row(_TUNING_COLUMNS, row.reason))
+    out.print(t)
+    out.print(f"[dim]{payload.active} of {payload.cap} stopwords active[/]")
+
+
+def render_graph_tuning_row(out: Console, payload: TuningRowPayload) -> None:
+    """One proposal after a transition or a trial, in the `graph refinements` grid shape."""
+    t = Table.grid(padding=(0, 3))
+    t.add_column(style="bold")
+    t.add_column(style=_ACCENT)
+    for label, value in (
+        ("id", str(payload.tuning_id)),
+        ("key", payload.key),
+        ("value", payload.value),
+        ("status", payload.status.value),
+        ("token", payload.token),
+        ("clusters", _tuning_delta(payload)),
+        ("guard", _tuning_guard(payload)),
+        ("reason", payload.reason),
+    ):
+        t.add_row(label, value)
+    out.print(t)
+
+
+def _tuning_guard(row: TuningRowPayload) -> str:
+    """Spec 11's verdict in words: what a human must not mistake for a passing trial."""
+    if not row.measured:
+        return "not measured yet"
+    return "passed" if row.passed else f"[red]refused: {escape(row.refused)}[/]"
+
+
+def _tuning_delta(row: TuningRowPayload) -> str:
+    """The numbers a human reads before accepting: what the trial did to the clustering.
+
+    Percentages to one place on both sides of the wire, so the same row cannot read `0.41%` here
+    and `0.4%` on the live page (S11 M14).
+    """
+    if not row.measured:
+        return "not measured yet"
+    m = row.metrics
+    return (
+        f"{m.baseline.clusters} -> {m.clusters}, "
+        f"name-edge churn {m.name_edge_churn:.1%}, label churn {m.label_churn:.1%}"
+    )
+
+
+def _tuning_cells(row: TuningRowPayload) -> tuple[str, ...]:
+    return (
+        str(row.tuning_id),
+        row.value,
+        row.status.value,
+        row.token,
+        _tuning_delta(row) if row.passed or not row.measured else _tuning_guard(row),
+    )
 
 
 def render_graph_refinements(out: Console, payload: RefinementsReport) -> None:

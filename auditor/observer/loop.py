@@ -50,6 +50,7 @@ from auditor.graph.refine.runner import (
 )
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.graph.refine.tiers import TierPolicy, activation_tier, eval_model
+from auditor.graph.refine.trial import TuningService
 from auditor.graph.scan import autoscan
 from auditor.observer.assess import (
     CachedFile,
@@ -637,12 +638,26 @@ class RepoLoop:
     # --- work item 5: tuning trials ------------------------------------------
 
     async def tuning(self) -> int:
-        """Spec 8.3 item 5's slot, which S11 fills: the ladder reaches it and finds no proposal.
+        """Measure the oldest proposal no trial has looked at, and land its verdict (spec 8.3
+        item 5). A passing trial stays `pending`: only a human accepts a knob.
 
-        Nothing tuning-shaped is written anywhere yet, so a trial harness here would be S11's
-        whole slice arriving early (recon Q6).
+        One row per pass. The trial is a whole facts-only rebuild, tens of seconds on a repo this
+        size, and it runs on a worker thread so the other repos this loop shares keep moving.
         """
-        return 0
+        if self.user.observer.tuning.mode == "off":
+            return 0
+        tuning = TuningService(service=self.service)
+        row = await tuning.unmeasured()
+        if row is None:
+            return 0
+        # `building`, not `running`: the badge's `running` means a paid model run and this is a
+        # $0 local rebuild (M9)
+        self._moved(LoopState.BUILDING)
+        try:
+            await tuning.measure(row.tuning_id)
+        finally:
+            self._moved(LoopState.OBSERVING)
+        return 1
 
     # --- opening a run -------------------------------------------------------
 

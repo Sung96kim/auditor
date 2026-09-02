@@ -309,6 +309,19 @@ RefinementStatusFilter = Annotated[
     list[RefinementStatus] | None,
     typer.Option("--status", help="Only these refinement statuses (repeatable)."),
 ]
+TuningId = Annotated[
+    str,
+    typer.Argument(
+        help="Tuning id, or the stopword itself, from `auditr graph tuning list`."
+    ),
+]
+TuningToken = Annotated[
+    str | None,
+    typer.Option(
+        "--token",
+        help="The confirmation word on the row; omit it to be shown the one to repeat.",
+    ),
+]
 RowLimit = Annotated[
     int,
     typer.Option(
