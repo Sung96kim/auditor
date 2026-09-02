@@ -822,13 +822,15 @@ def _run(
     seed: int = 1,
     pretend: FakeRun | None = None,
     on_plan: Any = None,
+    runner: RunnerKind = RunnerKind.FAKE,
+    model: str = "haiku",
 ) -> EvalRun:
     """One eval over this service, answered by a script rather than an SDK."""
     return EvalRun(
         service=service,
         build=eval_build(answers, pretend),
-        runner=RunnerKind.FAKE,
-        model="haiku",
+        runner=runner,
+        model=model,
         size=size,
         seed=seed,
         on_plan=on_plan,
@@ -843,6 +845,8 @@ async def _evaluate(
     size: int = 2,
     seed: int = 1,
     pretend: FakeRun | None = None,
+    runner: RunnerKind = RunnerKind.FAKE,
+    model: str = "haiku",
 ):
     """Run one suite with a script derived from the trials it will draw."""
     population = await Population.of(service.facts)
@@ -853,6 +857,8 @@ async def _evaluate(
         size=size,
         seed=seed,
         pretend=pretend,
+        runner=runner,
+        model=model,
     ).report([suite])
 
 
@@ -875,6 +881,21 @@ async def test_the_rows_a_run_writes_are_what_the_gate_reads_back(eval_service):
         ("add", Stratum.NEITHER),
     }
     assert all(row.metrics.false_removal_rate == 0.0 for row in rows)
+
+
+async def test_a_codex_eval_is_filed_under_its_codex_model(eval_service):
+    """`EvalRun.model` used to be typed `ClaudeModel`, so `tiers.eval_model` handing it a Codex
+    model string raised at construction, before a run ever opened (spec 14). This drives a whole
+    eval through with `runner=CODEX`, which used to fail the same way a second time inside
+    `_one_batch`'s own `RefinementJob`, and checks the stored row is filed under the Codex model
+    rather than under `haiku` or refused outright."""
+    report = await _evaluate(
+        eval_service, runner=RunnerKind.CODEX, model="gpt-5.1-codex"
+    )
+    assert (report.runner, report.model) == (RunnerKind.CODEX, "gpt-5.1-codex")
+    rows = await eval_service.index.evals.latest(RunnerKind.CODEX, "gpt-5.1-codex")
+    assert rows and all(row.model == "gpt-5.1-codex" for row in rows)
+    assert await eval_service.index.evals.latest(RunnerKind.FAKE, "haiku") == []
 
 
 async def test_a_perfect_short_run_cannot_clear_the_default_bar(eval_service):

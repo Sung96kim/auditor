@@ -68,7 +68,6 @@ from auditor.graph.resolve_edges import (
     form_for,
     resolve_structural,
 )
-from auditor.user_settings import ClaudeModel
 
 logger = logging.getLogger(__name__)
 
@@ -707,7 +706,9 @@ class EvalRun(BaseModel):
     service: RefinementService
     build: RunnerFactory
     runner: RunnerKind
-    model: ClaudeModel | None
+    #: what `tiers.eval_model` resolved for this runner: a Claude tier or a Codex model string, so
+    #: a Codex eval is filed under `codex_model` rather than refused for not being one (spec 14)
+    model: str | None
     size: int
     seed: int
     #: called once with the plan before the first run opens, so an operator can still stop
@@ -911,7 +912,10 @@ class EvalRun(BaseModel):
                     trigger=TriggerKind.EVAL,
                     producer=ProducerKind.CLI,
                     client=ClientKind.CLI,
-                    model=self.model,
+                    # `RefinementJob.model` is a Claude tier by type (spec 14); a Codex run's
+                    # `_open` reads `codex_model` on its own, so this stays unset for it rather
+                    # than handing it `self.model`'s Codex string
+                    model=None if self.runner is RunnerKind.CODEX else self.model,
                 )
             )
         except RefinementRefused as exc:
