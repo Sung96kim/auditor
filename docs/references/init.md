@@ -14,6 +14,9 @@ auditr init
 # also create this repo's personal overlay and breadcrumb
 auditr init --repo
 
+# work against another checkout instead of walking up from here
+auditr init --repo --root ../other-repo
+
 # report only: unknown keys, a moved checkout, a leftover status file
 auditr init --check
 
@@ -29,6 +32,11 @@ auditr init --json
 
 ## What it writes
 
+- `--root/-r` picks the repo whose config and plugins load, defaulting to a walk up from the
+  current directory. It selects the repo `--repo`, `--migrate` and `--clean-status` act on; it
+  never changes where the home itself lives, which is `$AUDITOR_HOME` alone. Every sibling command
+  takes the same flag ([config.md](config.md), [index.md](index.md), [rules.md](rules.md),
+  [plugins.md](plugins.md)).
 - `$AUDITOR_HOME/config.json`: `"$schema": "./config.schema.json"` and `"config_version": 2`, plus
   whatever keys were already there. Defaults are never written out, so a later default change is
   not pinned and a value the user chose stays distinguishable from one init wrote.

@@ -559,6 +559,7 @@ tier gate reads:
 | `AUDITOR_HOME` | `~/.auditor` | Root of all generated global state: `index.db` (the shared index, partitioned by repo, holding cached findings, persistent ignores and graph facts), `bin/` (the checksum-verified osv-scanner download), `osv-db/` (the OSV database). |
 | `AUDITOR_CODE_MODE` | unset (`false`) | Enables the experimental Code Mode transform on the MCP server. A no-op unless the `code-mode` extra is installed ([auditr-mcp.md](auditr-mcp.md)). |
 | `AUDITOR_REFINE_RUN` | unset | Pre-binds the MCP refinement tools to one run id, so a runner-spawned server needs no `run_id` per call ([auditr-mcp.md](auditr-mcp.md)). |
+| `AUDITOR_GRAPH_TOKEN` | unset | The bearer token the Codex refine runner's loopback MCP shim checks. `graph refine --runner codex` generates one per server and puts it in the Codex child's environment, and the `config.toml` it writes names this variable in `bearer_token_env_var`. Setting it yourself does nothing ([graph.md](graph.md)). |
 | `AUDITOR_OBSERVER` | unset (on) | Set to `0`, `f`, `false`, `n`, `no` or `off` to disable the observer entirely: every verb prints a notice and exits 0. Read by `paths.observer_enabled`, which ignores a value it cannot read rather than failing the command. |
 | `AUDITOR_OBSERVER_PORT` | unset (hashed) | The loopback port the daemon binds. Unset, it is `7490 + crc32(resolved $AUDITOR_HOME) % 500`; `0` asks the kernel for any free port. There is no `observer.port` config key: this is env only ([observer.md](observer.md)). |
 
