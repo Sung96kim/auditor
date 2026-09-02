@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 TEXT_MODEL_KIND = "tfidf_lsi"
 #: the one dtype name the fit writes and the query reads back; numpy stays out of this module
 TEXT_MODEL_DTYPE = "float32"
-#: bytes per stored value; "f" is the struct code for the dtype above, so neither can drift
+#: bytes per stored value; "f" is the struct code for the dtype above
 TEXT_MODEL_ITEMSIZE = struct.calcsize("f")
 
 

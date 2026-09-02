@@ -301,7 +301,9 @@ async def test_a_zero_limit_page_still_never_reads_the_fit(
     ranked_store: IndexStore, monkeypatch: pytest.MonkeyPatch
 ):
     """The tier gate reads the match set, not the truncated page, so an id that matches keeps
-    the ranked half shut even when the cap leaves no row to show for it."""
+    the ranked half shut even when the cap leaves no row to show for it. ``limit=0`` is
+    unreachable from the CLI and MCP, which both reject it before ``search`` runs; it is used
+    here anyway because it is the only value that separates this gate from the truncated page."""
 
     async def refuse() -> TextModel | None:
         raise AssertionError("the ranked tier ran for a term an id contains")

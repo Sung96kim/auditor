@@ -85,7 +85,7 @@ auditr graph export . --format dot > graph.dot
   come first, highest rank first, and when there are any they are the whole page, so an exact-name
   lookup returns what it always returned. A term no id contains falls through to the symbols whose
   naming document ranks nearest to it in the graph build's tf-idf + LSI space, each carrying that
-  cosine as `score`. A ranked row always scores above the 0.05 relevance floor, so `score: 0.0`
+  cosine as `score`. A ranked row always scores at least the 0.05 relevance floor, so `score: 0.0`
   still means the row came from the name half. Three cases, kept apart:
   - a name match suppresses ranking entirely, and `search Blueprint` returns its two rows;
   - a word the build never fitted returns nothing at all: measured on this repo, `kubernetes` and
@@ -97,10 +97,14 @@ auditr graph export . --format dot > graph.dot
 
   Read the ranked half as a shortlist to skim, not as a lookup: on this repo's own graph the
   labelled answer to a hand-written question is on a 20-row page for 13 of the 40 questions the
-  retrieval gate asks. Symbols the build marked text-sparse, and module nodes, carry no naming
-  document and never appear in the ranked half; find those by name. `--limit` is 1 to 1000 and
-  defaults to 20. An index built before this ranking existed holds no fit, and `search` is the
-  substring scan alone until the next `graph build`.
+  retrieval gate asks. That per-query answer set is a golden snapshot
+  (`RECOVERED_AT_20` in `tests/graph/test_retrieval.py`) over this repo's own corpus, so a commit
+  that adds, renames or rewords the symbols it ranks over can move which questions the fit
+  answers; when the gate fails, re-measure and update the snapshot in that same commit rather
+  than widen the assertion. Symbols the build marked text-sparse, and module nodes, carry no
+  naming document and never appear in the ranked half; find those by name. `--limit` is 1 to 1000
+  and defaults to 20. An index built before this ranking existed holds no fit, and `search` is
+  the substring scan alone until the next `graph build`.
 - `concept` returns the whole membership of the cluster a term belongs to, matching the cluster
   label first and member names second, and prints the label, the member count and every member id.
   The MCP `graph_concept` tool caps its member list and reports `member_count` and `shown`.

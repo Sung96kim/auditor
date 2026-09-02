@@ -404,6 +404,7 @@ class GraphDB(BaseDB):
         def op(conn: sqlite3.Connection) -> None:
             self.write_graph(conn, nodes, edges, clusters)
             # a fit describes the node set it was built from, so replacing the nodes clears it
+            # (`replace` is the fixture entry point; the build writes through `Snapshot.apply`)
             self.write_text_model(conn, None)
             conn.commit()
 

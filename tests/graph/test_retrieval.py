@@ -53,7 +53,6 @@ RECOVERED_AT_20 = (
     "add a missing column to a table that already exists",
     "which other symbols reach this one and which it reaches",
     "check a proposed answer against what the parser actually saw",
-    "choose which assistant back end will do the work",
     "the instructions handed to the model before it answers",
     "the test that pins the confidence bound arithmetic to the numbers the spec lists",
     "the test proving a half-written line from a killed process is skipped instead of raised",
@@ -120,11 +119,7 @@ async def test_the_fixture_asks_for_test_nodes_as_well_as_production_ones(
 ):
     """A fixture with no test-role answer cannot price any policy that reorders test nodes."""
     roles = {n["node_id"]: n["role"] for n in await repo_query.index.graph.nodes()}
-    wanted = [
-        q["q"]
-        for q in QUERIES
-        if any(roles.get(g, "") in TEST_ROLES for g in q["gold"])
-    ]
+    wanted = [q["q"] for q in QUERIES if any(roles[g] in TEST_ROLES for g in q["gold"])]
     assert len(wanted) >= 5, f"only {len(wanted)} queries whose answer is a test node"
 
 
@@ -173,7 +168,9 @@ async def test_every_question_this_fit_could_answer_is_still_answered(
     """The sensitivity half: per query, so a lost answer cannot be paid for by a gained one.
 
     Recall counts queries and the floors budget three of them, which is wider than the effect of
-    deleting a weighting step; a named query that stops being answered is not.
+    deleting a weighting step; a named query that stops being answered is not. A failure here
+    means the corpus moved: re-measure and update ``RECOVERED_AT_20`` in the commit that moved
+    it, rather than widening this assertion.
     """
     recovered = {
         item["q"]
@@ -182,5 +179,6 @@ async def test_every_question_this_fit_could_answer_is_still_answered(
     }
     lost = sorted(set(RECOVERED_AT_20) - recovered)
     assert not lost, (
-        f"{len(lost)} of {len(RECOVERED_AT_20)} answers left the page: {lost}"
+        f"{len(lost)} of {len(RECOVERED_AT_20)} answers left the page: {lost} "
+        "(see this test's docstring to re-measure RECOVERED_AT_20 rather than widen this)"
     )

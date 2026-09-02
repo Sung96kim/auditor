@@ -147,11 +147,7 @@ class GraphQuery:
         """Symbols whose id contains ``term``, highest-rank first, and only when none does, the
         symbols whose naming document ranks nearest to it in the build's tf-idf + LSI space.
 
-        The name half is unchanged, so locating the exact node before a usages/neighbors query
-        returns exactly what it used to and "no symbol by that name" is still an answer. A ranked
-        row scores at least ``RELEVANCE_FLOOR``, so ``score == 0.0`` still means the name half.
-        An index built before the fit was stored has no model and never ranks, and the nodes and
-        the fit are two reads, so a query racing a build may rank against the previous fit.
+        A ranked row scores at least ``RELEVANCE_FLOOR``, so ``score == 0.0`` still means the name half.
         """
         nodes = await self.index.graph.nodes()
         kinds = {n["node_id"]: n["kind"] for n in nodes}
@@ -164,6 +160,9 @@ class GraphQuery:
             key=lambda nid: (-ranks[nid], nid),
         )
         named = matched[:limit]
+        # the nodes read above and the fit read here are two independent reads, so a query
+        # racing a build may rank against the fit that predates it; an index built before the
+        # fit was stored has no model at all and never ranks
         model = None if matched else await self.index.graph.text_model()
         scores = text_scores(model, term) if model is not None else {}
         ranked = heapq.nsmallest(

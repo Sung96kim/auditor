@@ -7,7 +7,7 @@ from auditor.graph.textmodel import TEXT_MODEL_DTYPE, TextModel
 from auditor.graph.tokens import normalize_tokens, split_ident
 
 #: below this cosine a document is noise rather than a candidate, so the caller drops it. Measured
-#: on this repo's own fit: about half of all 6496 documents score at or below zero for any query,
+#: on this repo's own fit: about half of all 6514 documents score at or below zero for any query,
 #: while the weakest page the retrieval gate recovers an answer from bottoms out at 0.32, so the
 #: floor sits an order of magnitude under the weakest real answer and above the noise band.
 RELEVANCE_FLOOR = 0.05

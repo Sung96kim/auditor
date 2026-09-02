@@ -239,7 +239,7 @@ auditr graph concept <term> --json    # the concept cluster best matching the te
 `search` is name-first, meaning-second: every node id containing the term, highest-rank first, and
 when any id contains it that is the whole answer. A term no id contains falls through to the
 symbols whose naming document ranks nearest to it in the build's tf-idf + LSI space, with that
-cosine on each row as `score`. Every ranked row clears a 0.05 relevance floor, so `score: 0.0`
+cosine on each row as `score`. Every ranked row scores at least 0.05, so `score: 0.0`
 does mean the row came from the name half. An empty page means the term is not in the fitted
 corpus at all: a word the corpus holds but no id carries is ranked rather than missed, and
 text-sparse symbols and module nodes have no naming document and are reachable by name only.
@@ -254,23 +254,25 @@ one deliberately). Real example:
 ```json
 // auditr graph search find_root --json --limit 3   (the name half; every score is 0.0)
 [
-  {"id": "auditor/discovery.py::find_root", "kind": "function", "rank": 0.001951, "score": 0.0},
-  {"id": "plugin/statusline/auditor_status.py::_find_root", "kind": "function", "rank": 0.000325, "score": 0.0},
-  {"id": "auditr_observer.py::find_root", "kind": "function", "rank": 0.000229, "score": 0.0}
+  {"id": "auditor/discovery.py::find_root", "kind": "function", "rank": 0.001937, "score": 0.0},
+  {"id": "plugin/statusline/auditor_status.py::_find_root", "kind": "function", "rank": 0.000323, "score": 0.0},
+  {"id": "auditr_observer.py::find_root", "kind": "function", "rank": 0.000228, "score": 0.0}
 ]
 
 // auditr graph search "how much money is left to spend today" --json --limit 3
 [
-  {"id": "auditor/observer/budget.py::BudgetState.remaining_fraction", "kind": "method", "rank": 0.000204, "score": 0.607921},
-  {"id": "auditor/observer/budget.py::budget_state", "kind": "function", "rank": 0.000238, "score": 0.585127},
-  {"id": "auditor/graph/refine/eval.py::EvalRun.ceiling", "kind": "method", "rank": 0.000204, "score": 0.58272}
+  {"id": "auditor/graph/refine/eval.py::EvalRun.ceiling", "kind": "method", "rank": 0.000203, "score": 0.61964},
+  {"id": "auditor/graph/refine/models.py::Spend", "kind": "class", "rank": 0.000313, "score": 0.61368},
+  {"id": "auditor/observer/budget.py::BudgetState.remaining_fraction", "kind": "method", "rank": 0.000203, "score": 0.574064}
 ]
 ```
 
 Both blocks are real runs against this repo's own graph, not illustrations, so they move when the
 corpus does: re-measure them in the commit that changes the code they rank over. The second query
-is entry 10 of `tests/graph/data/retrieval_queries.json` and its labelled answer is the first row.
-Queries the fit misses look no different on the way out, which is why the page is a shortlist:
+is entry 10 of `tests/graph/data/retrieval_queries.json`; its labelled answer,
+`BudgetState.remaining_fraction`, is the third row here rather than the first: two newer, more
+generically money-shaped symbols now outrank it, which is exactly why the ranked half is a
+shortlist and not a lookup. Queries the fit misses look no different on the way out:
 `"wait for a quiet period before acting on a burst of file changes"` answers with three plausible
 file-handling symbols and none of them is `observer/scheduling.py::debounced`, the labelled answer.
 

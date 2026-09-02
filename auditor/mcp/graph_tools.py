@@ -107,7 +107,7 @@ async def graph_search(
     ``term`` come first, highest-rank first; only when no id contains it does the page
     become the symbols whose naming document ranks nearest to ``term`` in the graph
     build's tf-idf + LSI space, each with its cosine as ``score`` (a ranked row scores
-    above 0.05, so ``score`` 0.0 still means the name half). So an exact name still
+    at least 0.05, so ``score`` 0.0 still means the name half). So an exact name still
     locates the node before graph_usages/graph_neighbors, and a word the corpus never
     fitted still returns nothing. A plain-English question ("how much money is left to
     spend today") returns a ranked shortlist to skim, not a lookup: on this repo the

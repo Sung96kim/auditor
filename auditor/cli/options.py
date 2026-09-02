@@ -348,6 +348,17 @@ LogSkipped = Annotated[
     ),
 ]
 
+# --- `graph search` options ---
+SearchLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit",
+        min=1,
+        max=MAX_SEARCH_LIMIT,
+        help="Cap on rows returned, by name or by rank.",
+    ),
+]
+
 # --- `graph flow` options ---
 FlowIn = Annotated[
     bool,
@@ -371,15 +382,6 @@ FlowLimit = Annotated[
         min=1,
         max=MAX_FLOW_LIMIT,
         help="Cap on nodes emitted; shallow levels complete first.",
-    ),
-]
-SearchLimit = Annotated[
-    int,
-    typer.Option(
-        "--limit",
-        min=1,
-        max=MAX_SEARCH_LIMIT,
-        help="Cap on rows returned, by name or by rank.",
     ),
 ]
 FlowKinds = Annotated[
