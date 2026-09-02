@@ -101,5 +101,10 @@ def test_a_tuning_row_carries_trial_metrics_not_eval_accuracy():
         "singletons",
         "top_cluster_share",
         "stranded_pins",
+        "name_edge_churn",
+        "label_churn",
+        "measured_at",
+        "refused",
+        "baseline",
     }
     assert not hasattr(row.metrics, "lower_bound_95")

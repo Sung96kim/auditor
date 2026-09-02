@@ -295,9 +295,31 @@ class GraphBuilder:
         progress: Callable[[str], None] | None = None,
         snapshot: Snapshot | None = None,
     ) -> GraphBuildReport:
-        # spec 11's precedence, at the one merge point Invariant 1 names: repo policy beats an
-        # active tuning row, which beats the default
-        settings = await tuned_settings(index, settings)
+        """Build this checkout's graph and land it as one commit.
+
+        The tuning read is here and nowhere else, which is what makes Invariant 1's "one merge
+        point" a property of the call graph: `shape` builds the settings it is given.
+        """
+        # spec 11's precedence: repo policy beats an active tuning row, which beats the default
+        write = await self.shape(
+            index, await tuned_settings(index, settings), progress=progress
+        )
+        (progress or (lambda _m: None))("persisting graph")
+        return await write.persist(index, snapshot)
+
+    async def shape(
+        self,
+        index: IndexStore,
+        settings: AuditorSettings,
+        *,
+        progress: Callable[[str], None] | None = None,
+    ) -> GraphWrite:
+        """Everything one build produces, as a value, before anything is written.
+
+        The write is the last line of :meth:`run` and nothing else here touches the index, so a
+        caller that wants the graph a config *would* produce calls this and never persists it.
+        That is what makes a tuning trial provably footprint free (spec 11, Invariant 6).
+        """
         cfg = settings.graph
         report = progress or (lambda _m: None)
         report("loading cached facts")
@@ -307,7 +329,7 @@ class GraphBuilder:
         nodes = _deduped(facts)
         if not nodes:
             # one write path: the empty graph also clears the last build's GRAPH-* findings
-            return await GraphWrite(detect=cfg.detect).persist(index, snapshot)
+            return GraphWrite(detect=cfg.detect)
 
         report("resolving structural edges")
         structural = resolve_structural(nodes)
@@ -360,8 +382,7 @@ class GraphBuilder:
             per_file = run_graph_detectors(
                 det.nodes, deterministic_edges, det.clusters, settings
             )
-        report("persisting graph")
-        write = GraphWrite(
+        return GraphWrite(
             nodes=served.nodes,
             edges=tuple(all_edges),
             clusters=served.clusters,
@@ -371,7 +392,6 @@ class GraphBuilder:
             outcomes=overlay.outcomes,
             text_model=similar.naming.text_model,
         )
-        return await write.persist(index, snapshot)
 
     async def rebuild(
         self,

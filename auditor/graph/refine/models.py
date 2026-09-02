@@ -1060,10 +1060,26 @@ class TuningStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class TuningBaseline(BaseModel):
+    """One clustering's guard numbers. Carried on a trial's metrics as the graph it was measured
+    against, so a reader can re-derive the verdict from the row instead of trusting it (spec 11)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    modularity: float = 0.0
+    clusters: int = 0
+    singletons: int = 0
+    top_cluster_share: float = 0.0
+    stranded_pins: int = 0
+
+
 class TuningMetrics(BaseModel):
-    """One trial's measured effect on the clustering (spec 11), from two facts-only rebuilds.
+    """One trial's measured effect on the clustering (spec 11), from one facts-only rebuild read
+    against the graph this checkout already holds.
 
     Spec 10.2's accuracy numbers answer a different question, so a tuning row does not carry them.
+    `cohesion_intra`, `cohesion_inter` and `label_specificity` stay 0.0: the stored graph keeps no
+    doc tokens, so neither has a baseline without a second rebuild (S11 P3).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -1075,7 +1091,20 @@ class TuningMetrics(BaseModel):
     clusters: int = 0
     singletons: int = 0
     top_cluster_share: float = 0.0
+    #: pinned cluster refinements this trial stranded over and above the ones the checkout
+    #: already strands, so a pre-stranded pin cannot blame the stopword
     stranded_pins: int = 0
+    #: |trial name_similar - baseline name_similar| / baseline, the one number that moves on this
+    #: repo when a stopword is added
+    name_edge_churn: float = 0.0
+    #: the share of the baseline's cluster labels the trial did not reproduce
+    label_churn: float = 0.0
+    #: when a trial last wrote this row. 0.0 is "no trial has looked at it", which is the one
+    #: thing a zeroed metric set cannot say for itself (S11 E4)
+    measured_at: float = 0.0
+    #: the first spec 11 guard the trial failed, or "" when it passed them all
+    refused: str = ""
+    baseline: TuningBaseline = TuningBaseline()
 
 
 class TuningRow(BaseModel):

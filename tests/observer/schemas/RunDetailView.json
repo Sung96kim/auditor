@@ -3,6 +3,14 @@
     "Assessment": {
       "description": "Why one edit batch did or did not earn a refinement run (spec 8.6).\n\n``files`` is attribution only: ``facts_changed_nodes`` can name nodes outside them when the\ntree moved. ``targets`` is the ordered, node-capped set a run would take and ``deferred`` the\npairs the cap left behind, which stay in the queue for the suspect drain (spec 8.3).",
       "properties": {
+        "files": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "array"
+        },
         "added_nodes": {
           "default": [],
           "items": {
@@ -11,20 +19,12 @@
           "title": "Added Nodes",
           "type": "array"
         },
-        "affected_flow": {
+        "removed_nodes": {
           "default": [],
           "items": {
             "type": "string"
           },
-          "title": "Affected Flow",
-          "type": "array"
-        },
-        "deferred": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/NodePair"
-          },
-          "title": "Deferred",
+          "title": "Removed Nodes",
           "type": "array"
         },
         "facts_changed_nodes": {
@@ -35,28 +35,12 @@
           "title": "Facts Changed Nodes",
           "type": "array"
         },
-        "files": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Files",
-          "type": "array"
-        },
         "new_pairs": {
           "default": [],
           "items": {
             "$ref": "#/$defs/NodePair"
           },
           "title": "New Pairs",
-          "type": "array"
-        },
-        "removed_nodes": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Removed Nodes",
           "type": "array"
         },
         "resolved_pairs": {
@@ -75,12 +59,28 @@
           "title": "Stale Refinements",
           "type": "array"
         },
+        "affected_flow": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected Flow",
+          "type": "array"
+        },
         "targets": {
           "default": [],
           "items": {
             "$ref": "#/$defs/NodePair"
           },
           "title": "Targets",
+          "type": "array"
+        },
+        "deferred": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodePair"
+          },
+          "title": "Deferred",
           "type": "array"
         },
         "verdict": {
@@ -104,19 +104,17 @@
     "AssessmentPayload": {
       "description": "One assessment as the log shows it: the decision, its reason and the sizes behind it.\n\nCounts rather than the id tuples the row holds, for the reason the prompt triple below states:\na fifty row page carrying every changed node id would fight the log's own cap. The whole\nobject stays on the run row, where the run detail reads it.",
       "properties": {
+        "verdict": {
+          "$ref": "#/$defs/Decision"
+        },
         "added_nodes": {
           "default": 0,
           "title": "Added Nodes",
           "type": "integer"
         },
-        "affected_flow": {
+        "removed_nodes": {
           "default": 0,
-          "title": "Affected Flow",
-          "type": "integer"
-        },
-        "deferred_pairs": {
-          "default": 0,
-          "title": "Deferred Pairs",
+          "title": "Removed Nodes",
           "type": "integer"
         },
         "facts_changed_nodes": {
@@ -129,11 +127,6 @@
           "title": "New Pairs",
           "type": "integer"
         },
-        "removed_nodes": {
-          "default": 0,
-          "title": "Removed Nodes",
-          "type": "integer"
-        },
         "resolved_pairs": {
           "default": 0,
           "title": "Resolved Pairs",
@@ -144,8 +137,15 @@
           "title": "Stale Refinements",
           "type": "integer"
         },
-        "verdict": {
-          "$ref": "#/$defs/Decision"
+        "affected_flow": {
+          "default": 0,
+          "title": "Affected Flow",
+          "type": "integer"
+        },
+        "deferred_pairs": {
+          "default": 0,
+          "title": "Deferred Pairs",
+          "type": "integer"
         }
       },
       "required": [
@@ -210,12 +210,12 @@
     "NodePair": {
       "description": "One ``(node_id, name)`` the queue holds and a run can target (spec 5.6).",
       "properties": {
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "node_id": {
           "title": "Node Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
           "type": "string"
         }
       },
@@ -269,6 +269,18 @@
     "RefinementPayload": {
       "description": "What a refinement carries beyond its target: a label, an annotation, the candidate it\nchose, the reason code it retired a pair under, and the call form it saw.",
       "properties": {
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
         "annotation": {
           "anyOf": [
             {
@@ -280,17 +292,6 @@
           ],
           "default": null,
           "title": "Annotation"
-        },
-        "call_form": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CallForm"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "candidate": {
           "anyOf": [
@@ -304,18 +305,6 @@
           "default": null,
           "title": "Candidate"
         },
-        "label": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Label"
-        },
         "reason_code": {
           "anyOf": [
             {
@@ -327,6 +316,17 @@
           ],
           "default": null,
           "title": "Reason Code"
+        },
+        "call_form": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallForm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "RefinementPayload",
@@ -335,28 +335,34 @@
     "RefinementRowPayload": {
       "description": "One refinement as every surface shows it: the target flattened, the proposal's own values\nbeside it, the anchors by node id.\n\n``payload`` is carried whole rather than flattened further: a ``pending`` row is one a human\nhas to judge, and the label, annotation, candidate or reason code is what there is to judge.",
       "properties": {
-        "anchors": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Anchors",
-          "type": "array"
+        "refinement_id": {
+          "title": "Refinement Id",
+          "type": "integer"
         },
-        "confidence": {
-          "default": 0.0,
-          "title": "Confidence",
-          "type": "number"
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
         },
-        "created_at": {
-          "default": 0.0,
-          "title": "Created At",
-          "type": "number"
+        "kind": {
+          "$ref": "#/$defs/RefinementKind"
         },
-        "drifted": {
-          "default": false,
-          "title": "Drifted",
-          "type": "boolean"
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        },
+        "status": {
+          "$ref": "#/$defs/RefinementStatus"
+        },
+        "src": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Src"
         },
         "dst": {
           "anyOf": [
@@ -380,29 +386,6 @@
             }
           ],
           "default": null
-        },
-        "from_dst": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "From Dst"
-        },
-        "kind": {
-          "$ref": "#/$defs/RefinementKind"
-        },
-        "members": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Members",
-          "type": "array"
         },
         "name": {
           "anyOf": [
@@ -428,35 +411,7 @@
           "default": null,
           "title": "Node Id"
         },
-        "noop_builds": {
-          "default": 0,
-          "title": "Noop Builds",
-          "type": "integer"
-        },
-        "payload": {
-          "$ref": "#/$defs/RefinementPayload",
-          "default": {
-            "annotation": null,
-            "call_form": null,
-            "candidate": null,
-            "label": null,
-            "reason_code": null
-          }
-        },
-        "reason": {
-          "default": "",
-          "title": "Reason",
-          "type": "string"
-        },
-        "refinement_id": {
-          "title": "Refinement Id",
-          "type": "integer"
-        },
-        "run_id": {
-          "title": "Run Id",
-          "type": "string"
-        },
-        "src": {
+        "from_dst": {
           "anyOf": [
             {
               "type": "string"
@@ -466,15 +421,45 @@
             }
           ],
           "default": null,
-          "title": "Src"
+          "title": "From Dst"
         },
-        "status": {
-          "$ref": "#/$defs/RefinementStatus"
+        "members": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Members",
+          "type": "array"
         },
-        "status_at": {
+        "payload": {
+          "$ref": "#/$defs/RefinementPayload",
+          "default": {
+            "label": null,
+            "annotation": null,
+            "candidate": null,
+            "reason_code": null,
+            "call_form": null
+          }
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
           "default": 0.0,
-          "title": "Status At",
+          "title": "Confidence",
           "type": "number"
+        },
+        "drifted": {
+          "default": false,
+          "title": "Drifted",
+          "type": "boolean"
+        },
+        "noop_builds": {
+          "default": 0,
+          "title": "Noop Builds",
+          "type": "integer"
         },
         "supersedes": {
           "anyOf": [
@@ -488,8 +473,23 @@
           "default": null,
           "title": "Supersedes"
         },
-        "tier": {
-          "$ref": "#/$defs/Tier"
+        "anchors": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Anchors",
+          "type": "array"
+        },
+        "created_at": {
+          "default": 0.0,
+          "title": "Created At",
+          "type": "number"
+        },
+        "status_at": {
+          "default": 0.0,
+          "title": "Status At",
+          "type": "number"
         }
       },
       "required": [
@@ -519,6 +519,83 @@
     "RunRowPayload": {
       "description": "One run as the log shows it: who made it, against which checkout, and what it cost.\n\n``cost_estimated`` travels with ``cost_usd`` because a runner that reports no price has one\nmodelled for it, and a log that showed only the number would present it as measured.",
       "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "producer": {
+          "$ref": "#/$defs/ProducerKind"
+        },
+        "client": {
+          "$ref": "#/$defs/ClientKind"
+        },
+        "runner": {
+          "$ref": "#/$defs/RunnerKind"
+        },
+        "trigger_kind": {
+          "$ref": "#/$defs/TriggerKind"
+        },
+        "trigger_detail": {
+          "$ref": "#/$defs/TriggerDetailPayload",
+          "default": {
+            "files": [],
+            "file_count": 0,
+            "targets": [],
+            "target_count": 0,
+            "assessment": null
+          }
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
         "agent_name": {
           "anyOf": [
             {
@@ -543,9 +620,6 @@
           "default": null,
           "title": "Branch"
         },
-        "client": {
-          "$ref": "#/$defs/ClientKind"
-        },
         "commit_sha": {
           "anyOf": [
             {
@@ -558,110 +632,20 @@
           "default": null,
           "title": "Commit Sha"
         },
-        "cost_estimated": {
-          "default": false,
-          "title": "Cost Estimated",
-          "type": "boolean"
-        },
         "cost_usd": {
           "default": 0.0,
           "title": "Cost Usd",
           "type": "number"
         },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Error"
-        },
-        "finished_at": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Finished At"
-        },
-        "model": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Model"
+        "cost_estimated": {
+          "default": false,
+          "title": "Cost Estimated",
+          "type": "boolean"
         },
         "num_turns": {
           "default": 0,
           "title": "Num Turns",
           "type": "integer"
-        },
-        "producer": {
-          "$ref": "#/$defs/ProducerKind"
-        },
-        "prompt_chars": {
-          "default": 0,
-          "title": "Prompt Chars",
-          "type": "integer"
-        },
-        "refinements": {
-          "$ref": "#/$defs/RefinementCounts",
-          "default": {
-            "committed": 0,
-            "rejected": 0
-          }
-        },
-        "run_id": {
-          "title": "Run Id",
-          "type": "string"
-        },
-        "runner": {
-          "$ref": "#/$defs/RunnerKind"
-        },
-        "session_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Session Id"
-        },
-        "started_at": {
-          "default": 0.0,
-          "title": "Started At",
-          "type": "number"
-        },
-        "status": {
-          "$ref": "#/$defs/RunStatus"
-        },
-        "summary": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Summary"
         },
         "system_prompt_sha": {
           "anyOf": [
@@ -675,23 +659,39 @@
           "default": null,
           "title": "System Prompt Sha"
         },
+        "prompt_chars": {
+          "default": 0,
+          "title": "Prompt Chars",
+          "type": "integer"
+        },
         "tool_calls": {
           "default": 0,
           "title": "Tool Calls",
           "type": "integer"
         },
-        "trigger_detail": {
-          "$ref": "#/$defs/TriggerDetailPayload",
+        "refinements": {
+          "$ref": "#/$defs/RefinementCounts",
           "default": {
-            "assessment": null,
-            "file_count": 0,
-            "files": [],
-            "target_count": 0,
-            "targets": []
+            "committed": 0,
+            "rejected": 0
           }
         },
-        "trigger_kind": {
-          "$ref": "#/$defs/TriggerKind"
+        "started_at": {
+          "default": 0.0,
+          "title": "Started At",
+          "type": "number"
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finished At"
         }
       },
       "required": [
@@ -740,11 +740,6 @@
     "ToolCall": {
       "description": "One tool the runner used, as the run's trace records it.",
       "properties": {
-        "detail": {
-          "default": "",
-          "title": "Detail",
-          "type": "string"
-        },
         "tool": {
           "title": "Tool",
           "type": "string"
@@ -753,6 +748,11 @@
           "default": 0.0,
           "title": "Ts",
           "type": "number"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
         }
       },
       "required": [
@@ -764,6 +764,32 @@
     "TriggerDetailPayload": {
       "description": "What a run's trigger carried: the paths it named, and the gate decision behind it.\n\n``files`` and ``targets`` are both capped for the same reason the counts replace the id\ntuples: a Stop path set names hundreds of paths and a suspect run names as many pairs.",
       "properties": {
+        "files": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "file_count": {
+          "default": 0,
+          "title": "File Count",
+          "type": "integer"
+        },
+        "targets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodePair"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "target_count": {
+          "default": 0,
+          "title": "Target Count",
+          "type": "integer"
+        },
         "assessment": {
           "anyOf": [
             {
@@ -774,32 +800,6 @@
             }
           ],
           "default": null
-        },
-        "file_count": {
-          "default": 0,
-          "title": "File Count",
-          "type": "integer"
-        },
-        "files": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Files",
-          "type": "array"
-        },
-        "target_count": {
-          "default": 0,
-          "title": "Target Count",
-          "type": "integer"
-        },
-        "targets": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/NodePair"
-          },
-          "title": "Targets",
-          "type": "array"
         }
       },
       "title": "TriggerDetailPayload",
@@ -819,17 +819,44 @@
       "title": "TriggerKind",
       "type": "string"
     },
-    "TuningMetrics": {
-      "description": "One trial's measured effect on the clustering (spec 11), from two facts-only rebuilds.\n\nSpec 10.2's accuracy numbers answer a different question, so a tuning row does not carry them.",
+    "TuningBaseline": {
+      "description": "One clustering's guard numbers. Carried on a trial's metrics as the graph it was measured\nagainst, so a reader can re-derive the verdict from the row instead of trusting it (spec 11).",
       "properties": {
+        "modularity": {
+          "default": 0.0,
+          "title": "Modularity",
+          "type": "number"
+        },
         "clusters": {
           "default": 0,
           "title": "Clusters",
           "type": "integer"
         },
-        "cohesion_inter": {
+        "singletons": {
+          "default": 0,
+          "title": "Singletons",
+          "type": "integer"
+        },
+        "top_cluster_share": {
           "default": 0.0,
-          "title": "Cohesion Inter",
+          "title": "Top Cluster Share",
+          "type": "number"
+        },
+        "stranded_pins": {
+          "default": 0,
+          "title": "Stranded Pins",
+          "type": "integer"
+        }
+      },
+      "title": "TuningBaseline",
+      "type": "object"
+    },
+    "TuningMetrics": {
+      "description": "One trial's measured effect on the clustering (spec 11), from one facts-only rebuild read\nagainst the graph this checkout already holds.\n\nSpec 10.2's accuracy numbers answer a different question, so a tuning row does not carry them.\n`cohesion_intra`, `cohesion_inter` and `label_specificity` stay 0.0: the stored graph keeps no\ndoc tokens, so neither has a baseline without a second rebuild (S11 P3).",
+      "properties": {
+        "modularity": {
+          "default": 0.0,
+          "title": "Modularity",
           "type": "number"
         },
         "cohesion_intra": {
@@ -837,30 +864,65 @@
           "title": "Cohesion Intra",
           "type": "number"
         },
+        "cohesion_inter": {
+          "default": 0.0,
+          "title": "Cohesion Inter",
+          "type": "number"
+        },
         "label_specificity": {
           "default": 0.0,
           "title": "Label Specificity",
           "type": "number"
         },
-        "modularity": {
-          "default": 0.0,
-          "title": "Modularity",
-          "type": "number"
+        "clusters": {
+          "default": 0,
+          "title": "Clusters",
+          "type": "integer"
         },
         "singletons": {
           "default": 0,
           "title": "Singletons",
           "type": "integer"
         },
+        "top_cluster_share": {
+          "default": 0.0,
+          "title": "Top Cluster Share",
+          "type": "number"
+        },
         "stranded_pins": {
           "default": 0,
           "title": "Stranded Pins",
           "type": "integer"
         },
-        "top_cluster_share": {
+        "name_edge_churn": {
           "default": 0.0,
-          "title": "Top Cluster Share",
+          "title": "Name Edge Churn",
           "type": "number"
+        },
+        "label_churn": {
+          "default": 0.0,
+          "title": "Label Churn",
+          "type": "number"
+        },
+        "measured_at": {
+          "default": 0.0,
+          "title": "Measured At",
+          "type": "number"
+        },
+        "refused": {
+          "default": "",
+          "title": "Refused",
+          "type": "string"
+        },
+        "baseline": {
+          "$ref": "#/$defs/TuningBaseline",
+          "default": {
+            "modularity": 0.0,
+            "clusters": 0,
+            "singletons": 0,
+            "top_cluster_share": 0.0,
+            "stranded_pins": 0
+          }
         }
       },
       "title": "TuningMetrics",
@@ -869,57 +931,68 @@
     "TuningRow": {
       "description": "One proposed knob change (spec 5.8). ``value_json`` stays a raw JSON string because a knob\ncan be a float, an int or a list of stopwords.",
       "properties": {
-        "created_at": {
-          "title": "Created At",
-          "type": "number"
-        },
-        "key": {
-          "title": "Key",
-          "type": "string"
-        },
-        "metrics": {
-          "$ref": "#/$defs/TuningMetrics",
-          "default": {
-            "clusters": 0,
-            "cohesion_inter": 0.0,
-            "cohesion_intra": 0.0,
-            "label_specificity": 0.0,
-            "modularity": 0.0,
-            "singletons": 0,
-            "stranded_pins": 0,
-            "top_cluster_share": 0.0
-          }
-        },
-        "reason": {
-          "default": "",
-          "title": "Reason",
-          "type": "string"
+        "tuning_id": {
+          "default": 0,
+          "title": "Tuning Id",
+          "type": "integer"
         },
         "repo_identity": {
           "title": "Repo Identity",
           "type": "string"
         },
-        "run_id": {
-          "title": "Run Id",
+        "key": {
+          "title": "Key",
           "type": "string"
         },
-        "status": {
-          "$ref": "#/$defs/TuningStatus",
-          "default": "pending"
+        "value_json": {
+          "title": "Value Json",
+          "type": "string"
         },
         "token": {
           "default": "",
           "title": "Token",
           "type": "string"
         },
-        "tuning_id": {
-          "default": 0,
-          "title": "Tuning Id",
-          "type": "integer"
-        },
-        "value_json": {
-          "title": "Value Json",
+        "run_id": {
+          "title": "Run Id",
           "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TuningStatus",
+          "default": "pending"
+        },
+        "metrics": {
+          "$ref": "#/$defs/TuningMetrics",
+          "default": {
+            "modularity": 0.0,
+            "cohesion_intra": 0.0,
+            "cohesion_inter": 0.0,
+            "label_specificity": 0.0,
+            "clusters": 0,
+            "singletons": 0,
+            "top_cluster_share": 0.0,
+            "stranded_pins": 0,
+            "name_edge_churn": 0.0,
+            "label_churn": 0.0,
+            "measured_at": 0.0,
+            "refused": "",
+            "baseline": {
+              "clusters": 0,
+              "modularity": 0.0,
+              "singletons": 0,
+              "stranded_pins": 0,
+              "top_cluster_share": 0.0
+            }
+          }
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "number"
         }
       },
       "required": [
@@ -946,36 +1019,12 @@
   },
   "description": "One run in full: the verbatim prompt, the tool trace, its rows, trials and the assessment.",
   "properties": {
-    "assessment": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Assessment"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
+    "repo": {
+      "title": "Repo",
+      "type": "string"
     },
     "identity": {
       "title": "Identity",
-      "type": "string"
-    },
-    "prompt": {
-      "default": "",
-      "title": "Prompt",
-      "type": "string"
-    },
-    "refinements": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/RefinementRowPayload"
-      },
-      "title": "Refinements",
-      "type": "array"
-    },
-    "repo": {
-      "title": "Repo",
       "type": "string"
     },
     "run": {
@@ -989,12 +1038,36 @@
       ],
       "default": null
     },
+    "prompt": {
+      "default": "",
+      "title": "Prompt",
+      "type": "string"
+    },
     "tool_trace": {
       "default": [],
       "items": {
         "$ref": "#/$defs/ToolCall"
       },
       "title": "Tool Trace",
+      "type": "array"
+    },
+    "assessment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Assessment"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "refinements": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RefinementRowPayload"
+      },
+      "title": "Refinements",
       "type": "array"
     },
     "trials": {
