@@ -359,7 +359,13 @@ One `RepoLoop` per attached repo works spec 8.3's five items in order, highest f
    correction. Its proposals are judged and never stored, but the judgement moves the row it was
    asked about: agreement activates it, a named different destination rejects it, and silence
    leaves it `pending`.
-5. **Tuning trials.** The slot exists and returns 0; S11 fills it.
+5. **Tuning trials.** One pending proposal per pass, oldest first, and only one a trial has not
+   already measured. The trial is a whole facts-only rebuild that is never written, run on a worker
+   thread so the other repos this loop drives keep moving; the badge reads `building`, not
+   `running`, because nothing here calls a model. A passing trial leaves the row `pending` for a
+   human to accept; one a guard refuses lands it `rejected`, which is what stops the ladder paying
+   for the same refusal every pass. With `observer.tuning.mode = "off"` the slot returns 0 before
+   it queries anything. See `docs/references/graph.md`, "Tuning".
 
 A run takes **pairs**, never a path prefix. `trigger_detail.targets` carries them, so `graph log
 --json` and `GET /api/runs/<id>` both show what a run was asked about.

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import RunDetail from "./RunDetail";
-import { refinementRow, runDetail, toolCall } from "../api/wire.fixture";
+import { refinementRow, runDetail, toolCall, tuningRow } from "../api/wire.fixture";
 
 const VIEW = runDetail({
   run: null,
@@ -25,12 +25,12 @@ const VIEW = runDetail({
   assessment: null,
 });
 
-function serve() {
+function serve(view = VIEW) {
   vi.stubGlobal(
     "fetch",
     vi.fn(() =>
       Promise.resolve(
-        new Response(JSON.stringify(VIEW), {
+        new Response(JSON.stringify(view), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
@@ -172,8 +172,30 @@ describe("what a run detail says when a row has no edge to show", () => {
 
   it("an empty tuning list reads inline, like every other empty group in the box", async () => {
     serve();
-    const none = await screen.findByText(/S11 is what writes a tuning row/);
-    expect(none.textContent).toBe("none, S11 is what writes a tuning row");
+    const none = await screen.findByText(/no knob change was proposed/);
+    expect(none.textContent).toBe("no knob change was proposed on this run");
     expect(none.tagName).toBe("SPAN");
+  });
+
+  it("a trial shows the word it proposed and the cluster delta it measured", async () => {
+    serve({ ...VIEW, trials: [tuningRow()] });
+    const line = await screen.findByText(/helper \(pending\)/);
+    expect(line.textContent).toBe(
+      "helper (pending): clusters 24 to 22, name-edge churn 0.4%, label churn 25.0%",
+    );
+  });
+
+  it("a trial a guard refused says so where the numbers would have gone", async () => {
+    const row = tuningRow({ status: "rejected" });
+    serve({
+      ...VIEW,
+      trials: [
+        { ...row, metrics: { ...row.metrics, refused: "singleton clusters 6 to 9" } },
+      ],
+    });
+    const line = await screen.findByText(/helper \(rejected\)/);
+    expect(line.textContent).toBe(
+      "helper (rejected): refused, singleton clusters 6 to 9",
+    );
   });
 });

@@ -204,9 +204,29 @@ export function toolCall(over: Partial<ToolCall> = {}): ToolCall {
 
 export function tuningRow(over: Partial<TuningRow> = {}): TuningRow {
   return {
-    tuning_id: "t-1",
-    key: "graph.cluster_resolution",
+    tuning_id: 1,
+    key: "stopwords",
+    value_json: '"helper"',
     status: "pending",
+    reason: "every module says helper",
+    metrics: {
+      modularity: 0.51,
+      clusters: 22,
+      singletons: 5,
+      top_cluster_share: 0.2,
+      stranded_pins: 0,
+      name_edge_churn: 0.0041,
+      label_churn: 0.25,
+      measured_at: 1_700_000_000,
+      refused: "",
+      baseline: {
+        modularity: 0.5,
+        clusters: 24,
+        singletons: 6,
+        top_cluster_share: 0.21,
+        stranded_pins: 0,
+      },
+    },
     created_at: 1_700_000_000,
     ...over,
   };

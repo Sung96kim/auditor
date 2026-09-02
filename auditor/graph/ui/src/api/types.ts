@@ -125,10 +125,34 @@ export interface ToolCall {
   detail: string;
 }
 
+export interface TuningBaseline {
+  modularity: number;
+  clusters: number;
+  singletons: number;
+  top_cluster_share: number;
+  stranded_pins: number;
+}
+
+export interface TuningMetrics {
+  modularity: number;
+  clusters: number;
+  singletons: number;
+  top_cluster_share: number;
+  stranded_pins: number;
+  name_edge_churn: number;
+  label_churn: number;
+  measured_at: number;
+  refused: string;
+  baseline: TuningBaseline;
+}
+
 export interface TuningRow {
-  tuning_id: string;
+  tuning_id: number;
   key: string;
+  value_json: string;
   status: string;
+  reason: string;
+  metrics: TuningMetrics;
   created_at: number;
 }
 

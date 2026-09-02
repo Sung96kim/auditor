@@ -154,6 +154,26 @@ args = ["run", "-i", "--rm",
   about, each capped at 10; `file_count` and `target_count`, the full sizes behind those caps; and
   `assessment` when there is one, travelling as counts rather than node ids.
 
+### Proposing a knob change
+
+- `propose_tuning(key, value, reason, path=".", client="cli")` records one repo-specific stopword
+  as a `pending` row and applies nothing. A human runs
+  `auditr graph tuning accept <id> --token <word>` after reading the trial.
+- It is not a `graph_refine_*` tool. A tuning proposal is not a refinement (spec 5.4): it shares
+  neither a run's staging nor the AST verifier, so there is no run to open, fill and commit.
+- `key` must be allow-listed and only `stopwords` is shipped, so `value` is one lowercase token,
+  letter first, at most 40 characters. `name_similarity_threshold`, `cluster_floor` and `knn_k` are
+  declared and refused with the measurement that deferred them.
+- `reason` is required and is what the human reads.
+- Refusals come back as errors naming the cause: tuning is off, the key is not tunable or not
+  shipped, the value is not one token, the reason is empty, the cap is full, the token is already
+  active, or one proposal for this key was already recorded inside the last day.
+- The returned row carries `token`, the confirmation word the accept has to repeat, plus
+  `tuning_id`, `key`, `value`, `status`, `reason`, `run_id`, `created_at` and `allow_list`.
+- The trial that measures the proposal is a separate step, because a facts-only rebuild is tens of
+  seconds. The observer runs it, or `auditr graph tuning measure <id>` does when no daemon is
+  attached. It needs a built graph: on a checkout with none the trial records that and refuses once.
+
 ### Annotations and the shared preamble
 
 - Every tool is annotated so clients can skip confirmation prompts and cache results: read-only for

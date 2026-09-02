@@ -5,6 +5,7 @@ import { accepted, rejected } from "./runs";
 import RefinementGroup from "./RefinementGroup";
 import { Clipped, Field, microLabel, mono, nested, wrapped } from "./Panel";
 import { Phases } from "./States";
+import { trialLine } from "./trials";
 
 const box: React.CSSProperties = {
   ...nested,
@@ -101,11 +102,11 @@ export default function RunDetail({ base, repo, runId, onClose }: RunDetailProps
 
           <Field title="Tuning trials">
             {view.trials.length === 0 ? (
-              <span style={{ color: TEXT.label }}>none, S11 is what writes a tuning row</span>
+              <span style={{ color: TEXT.label }}>no knob change was proposed on this run</span>
             ) : (
               view.trials.map((trial) => (
                 <span key={trial.tuning_id} style={wrapped}>
-                  {trial.key} {trial.status}
+                  {trialLine(trial)}
                 </span>
               ))
             )}

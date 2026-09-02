@@ -328,6 +328,93 @@ auditr graph refinements prune
   adds this edge, so it is stored as a `confirm_edge`) and `contradicts` (an active refinement
   points the same source at another destination for this name).
 
+## Tuning
+
+A tuning proposal is one repo-specific stopword: a word that carries no meaning in this codebase's
+concept names, so the clustering and the naming should stop treating it as one. It is not a
+refinement (spec 5.4). It carries no anchor, answers no queue row, and the only thing it changes is
+one `graph.stopwords` entry the next build reads.
+
+- One row per token, so a single word can be taken back out without touching the rest.
+- An agent records one with the `propose_tuning` MCP tool. There is no CLI door that writes a row.
+- One proposal per key per day. A second proposal for a token that is already pending supersedes
+  it; a token that is already active is an error.
+- `stopwords` is the only shipped knob. `name_similarity_threshold`, `cluster_floor` and `knn_k`
+  are declared and refused: measured on real repos they are either inert (a threshold of 0.30 moves
+  49 of 68684 edges and zero clusters) or catastrophic (the others move the cluster count by 104 to
+  1838 percent), with nothing usable in between.
+
+```bash
+auditr graph tuning list                          # every proposal and its confirmation word
+auditr graph tuning measure <id|word>             # run the trial here rather than waiting
+auditr graph tuning accept <id|word> --token <w>  # the next build reads it
+auditr graph tuning revert <id|word> --token <w>  # take it back out
+```
+
+- `<id|word>` is the numeric tuning id or the stopword itself. An all-digit argument is an id.
+- `--token` is the confirmation word printed on the row. Leaving it off prints the word and exits
+  non-zero, so you can always ask for it. `graph refinements accept` needs no confirmation because
+  it moves one recorded correction; a knob moves every cluster in the repo.
+- `accept` refuses a row no trial has measured, and refuses one a guard rejected, by name.
+
+### What the trial measures
+
+The trial is one facts-only rebuild that is never written, compared against the graph this checkout
+already holds. Four guards decide whether the move is safe:
+
+- no pinned cluster refinement is newly stranded, counted against the ones this checkout already
+  strands so a pre-stranded pin cannot blame the stopword;
+- the cluster count stays inside a 20 percent band;
+- the number of singleton clusters does not go up;
+- the top cluster's share of members does not go up.
+
+Two numbers say what the move did rather than whether it is safe: `name-edge churn`, the share of
+`name_similar` edges that moved, and `label churn`, the share of the baseline's cluster labels the
+trial did not reproduce. A token can leave the cluster count untouched and still move hundreds of
+edges, which is why a count-only metric would report "nothing happened".
+
+A trial that fails a guard lands the row `rejected` with the guard's own message, and `accept`
+refuses it. `cohesion_intra`, `cohesion_inter` and `label_specificity` stay 0.0: the stored graph
+keeps no doc tokens, so neither has a baseline without a second rebuild.
+
+The trial needs a built graph. On a checkout with none it records that once, lands the row
+`rejected`, and is not retried; run `auditr graph build` and measure again.
+
+### Precedence and the cap
+
+- A repo that sets `graph.stopwords` in its own config wins, and per key: setting `cluster_floor`
+  in the repo config does not freeze `stopwords`.
+- `observer.tuning.stopwords_max` (default 20) bounds the active stopword rows, checked both at
+  propose time and at accept time.
+- `observer.tuning.mode = "off"` refuses proposals before anything is written, and makes the
+  observer skip the trial slot entirely.
+
+### An accepted stopword also moves search
+
+`extra_stopwords` is applied inside `naming.py`'s tf-idf fit, and that fit is what `auditr graph
+search` ranks on. Accepting a stopword therefore changes search results as well as clusters. The
+trial does not measure that: its guards are cluster shaped.
+
+The shipped retrieval gate cannot see your accept either. It builds this repo's graph into a
+throwaway `AUDITOR_HOME` of its own, and tuning rows live in the home's index, so the graph it
+scores never carries an active token:
+
+```bash
+uv run pytest -q tests/graph/test_retrieval.py -m ""   # marked slow; scores an untuned build
+```
+
+To check the ranking a token actually changed, rebuild and compare the pages the same questions
+answer, before and after:
+
+```bash
+auditr graph build --no-scan          # the tuned build
+auditr graph search "<a question you care about>"
+```
+
+Measured on this repo: accepting `auditor`, the package root every module sits under, left recall
+at k=5 and k=20 unchanged over the gate's 40 labelled queries, moved MRR from 0.106 to 0.122, and
+lost no answer that was on the page before.
+
 ## Eval
 
 ```bash

@@ -139,7 +139,38 @@ READS: dict[str, dict[tuple[str, str], frozenset[str]]] = {
         ),
         ("ToolCall", "ToolCall"): frozenset({"tool", "ts", "detail"}),
         ("TuningRow", "TuningRow"): frozenset(
-            {"tuning_id", "key", "status", "created_at"}
+            {
+                "tuning_id",
+                "key",
+                "value_json",
+                "status",
+                "reason",
+                "metrics",
+                "created_at",
+            }
+        ),
+        ("TuningMetrics", "TuningMetrics"): frozenset(
+            {
+                "modularity",
+                "clusters",
+                "singletons",
+                "top_cluster_share",
+                "stranded_pins",
+                "name_edge_churn",
+                "label_churn",
+                "measured_at",
+                "refused",
+                "baseline",
+            }
+        ),
+        ("TuningBaseline", "TuningBaseline"): frozenset(
+            {
+                "modularity",
+                "clusters",
+                "singletons",
+                "top_cluster_share",
+                "stranded_pins",
+            }
         ),
         # `Assessment`, not `AssessmentPayload`: both carry a `verdict`, and they are not the
         # same model. `RunDetailView.assessment` is the one the run's own row holds.

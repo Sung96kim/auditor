@@ -492,8 +492,12 @@ the run, and Codex checks the estimated cost after its one turn and aborts the r
 `max_nodes_per_run` and `max_changes_per_run` bind both, because the brief carries them rather
 than the SDK.
 
-`observer.tuning` (`TuningConfig`). `mode` (default `"propose"`) and `stopwords_max` (default `20`)
-govern knob-tuning proposals and have no reader today. The one the tier gate reads:
+`observer.tuning` (`TuningConfig`). `mode` (default `"propose"`) is read at propose time, where
+`"off"` refuses a proposal before anything is written, and by the observer's work item 5, which
+skips the trial slot entirely on an off repo. `stopwords_max` (default `20`) is read at propose
+time and again at accept time, and counts only active `stopwords` rows, so a future second knob
+cannot spend a cap whose name says stopwords. See `docs/references/graph.md`, "Tuning". The one the
+tier gate reads:
 
 - `min_precision` (default `0.95`, 0 to just under 1): the Wilson 95 per cent lower bound a
   stratum's measured precision has to reach before that shape may go active. Read off the latest
