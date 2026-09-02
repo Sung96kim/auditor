@@ -30,8 +30,10 @@ from auditor.graph.refine.models import (
     RefinementOutcome,
     Snapshot,
     SnapshotPhase,
+    TuningStatus,
 )
 from auditor.graph.refine.overlay import Overlay, anchor_truth
+from auditor.graph.refine.tuning import candidate_stopwords, tuned
 from auditor.graph.resolve_edges import resolve_structural
 from auditor.graph.textmodel import TextModel
 from auditor.graph.usage import usage_similar_edges
@@ -293,6 +295,9 @@ class GraphBuilder:
         progress: Callable[[str], None] | None = None,
         snapshot: Snapshot | None = None,
     ) -> GraphBuildReport:
+        # spec 11's precedence, at the one merge point Invariant 1 names: repo policy beats an
+        # active tuning row, which beats the default
+        settings = await tuned_settings(index, settings)
         cfg = settings.graph
         report = progress or (lambda _m: None)
         report("loading cached facts")
@@ -391,6 +396,24 @@ class GraphBuilder:
             timeout=timeout,
         ):
             return await self.run(index, settings, progress=progress, snapshot=snapshot)
+
+
+async def tuned_settings(
+    index: IndexStore,
+    settings: AuditorSettings,
+    *,
+    extra: Sequence[str] = (),
+) -> AuditorSettings:
+    """``settings`` with this checkout's active tuning rows applied to ``graph`` (spec 11).
+
+    ``extra`` is the token a trial is measuring, unioned with the active set here rather than
+    copied onto a config first, so precedence is decided against the repo's own object.
+    """
+    rows = await index.tuning.tuning(statuses=[TuningStatus.ACTIVE])
+    cfg = tuned(settings.graph, candidate_stopwords(rows, extra))
+    if cfg is settings.graph:
+        return settings
+    return settings.model_copy(update={"graph": cfg})
 
 
 async def _overlay_for(
