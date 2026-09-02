@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Sequence
 from typing import ClassVar
@@ -27,7 +28,7 @@ from auditor.graph.refine.models import (
 from auditor.graph.refine.runner import FakeRun, FakeRunner, RunnerUnavailable
 from auditor.graph.refine.service import RefinementService, RunRegistry
 from auditor.graph.refine.trial import TuningService
-from auditor.graph.refine.tuning import TuningLedger
+from auditor.graph.refine.tuning import TuningLedger, TuningRefused
 from auditor.observer.assess import EditedFile
 from auditor.observer.budget import BudgetState
 from auditor.observer.daemon import Daemon, IdleTimer
@@ -875,14 +876,23 @@ async def test_the_attach_sweep_gives_a_running_row_this_repo_s_own_longer_windo
 
 
 async def test_the_daemon_writes_the_graph_block_the_status_line_reads(
-    refine_service: RefinementService, tmp_path
+    refine_service: RefinementService, tmp_path, caplog
 ):
-    """C1: `graph` is the observer's block of `status.json`, written through `write_block`."""
+    """C1: `graph` is the observer's block of `status.json`, written through `write_block`.
+
+    The log capture and the existence check are the diagnosis, not the assertion: both writers
+    under this read swallow everything they catch (`daemon.py`'s `except Exception` and
+    `status.py`'s `except OSError`), and `attach` degrades silently on a lock timeout, so an
+    intermittent failure here used to arrive as a bare `KeyError: 'graph'` with its cause in a
+    log record the test threw away (S11 L7).
+    """
+    caplog.set_level(logging.WARNING)
     loop = _loop(refine_service)
     daemon = _daemon_for(loop, tmp_path)
     before = int(time.time())
     await loop.attach()
     await daemon.publisher.publish(loop)
+    assert status_path(loop.root).exists(), caplog.text
     block = json.loads(status_path(loop.root).read_text())["graph"]
     assert block["state"] == LoopState.OBSERVING.value
     # `len(await nodes())` and not `count_nodes()`: the reader under test on both sides of an
@@ -1241,6 +1251,23 @@ async def test_a_trial_reads_building_on_the_badge_and_leaves_it_observing(
     loop._moved = lambda state: (seen.append(state), moved(state))[1]
     assert await loop.tuning() == 1
     assert seen == [LoopState.BUILDING, LoopState.OBSERVING]
+    assert loop.state is LoopState.OBSERVING
+
+
+async def test_a_refused_trial_does_not_pause_the_ladder(
+    refine_service: RefinementService, monkeypatch
+):
+    """Work item 5 is the lowest-priority slot and an unhandled refusal out of it reached
+    `Daemon._drive`, which pauses this repo with a doubling backoff: edit batches, suspects and
+    verify all stopped because a human decided a tuning row mid-trial (S11 M2)."""
+    await _proposed(refine_service)
+    loop = _loop(refine_service)
+
+    async def refused(self, tuning_id, *, now=None):
+        raise TuningRefused("decided while its trial was running")
+
+    monkeypatch.setattr(TuningService, "measure", refused)
+    assert await loop.tuning() == 0
     assert loop.state is LoopState.OBSERVING
 
 

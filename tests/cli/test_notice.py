@@ -171,12 +171,27 @@ def test_a_config_loading_command_warns_exactly_once(bad_config, argv):
     assert result.stderr.count("unknown config key") == 1
 
 
-def test_the_warning_survives_a_command_that_exits_non_zero(bad_config):
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("ignore", "rm", "nosuch", "-r", "{repo}"),
+        ("graph", "tuning", "accept", "1", "{repo}"),
+        ("graph", "tuning", "revert", "1", "{repo}"),
+        ("graph", "tuning", "measure", "1", "{repo}"),
+    ],
+)
+def test_the_warning_survives_a_command_that_exits_non_zero(bad_config, argv):
     """The notice flushes on context close, so a clean failure still reports the typo that may be
-    the reason for it."""
-    result = invoke("ignore", "rm", "nosuch", "-r", str(bad_config))
+    the reason for it.
+
+    The three tuning transitions are here rather than beside `graph tuning list` because they
+    cannot exit zero without a row to name: `WARNING_COMMANDS` claims the property for all four
+    and only `list` was ever proved (S11 L5).
+    """
+    result = invoke(*(part.format(repo=bad_config) for part in argv))
     assert result.exit_code == 1
     assert "unknown config key: bogus" in result.stderr
+    assert result.stderr.count("unknown config key") == 1
 
 
 def test_a_user_settings_typo_is_reported_too(bad_config):

@@ -149,7 +149,7 @@ export interface TuningMetrics {
 export interface TuningRow {
   tuning_id: number;
   key: string;
-  value_json: string;
+  value: string;
   status: string;
   reason: string;
   metrics: TuningMetrics;

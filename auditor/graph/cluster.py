@@ -64,7 +64,7 @@ def modularity(
 
 
 def cluster_concepts(
-    nodes: list[GraphNode], edges: list[GraphEdge], *, floor: float = 0.45
+    nodes: Sequence[GraphNode], edges: Sequence[GraphEdge], *, floor: float = 0.45
 ) -> tuple[dict[str, int], dict[int, str]]:
     g = weighted_graph([n.id for n in nodes], edges, floor=floor)
     if g.number_of_nodes() == 0:

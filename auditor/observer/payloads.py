@@ -12,14 +12,9 @@ from auditor.graph.payloads import (
     RefinementRowPayload,
     RefinementsReport,
     RunRowPayload,
+    TuningRowPayload,
 )
-from auditor.graph.refine.models import (
-    Assessment,
-    ClientKind,
-    RunnerKind,
-    ToolCall,
-    TuningRow,
-)
+from auditor.graph.refine.models import Assessment, ClientKind, RunnerKind, ToolCall
 from auditor.observer.budget import BudgetState
 from auditor.payload import WirePayload
 
@@ -192,8 +187,9 @@ class RunDetailView(RepoScoped):
     #: a convenience copy of ``run.trigger_detail.assessment``; presence, not status, discriminates
     assessment: Assessment | None = None
     refinements: tuple[RefinementRowPayload, ...] = ()
-    #: spec 12.1's "tuning trials with metric deltas"; empty until S11 writes a `graph_tuning` row
-    trials: tuple[TuningRow, ...] = ()
+    #: spec 12.1's "tuning trials with metric deltas". A payload like every other row on this
+    #: view, so the page reads a decoded value and never the repo identity behind it (S11 L8)
+    trials: tuple[TuningRowPayload, ...] = ()
 
 
 class RefinementsView(RepoScoped):

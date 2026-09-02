@@ -285,8 +285,10 @@ def _proposed_values(payload: RefinementRowPayload) -> list[tuple[str, str]]:
 #: the log prepends its own `when`
 _REFINEMENT_COLUMNS = ("id", "kind", "tier", "status", "target")
 
-#: one tuning proposal, in the order a human decides on it (spec 11, 12.2)
-_TUNING_COLUMNS = ("id", "stopword", "status", "token", "trial")
+#: one tuning proposal, in the order a human decides on it (spec 11, 12.2). "value" and not
+#: "stopword": `TUNING_KNOBS` names three more knobs, and the first one to ship would render
+#: every row under a header naming the wrong one (S11 M5)
+_TUNING_COLUMNS = ("id", "value", "status", "token", "trial")
 
 #: the decisions view, which only the log has
 _RUN_COLUMNS = ("when", "producer", "runner", "trigger", "status", "n", "summary")
@@ -365,7 +367,7 @@ def render_graph_tuning(out: Console, payload: TuningReport) -> None:
     t = _headed_table(_TUNING_COLUMNS)
     for row in payload.rows:
         t.add_row(*_tuning_cells(row))
-        t.add_row(*_note_row(_TUNING_COLUMNS, row.reason))
+        t.add_row(*_note_row(_TUNING_COLUMNS, escape(row.reason)))
     out.print(t)
     out.print(f"[dim]{payload.active} of {payload.cap} stopwords active[/]")
 
@@ -383,17 +385,30 @@ def render_graph_tuning_row(out: Console, payload: TuningRowPayload) -> None:
         ("token", payload.token),
         ("clusters", _tuning_delta(payload)),
         ("guard", _tuning_guard(payload)),
-        ("reason", payload.reason),
+        ("reason", escape(payload.reason)),
     ):
         t.add_row(label, value)
     out.print(t)
 
 
+#: what every tuning cell says about a row no trial has looked at, in one place: the two cells
+#: below rely on reading identically for it (S11 L4)
+_UNMEASURED = "not measured yet"
+
+
+def _measured_or(
+    row: TuningRowPayload, describe: Callable[[TuningRowPayload], str]
+) -> str:
+    """``describe(row)`` for a measured row, and the one unmeasured wording for the rest."""
+    return describe(row) if row.measured else _UNMEASURED
+
+
 def _tuning_guard(row: TuningRowPayload) -> str:
     """Spec 11's verdict in words: what a human must not mistake for a passing trial."""
-    if not row.measured:
-        return "not measured yet"
-    return "passed" if row.passed else f"[red]refused: {escape(row.refused)}[/]"
+    return _measured_or(
+        row,
+        lambda r: "passed" if r.passed else f"[red]refused: {escape(r.refused)}[/]",
+    )
 
 
 def _tuning_delta(row: TuningRowPayload) -> str:
@@ -402,8 +417,11 @@ def _tuning_delta(row: TuningRowPayload) -> str:
     Percentages to one place on both sides of the wire, so the same row cannot read `0.41%` here
     and `0.4%` on the live page (S11 M14).
     """
-    if not row.measured:
-        return "not measured yet"
+    return _measured_or(row, _delta_line)
+
+
+def _delta_line(row: TuningRowPayload) -> str:
+    """One measured trial's cluster move, name-edge churn and label churn."""
     m = row.metrics
     return (
         f"{m.baseline.clusters} -> {m.clusters}, "

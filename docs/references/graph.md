@@ -380,6 +380,14 @@ keeps no doc tokens, so neither has a baseline without a second rebuild.
 The trial needs a built graph. On a checkout with none it records that once, lands the row
 `rejected`, and is not retried; run `auditr graph build` and measure again.
 
+A trial is tens of seconds, so two things can happen inside one:
+
+- a `graph build` starts. The trial waits for the rebuild lock rather than reading a baseline out
+  of a graph that is being rewritten, and gives up with the usual lock message if the build runs
+  past `graph.rebuild_lock_timeout_seconds`.
+- you accept or revert the row. Your decision stands; the trial drops its own verdict rather than
+  putting the row back to `pending`. The observer logs the refusal and moves on.
+
 ### Precedence and the cap
 
 - A repo that sets `graph.stopwords` in its own config wins, and per key: setting `cluster_floor`
@@ -400,7 +408,7 @@ throwaway `AUDITOR_HOME` of its own, and tuning rows live in the home's index, s
 scores never carries an active token:
 
 ```bash
-uv run pytest -q tests/graph/test_retrieval.py -m ""   # marked slow; scores an untuned build
+uv run pytest -q tests/graph/test_retrieval.py   # scores an untuned build
 ```
 
 To check the ranking a token actually changed, rebuild and compare the pages the same questions

@@ -223,7 +223,7 @@ class TuningRowPayload(WirePayload):
         return cls(
             tuning_id=row.tuning_id,
             key=row.key,
-            value=str(json.loads(row.value_json)),
+            value=_decoded(row.value_json),
             status=row.status,
             token=row.token,
             reason=row.reason,
@@ -234,6 +234,18 @@ class TuningRowPayload(WirePayload):
             passed=bool(row.metrics.measured_at and not row.metrics.refused),
             refused=row.metrics.refused,
         )
+
+
+def _decoded(value_json: str) -> str:
+    """One row's stored value as text, never as an exception.
+
+    A row written by any path but `propose` can hold something `json.loads` refuses, and one bad
+    row must not take the whole list view down with it; the raw text is still readable (S11 L4).
+    """
+    try:
+        return str(json.loads(value_json))
+    except json.JSONDecodeError:
+        return value_json
 
 
 class TuningReport(WirePayload):

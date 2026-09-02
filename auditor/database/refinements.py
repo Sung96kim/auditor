@@ -9,7 +9,8 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any, ClassVar
 
 from pydantic import ValidationError
@@ -160,8 +161,44 @@ def _eval_rows(rows: Sequence[sqlite3.Row]) -> list[EvalRow]:
     return out
 
 
+def _tuning_rows(rows: Sequence[sqlite3.Row]) -> list[TuningRow]:
+    """``graph_tuning`` rows as models, with the metrics column decoded out of its JSON string."""
+    return [
+        TuningRow.model_validate(dict(r) | {"metrics": json.loads(r["metrics"])})
+        for r in rows
+    ]
+
+
+@contextmanager
+def _immediate(conn: sqlite3.Connection) -> Iterator[None]:
+    """One ``BEGIN IMMEDIATE`` transaction, rolled back on any exception out of the block.
+
+    For a read whose decision the write in the same block depends on: the write lock is taken by
+    the first statement, so two processes cannot both read a state neither of them leaves behind
+    (S11 M2).
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+
+
 def _in_clause(column: str, values: Sequence[object]) -> str:
     return f" AND {column} IN ({','.join('?' for _ in values)})"
+
+
+def _inserted_id(cursor: sqlite3.Cursor) -> int:
+    """The autoincrement key the insert just assigned, named rather than cast off ``int | None``.
+
+    SQLite populates it on every successful autoincrement insert, so the raise is a contract
+    statement: an ``int(None)`` here would have been a TypeError with no name on it (S11 L3).
+    """
+    if cursor.lastrowid is None:
+        raise RuntimeError("the insert assigned no rowid")
+    return cursor.lastrowid
 
 
 class RunsDB(BaseDB):
@@ -621,7 +658,7 @@ class RefinementsDB(BaseDB):
         sql, binds = self.insert_sql(
             "graph_refinements", _refinement_values(refinement)
         )
-        new_id = int(conn.execute(sql, binds).lastrowid)
+        new_id = _inserted_id(conn.execute(sql, binds))
         anchor_sql, anchor_binds = self.insert_many_sql(
             "graph_refinement_anchors",
             [
@@ -939,7 +976,7 @@ class TuningDB(BaseDB):
         def op(conn: sqlite3.Connection) -> int:
             cur = conn.execute(sql, binds)
             conn.commit()
-            return int(cur.lastrowid)
+            return _inserted_id(cur)
 
         return await self._worker.run(op)
 
@@ -952,16 +989,19 @@ class TuningDB(BaseDB):
             sql += _in_clause("status", statuses)
             params += [s.value for s in statuses]
         sql += " ORDER BY tuning_id"
-        return [
-            TuningRow.model_validate(dict(r) | {"metrics": json.loads(r["metrics"])})
-            for r in await self._fetch_by_identity(sql, tuple(params))
-        ]
+        return _tuning_rows(await self._fetch_by_identity(sql, tuple(params)))
 
-    async def supersede_and_add(self, superseded: Sequence[int], row: TuningRow) -> int:
-        """Retire the rows this proposal replaces and insert it, in one transaction.
+    async def supersede_and_add(
+        self, row: TuningRow, decide: Callable[[Sequence[TuningRow]], Sequence[int]]
+    ) -> int:
+        """Decide this proposal against the rows it will land beside, and insert it, in one
+        transaction.
 
-        One commit because the two halves are one decision: a failing insert must not leave the
-        older row superseded with nothing standing in for it (S11 L3).
+        ``decide`` names the rows the new one retires, or raises to refuse it, and it reads the
+        rows inside the insert's own ``BEGIN IMMEDIATE`` so two processes proposing at once
+        cannot both pass a check neither of them leaves standing (S11 M2). One commit for both
+        halves because they are one decision: a failing insert must not leave the older row
+        superseded with nothing standing in for it (S11 L3).
         """
         identity = self.partition.identity
         sql, binds = self.insert_sql(
@@ -980,49 +1020,111 @@ class TuningDB(BaseDB):
         )
 
         def op(conn: sqlite3.Connection) -> int:
-            for tuning_id in superseded:
-                conn.execute(
-                    "UPDATE graph_tuning SET status=? WHERE tuning_id=? AND repo_identity=?",
-                    (TuningStatus.SUPERSEDED.value, tuning_id, identity),
+            with _immediate(conn):
+                live = _tuning_rows(
+                    conn.execute(
+                        "SELECT * FROM graph_tuning WHERE repo_identity = ? "
+                        "ORDER BY tuning_id",
+                        (identity,),
+                    ).fetchall()
                 )
-            cur = conn.execute(sql, binds)
-            conn.commit()
-            return int(cur.lastrowid)
+                for tuning_id in decide(live):
+                    conn.execute(
+                        "UPDATE graph_tuning SET status=? "
+                        "WHERE tuning_id=? AND repo_identity=?",
+                        (TuningStatus.SUPERSEDED.value, tuning_id, identity),
+                    )
+                return _inserted_id(conn.execute(sql, binds))
 
         return await self._worker.run(op)
 
     async def set_tuning_metrics(
-        self, tuning_id: int, metrics: TuningMetrics, status: TuningStatus
-    ) -> None:
-        """Write one trial's measured metrics and the status its verdict earns, in one statement.
+        self,
+        tuning_id: int,
+        metrics: TuningMetrics,
+        status: TuningStatus,
+        *,
+        expected: Sequence[TuningStatus],
+    ) -> bool:
+        """Write one trial's metrics and the status its verdict earns while the row still reads
+        one of ``expected``, and say whether that write landed.
 
-        Together because a guard that refused and the row that says so are one fact: a reader that
-        saw the metrics without the status would see a refusal it could still accept.
+        Conditional because a trial is tens of seconds long and a human can accept or revert the
+        row inside that window: an unconditional write puts their decision back to `pending` with
+        nothing anywhere saying so (S11 H2). Metrics and status go together because a guard that
+        refused and the row that says so are one fact: a reader that saw the metrics without the
+        status would see a refusal it could still accept.
         """
         identity = self.partition.identity
         blob = metrics.model_dump_json()
+        allowed = [s.value for s in expected]
 
-        def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
                 "UPDATE graph_tuning SET metrics=?, status=? "
-                "WHERE tuning_id=? AND repo_identity=?",
-                (blob, status.value, tuning_id, identity),
+                "WHERE tuning_id=? AND repo_identity=?" + _in_clause("status", allowed),
+                (blob, status.value, tuning_id, identity, *allowed),
             )
             conn.commit()
+            return cur.rowcount > 0
 
-        await self._worker.run(op)
+        return await self._worker.run(op)
 
-    async def set_tuning_status(self, tuning_id: int, status: TuningStatus) -> None:
+    async def activate(
+        self, tuning_id: int, *, expected: TuningStatus, cap: int
+    ) -> bool:
+        """Move one row to `active` while it still reads ``expected`` and fewer than ``cap``
+        stopword rows are active, and say whether that write landed.
+
+        The cap is counted inside the write's own statement rather than read first: two accepts
+        landing together both pass a check-then-write and take the count past the bound
+        ``stopwords_max`` exists to hold (S11 M2).
+        """
         identity = self.partition.identity
 
-        def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "UPDATE graph_tuning SET status=? WHERE tuning_id=? AND repo_identity=?",
-                (status.value, tuning_id, identity),
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "UPDATE graph_tuning SET status=? "
+                "WHERE tuning_id=? AND repo_identity=? AND status=? AND ("
+                " SELECT COUNT(*) FROM graph_tuning WHERE repo_identity=? AND status=?"
+                " AND key='stopwords') < ?",
+                (
+                    TuningStatus.ACTIVE.value,
+                    tuning_id,
+                    identity,
+                    expected.value,
+                    identity,
+                    TuningStatus.ACTIVE.value,
+                    cap,
+                ),
             )
             conn.commit()
+            return cur.rowcount > 0
 
-        await self._worker.run(op)
+        return await self._worker.run(op)
+
+    async def set_tuning_status(
+        self,
+        tuning_id: int,
+        status: TuningStatus,
+        *,
+        expected: Sequence[TuningStatus] | None = None,
+    ) -> bool:
+        """Move one row, optionally only while it still reads one of ``expected``, and say
+        whether that write landed. ``None`` is the administrative write that asks nothing."""
+        identity = self.partition.identity
+        allowed = [s.value for s in expected or ()]
+        sql = (
+            "UPDATE graph_tuning SET status=? WHERE tuning_id=? AND repo_identity=?"
+            + (_in_clause("status", allowed) if allowed else "")
+        )
+
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(sql, (status.value, tuning_id, identity, *allowed))
+            conn.commit()
+            return cur.rowcount > 0
+
+        return await self._worker.run(op)
 
 
 class EvalsDB(BaseDB):
@@ -1083,7 +1185,7 @@ class EvalsDB(BaseDB):
         def op(conn: sqlite3.Connection) -> int:
             cur = conn.execute(sql, binds)
             conn.commit()
-            return int(cur.lastrowid)
+            return _inserted_id(cur)
 
         return await self._worker.run(op)
 

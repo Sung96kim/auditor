@@ -928,43 +928,39 @@
       "title": "TuningMetrics",
       "type": "object"
     },
-    "TuningRow": {
-      "description": "One proposed knob change (spec 5.8). ``value_json`` stays a raw JSON string because a knob\ncan be a float, an int or a list of stopwords.",
+    "TuningRowPayload": {
+      "description": "One tuning proposal as every surface shows it: the value decoded out of its JSON string,\nthe confirmation word beside it, and the verdict the guards reached.",
       "properties": {
         "tuning_id": {
-          "default": 0,
           "title": "Tuning Id",
           "type": "integer"
-        },
-        "repo_identity": {
-          "title": "Repo Identity",
-          "type": "string"
         },
         "key": {
           "title": "Key",
           "type": "string"
         },
-        "value_json": {
-          "title": "Value Json",
+        "value": {
+          "title": "Value",
           "type": "string"
         },
+        "status": {
+          "$ref": "#/$defs/TuningStatus"
+        },
         "token": {
-          "default": "",
           "title": "Token",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
           "type": "string"
         },
         "run_id": {
           "title": "Run Id",
           "type": "string"
         },
-        "reason": {
-          "default": "",
-          "title": "Reason",
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/TuningStatus",
-          "default": "pending"
+        "created_at": {
+          "title": "Created At",
+          "type": "number"
         },
         "metrics": {
           "$ref": "#/$defs/TuningMetrics",
@@ -990,18 +986,33 @@
             }
           }
         },
-        "created_at": {
-          "title": "Created At",
-          "type": "number"
+        "measured": {
+          "default": false,
+          "title": "Measured",
+          "type": "boolean"
+        },
+        "passed": {
+          "default": false,
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "refused": {
+          "default": "",
+          "title": "Refused",
+          "type": "string"
         }
       },
       "required": [
-        "repo_identity",
+        "tuning_id",
         "key",
-        "value_json",
-        "run_id"
+        "value",
+        "status",
+        "token",
+        "reason",
+        "run_id",
+        "created_at"
       ],
-      "title": "TuningRow",
+      "title": "TuningRowPayload",
       "type": "object"
     },
     "TuningStatus": {
@@ -1073,7 +1084,7 @@
     "trials": {
       "default": [],
       "items": {
-        "$ref": "#/$defs/TuningRow"
+        "$ref": "#/$defs/TuningRowPayload"
       },
       "title": "Trials",
       "type": "array"

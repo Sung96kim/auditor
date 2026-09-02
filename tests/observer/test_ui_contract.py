@@ -7,6 +7,7 @@ prove the daemon still serves it (recon Q3, the middle path).
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -138,11 +139,11 @@ READS: dict[str, dict[tuple[str, str], frozenset[str]]] = {
             {"run", "prompt", "tool_trace", "refinements", "trials", "assessment"}
         ),
         ("ToolCall", "ToolCall"): frozenset({"tool", "ts", "detail"}),
-        ("TuningRow", "TuningRow"): frozenset(
+        ("TuningRowPayload", "TuningRow"): frozenset(
             {
                 "tuning_id",
                 "key",
-                "value_json",
+                "value",
                 "status",
                 "reason",
                 "metrics",
@@ -228,8 +229,10 @@ BRANCHES: dict[str, dict[str, frozenset[str]]] = {
     "FlowView": {"FlowDirection": frozenset({"out", "in"})},
 }
 
+#: indentation-tolerant on purpose: no formatter config guards these sources, so a reflow to
+#: four spaces or tabs would silently empty the parse rather than fail it (S11 L7)
 _INTERFACE = re.compile(r"^export interface (\w+) \{\n(.*?)^\}", re.M | re.S)
-_FIELD = re.compile(r"^  (\w+)(\??): (.+?);$", re.M)
+_FIELD = re.compile(r"^[ \t]+(\w+)(\??): (.+?);$", re.M)
 
 
 def _declared() -> dict[str, dict[str, str]]:
@@ -247,7 +250,7 @@ def _declared() -> dict[str, dict[str, str]]:
     }
 
 
-def _definitions(model: str) -> dict[str, dict]:
+def _definitions(model: str) -> dict[str, dict[str, Any]]:
     """One committed schema flattened to `{definition name: its properties}`."""
     schema = json.loads((SCHEMAS / f"{model}.json").read_text())
     found = {schema["title"]: schema.get("properties", {})}
@@ -256,7 +259,7 @@ def _definitions(model: str) -> dict[str, dict]:
     return found
 
 
-def _nullable(served: dict) -> bool:
+def _nullable(served: dict[str, Any]) -> bool:
     """Whether the wire can send null for this property, which is what `.slice` on it needs."""
     return any(arm.get("type") == "null" for arm in served.get("anyOf", []))
 
@@ -367,7 +370,7 @@ def test_the_pages_status_map_is_exactly_the_enum_the_wire_serves():
         ]["enum"]
     )
     block = RUNS_TS.read_text().split("export const STATUS_GROUPS", 1)[1].split("};", 1)
-    declared = set(re.findall(r"^  (\w+): ", block[0], re.M))
+    declared = set(re.findall(r"^[ \t]+(\w+): ", block[0], re.M))
     assert declared == served
     assert declared == set(_REFINEMENT_STATUSES)
 
@@ -383,7 +386,7 @@ def test_the_runner_marks_are_exactly_the_enum_the_wire_serves():
     )
     text = RUNNER_MARK_TS.read_text()
     marks_block = text.split("export const MARKS", 1)[1].split("\n};\n", 1)[0]
-    marks = set(re.findall(r"^  (\w+): \{", marks_block, re.M))
+    marks = set(re.findall(r"^[ \t]+(\w+): \{", marks_block, re.M))
     unmarked_block = text.split("const UNMARKED", 1)[1].split(";", 1)[0]
     unmarked = set(re.findall(r"(\w+):\s*\"", unmarked_block))
     assert marks | unmarked == served

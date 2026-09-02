@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,24 @@ def test_compute_abstractness_stub_method():
     facts = extract_file_facts("base.py", STUB_CLASS, "production")
     run = next(n for n in facts.nodes if n.id == "base.py::Base.run")
     assert compute_abstractness(run, proto_method_ids=set()) >= 0.4  # stub body
+
+
+async def test_a_real_build_shapes_off_the_event_loop_thread(facts_store, monkeypatch):
+    """`shape` is 19 to 41 seconds of synchronous sklearn and networkx, and the observer drives
+    every repo's loop from one event loop, so a build that shaped in place froze every other
+    repo, every MCP call and the heartbeat for its whole duration (S11 H2). The tuning trial
+    had a worker thread; the path that runs far more often did not."""
+    caller = threading.get_ident()
+    seen: list[int] = []
+    real = GraphBuilder.shape
+
+    async def spy(self, index, settings, *, progress=None):
+        seen.append(threading.get_ident())
+        return await real(self, index, settings, progress=progress)
+
+    monkeypatch.setattr(GraphBuilder, "shape", spy)
+    await GraphBuilder().run(facts_store, AuditorSettings())
+    assert seen and caller not in seen
 
 
 async def test_build_reports_stage_progress(facts_store):

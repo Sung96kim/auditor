@@ -27,6 +27,7 @@ from auditor.graph.payloads import (
     LogView,
     RefinementRowPayload,
     RunRowPayload,
+    TuningRowPayload,
 )
 from auditor.graph.query import GraphQuery, LogQuery
 from auditor.graph.refine.models import MODEL_RUNNERS, RunnerKind
@@ -397,7 +398,7 @@ class Readers:
                 RefinementRowPayload.of(r, anchors.get(r.refinement_id, ()))
                 for r in rows
             ),
-            trials=tuple(trials),
+            trials=tuple(TuningRowPayload.of(t) for t in trials),
         )
 
     def run(

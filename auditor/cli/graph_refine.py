@@ -305,12 +305,15 @@ def _tuning_transition(
     ident: str,
     token: str | None,
     json_: bool,
-    act: Callable[[TuningLedger, str], Awaitable[TuningRow]],
+    act: Callable[[TuningLedger, str, Path], Awaitable[TuningRow]],
 ) -> None:
     """Run one transition, or print the word it needs when `--token` was left off.
 
     `refinements accept` takes no confirmation because it moves one recorded correction; a knob
     moves every cluster in the repo, so this one is deliberately harder to do by accident (P9).
+
+    ``act`` is handed the resolved root, so every subcommand resolves it once and none reaches
+    for `cli_root` a second time to read a setting off it (S11 L5).
     """
     root = cli_root(target)
     try:
@@ -318,7 +321,7 @@ def _tuning_transition(
             word = run(_tuning_word(root, ident), "reading…")
             fail(f"repeat the confirmation word to confirm: --token {word}")
         payload = run(
-            _tuning_move(root, lambda ledger: act(ledger, token)), "updating…"
+            _tuning_move(root, lambda ledger: act(ledger, token, root)), "updating…"
         )
     except TuningRefused as exc:
         fail(str(exc))
@@ -348,13 +351,14 @@ def tuning_accept(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Activate a measured proposal. The next `graph build` reads it."""
-    cap = load_user(cli_root(target)).observer.tuning.stopwords_max
     _tuning_transition(
         target,
         ident,
         token,
         json_,
-        lambda ledger, word: ledger.accept(ident, token=word, cap=cap),
+        lambda ledger, word, root: ledger.accept(
+            ident, token=word, cap=load_user(root).observer.tuning.stopwords_max
+        ),
     )
 
 
@@ -371,7 +375,7 @@ def tuning_revert(
         ident,
         token,
         json_,
-        lambda ledger, word: ledger.revert(ident, token=word),
+        lambda ledger, word, _root: ledger.revert(ident, token=word),
     )
 
 

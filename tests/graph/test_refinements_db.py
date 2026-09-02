@@ -682,6 +682,143 @@ async def test_set_tuning_status_moves_one_row(refine_store):
     assert stored.status is TuningStatus.ACTIVE
 
 
+@pytest.mark.parametrize(
+    ("expected", "landed", "left"),
+    [
+        ([TuningStatus.REJECTED], False, TuningStatus.PENDING),
+        ([TuningStatus.PENDING], True, TuningStatus.ACTIVE),
+    ],
+    ids=["a-status-the-row-does-not-hold", "the-status-it-was-read-at"],
+)
+async def test_set_tuning_status_can_be_conditioned_on_what_it_expected(
+    refine_store, expected, landed, left
+):
+    """Every hand transition reads the row and then writes it, so the condition is what makes
+    the two one decision when something else moves the row in between (S11 H2)."""
+    run_id = await refine_store.runs.add_run(_run())
+    tid = await refine_store.tuning.add_tuning(_tuning(run_id))
+    assert (
+        await refine_store.tuning.set_tuning_status(
+            tid, TuningStatus.ACTIVE, expected=expected
+        )
+        is landed
+    )
+    (stored,) = await refine_store.tuning.tuning()
+    assert stored.status is left
+
+
+async def test_the_metrics_write_lands_only_on_a_status_it_expected(refine_store):
+    """A trial is tens of seconds; a human who accepted the row inside that window must not
+    find it back at `pending` with the trial's numbers on it (S11 H2)."""
+    run_id = await refine_store.runs.add_run(_run())
+    tid = await refine_store.tuning.add_tuning(_tuning(run_id))
+    await refine_store.tuning.set_tuning_status(tid, TuningStatus.ACTIVE)
+    assert (
+        await refine_store.tuning.set_tuning_metrics(
+            tid,
+            _tuning_metrics(),
+            TuningStatus.PENDING,
+            expected=[TuningStatus.PENDING, TuningStatus.REJECTED],
+        )
+        is False
+    )
+    (stored,) = await refine_store.tuning.tuning()
+    assert stored.status is TuningStatus.ACTIVE
+    assert stored.metrics == TuningMetrics()
+
+
+@pytest.mark.parametrize(
+    ("cap", "landed"), [(2, True), (1, False)], ids=["under-the-cap", "at-the-cap"]
+)
+async def test_activate_counts_the_cap_inside_its_own_statement(
+    refine_store, cap, landed
+):
+    """Two accepts deciding from the same read both pass a check-then-write and both activate;
+    only a count inside the write itself can refuse the second (S11 M2)."""
+    run_id = await refine_store.runs.add_run(_run())
+    first = await refine_store.tuning.add_tuning(
+        _tuning(run_id, key="stopwords", value_json='"a"')
+    )
+    second = await refine_store.tuning.add_tuning(
+        _tuning(run_id, key="stopwords", value_json='"b"')
+    )
+    assert (
+        await refine_store.tuning.activate(
+            first, expected=TuningStatus.PENDING, cap=cap
+        )
+        is True
+    )
+    assert (
+        await refine_store.tuning.activate(
+            second, expected=TuningStatus.PENDING, cap=cap
+        )
+        is landed
+    )
+
+
+async def test_activate_refuses_a_row_that_moved_since_it_was_read(refine_store):
+    run_id = await refine_store.runs.add_run(_run())
+    tid = await refine_store.tuning.add_tuning(
+        _tuning(run_id, key="stopwords", value_json='"a"')
+    )
+    await refine_store.tuning.set_tuning_status(tid, TuningStatus.REVERTED)
+    assert (
+        await refine_store.tuning.activate(tid, expected=TuningStatus.PENDING, cap=20)
+        is False
+    )
+
+
+async def test_a_proposal_decides_against_the_rows_its_insert_lands_beside(
+    refine_store,
+):
+    """The rate limit and the cap are read-then-write decisions, so two proposers could both
+    pass a check neither of them left standing; `decide` runs inside the insert's own
+    transaction rather than against a read that has already gone stale (S11 M2)."""
+    run_id = await refine_store.runs.add_run(_run())
+    first = await refine_store.tuning.add_tuning(_tuning(run_id))
+    seen: list[list[int]] = []
+
+    def decide(rows: Sequence[TuningRow]) -> list[int]:
+        seen.append([r.tuning_id for r in rows])
+        return [first]
+
+    second = await refine_store.tuning.supersede_and_add(_tuning(run_id), decide)
+    assert seen == [[first]]
+    assert {r.tuning_id: r.status for r in await refine_store.tuning.tuning()} == {
+        first: TuningStatus.SUPERSEDED,
+        second: TuningStatus.PENDING,
+    }
+
+
+async def test_a_decision_that_refuses_inside_the_transaction_writes_no_row(
+    refine_store,
+):
+    run_id = await refine_store.runs.add_run(_run())
+    first = await refine_store.tuning.add_tuning(_tuning(run_id))
+
+    def refuse(rows: Sequence[TuningRow]) -> list[int]:
+        raise RuntimeError("the cap is full")
+
+    with pytest.raises(RuntimeError, match="the cap is full"):
+        await refine_store.tuning.supersede_and_add(_tuning(run_id), refuse)
+    assert [r.tuning_id for r in await refine_store.tuning.tuning()] == [first]
+
+
+async def test_a_failing_insert_rolls_back_the_rows_it_had_already_superseded(
+    refine_store,
+):
+    """One commit because the two halves are one decision: a proposal that cannot be written
+    must not leave the row it replaces retired with nothing standing in for it (S11 L3)."""
+    run_id = await refine_store.runs.add_run(_run())
+    first = await refine_store.tuning.add_tuning(_tuning(run_id))
+    with pytest.raises(sqlite3.IntegrityError):
+        await refine_store.tuning.supersede_and_add(
+            _tuning("no-such-run"), lambda rows: [first]
+        )
+    (stored,) = await refine_store.tuning.tuning()
+    assert (stored.tuning_id, stored.status) == (first, TuningStatus.PENDING)
+
+
 async def test_eval_rows_are_bound_to_their_runner_and_model(refine_store):
     """`latest` is the one reader: a row of another model must not answer this model's gate."""
     await refine_store.evals.add_eval(_eval())

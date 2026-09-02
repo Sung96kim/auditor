@@ -4,16 +4,20 @@ the trial's metrics and guards, and the proposal lifecycle."""
 import asyncio
 import json
 import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
 from _support import tool_data
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from graph._support import with_lock_timeout
 
 from auditor.cli.helpers import open_index
 from auditor.config import AuditorSettings, GraphConfig, load_config
-from auditor.graph.build import GraphBuilder, tuned_settings
+from auditor.graph.build import GraphBuilder, GraphWrite, tuned_settings
+from auditor.graph.model import GraphCluster
+from auditor.graph.refine.lock import rebuild_lock
 from auditor.graph.refine.models import (
     Refinement,
     RefinementKind,
@@ -766,7 +770,7 @@ async def test_the_mcp_tool_records_a_row_and_names_the_confirmation_word(
         refine_repo, key="stopwords", value="helper", reason="every module says helper"
     )
     assert (data["key"], data["status"]) == ("stopwords", "pending")
-    assert data["value"] == '"helper"'
+    assert data["value"] == "helper"
     assert len(data["token"]) == TOKEN_LENGTH
     assert data["allow_list"] == ["stopwords"]
 
@@ -799,3 +803,152 @@ async def test_the_tool_is_annotated_as_a_writer():
     tools = {t.name: t for t in await mcp.list_tools()}
     assert "propose_tuning" in tools
     assert tools["propose_tuning"].annotations.readOnlyHint is not True
+
+
+async def test_an_accepted_row_reaches_a_real_build_and_not_only_the_settings_read(
+    tuning: TuningService, monkeypatch
+):
+    """`run`'s call to `tuned_settings` is the only line that makes an accept do anything.
+
+    Every other tuning assertion stops at that read, so replacing the call with the untuned
+    settings left the whole suite green while `graph tuning list` still said `active` (S11 H1).
+    """
+    row = await tuning.propose("stopwords", "load", "load is in every module name")
+    await tuning.measure(row.tuning_id)
+    await tuning.ledger.accept(str(row.tuning_id), token=row.token, cap=20)
+    seen: list[list[str]] = []
+    real = GraphBuilder.shape
+
+    async def spy(self, index, settings, *, progress=None):
+        seen.append(list(settings.graph.stopwords))
+        return await real(self, index, settings, progress=progress)
+
+    monkeypatch.setattr(GraphBuilder, "shape", spy)
+    await GraphBuilder().run(tuning.service.index, tuning.service.settings)
+    assert seen == [["load"]]
+
+
+async def _decided_midway(
+    tuning: TuningService,
+    row: TuningRow,
+    monkeypatch,
+    decide: Callable[[TuningLedger, TuningRow], Awaitable[TuningRow]],
+) -> None:
+    """Run this row's trial with a human decision landing inside it, and refuse the trial."""
+    started, release = threading.Event(), threading.Event()
+    real = GraphBuilder.shape
+
+    async def blocking(self, index, settings, *, progress=None):
+        started.set()
+        release.wait(10.0)
+        return await real(self, index, settings, progress=progress)
+
+    monkeypatch.setattr(GraphBuilder, "shape", blocking)
+
+    async def decision() -> None:
+        await asyncio.to_thread(started.wait, 10.0)
+        await decide(tuning.ledger, row)
+        release.set()
+
+    with pytest.raises(TuningRefused, match="decided while its trial was running"):
+        async with asyncio.timeout(30):
+            await asyncio.gather(tuning.measure(row.tuning_id), decision())
+
+
+@pytest.mark.parametrize(
+    ("decide", "left"),
+    [
+        (
+            lambda ledger, row: ledger.accept(
+                str(row.tuning_id), token=row.token, cap=20
+            ),
+            TuningStatus.ACTIVE,
+        ),
+        (
+            lambda ledger, row: ledger.revert(str(row.tuning_id), token=row.token),
+            TuningStatus.REVERTED,
+        ),
+    ],
+    ids=["accept", "revert"],
+)
+async def test_a_decision_taken_while_a_trial_runs_is_not_written_over(
+    tuning: TuningService, monkeypatch, decide, left: TuningStatus
+):
+    """A trial is tens of seconds and the docs tell a human to accept from a terminal, so both
+    directions are reachable: an accept put back to `pending` stops the build reading a stopword
+    the user was told is `active`, and a revert put back to `pending` is acceptable again (H2).
+    """
+    row = await tuning.propose("stopwords", "load", "one")
+    await tuning.measure(row.tuning_id)
+    await _decided_midway(tuning, row, monkeypatch, decide)
+    assert (await tuning.ledger.row(str(row.tuning_id))).status is left
+
+
+async def test_a_trial_waits_for_the_build_that_holds_the_rebuild_lock(
+    refine_service: RefinementService,
+):
+    """The trial reads its baseline out of the stored graph and then rebuilds against it, so a
+    real build landing between the two would score a comparison of two different graphs (M1)."""
+    tuning = TuningService(service=with_lock_timeout(refine_service, 5.0, poll=0.01))
+    row = await tuning.propose("stopwords", "load", "one")
+    order: list[str] = []
+
+    async def build() -> None:
+        async with rebuild_lock(refine_service.identity, poll=0.01):
+            order.append("build takes the lock")
+            await asyncio.sleep(0.15)
+            order.append("build releases it")
+
+    async def trial() -> None:
+        await asyncio.sleep(0.05)
+        await tuning.measure(row.tuning_id)
+        order.append("trial measured")
+
+    async with asyncio.timeout(30):
+        await asyncio.gather(build(), trial())
+    assert order == ["build takes the lock", "build releases it", "trial measured"]
+
+
+def _labelled(*labels: str) -> GraphWrite:
+    """One shaped build carrying these cluster labels and nothing else a guard reads."""
+    return GraphWrite(
+        clusters=tuple(
+            GraphCluster(cluster_id=i, label=label, member_count=2)
+            for i, label in enumerate(labels)
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("labels", "churn"),
+    [(("parsers", "writers", "cli"), 0.0), (("parsers",), 0.5)],
+    ids=["invented-a-label", "lost-a-label"],
+)
+def test_label_churn_counts_the_baseline_labels_the_trial_stopped_producing(
+    labels: tuple[str, ...], churn: float
+):
+    """The direction is the whole number, and flipping the subtraction survived every test in
+    the repo while `label churn` stayed a headline figure on three surfaces (S11 L1)."""
+    trial = measured(
+        _labelled(*labels),
+        [],
+        TuningBaseline(clusters=2, top_cluster_share=0.5),
+        0,
+        frozenset({"parsers", "writers"}),
+        cfg=GraphConfig(),
+        now=1.0,
+    )
+    assert trial.metrics.label_churn == churn
+
+
+async def test_a_token_names_a_live_row_and_never_a_settled_one(tuning: TuningService):
+    """`graph tuning revert loader` must not resolve to the row a revert already took out, and
+    `measure loader` must not pick a superseded one; dropping the filter survived 1571 tests."""
+    first = await tuning.propose("stopwords", "loader", "one", now=1.0)
+    await tuning.ledger.revert(str(first.tuning_id), token=first.token)
+    with pytest.raises(TuningRefused, match="no tuning row 'loader'"):
+        await tuning.ledger.row("loader")
+    second = await tuning.propose("stopwords", "loader", "two", now=200_000.0)
+    third = await tuning.propose("stopwords", "loader", "three", now=400_000.0)
+    assert (await tuning.ledger.rows())[1].tuning_id == second.tuning_id
+    assert (await tuning.ledger.row("loader")).tuning_id == third.tuning_id

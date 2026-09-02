@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 
+import pytest
 from _support import cli_json, one_line, tool_data
 from fastmcp import Client
 from graph._support import cells, render_text
@@ -232,3 +233,55 @@ def test_the_row_renderer_says_which_guard_refused():
         )
     )
     assert "refused: singleton clusters 2 -> 3" in rendered
+
+
+def test_the_value_the_tool_hands_back_names_the_row_for_a_later_accept(
+    refine_repo: Path,
+):
+    """`propose_tuning` used to return the raw `value_json`, so an agent following its own
+    docstring told the user to accept `"helper"` with the quotes, and no row answers to that
+    spelling (S11 H1)."""
+    row = _propose(refine_repo)
+    assert row["value"] == "helper"
+    runner.invoke(
+        app, ["graph", "tuning", "measure", row["value"], str(refine_repo), "--json"]
+    )
+    accepted = cli_json(
+        runner.invoke(
+            app,
+            [
+                "graph",
+                "tuning",
+                "accept",
+                row["value"],
+                str(refine_repo),
+                "--token",
+                row["token"],
+                "--json",
+            ],
+        )
+    )
+    assert (accepted["tuning_id"], accepted["status"]) == (row["tuning_id"], "active")
+
+
+#: an agent writes `reason` freehand, and rich reads three of these as markup: `[/]` closes a tag
+#: that was never opened and raises, `[red]` styles the row, and `list[str]` loses its argument
+_MARKUP_REASON = "drops the [/] gap in [red]list[str][/red] names"
+
+
+@pytest.mark.parametrize(
+    ("render", "payload"),
+    [
+        (
+            render_graph_tuning,
+            lambda: TuningReport(rows=(_payload(reason=_MARKUP_REASON),), cap=20),
+        ),
+        (render_graph_tuning_row, lambda: _payload(reason=_MARKUP_REASON)),
+    ],
+    ids=["list", "row"],
+)
+def test_a_reason_carrying_rich_markup_is_printed_as_the_text_it_is(render, payload):
+    """One bad row raised `MarkupError` for every row in the table, and `graph tuning list` is
+    the only surface that prints the confirmation word a revert needs (S11 M1)."""
+    rendered = one_line(render_text(render, payload()))
+    assert "drops the [/] gap in [red]list[str][/red] names" in rendered

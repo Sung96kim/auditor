@@ -170,6 +170,8 @@ args = ["run", "-i", "--rm",
   active, or one proposal for this key was already recorded inside the last day.
 - The returned row carries `token`, the confirmation word the accept has to repeat, plus
   `tuning_id`, `key`, `value`, `status`, `reason`, `run_id`, `created_at` and `allow_list`.
+  `value` is the decoded token, so it can be handed straight back to
+  `auditr graph tuning accept <value> --token <word>`.
 - The trial that measures the proposal is a separate step, because a facts-only rebuild is tens of
   seconds. The observer runs it, or `auditr graph tuning measure <id>` does when no daemon is
   attached. It needs a built graph: on a checkout with none the trial records that and refuses once.

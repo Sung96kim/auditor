@@ -171,14 +171,19 @@ def cells(rendered: str, first: str) -> list[str]:
     raise AssertionError(f"no row starting {first!r} in\n{rendered}")
 
 
-def with_lock_timeout(service: RefinementService, seconds: float) -> RefinementService:
-    """Shrink this service's rebuild-lock budget, so a held lock is a fast refusal."""
+def with_lock_timeout(
+    service: RefinementService, seconds: float, *, poll: float | None = None
+) -> RefinementService:
+    """Shrink this service's rebuild-lock budget, so a held lock is a fast refusal.
+
+    ``poll`` shrinks the interval between attempts as well, for a test that watches the wait end
+    rather than the refusal arrive.
+    """
+    budget: dict[str, float] = {"rebuild_lock_timeout_seconds": seconds}
+    if poll is not None:
+        budget["rebuild_lock_poll_seconds"] = poll
     service.settings = service.settings.model_copy(
-        update={
-            "graph": service.settings.graph.model_copy(
-                update={"rebuild_lock_timeout_seconds": seconds}
-            )
-        }
+        update={"graph": service.settings.graph.model_copy(update=budget)}
     )
     return service
 

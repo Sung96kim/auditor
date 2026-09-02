@@ -112,25 +112,14 @@ describe("what a run detail says when a row has no edge to show", () => {
 
   it("an added edge names its source, and is told apart from a confirm on the same pair", async () => {
     const pair = { src: "pkg/dispatch.py::relay", dst: "pkg/util.py::slugify" };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify(
-              runDetail({
-                refinements: [
-                  refinementRow({ refinement_id: "r-1", kind: "add_edge", ...pair }),
-                  refinementRow({ refinement_id: "r-2", kind: "confirm_edge", ...pair }),
-                ],
-              }),
-            ),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        ),
-      ),
+    serve(
+      runDetail({
+        refinements: [
+          refinementRow({ refinement_id: "r-1", kind: "add_edge", ...pair }),
+          refinementRow({ refinement_id: "r-2", kind: "confirm_edge", ...pair }),
+        ],
+      }),
     );
-    render(<RunDetail base="/" repo="/w" runId="3f2a1b9c44de4c7f" onClose={vi.fn()} />);
     const added = await screen.findByText(/add_edge/);
     expect(added.textContent).toBe(
       "[A] add_edge pkg/dispatch.py::relay to pkg/util.py::slugify",
@@ -141,30 +130,19 @@ describe("what a run detail says when a row has no edge to show", () => {
   });
 
   it("a cluster relabel in the accepted list names its label and its members", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify(
-              runDetail({
-                refinements: [
-                  refinementRow({
-                    kind: "relabel_cluster",
-                    src: null,
-                    dst: null,
-                    members: ["pkg/core.py::Engine", "pkg/core.py::boot"],
-                    payload: { label: "engine startup" },
-                  }),
-                ],
-              }),
-            ),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        ),
-      ),
+    serve(
+      runDetail({
+        refinements: [
+          refinementRow({
+            kind: "relabel_cluster",
+            src: null,
+            dst: null,
+            members: ["pkg/core.py::Engine", "pkg/core.py::boot"],
+            payload: { label: "engine startup" },
+          }),
+        ],
+      }),
     );
-    render(<RunDetail base="/" repo="/w" runId="3f2a1b9c44de4c7f" onClose={vi.fn()} />);
     expect((await screen.findByText(/relabel_cluster/)).textContent).toBe(
       "[A] relabel_cluster engine startup: pkg/core.py::Engine, pkg/core.py::boot",
     );

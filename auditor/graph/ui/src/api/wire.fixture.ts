@@ -189,13 +189,17 @@ export function refinementRow(over: Partial<RefinementRow> = {}): RefinementRow 
   };
 }
 
+export function refinementsReport(
+  over: Partial<RefinementsReport> = {},
+): RefinementsReport {
+  const rows = over.rows ?? [refinementRow()];
+  return { rows, refinement_count: rows.length, truncated: false, ...over };
+}
+
 export function refinementsView(
   over: Partial<RefinementsReport> = {},
 ): RefinementsView {
-  const rows = over.rows ?? [refinementRow()];
-  return {
-    refinements: { rows, refinement_count: rows.length, truncated: false, ...over },
-  };
+  return { refinements: refinementsReport(over) };
 }
 
 export function toolCall(over: Partial<ToolCall> = {}): ToolCall {
@@ -206,7 +210,7 @@ export function tuningRow(over: Partial<TuningRow> = {}): TuningRow {
   return {
     tuning_id: 1,
     key: "stopwords",
-    value_json: '"helper"',
+    value: "helper",
     status: "pending",
     reason: "every module says helper",
     metrics: {

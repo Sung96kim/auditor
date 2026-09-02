@@ -23,7 +23,13 @@ class TuningRefused(RuntimeError):
 
 
 class KnobSpec(BaseModel):
-    """One allow-listed knob: the `GraphConfig` field it sets, its range, and whether S11 ships it."""
+    """One allow-listed knob: the `GraphConfig` field it sets, its range, and whether S11 ships it.
+
+    `low` and `high` are declared and unread: `TuningService.propose` validates every value as a
+    stopword token, because `stopwords` is the only knob `knob()` lets through. Shipping one of
+    the numeric knobs is therefore not a `shipped=True` flip on its own; it also needs a
+    key-dispatched value validator that reads this range (S11 M4).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -195,13 +201,23 @@ class TuningLedger(BaseModel):
         return found[-1]
 
     async def accept(self, ident: str, *, token: str, cap: int) -> TuningRow:
-        """Activate a measured, guard-passing proposal. The next `graph build` reads it."""
+        """Activate a measured, guard-passing proposal. The next `graph build` reads it.
+
+        The cap is checked here for the message it can give and enforced again inside the write,
+        which is what holds it against a second accept landing at the same moment (S11 M2).
+        """
         row = await self.row(ident)
         _judged(row)
         _checked(row, token, _ACCEPT_FROM, TuningStatus.ACTIVE)
-        active = await self.rows(statuses=[TuningStatus.ACTIVE])
-        check_cap(active, cap)
-        return await self._move(row, TuningStatus.ACTIVE)
+        check_cap(await self.rows(statuses=[TuningStatus.ACTIVE]), cap)
+        landed = await self.index.tuning.activate(
+            row.tuning_id, expected=row.status, cap=cap
+        )
+        return await self._settled(
+            row,
+            landed,
+            "the row moved, or the cap filled, while this accept was deciding",
+        )
 
     async def revert(self, ident: str, *, token: str) -> TuningRow:
         """Take a knob back out. The row stays, with its reason and its metrics."""
@@ -216,12 +232,38 @@ class TuningLedger(BaseModel):
 
         A passing trial leaves the row `pending`, which is the only status a human may accept; a
         guard that refused lands it `rejected`, which is what stops the loop measuring it again.
+
+        Raises:
+            TuningRefused: a human accepted or reverted the row while the trial was running, so
+                the verdict is about a decision that has already been taken and is dropped
+                rather than written over it (S11 H2).
         """
-        await self.index.tuning.set_tuning_metrics(tuning_id, metrics, status)
+        landed = await self.index.tuning.set_tuning_metrics(
+            tuning_id, metrics, status, expected=sorted(MEASURE_FROM)
+        )
+        if not landed:
+            raise TuningRefused(
+                f"tuning {tuning_id} was decided while its trial was running; the trial's "
+                "verdict was discarded and the row keeps the status the decision left"
+            )
         return await self.row(str(tuning_id))
 
     async def _move(self, row: TuningRow, status: TuningStatus) -> TuningRow:
-        await self.index.tuning.set_tuning_status(row.tuning_id, status)
+        """One hand transition, refused when the row moved between the read and the write."""
+        landed = await self.index.tuning.set_tuning_status(
+            row.tuning_id, status, expected=[row.status]
+        )
+        return await self._settled(
+            row, landed, "the row moved while this transition was deciding"
+        )
+
+    async def _settled(self, row: TuningRow, landed: bool, why: str) -> TuningRow:
+        """The row a transition left, or a refusal naming what the write found instead."""
+        if not landed:
+            raise TuningRefused(
+                f"tuning {row.tuning_id} was not moved: {why}. "
+                "`auditr graph tuning list` shows where it stands now"
+            )
         return await self.row(str(row.tuning_id))
 
 

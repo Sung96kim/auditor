@@ -7,6 +7,7 @@ refinement, and the two surfaces share neither a run's staging nor a verifier.
 
 from fastmcp.exceptions import ToolError
 
+from auditor.graph.payloads import TuningRowPayload
 from auditor.graph.refine.models import ClientKind, ProducerKind
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.graph.refine.trial import TuningService
@@ -44,27 +45,30 @@ async def propose_tuning(
     `auditr graph tuning measure <id>` when no daemon is attached, and it needs a built graph:
     on a checkout with none the trial records that and refuses once."""
     async with tool_repo(path) as repo:
+        # narrowly, and around this line alone: `ValidationError` is a `ValueError`, so a whole
+        # `try` here would report a model that stopped validating as a bad client (S11 L3)
+        try:
+            kind = ClientKind(client)
+        except ValueError as exc:
+            raise ToolError(f"unknown client: {client}") from exc
         try:
             tuning = await _tuning(repo)
             row = await tuning.propose(
-                key,
-                value,
-                reason,
-                producer=ProducerKind.AGENT,
-                client=ClientKind(client),
+                key, value, reason, producer=ProducerKind.AGENT, client=kind
             )
         except (TuningRefused, RefinementRefused) as exc:
             raise ToolError(str(exc)) from exc
-        except ValueError as exc:
-            raise ToolError(f"unknown client: {client}") from exc
+        payload = TuningRowPayload.of(row)
     return {
-        "tuning_id": row.tuning_id,
-        "key": row.key,
-        "value": row.value_json,
-        "status": row.status.value,
-        "token": row.token,
-        "reason": row.reason,
-        "run_id": row.run_id,
-        "created_at": row.created_at,
+        "tuning_id": payload.tuning_id,
+        "key": payload.key,
+        # the decoded token, through the one decoder the CLI and the live page also read: an
+        # agent that echoed `value_json` back told the user to accept `"helper"` with the quotes
+        "value": payload.value,
+        "status": payload.status.value,
+        "token": payload.token,
+        "reason": payload.reason,
+        "run_id": payload.run_id,
+        "created_at": payload.created_at,
         "allow_list": sorted(k for k, v in TUNING_KNOBS.items() if v.shipped),
     }

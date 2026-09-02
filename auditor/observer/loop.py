@@ -51,6 +51,7 @@ from auditor.graph.refine.runner import (
 from auditor.graph.refine.service import RefinementRefused, RefinementService
 from auditor.graph.refine.tiers import TierPolicy, activation_tier, eval_model
 from auditor.graph.refine.trial import TuningService
+from auditor.graph.refine.tuning import TuningRefused
 from auditor.graph.scan import autoscan
 from auditor.observer.assess import (
     CachedFile,
@@ -655,6 +656,11 @@ class RepoLoop:
         self._moved(LoopState.BUILDING)
         try:
             await tuning.measure(row.tuning_id)
+        except TuningRefused as refused:
+            # the lowest-priority item, so a refusal here must not pause the four above it: a
+            # human deciding the row mid-trial is a normal race, not a reason to back off (S11 M2)
+            logger.warning("tuning trial refused: %s", refused)
+            return 0
         finally:
             self._moved(LoopState.OBSERVING)
         return 1

@@ -5,7 +5,6 @@ Separate from `tuning.py` because `build.py` imports the precedence read and thi
 `build.py`; one module for both would be a cycle.
 """
 
-import asyncio
 import json
 import time
 from collections.abc import Mapping, Sequence
@@ -13,11 +12,12 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
-from auditor.config import AuditorSettings, GraphConfig
+from auditor.config import GraphConfig
 from auditor.database import IndexStore
-from auditor.graph.build import GraphBuilder, GraphWrite, tuned_settings
+from auditor.graph.build import GraphWrite, shaped_off_loop, tuned_settings
 from auditor.graph.cluster import modularity
 from auditor.graph.model import EdgeKind, GraphEdge
+from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
 from auditor.graph.refine.models import (
     ClientKind,
     ProducerKind,
@@ -162,11 +162,8 @@ def measured(
     name_edges = sum(1 for e in write.edges if e.kind is EdgeKind.NAME_SIMILAR)
     labels = {c.label for c in write.clusters}
     metrics = TuningMetrics(
-        modularity=shape.modularity,
-        clusters=shape.clusters,
-        singletons=shape.singletons,
-        top_cluster_share=shape.top_cluster_share,
-        stranded_pins=shape.stranded_pins,
+        # the five guard numbers spread rather than copied by hand, as `Refinement.of` does (M3)
+        **shape.model_dump(),
         name_edge_churn=(
             abs(name_edges - base_name_edges) / base_name_edges
             if base_name_edges
@@ -230,15 +227,6 @@ def _stranded_pins(
     )
 
 
-def _shaped(index: IndexStore, settings: AuditorSettings) -> GraphWrite:
-    """One trial's rebuild, run to completion on whatever thread calls this.
-
-    Called through `asyncio.to_thread` so the 19 to 41 seconds of sklearn and networkx stay off
-    the loop the daemon drives every repo on (spec 11's worker thread).
-    """
-    return asyncio.run(GraphBuilder().shape(index, settings))
-
-
 class TuningService(BaseModel):
     """Spec 11's producer side: propose one knob change, and measure the trial it asks for.
 
@@ -288,14 +276,21 @@ class TuningService(BaseModel):
         knob(key)
         token = stopword(value)
         moment = time.time() if now is None else now
-        rows = await self.ledger.rows()
-        _rate_limited(rows, key, moment)
-        superseded = _clashes(rows, token, self.user.observer.tuning.stopwords_max)
+        cap = self.user.observer.tuning.stopwords_max
+
+        def decide(rows: Sequence[TuningRow]) -> list[int]:
+            """The pending rows this proposal retires, refusing when the key, the token or the
+            cap says no. Called twice on purpose: once here, so a proposal that cannot land
+            writes no `tune` run, and once inside the insert's transaction, which is what holds
+            the two invariants against a second proposer (S11 M2)."""
+            _rate_limited(rows, key, moment)
+            return [r.tuning_id for r in _clashes(rows, token, cap)]
+
+        decide(await self.ledger.rows())
         run_id = await self._tune_run(
             key, moment, producer, client, session_id, agent_name
         )
         tuning_id = await self.service.index.tuning.supersede_and_add(
-            [r.tuning_id for r in superseded],
             TuningRow(
                 repo_identity=self.service.index.partition.identity,
                 key=key,
@@ -305,6 +300,7 @@ class TuningService(BaseModel):
                 reason=reason.strip(),
                 created_at=moment,
             ),
+            decide,
         )
         return await self.ledger.row(str(tuning_id))
 
@@ -354,8 +350,9 @@ class TuningService(BaseModel):
         graph to compare against, lands it `rejected` so nothing measures it a second time.
 
         Raises:
-            TuningRefused: the row is not one a trial may look at, which is every status but
-                `pending` and `rejected`.
+            TuningRefused: the row is not one a trial may look at (every status but `pending`
+                and `rejected`), another build held the rebuild lock past the timeout, or a
+                human decided the row while the trial was running.
         """
         row = await self.ledger.row(str(tuning_id))
         if row.status not in MEASURE_FROM:
@@ -364,27 +361,38 @@ class TuningService(BaseModel):
                 f"{sorted(s.value for s in MEASURE_FROM)} rows can be measured"
             )
         moment = time.time() if now is None else now
+        cfg = self.service.settings.graph
         active = await self.service.index.refinements.active()
-        base, name_edges, labels = await baseline_of(
-            self.service.index, self.service.settings.graph, active
-        )
-        if not base.clusters:
-            return await self._refuse(row, NO_GRAPH, moment)
-        settings = await tuned_settings(
-            self.service.index, self.service.settings, extra=(row_token(row),)
-        )
-        # the detectors' findings are discarded with the write, so a trial does not pay for them
-        settings = settings.model_copy(
-            update={"graph": settings.graph.model_copy(update={"detect": False})}
-        )
-        write = await asyncio.to_thread(_shaped, self.service.index, settings)
+        try:
+            async with rebuild_lock(
+                self.service.index.partition.identity,
+                poll=cfg.rebuild_lock_poll_seconds,
+                timeout=cfg.rebuild_lock_timeout_seconds,
+            ):
+                base, name_edges, labels = await baseline_of(
+                    self.service.index, cfg, active
+                )
+                if not base.clusters:
+                    return await self._refuse(row, NO_GRAPH, moment)
+                settings = await tuned_settings(
+                    self.service.index, self.service.settings, extra=(row_token(row),)
+                )
+                # the findings are discarded with the write, so a trial does not pay for them
+                settings = settings.model_copy(
+                    update={
+                        "graph": settings.graph.model_copy(update={"detect": False})
+                    }
+                )
+                write = await shaped_off_loop(self.service.index, settings)
+        except RebuildLockTimeout as exc:
+            raise TuningRefused(exc.advice) from exc
         trial = measured(
             write,
             active,
             base,
             name_edges,
             labels,
-            cfg=self.service.settings.graph,
+            cfg=cfg,
             now=moment,
         )
         await self.ledger.record(row.tuning_id, trial.metrics, trial.status)
