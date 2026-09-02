@@ -38,6 +38,7 @@ from auditor.graph.refine.models import (
     Spend,
     TriggerDetail,
     TriggerKind,
+    TuningMetrics,
     TuningRow,
     TuningStatus,
 )
@@ -955,6 +956,61 @@ class TuningDB(BaseDB):
             TuningRow.model_validate(dict(r) | {"metrics": json.loads(r["metrics"])})
             for r in await self._fetch_by_identity(sql, tuple(params))
         ]
+
+    async def supersede_and_add(self, superseded: Sequence[int], row: TuningRow) -> int:
+        """Retire the rows this proposal replaces and insert it, in one transaction.
+
+        One commit because the two halves are one decision: a failing insert must not leave the
+        older row superseded with nothing standing in for it (S11 L3).
+        """
+        identity = self.partition.identity
+        sql, binds = self.insert_sql(
+            "graph_tuning",
+            {
+                "repo_identity": row.repo_identity,
+                "key": row.key,
+                "value_json": row.value_json,
+                "token": row.token,
+                "run_id": row.run_id,
+                "reason": row.reason,
+                "status": row.status.value,
+                "metrics": row.metrics.model_dump_json(),
+                "created_at": row.created_at,
+            },
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            for tuning_id in superseded:
+                conn.execute(
+                    "UPDATE graph_tuning SET status=? WHERE tuning_id=? AND repo_identity=?",
+                    (TuningStatus.SUPERSEDED.value, tuning_id, identity),
+                )
+            cur = conn.execute(sql, binds)
+            conn.commit()
+            return int(cur.lastrowid)
+
+        return await self._worker.run(op)
+
+    async def set_tuning_metrics(
+        self, tuning_id: int, metrics: TuningMetrics, status: TuningStatus
+    ) -> None:
+        """Write one trial's measured metrics and the status its verdict earns, in one statement.
+
+        Together because a guard that refused and the row that says so are one fact: a reader that
+        saw the metrics without the status would see a refusal it could still accept.
+        """
+        identity = self.partition.identity
+        blob = metrics.model_dump_json()
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE graph_tuning SET metrics=?, status=? "
+                "WHERE tuning_id=? AND repo_identity=?",
+                (blob, status.value, tuning_id, identity),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
 
     async def set_tuning_status(self, tuning_id: int, status: TuningStatus) -> None:
         identity = self.partition.identity

@@ -198,6 +198,7 @@ PREAMBLE_TOOLS: dict[str, dict[str, object]] = {
     "ignore_remove": {"id": 1},
     "aggregate": {},
     "finding_detail": {},
+    "propose_tuning": {"key": "stopwords", "value": "x", "reason": "why"},
 }
 
 

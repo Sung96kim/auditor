@@ -6,6 +6,8 @@ Separate from `tuning.py` because `build.py` imports the precedence read and thi
 """
 
 import asyncio
+import json
+import time
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -13,18 +15,40 @@ from pydantic import BaseModel, ConfigDict
 
 from auditor.config import AuditorSettings, GraphConfig
 from auditor.database import IndexStore
-from auditor.graph.build import GraphBuilder, GraphWrite
+from auditor.graph.build import GraphBuilder, GraphWrite, tuned_settings
 from auditor.graph.cluster import modularity
 from auditor.graph.model import EdgeKind, GraphEdge
 from auditor.graph.refine.models import (
+    ClientKind,
+    ProducerKind,
     Refinement,
     RefinementKind,
     RefinementOutcome,
     RefinementStatus,
+    Run,
+    RunnerKind,
+    RunOutcome,
+    RunStatus,
+    TriggerKind,
     TuningBaseline,
     TuningMetrics,
+    TuningRow,
     TuningStatus,
 )
+from auditor.graph.refine.service import RefinementService
+from auditor.graph.refine.tuning import (
+    LIVE_STATUSES,
+    MEASURE_FROM,
+    PROPOSAL_WINDOW_SECONDS,
+    TuningLedger,
+    TuningRefused,
+    check_cap,
+    confirmation_token,
+    knob,
+    row_token,
+    stopword,
+)
+from auditor.user_settings import UserSettings
 
 #: spec 11's size-distribution guard: a trial may move the cluster count by at most this share
 CLUSTER_BAND: Final[float] = 0.2
@@ -213,3 +237,197 @@ def _shaped(index: IndexStore, settings: AuditorSettings) -> GraphWrite:
     the loop the daemon drives every repo on (spec 11's worker thread).
     """
     return asyncio.run(GraphBuilder().shape(index, settings))
+
+
+class TuningService(BaseModel):
+    """Spec 11's producer side: propose one knob change, and measure the trial it asks for.
+
+    Proposing and measuring are two calls on purpose. A facts-only rebuild on this repo is 19 to
+    41 seconds measured, which is a background job and not something an agent waits on inside a
+    tool call (S11 P6).
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    service: RefinementService
+
+    @property
+    def user(self) -> UserSettings:
+        """The one settings object: the service holds it, so the two can never disagree (M-6)."""
+        return self.service.user
+
+    @property
+    def ledger(self) -> TuningLedger:
+        return TuningLedger(index=self.service.index)
+
+    async def propose(
+        self,
+        key: str,
+        value: object,
+        reason: str,
+        *,
+        producer: ProducerKind = ProducerKind.AGENT,
+        client: ClientKind = ClientKind.CLI,
+        session_id: str | None = None,
+        agent_name: str | None = None,
+        now: float | None = None,
+    ) -> TuningRow:
+        """Record one knob change as a `pending` row under its own `tune` run (spec 8.3 item 5).
+
+        Raises:
+            TuningRefused: tuning is off, the key or the value is not allow-listed, the cap is
+                full, the token is already proposed or active, or one proposal for this key was
+                already recorded inside the last day.
+        """
+        if self.user.observer.tuning.mode == "off":
+            raise TuningRefused(
+                "tuning is off; set observer.tuning.mode to 'propose' to record proposals"
+            )
+        if not reason.strip():
+            raise TuningRefused("a tuning proposal needs a reason")
+        knob(key)
+        token = stopword(value)
+        moment = time.time() if now is None else now
+        rows = await self.ledger.rows()
+        _rate_limited(rows, key, moment)
+        superseded = _clashes(rows, token, self.user.observer.tuning.stopwords_max)
+        run_id = await self._tune_run(
+            key, moment, producer, client, session_id, agent_name
+        )
+        tuning_id = await self.service.index.tuning.supersede_and_add(
+            [r.tuning_id for r in superseded],
+            TuningRow(
+                repo_identity=self.service.index.partition.identity,
+                key=key,
+                value_json=json.dumps(token),
+                token=confirmation_token(),
+                run_id=run_id,
+                reason=reason.strip(),
+                created_at=moment,
+            ),
+        )
+        return await self.ledger.row(str(tuning_id))
+
+    async def _tune_run(
+        self,
+        key: str,
+        moment: float,
+        producer: ProducerKind,
+        client: ClientKind,
+        session_id: str | None,
+        agent_name: str | None,
+    ) -> str:
+        """Invariant 2's row for a proposal: `trigger_kind=tune`, `runner=none`, closed at once.
+
+        Written directly rather than through `service.begin`, the way spec 5.7's auto-retire is:
+        a proposal stages nothing, so it has no reason to hold a slot in the run registry and no
+        reason to be able to evict a run that does (S11 L8). The note is a summary, because
+        `graph log` paints `error` red.
+        """
+        run_id = await self.service.index.runs.add_run(
+            Run(
+                repo_identity=self.service.index.partition.identity,
+                client=client,
+                producer=producer,
+                runner=RunnerKind.NONE,
+                trigger_kind=TriggerKind.TUNE,
+                session_id=session_id,
+                agent_name=agent_name,
+                status=RunStatus.QUEUED,
+                started_at=moment,
+            )
+        )
+        await self.service.index.runs.finish_run(
+            run_id,
+            RunOutcome.of(
+                RunStatus.SUCCEEDED,
+                summary=f"tuning proposal for {key}",
+                finished_at=moment,
+            ),
+        )
+        return run_id
+
+    async def measure(self, tuning_id: int, *, now: float | None = None) -> Trial:
+        """Run this proposal's trial and write its verdict onto the row (spec 11).
+
+        A passing trial leaves the row `pending`; a guard that refused, or a checkout with no
+        graph to compare against, lands it `rejected` so nothing measures it a second time.
+
+        Raises:
+            TuningRefused: the row is not one a trial may look at, which is every status but
+                `pending` and `rejected`.
+        """
+        row = await self.ledger.row(str(tuning_id))
+        if row.status not in MEASURE_FROM:
+            raise TuningRefused(
+                f"tuning {row.tuning_id} is {row.status.value}; only "
+                f"{sorted(s.value for s in MEASURE_FROM)} rows can be measured"
+            )
+        moment = time.time() if now is None else now
+        active = await self.service.index.refinements.active()
+        base, name_edges, labels = await baseline_of(
+            self.service.index, self.service.settings.graph, active
+        )
+        if not base.clusters:
+            return await self._refuse(row, NO_GRAPH, moment)
+        settings = await tuned_settings(
+            self.service.index, self.service.settings, extra=(row_token(row),)
+        )
+        # the detectors' findings are discarded with the write, so a trial does not pay for them
+        settings = settings.model_copy(
+            update={"graph": settings.graph.model_copy(update={"detect": False})}
+        )
+        write = await asyncio.to_thread(_shaped, self.service.index, settings)
+        trial = measured(
+            write,
+            active,
+            base,
+            name_edges,
+            labels,
+            cfg=self.service.settings.graph,
+            now=moment,
+        )
+        await self.ledger.record(row.tuning_id, trial.metrics, trial.status)
+        return trial
+
+    async def _refuse(self, row: TuningRow, why: str, now: float) -> Trial:
+        """Record one refusal a rebuild cannot answer, so the loop stops asking (S11 E4)."""
+        trial = Trial(metrics=TuningMetrics(measured_at=now, refused=why))
+        await self.ledger.record(row.tuning_id, trial.metrics, trial.status)
+        return trial
+
+    async def unmeasured(self) -> TuningRow | None:
+        """The oldest `pending` row no trial has measured yet, which is the loop's work item."""
+        pending = await self.ledger.rows(statuses=[TuningStatus.PENDING])
+        waiting = [r for r in pending if not r.metrics.measured_at]
+        return waiting[0] if waiting else None
+
+
+def _rate_limited(rows: Sequence[TuningRow], key: str, now: float) -> None:
+    """Spec 11's one proposal per key per day, counted from the newest live row for that key.
+
+    Reverted and superseded rows do not count: a proposal that was taken back out has no claim on
+    the key it named (S11 L4).
+    """
+    recent = [
+        r
+        for r in rows
+        if r.key == key
+        and r.status in LIVE_STATUSES
+        and now - r.created_at < PROPOSAL_WINDOW_SECONDS
+    ]
+    if recent:
+        newest = max(r.created_at for r in recent)
+        hours = (PROPOSAL_WINDOW_SECONDS - (now - newest)) / 3600
+        raise TuningRefused(
+            f"one {key} proposal per day; the next one is in {hours:.1f} hours"
+        )
+
+
+def _clashes(rows: Sequence[TuningRow], token: str, cap: int) -> list[TuningRow]:
+    """The pending rows this proposal supersedes, refusing when the token is live or the cap full."""
+    same = [r for r in rows if r.key == "stopwords" and row_token(r) == token]
+    if any(r.status is TuningStatus.ACTIVE for r in same):
+        raise TuningRefused(f"{token!r} is already an active stopword")
+    check_cap([r for r in rows if r.status is TuningStatus.ACTIVE], cap)
+    return [r for r in same if r.status is TuningStatus.PENDING]

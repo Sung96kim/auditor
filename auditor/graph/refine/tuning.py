@@ -14,7 +14,8 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict
 
 from auditor.config import GraphConfig
-from auditor.graph.refine.models import TuningRow, TuningStatus
+from auditor.database import IndexStore
+from auditor.graph.refine.models import TuningMetrics, TuningRow, TuningStatus
 
 
 class TuningRefused(RuntimeError):
@@ -139,3 +140,124 @@ def tuned(cfg: GraphConfig, tokens: Sequence[str]) -> GraphConfig:
     if not tokens or "stopwords" in cfg.model_fields_set:
         return cfg
     return cfg.model_copy(update={"stopwords": list(tokens)})
+
+
+#: statuses a hand transition may leave (spec 5.8); everything else is terminal
+_ACCEPT_FROM = frozenset({TuningStatus.PENDING})
+_REVERT_FROM = frozenset({TuningStatus.PENDING, TuningStatus.ACTIVE})
+#: a trial may look at a row that is waiting and at one a guard already refused, and at nothing
+#: else: re-measuring an active or reverted row would overwrite the metrics Invariant 3 keeps
+MEASURE_FROM = frozenset({TuningStatus.PENDING, TuningStatus.REJECTED})
+
+#: one proposal per key per day (spec 11)
+PROPOSAL_WINDOW_SECONDS: Final[float] = 86400.0
+
+#: the statuses that still claim a key: a reverted or superseded row is not a live proposal and
+#: must not hold the key's daily slot (S11 L4)
+LIVE_STATUSES = frozenset({TuningStatus.PENDING, TuningStatus.ACTIVE})
+
+
+class TuningLedger(BaseModel):
+    """Spec 5.8's hand transitions over one index handle, and the reads every surface shares.
+
+    A ledger rather than a service because none of it needs a checkout: accepting a knob reads and
+    writes one row and touches no file, no run registry and no git.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    index: IndexStore
+
+    async def rows(
+        self, *, statuses: Sequence[TuningStatus] | None = None
+    ) -> list[TuningRow]:
+        return await self.index.tuning.tuning(statuses=statuses)
+
+    async def row(self, ident: str) -> TuningRow:
+        """One row by id or by the token it proposes, refused by name rather than answered None.
+
+        Spec 12.2 writes `<id|key>`; with one row per stopword token the useful second spelling is
+        the token itself, because `stopwords` names every row at once (P10).
+        """
+        rows = await self.rows()
+        if ident.isdigit():
+            found = [r for r in rows if r.tuning_id == int(ident)]
+        else:
+            found = [
+                r
+                for r in rows
+                if r.status in LIVE_STATUSES
+                and r.key == "stopwords"
+                and row_token(r) == ident
+            ]
+        if not found:
+            raise TuningRefused(f"no tuning row {ident!r} on this checkout")
+        return found[-1]
+
+    async def accept(self, ident: str, *, token: str, cap: int) -> TuningRow:
+        """Activate a measured, guard-passing proposal. The next `graph build` reads it."""
+        row = await self.row(ident)
+        _judged(row)
+        _checked(row, token, _ACCEPT_FROM, TuningStatus.ACTIVE)
+        active = await self.rows(statuses=[TuningStatus.ACTIVE])
+        check_cap(active, cap)
+        return await self._move(row, TuningStatus.ACTIVE)
+
+    async def revert(self, ident: str, *, token: str) -> TuningRow:
+        """Take a knob back out. The row stays, with its reason and its metrics."""
+        row = await self.row(ident)
+        _checked(row, token, _REVERT_FROM, TuningStatus.REVERTED)
+        return await self._move(row, TuningStatus.REVERTED)
+
+    async def record(
+        self, tuning_id: int, metrics: TuningMetrics, status: TuningStatus
+    ) -> TuningRow:
+        """Write one trial's measured metrics and the status its verdict earns (spec 11).
+
+        A passing trial leaves the row `pending`, which is the only status a human may accept; a
+        guard that refused lands it `rejected`, which is what stops the loop measuring it again.
+        """
+        await self.index.tuning.set_tuning_metrics(tuning_id, metrics, status)
+        return await self.row(str(tuning_id))
+
+    async def _move(self, row: TuningRow, status: TuningStatus) -> TuningRow:
+        await self.index.tuning.set_tuning_status(row.tuning_id, status)
+        return await self.row(str(row.tuning_id))
+
+
+def _judged(row: TuningRow) -> None:
+    """Refuse a row no trial measured, and one a spec 11 guard refused, each by its own name."""
+    if row.metrics.refused:
+        raise TuningRefused(
+            f"tuning {row.tuning_id} failed a spec 11 guard: {row.metrics.refused}"
+        )
+    if not row.metrics.measured_at:
+        raise TuningRefused(
+            f"tuning {row.tuning_id} has no trial yet; run `auditr graph tuning measure "
+            f"{row.tuning_id}` or let the observer measure it"
+        )
+
+
+def _checked(
+    row: TuningRow, token: str, allowed: frozenset[TuningStatus], to: TuningStatus
+) -> None:
+    """The two things every hand transition shares: a legal start, and the confirmation word."""
+    if row.status not in allowed:
+        raise TuningRefused(
+            f"tuning {row.tuning_id} is {row.status.value}; only "
+            f"{sorted(s.value for s in allowed)} can become {to.value}"
+        )
+    if token != row.token:
+        raise TuningRefused(
+            f"wrong confirmation word for tuning {row.tuning_id}; "
+            f"`auditr graph tuning list` prints it"
+        )
+
+
+def check_cap(active: Sequence[TuningRow], cap: int) -> None:
+    """`stopwords_max` bounds the stopword rows a build reads, at propose time and at accept time."""
+    live = [r for r in active if r.key == "stopwords"]
+    if len(live) >= cap:
+        raise TuningRefused(
+            f"{len(live)} stopwords are already active and the cap is {cap}; revert one first"
+        )
