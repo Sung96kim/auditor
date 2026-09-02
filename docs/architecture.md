@@ -21,27 +21,13 @@ Paths are relative to the repo root.
 - `auditor/malware/` wraps the opt-in ClamAV and osv-scanner shell-outs, `auditor/reporters/` holds
   one module per output format, and `auditor/profiles/*.toml` the built-in config profiles
   (`base`, `strict`, `pydantic`, `all-strict`).
-- `auditor/observer/` holds the daemon and the change assessment. `assess.py` classifies an edit
-  batch against the graph and `budget.py` turns a window's spend into day-ceiling state; both are
-  pure. The process is `daemon.py` (the singleton flock, `daemon.json`, the idle timer, the restart
-  exec, and `RepoPublisher`, which owns every attached repo's meters and its `graph` status
-  block), `server.py` (stdlib `ThreadingHTTPServer` on loopback, transport only), `routes.py` (one
-  method and path to one `Reply`, routing only), `events.py`, `sessions.py`, `scheduling.py` (spec
-  8.4's "one run per repo, two globally"), `loop.py` and `payloads.py`. One rule holds the design
-  together: the spool is the truth and the in-memory set is only the wakeup, so `POST /events`
-  writes `repos/<key>/spool.jsonl` before it answers 202, the drain takes that file by rename and
-  leaves it staged until its consumer returns, and a daemon killed anywhere in between loses
-  nothing. `auditr_observer.py` is the client, at the repo root outside the package so it never
-  imports `auditor`; `auditr observer` is the same surface as a lazy CLI mount.
-- The observer's decision half is two modules and one rule. `scheduling.py` decides **when** a loop
-  may act: the state enum, the quiet window, the three pauses, the run slots and the retry budget,
-  every value off an injected clock or feed. `loop.py` decides **what** it does when it may: spec
-  8.3's five work items over a store, a service and a runner factory, owning every side effect
-  `assess.py` refuses to have.
+- `auditor/observer/` is the daemon, its change assessment and its loop; `auditr_observer.py` is
+  the stdlib-only client at the repo root. Both are laid out under [observer](#observer) below.
 - Everything else at `auditor/` top level is a shared seam, described next.
 - `tests/` mirrors the package; `plugin/` is the Claude Code plugin (skills, subagents, hooks,
-  statusline, bundled MCP config); `assets/` holds the project icon and the vendored runner marks
-  (see `assets/README.md`).
+  statusline, bundled MCP config) and `codex-plugin/` its generated Codex mirror; `scripts/` holds
+  the build tools CI runs; `assets/` holds the project icon and the vendored runner marks (see
+  `assets/README.md`).
 
 ## Shared seams
 
@@ -207,8 +193,9 @@ flowchart TB
 - `cli/__init__.py` mounts `graph` through `cli/lazy.py`'s `LazyGraphGroup`, which imports
   `cli/graph.py` on the first graph subcommand, so numpy, scikit-learn and networkx never load for
   the other commands. A broken graph dependency surfaces as a one-line error naming `auditr graph`,
-  and the failed import is cached. `cli/graph_refine.py` holds `unresolved`, `refine`, `eval`,
-  `log` and `refinements`, registered from the bottom of `cli/graph.py` in one direction only.
+  and the failed import is cached. `cli/graph_refine.py` holds `unresolved`, `refine`, `eval`, `log`,
+  `refinements` and the `tuning` sub-app (`list`, `accept`, `revert`, `measure`), registered from
+  the bottom of `cli/graph.py` in one direction only.
   See [graph.md](references/graph.md).
 - `graph build` auto-scans with graph extraction forced on, then runs `build.GraphBuilder.run` over
   the cached facts: dedupe nodes, `resolve_edges.resolve_structural`, `naming.name_similar_edges`
@@ -244,6 +231,13 @@ flowchart TB
   guard, the conflict checks, the inserts and `GraphBuilder.rebuild` inside it, as one transaction.
   `RefinementLedger` is the by-hand half over the index handle alone: `accept`, `revert`, `pin` and
   `prune` are status transitions, because the build is the one merge point.
+- `refine/tuning.py` and `refine/trial.py` are spec 11's knob tuning, and a tuning row is
+  deliberately not a refinement: it carries no anchor, answers no queue row, and the only thing it
+  changes is one `GraphConfig` field the next build reads. `tuning.py` holds the knob allow-list,
+  the per-token stopword model, the build-time precedence read (`tuned`) and `TuningLedger`'s hand
+  transitions. `trial.py` holds `TuningService` and the facts-only rebuild it measures a proposal
+  against, split into its own module because `build.py` imports the precedence read and the trial
+  imports `build.py`.
 - `GraphBuilder.run` is the only place refinements are applied. `overlay.Overlay.for_build` triages
   the active rows against their anchors; its passes merge edge kinds into the resolver's output,
   apply the node and cluster kinds, and retire the queue rows a refinement answered. The `GRAPH-*`
@@ -265,6 +259,39 @@ flowchart TB
   pydantic and never touch numpy, which only `build.py`, `naming.py`, `usage.py`, `rank.py` and
   `cluster.py` import.
 
+## observer
+
+- `cli/__init__.py` mounts `observer` through `cli/lazy.py`'s `LazyObserverGroup`, the same
+  deferred mount `graph` uses. `auditr observer` (`start`, `stop`, `status`, `open`, `ensure`) and
+  the hook client are one surface on two entry points. See [observer.md](references/observer.md).
+- `auditr_observer.py` is the client: a stdlib-only module at the repo root, outside the package,
+  because a hook runs on every tool call and `import auditor` costs about 0.17 s. It posts hook
+  events and never blocks a session on the daemon being up.
+- `daemon.py` is the process: the singleton flock, `daemon.json`, the idle timer, the restart exec,
+  and `RepoPublisher`, which owns every attached repo's meters and its `graph` status block.
+- `server.py` is a stdlib `ThreadingHTTPServer` on loopback and is transport only. `routes.py` maps
+  one method and path to one `Reply` and is routing only. `payloads.py` holds the wire shapes.
+- `events.py` is the spool and `sessions.py` the attach gate. One rule holds the design together:
+  the spool is the truth and the in-memory set is only the wakeup. `POST /events` writes
+  `repos/<key>/spool.jsonl` before it answers 202, the drain takes that file by rename and leaves
+  it staged until its consumer returns, so a daemon killed anywhere in between loses nothing.
+- The decision half is two modules. `scheduling.py` decides **when** a loop may act: the state
+  enum, the quiet window, the three pauses, the run slots and the retry budget, every value off an
+  injected clock or feed. `loop.py` decides **what** it does when it may: spec 8.3's five work
+  items over a store, a service and a runner factory, owning every side effect `assess.py` refuses
+  to have.
+- `assess.py` classifies an edit batch against the graph and `budget.py` turns a window's spend
+  into day-ceiling state. Both are pure.
+- Because the client may not import the package, the two sides share thirteen things by
+  duplication, each pinned by a test: the `OBSERVER_API_VERSION` literal, `home()` against
+  `paths.auditor_home()`, the `_OFF` set against `paths.OFF_VALUES`, `STATUS_KEYS` against
+  `DaemonStatus`, the two lifecycle timeouts against `SchedulingConfig`, `find_root` against
+  `discovery.find_root`, `repo_dir_key` against `paths.repo_dir_key`, `parse_status_z` against
+  `discovery.parse_status_z`, Stage 0's suffix, filename and excluded-directory sets against
+  `FileDiscovery`'s, `_STATUS_ARGS` against `discovery._STATUS_ARGS`, `_MAX_PATHS` against
+  `events.MAX_EVENT_PATHS`, `spool_name` against `events.CLIENT_SPOOL_GLOB`, and the `repos/<key>`
+  directory the client writes into against `paths.repo_dir_from_key`.
+
 ## self, version
 
 - `cli/self_update.py` (`update`) queries PyPI, compares versions, and reconstructs the install
@@ -277,9 +304,9 @@ flowchart TB
 ## auditr-mcp
 
 - `auditor/mcp_server.py` re-exports `main` and `mcp` from `auditor/mcp/`. `mcp/server.py` builds
-  the `FastMCP` instance and caps any single tool response at `MAX_TOOL_RESPONSE_BYTES`. See
-  [auditr-mcp.md](references/auditr-mcp.md).
 - The tool modules mirror the CLI: `scan_tools.py`, `rules_tools.py`, `ignore_tools.py`,
+  `malware_tools.py`, `refine_tools.py`, `graph_tools.py` and `tuning_tools.py`. Every module
+  registers unconditionally.
   `malware_tools.py`, `refine_tools.py` and `graph_tools.py`. Every module registers
   unconditionally.
 - Every tool carries a `READ_ONLY`, `MUTATING` or `DESTRUCTIVE` annotation from `mcp/helpers.py`.
@@ -309,6 +336,22 @@ flowchart TB
   `tests/plugin/test_statusline.py` pins each pair, the `graph` block's eight state words against
   `LoopState`, the `scan` block's five severity words against `Severity`, and each model's field
   names against the keys the reader pulls off that block.
+
+## Codex plugin
+
+- `codex-plugin/` is generated, never authored. `scripts/build_codex_plugin.py` copies
+  `plugin/skills/` across byte for byte, derives `codex-plugin/.codex-plugin/plugin.json` from the
+  Claude manifest so `name`, `version`, `author`, `homepage`, `repository`, `license` and
+  `keywords` cannot drift, then overrides `description`, `skills` and `mcpServers` with the Codex
+  wording and paths. `codex-plugin/.mcp.json` launches
+  `uvx --from "auditr[mcp,observer-codex]" auditr-mcp`. See
+  [codex-plugin.md](references/codex-plugin.md).
+- `--check` reports drift instead of writing, and that is the only form a workflow may run.
+  `tests/test_ci_workflows.py` fails a workflow that invokes the builder bare, because a write step
+  would repair the drift `tests/plugin/test_codex_plugin.py` exists to catch and would ride into
+  `cz bump`'s `commit -a`.
+- The mirror carries the skills and the MCP config only. Agents, hooks, the status line and
+  `settings.json` stay Claude-side, because Codex loads none of them from a plugin.
 
 ## Cross-cutting behavior
 
