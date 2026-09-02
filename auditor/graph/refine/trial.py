@@ -14,7 +14,12 @@ from pydantic import BaseModel, ConfigDict
 
 from auditor.config import GraphConfig
 from auditor.database import IndexStore
-from auditor.graph.build import GraphWrite, shaped_off_loop, tuned_settings
+from auditor.graph.build import (
+    GraphBuilder,
+    GraphWrite,
+    shaped_off_loop,
+    tuned_settings,
+)
 from auditor.graph.cluster import modularity
 from auditor.graph.model import EdgeKind, GraphEdge
 from auditor.graph.refine.lock import RebuildLockTimeout, rebuild_lock
@@ -383,7 +388,9 @@ class TuningService(BaseModel):
                         "graph": settings.graph.model_copy(update={"detect": False})
                     }
                 )
-                write = await shaped_off_loop(self.service.index, settings)
+                write = await shaped_off_loop(
+                    GraphBuilder(), self.service.index, settings
+                )
         except RebuildLockTimeout as exc:
             raise TuningRefused(exc.advice) from exc
         trial = measured(

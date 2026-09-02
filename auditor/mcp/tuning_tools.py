@@ -59,16 +59,23 @@ async def propose_tuning(
         except (TuningRefused, RefinementRefused) as exc:
             raise ToolError(str(exc)) from exc
         payload = TuningRowPayload.of(row)
+    # named, not spread: this is a wire contract, and `payload` also carries `metrics`,
+    # `measured`, `passed` and `refused` that no caller here has asked for (S11 L8). `value` is
+    # the decoded token, through the one decoder the CLI and the live page also read: an agent
+    # that echoed `value_json` back told the user to accept `"helper"` with the quotes.
     return {
-        "tuning_id": payload.tuning_id,
-        "key": payload.key,
-        # the decoded token, through the one decoder the CLI and the live page also read: an
-        # agent that echoed `value_json` back told the user to accept `"helper"` with the quotes
-        "value": payload.value,
-        "status": payload.status.value,
-        "token": payload.token,
-        "reason": payload.reason,
-        "run_id": payload.run_id,
-        "created_at": payload.created_at,
+        **payload.model_dump(
+            mode="json",
+            include={
+                "tuning_id",
+                "key",
+                "value",
+                "status",
+                "token",
+                "reason",
+                "run_id",
+                "created_at",
+            },
+        ),
         "allow_list": sorted(k for k, v in TUNING_KNOBS.items() if v.shipped),
     }

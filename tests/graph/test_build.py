@@ -2,6 +2,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from graph._support import shape_spy
 
 from auditor.config import AuditorSettings, GraphConfig
 from auditor.graph import build
@@ -53,14 +54,7 @@ async def test_a_real_build_shapes_off_the_event_loop_thread(facts_store, monkey
     repo, every MCP call and the heartbeat for its whole duration (S11 H2). The tuning trial
     had a worker thread; the path that runs far more often did not."""
     caller = threading.get_ident()
-    seen: list[int] = []
-    real = GraphBuilder.shape
-
-    async def spy(self, index, settings, *, progress=None):
-        seen.append(threading.get_ident())
-        return await real(self, index, settings, progress=progress)
-
-    monkeypatch.setattr(GraphBuilder, "shape", spy)
+    seen = shape_spy(monkeypatch)
     await GraphBuilder().run(facts_store, AuditorSettings())
     assert seen and caller not in seen
 

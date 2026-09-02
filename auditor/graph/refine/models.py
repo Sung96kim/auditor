@@ -7,7 +7,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 from pydantic import (
     BaseModel,
@@ -1047,6 +1047,11 @@ class RefinementOutcome(BaseModel):
     noop_builds: int = 0
     drifted: bool = False
     applied: bool = False
+
+
+#: the one knob key the cap enforces, shared so the SQL count in `refinements.py` and
+#: `check_cap`'s Python filter cannot drift onto two different strings (S11 L5)
+STOPWORDS_KEY: Final[str] = "stopwords"
 
 
 class TuningStatus(StrEnum):

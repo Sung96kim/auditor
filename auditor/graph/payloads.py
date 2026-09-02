@@ -241,6 +241,10 @@ def _decoded(value_json: str) -> str:
 
     A row written by any path but `propose` can hold something `json.loads` refuses, and one bad
     row must not take the whole list view down with it; the raw text is still readable (S11 L4).
+    This is the display policy: a malformed row degrades rather than raises. `row_token`
+    (`refine/tuning.py`) is the enforcement policy for the same column and raises on the same
+    input, because a build must refuse a proposal it cannot read rather than guess at it (S11
+    L3).
     """
     try:
         return str(json.loads(value_json))

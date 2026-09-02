@@ -15,7 +15,12 @@ from pydantic import BaseModel, ConfigDict
 
 from auditor.config import GraphConfig
 from auditor.database import IndexStore
-from auditor.graph.refine.models import TuningMetrics, TuningRow, TuningStatus
+from auditor.graph.refine.models import (
+    STOPWORDS_KEY,
+    TuningMetrics,
+    TuningRow,
+    TuningStatus,
+)
 
 
 class TuningRefused(RuntimeError):
@@ -298,7 +303,7 @@ def _checked(
 
 def check_cap(active: Sequence[TuningRow], cap: int) -> None:
     """`stopwords_max` bounds the stopword rows a build reads, at propose time and at accept time."""
-    live = [r for r in active if r.key == "stopwords"]
+    live = [r for r in active if r.key == STOPWORDS_KEY]
     if len(live) >= cap:
         raise TuningRefused(
             f"{len(live)} stopwords are already active and the cap is {cap}; revert one first"

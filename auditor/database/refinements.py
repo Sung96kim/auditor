@@ -9,16 +9,16 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
-from auditor.database.base import BaseDB, Column, Index, Table
+from auditor.database.base import BaseDB, Column, Index, Table, immediate
 from auditor.graph.model import DAY_SECONDS
 from auditor.graph.refine.models import (
     ACTIVE_STATUSES,
+    STOPWORDS_KEY,
     STORED_ROW,
     Anchor,
     EvalMetrics,
@@ -167,23 +167,6 @@ def _tuning_rows(rows: Sequence[sqlite3.Row]) -> list[TuningRow]:
         TuningRow.model_validate(dict(r) | {"metrics": json.loads(r["metrics"])})
         for r in rows
     ]
-
-
-@contextmanager
-def _immediate(conn: sqlite3.Connection) -> Iterator[None]:
-    """One ``BEGIN IMMEDIATE`` transaction, rolled back on any exception out of the block.
-
-    For a read whose decision the write in the same block depends on: the write lock is taken by
-    the first statement, so two processes cannot both read a state neither of them leaves behind
-    (S11 M2).
-    """
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        yield
-    except BaseException:
-        conn.rollback()
-        raise
-    conn.commit()
 
 
 def _in_clause(column: str, values: Sequence[object]) -> str:
@@ -1020,23 +1003,22 @@ class TuningDB(BaseDB):
         )
 
         def op(conn: sqlite3.Connection) -> int:
-            with _immediate(conn):
-                live = _tuning_rows(
-                    conn.execute(
-                        "SELECT * FROM graph_tuning WHERE repo_identity = ? "
-                        "ORDER BY tuning_id",
-                        (identity,),
-                    ).fetchall()
+            live = _tuning_rows(
+                conn.execute(
+                    "SELECT * FROM graph_tuning WHERE repo_identity = ? "
+                    "ORDER BY tuning_id",
+                    (identity,),
+                ).fetchall()
+            )
+            for tuning_id in decide(live):
+                conn.execute(
+                    "UPDATE graph_tuning SET status=? "
+                    "WHERE tuning_id=? AND repo_identity=?",
+                    (TuningStatus.SUPERSEDED.value, tuning_id, identity),
                 )
-                for tuning_id in decide(live):
-                    conn.execute(
-                        "UPDATE graph_tuning SET status=? "
-                        "WHERE tuning_id=? AND repo_identity=?",
-                        (TuningStatus.SUPERSEDED.value, tuning_id, identity),
-                    )
-                return _inserted_id(conn.execute(sql, binds))
+            return _inserted_id(conn.execute(sql, binds))
 
-        return await self._worker.run(op)
+        return await self._worker.run(immediate(op))
 
     async def set_tuning_metrics(
         self,
@@ -1062,7 +1044,8 @@ class TuningDB(BaseDB):
         def op(conn: sqlite3.Connection) -> bool:
             cur = conn.execute(
                 "UPDATE graph_tuning SET metrics=?, status=? "
-                "WHERE tuning_id=? AND repo_identity=?" + _in_clause("status", allowed),
+                "WHERE tuning_id=? AND repo_identity=?"
+                + (_in_clause("status", allowed) if allowed else ""),
                 (blob, status.value, tuning_id, identity, *allowed),
             )
             conn.commit()
@@ -1087,7 +1070,7 @@ class TuningDB(BaseDB):
                 "UPDATE graph_tuning SET status=? "
                 "WHERE tuning_id=? AND repo_identity=? AND status=? AND ("
                 " SELECT COUNT(*) FROM graph_tuning WHERE repo_identity=? AND status=?"
-                " AND key='stopwords') < ?",
+                " AND key=?) < ?",
                 (
                     TuningStatus.ACTIVE.value,
                     tuning_id,
@@ -1095,6 +1078,7 @@ class TuningDB(BaseDB):
                     expected.value,
                     identity,
                     TuningStatus.ACTIVE.value,
+                    STOPWORDS_KEY,
                     cap,
                 ),
             )
@@ -1111,7 +1095,9 @@ class TuningDB(BaseDB):
         expected: Sequence[TuningStatus] | None = None,
     ) -> bool:
         """Move one row, optionally only while it still reads one of ``expected``, and say
-        whether that write landed. ``None`` is the administrative write that asks nothing."""
+        whether that write landed. ``None`` skips the check entirely; the one production
+        caller (`TuningLedger._move`) always passes `expected`, so today only test fixture
+        setup takes this branch (S11 L4)."""
         identity = self.partition.identity
         allowed = [s.value for s in expected or ()]
         sql = (

@@ -305,7 +305,7 @@ class GraphBuilder:
         """
         # spec 11's precedence: repo policy beats an active tuning row, which beats the default
         write = await shaped_off_loop(
-            index, await tuned_settings(index, settings), progress=progress
+            self, index, await tuned_settings(index, settings), progress=progress
         )
         (progress or (lambda _m: None))("persisting graph")
         return await write.persist(index, snapshot)
@@ -422,28 +422,34 @@ class GraphBuilder:
 
 
 def _shaped(
+    builder: GraphBuilder,
     index: IndexStore,
     settings: AuditorSettings,
     progress: Callable[[str], None] | None,
 ) -> GraphWrite:
     """One build's shaping, run to completion on whatever thread calls this."""
-    return asyncio.run(GraphBuilder().shape(index, settings, progress=progress))
+    return asyncio.run(builder.shape(index, settings, progress=progress))
 
 
 async def shaped_off_loop(
+    builder: GraphBuilder,
     index: IndexStore,
     settings: AuditorSettings,
     *,
     progress: Callable[[str], None] | None = None,
 ) -> GraphWrite:
-    """:meth:`GraphBuilder.shape` on a worker thread, which is the only way any caller runs it.
+    """``builder.shape`` on a worker thread, which is the only way any caller runs it.
 
-    The 19 to 41 seconds of sklearn and networkx are synchronous, and the daemon drives every
-    repo's loop from one event loop, so shaping in place freezes every other repo, every MCP
-    call and the heartbeat for the whole build (S11 H2). One wrapper rather than one per caller,
-    so the real build path and the tuning trial cannot disagree about which thread it is on.
+    ``builder`` is the caller's own receiver, not a fresh one constructed here, so a subclass or
+    a per-instance patch of `shape` is not silently ignored by `run` (S11 L1). ``progress`` is
+    called on that worker thread too, the same one `shape` runs on, not on the event loop (S11
+    L2). The 19 to 41 seconds of sklearn and networkx are synchronous, and the daemon drives
+    every repo's loop from one event loop, so shaping in place freezes every other repo, every
+    MCP call and the heartbeat for the whole build (S11 H2). One wrapper rather than one per
+    caller, so the real build path and the tuning trial cannot disagree about which thread it is
+    on.
     """
-    return await asyncio.to_thread(_shaped, index, settings, progress)
+    return await asyncio.to_thread(_shaped, builder, index, settings, progress)
 
 
 async def tuned_settings(

@@ -9,6 +9,7 @@ import enum
 import io
 import re
 import secrets
+import threading
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
@@ -21,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from auditor.database import open_repo_index
+from auditor.graph.build import GraphBuilder
 from auditor.graph.model import UnresolvedRow
 from auditor.graph.refine.client import ClientFactory, ServerStatus
 from auditor.graph.refine.models import (
@@ -186,6 +188,40 @@ def with_lock_timeout(
         update={"graph": service.settings.graph.model_copy(update=budget)}
     )
     return service
+
+
+def shape_spy(monkeypatch) -> list[int]:
+    """Patch ``GraphBuilder.shape`` to record the thread id of every call and delegate to the
+    real implementation, so a test can assert the call left the event loop thread (S11 M2).
+    """
+    seen: list[int] = []
+    real = GraphBuilder.shape
+
+    async def spy(self, index, settings, *, progress=None):
+        seen.append(threading.get_ident())
+        return await real(self, index, settings, progress=progress)
+
+    monkeypatch.setattr(GraphBuilder, "shape", spy)
+    return seen
+
+
+def blocking_shape(monkeypatch) -> tuple[threading.Event, threading.Event]:
+    """Patch ``GraphBuilder.shape`` to block until released, so a test can run something else
+    while a shape call is in flight (S11 M2).
+
+    Returns ``(started, release)``: the patched call sets ``started`` as soon as it begins, waits
+    on ``release``, then delegates to the real implementation.
+    """
+    started, release = threading.Event(), threading.Event()
+    real = GraphBuilder.shape
+
+    async def blocking(self, index, settings, *, progress=None):
+        started.set()
+        release.wait(10.0)
+        return await real(self, index, settings, progress=progress)
+
+    monkeypatch.setattr(GraphBuilder, "shape", blocking)
+    return started, release
 
 
 class Init(BaseModel):

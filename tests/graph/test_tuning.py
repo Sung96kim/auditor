@@ -11,7 +11,7 @@ import pytest
 from _support import tool_data
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
-from graph._support import with_lock_timeout
+from graph._support import blocking_shape, shape_spy, with_lock_timeout
 
 from auditor.cli.helpers import open_index
 from auditor.config import AuditorSettings, GraphConfig, load_config
@@ -624,14 +624,7 @@ async def test_a_trial_measures_the_active_set_plus_the_token_it_is_asked_about(
 async def test_a_trial_runs_off_the_loop_thread(tuning: TuningService, monkeypatch):
     """Spec 11 puts the trial on a worker thread, and this is what says it is on one (E5)."""
     caller = threading.get_ident()
-    seen: list[int] = []
-    real = GraphBuilder.shape
-
-    async def spy(self, index, settings, *, progress=None):
-        seen.append(threading.get_ident())
-        return await real(self, index, settings, progress=progress)
-
-    monkeypatch.setattr(GraphBuilder, "shape", spy)
+    seen = shape_spy(monkeypatch)
     row = await tuning.propose("stopwords", "load", "one")
     await tuning.measure(row.tuning_id)
     assert seen and caller not in seen
@@ -643,15 +636,7 @@ async def test_one_repos_trial_does_not_stall_another_repos_loop(
     """Two repos, one event loop: the daemon runs every driver on `observer-loops`, so a trial
     that held that thread would freeze the other repo's ladder and `reconcile`'s 60 s
     timeout with it (E5)."""
-    started, release = threading.Event(), threading.Event()
-    real = GraphBuilder.shape
-
-    async def blocking(self, index, settings, *, progress=None):
-        started.set()
-        release.wait(10.0)
-        return await real(self, index, settings, progress=progress)
-
-    monkeypatch.setattr(GraphBuilder, "shape", blocking)
+    started, release = blocking_shape(monkeypatch)
     row = await tuning.propose("stopwords", "load", "one")
     other = TuningService(service=_service_with(refine_service, {}))
 
@@ -835,15 +820,7 @@ async def _decided_midway(
     decide: Callable[[TuningLedger, TuningRow], Awaitable[TuningRow]],
 ) -> None:
     """Run this row's trial with a human decision landing inside it, and refuse the trial."""
-    started, release = threading.Event(), threading.Event()
-    real = GraphBuilder.shape
-
-    async def blocking(self, index, settings, *, progress=None):
-        started.set()
-        release.wait(10.0)
-        return await real(self, index, settings, progress=progress)
-
-    monkeypatch.setattr(GraphBuilder, "shape", blocking)
+    started, release = blocking_shape(monkeypatch)
 
     async def decision() -> None:
         await asyncio.to_thread(started.wait, 10.0)
@@ -892,15 +869,20 @@ async def test_a_trial_waits_for_the_build_that_holds_the_rebuild_lock(
     tuning = TuningService(service=with_lock_timeout(refine_service, 5.0, poll=0.01))
     row = await tuning.propose("stopwords", "load", "one")
     order: list[str] = []
+    took_lock = asyncio.Event()
 
     async def build() -> None:
         async with rebuild_lock(refine_service.identity, poll=0.01):
             order.append("build takes the lock")
+            took_lock.set()
             await asyncio.sleep(0.15)
             order.append("build releases it")
 
     async def trial() -> None:
-        await asyncio.sleep(0.05)
+        # ordering-by-construction rather than a head-start sleep: the trial does not attempt
+        # its own lock acquisition, and so cannot win the race, until the build already holds
+        # it (S11 L7)
+        await took_lock.wait()
         await tuning.measure(row.tuning_id)
         order.append("trial measured")
 

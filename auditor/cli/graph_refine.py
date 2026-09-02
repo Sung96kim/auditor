@@ -301,27 +301,26 @@ async def _tuning_word(root: Path, ident: str) -> str:
 
 
 def _tuning_transition(
-    target: Path,
+    root: Path,
     ident: str,
     token: str | None,
     json_: bool,
-    act: Callable[[TuningLedger, str, Path], Awaitable[TuningRow]],
+    act: Callable[[TuningLedger, str], Awaitable[TuningRow]],
 ) -> None:
     """Run one transition, or print the word it needs when `--token` was left off.
 
     `refinements accept` takes no confirmation because it moves one recorded correction; a knob
     moves every cluster in the repo, so this one is deliberately harder to do by accident (P9).
 
-    ``act`` is handed the resolved root, so every subcommand resolves it once and none reaches
-    for `cli_root` a second time to read a setting off it (S11 L5).
+    The caller resolves `root` once and hands it in, so a setting `act` needs off it (S11 L5) is
+    read from the same resolution rather than a second `cli_root` call.
     """
-    root = cli_root(target)
     try:
         if token is None:
             word = run(_tuning_word(root, ident), "reading…")
             fail(f"repeat the confirmation word to confirm: --token {word}")
         payload = run(
-            _tuning_move(root, lambda ledger: act(ledger, token, root)), "updating…"
+            _tuning_move(root, lambda ledger: act(ledger, token)), "updating…"
         )
     except TuningRefused as exc:
         fail(str(exc))
@@ -351,14 +350,14 @@ def tuning_accept(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Activate a measured proposal. The next `graph build` reads it."""
+    root = cli_root(target)
+    cap = load_user(root).observer.tuning.stopwords_max
     _tuning_transition(
-        target,
+        root,
         ident,
         token,
         json_,
-        lambda ledger, word, root: ledger.accept(
-            ident, token=word, cap=load_user(root).observer.tuning.stopwords_max
-        ),
+        lambda ledger, word: ledger.accept(ident, token=word, cap=cap),
     )
 
 
@@ -370,12 +369,13 @@ def tuning_revert(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Take a knob back out. The row stays, with its reason and its trial."""
+    root = cli_root(target)
     _tuning_transition(
-        target,
+        root,
         ident,
         token,
         json_,
-        lambda ledger, word, _root: ledger.revert(ident, token=word),
+        lambda ledger, word: ledger.revert(ident, token=word),
     )
 
 
