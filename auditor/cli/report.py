@@ -1,4 +1,4 @@
-"""``auditor report`` — audit one file statelessly (manifest + findings in one call)."""
+"""``auditor report``: audit one file statelessly (findings as JSON, no index writes)."""
 
 from pathlib import Path
 
@@ -33,7 +33,7 @@ def report(
     show_ignored: ShowIgnored = False,
     config_json: ConfigJson = None,
 ) -> None:
-    """Audit one file (stateless): manifest + findings in one call."""
+    """Audit one file (stateless): findings only, no index writes."""
     require_file(file)
     check_format(fmt)
     overrides = parse_config_json(config_json)

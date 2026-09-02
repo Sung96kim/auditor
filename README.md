@@ -3,9 +3,8 @@
 
   # auditor
 
-  Runs the mechanical half of a code audit (parse, class/function manifest, anti-pattern
-  detectors, cached findings) over Python, TypeScript/React, shell, config and data files, and
-  package manifests, for coding agents and CI.
+  Runs the mechanical half of a code audit (parse, manifest, anti-pattern detectors, cached
+  findings) over Python, TypeScript/React, shell, config, data and package manifests.
 
   [![CI](https://github.com/Sung96kim/auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/Sung96kim/auditor/actions/workflows/ci.yml)
   [![release](https://github.com/Sung96kim/auditor/actions/workflows/release.yml/badge.svg)](https://github.com/Sung96kim/auditor/actions/workflows/release.yml)
@@ -15,7 +14,7 @@
 | Command | What it does |
 | --- | --- |
 | `scan` | Audit a file or directory: filter, scope to a diff, gate CI. |
-| `report` | Audit one file statelessly: manifest plus findings. |
+| `report` | Audit one file statelessly: findings as JSON. |
 | `manifest` | Print one Python file's AST class+function manifest. |
 | `discover` | List auditable files with their classified role. |
 | `aggregate` | Roll the incremental index up into `AUDIT.md`. |
@@ -28,6 +27,7 @@
 | `plugins` | Loaded detectors, languages, reporters: `list`. |
 | `malware` | Opt-in ClamAV and osv-scanner backends: `status`, `update-dbs`, `install`. |
 | `graph` | Semantic code graph: `build`, `serve`, `search`, `usages`, `flow`, `refine`, `eval`, `log`, and more. |
+| `observer` | Background daemon for this repo: `start`, `stop`, `status`, `open`, `ensure`. |
 | `self` | Manage the install: `update`. |
 | `version` | Print the installed version. |
 
@@ -44,19 +44,9 @@ pip install "auditr[mcp,ts]"      # or into the active environment
 
 - The PyPI distribution is `auditr`; the commands are `auditr` and `auditr-mcp`, with `auditor`
   and `auditor-mcp` as aliases.
-- Extras gate features: `mcp` for the MCP server, `ts` for TypeScript/React (tree-sitter),
-  `observer-claude` for `auditr graph refine` and `auditr graph eval`, `code-mode` for sandboxed
-  tool orchestration.
-- `observer-claude` pulls `claude-agent-sdk`, which bundles its own 342 MB `claude` binary.
-  `observer` is the superset: it adds the Codex SDK and enables `graph refine` the same way.
-- `observer-codex` pulls the Codex SDK, whose own bundled `codex` binary is 246 MB, plus `fastmcp`
-  for the loopback MCP server the Codex runner serves its graph tools through. It enables
-  `auditr graph refine --runner codex` and `auditr graph eval --runner codex`. See
-  [graph](docs/references/graph.md) and [codex plugin](docs/references/codex-plugin.md).
-- `vectors` pulls `sqlite-vec` and `model2vec` and nothing reads it; `model2vec` also needs one
-  online model fetch. See [configuration](docs/references/configuration.md).
-- `graph` is an empty alias, kept so an existing `auditr[graph]` command or `uv tool` receipt keeps
-  resolving; the graph libraries are core dependencies, about 175 MB of every install.
+- Extras gate the optional features, and three pull a bundled agent binary. What each enables,
+  what it costs and which one nothing reads yet:
+  [configuration](docs/references/configuration.md#install-extras).
 - <img src="assets/claude-color.svg" height="16" alt="Claude"> Claude Code plugin:
   `claude plugin marketplace add Sung96kim/auditor`, then `/plugin install auditor` in a session.
   See [claude-code-plugin](docs/references/claude-code-plugin.md).
@@ -70,8 +60,8 @@ uv sync --extra dev --extra mcp --extra ts    # what CI installs
 uv run auditr scan .                          # run the working tree
 ```
 
-- Never `--all-extras`: it adds the `observer-*` and `vectors` SDK wheels, about 640 MB that nothing
-  in the suite imports, and it reddens `test_drive.py`'s missing-extra test.
+- Never `--all-extras`: it adds the `observer-*` and `vectors` SDK wheels, about 640 MB that
+  nothing in the suite imports, and it reddens `test_drive.py`'s missing-extra test.
 - `uv tool install .` puts the checkout on PATH.
 
 ### Containers
@@ -89,9 +79,10 @@ docker compose run --rm -T auditor-mcp   # the stdio MCP server
 ```bash
 auditr scan .                                  # severity counts and the worst files
 auditr scan --vs-base --fail-on high           # only what changed, gating CI
-auditr report src/service.py                   # one file, stateless: manifest plus findings
+auditr report src/service.py                   # one file, stateless, JSON on stdout
 auditr aggregate . -o AUDIT.md                 # roll the incremental index up
 auditr graph build . && auditr graph serve .   # build the semantic graph, then browse it
+auditr observer start                          # watch this repo in the background
 auditr-mcp                                     # stdio MCP server for agents (needs the mcp extra)
 ```
 
@@ -119,21 +110,25 @@ docker compose run --rm auditor scan . --format sarif
 ### Local
 
 ```bash
-uv run pytest -q                                                     # full suite, as CI runs it
-uv run ruff check auditor plugin auditr_observer.py tests            # lint, as CI runs it
-uv run ruff format --check auditor plugin auditr_observer.py tests   # format check, as CI runs it
+uv run python scripts/build_codex_plugin.py --check                          # mirror drift (CI)
+uv run ruff check auditor plugin auditr_observer.py tests scripts            # lint (CI)
+uv run ruff format --check auditor plugin auditr_observer.py tests scripts   # format check (CI)
+uv run pytest -q                                                             # full suite (CI)
 ```
+
+- No `### Containers`: the shipped image installs only the `mcp` and `ts` extras (`Dockerfile`),
+  so neither `pytest` nor `ruff` is on its `PATH`.
 
 ### CI
 
 ```bash
-uv run pytest tests/malware/test_integration.py -v   # the integration CI job; needs clamscan
+uv run pytest tests/malware/test_integration.py -v   # the integration job; needs clamscan
 ```
 
-- `.github/workflows/ci.yml` runs three jobs on every pull request:
-  - `test`: the three local commands above.
-  - `ui`: `pnpm install --frozen-lockfile`, `typecheck`, `test`, `build`, then a `git diff` that
-    fails when the committed `auditor/graph/ui/dist/` is not what a rebuild produces.
+- `.github/workflows/ci.yml` runs four jobs on every pull request:
+  - `test`: the four local commands in that order, then `claude plugin validate ./plugin --strict`.
+  - `codex-shapes`: the only job installing `observer-codex`, running `test_codex_client.py`.
+  - `ui`: pnpm install, typecheck, test, build, then a `git diff` on `auditor/graph/ui/dist/`.
   - `integration`: the malware suite against a real `clamscan`.
 
 ## Docs
@@ -143,7 +138,7 @@ uv run pytest tests/malware/test_integration.py -v   # the integration CI job; n
 | I want to | Page | Covers |
 | --- | --- | --- |
 | Understand how the pieces fit | [Architecture](docs/architecture.md) | Modules, seams, pipelines |
-| Configure a repo or my account | [Configuration](docs/references/configuration.md) | Config files, env vars, defaults |
+| Configure a repo or my account | [Configuration](docs/references/configuration.md) | Config files, env vars, extras |
 
 ### Auditing
 
@@ -172,7 +167,7 @@ uv run pytest tests/malware/test_integration.py -v   # the integration CI job; n
 | I want to | Page | Covers |
 | --- | --- | --- |
 | Query the semantic code graph | [graph](docs/references/graph.md) | Build, queries, flow, refinement, tuning |
-| Run the background observer | [observer](docs/references/observer.md) | The daemon, its lifecycle, its API and the live page |
+| Run the background observer | [observer](docs/references/observer.md) | Daemon lifecycle, API, live page |
 | Scan for malware and advisories | [malware](docs/references/malware.md) | ClamAV, osv-scanner, databases |
 
 ### Integrations
@@ -180,6 +175,7 @@ uv run pytest tests/malware/test_integration.py -v   # the integration CI job; n
 | I want to | Page | Covers |
 | --- | --- | --- |
 | Drive the auditor from an agent | [auditr-mcp](docs/references/auditr-mcp.md) | MCP tools, compact payloads |
-| Use it inside Claude Code | [claude-code-plugin](docs/references/claude-code-plugin.md) | Skills, subagent, hooks |
+| Use it inside Claude Code | [claude-code-plugin](docs/references/claude-code-plugin.md) | Skills, subagents, hooks |
+| Use it inside Codex | [codex-plugin](docs/references/codex-plugin.md) | The generated mirror, its MCP config |
 | Call it from Python | [Python API](docs/references/python-api.md) | Entry points, models, index |
 | Keep the install current | [self](docs/references/self.md) | `self update`, `version` |

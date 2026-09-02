@@ -5,10 +5,15 @@ import re
 from pathlib import Path
 
 import pytest
+import typer.main
+
+from auditor.cli import app as cli_app
 
 _ROOT = Path(__file__).resolve().parent.parent
 _IMG_SRC = re.compile(r'<img\s+[^>]*\bsrc="([^"]+)"')
 _MD_LINK = re.compile(r"\]\(([^)]+)\)")
+_TABLE_HEADER = "| Command | What it does |"
+_TABLE_ROW = re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE)
 
 
 def _doc_files() -> list[Path]:
@@ -48,4 +53,18 @@ def test_local_references_resolve(doc: Path):
     missing = [t for t in targets if not (doc.parent / t).resolve().exists()]
     assert not missing, (
         f"{doc.relative_to(_ROOT)}: missing local reference(s) {missing}"
+    )
+
+
+def test_the_readme_command_table_lists_every_cli_command():
+    """The table is the front page's contract with `auditr --help`; neither may gain a command
+    the other does not have."""
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    assert _TABLE_HEADER in readme, "the README command table lost its header row"
+    block = readme.split(_TABLE_HEADER, 1)[1].split("\n\n", 1)[0]
+    documented = set(_TABLE_ROW.findall(block))
+    registered = set(typer.main.get_command(cli_app).commands)
+    assert documented == registered, (
+        f"table-only {sorted(documented - registered)}, "
+        f"cli-only {sorted(registered - documented)}"
     )

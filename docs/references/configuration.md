@@ -16,6 +16,27 @@ env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus the one `AUD
   when the call leaves it out.
 - A key with an invalid value still fails: the command prints one line and exits non-zero.
 
+## Install extras
+
+`pyproject.toml`'s `[project.optional-dependencies]` is the source of truth. Which extras are
+installed decides which of the tables below do anything.
+
+| Extra | Pulls | Enables |
+| --- | --- | --- |
+| `mcp` | `fastmcp` | The `auditr-mcp` stdio server. See [auditr-mcp.md](auditr-mcp.md). |
+| `ts` | `tree-sitter`, `tree-sitter-typescript` | The TypeScript/React language auditor. |
+| `dev` | pytest, ruff, commitizen, plus everything in `mcp` and `ts` | The test and lint toolchain. |
+| `graph` | nothing | An empty alias. The graph libraries are core dependencies, about 175 MB of every install; the name is kept so an existing `auditr[graph]` command or `uv tool` receipt keeps resolving. |
+| `observer-claude` | `claude-agent-sdk` | `graph refine` and `graph eval` on the Claude runner. Bundles its own 342 MB `claude` binary. |
+| `observer-codex` | `openai-codex`, `mcp`, `uvicorn` | The same two commands on `--runner codex`. Bundles a 246 MB `codex` binary. `mcp` and `uvicorn` are the loopback MCP server the Codex runner serves its graph tools through, because Codex has no in-process transport. |
+| `observer` | everything in both rows above | Both runners. |
+| `vectors` | `sqlite-vec`, `model2vec` | Nothing yet. No module imports either package; only `VectorsConfig` names the feature. `model2vec` also needs one online model fetch. |
+| `code-mode` | `fastmcp[code-mode]` | The experimental sandboxed tool orchestration, also gated by `AUDITOR_CODE_MODE`. |
+
+- `--all-extras` resolves every row at once, about 640 MB of agent SDK wheels that nothing in the
+  test suite imports, and it reddens `test_drive.py`'s missing-extra test. Name the extras you want.
+- CI installs `dev`, `mcp` and `ts`. The `codex-shapes` job adds `observer-codex` for one test file.
+
 ## `[tool.auditor]` in `pyproject.toml`
 
 Table names are prefixed with `tool.auditor`. Sub-tables map one-to-one onto the models in

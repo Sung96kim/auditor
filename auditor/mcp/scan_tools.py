@@ -165,7 +165,7 @@ async def report(
     detail: str = "compact",
     limit: int | None = 50,
 ) -> dict | ResourceLink:
-    """Audit a single file statelessly (manifest + findings). ``detail``: summary|compact|full
+    """Audit a single file statelessly (findings only). ``detail``: summary|compact|full
     (default compact: hoists rule metadata, slims findings, drops evidence; use finding_detail
     to recover a finding's evidence). ``limit`` (compact only, default 50) caps to the worst-N
     findings with the surplus under `omitted`. ``detail='full'`` is returned as a ResourceLink to
