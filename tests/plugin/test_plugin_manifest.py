@@ -51,7 +51,7 @@ def test_manifest_lists_every_agent_file_and_nothing_else():
     assert listed == {p.name for p in (ROOT / "plugin" / "agents").glob("*.md")}
 
 
-def test_manifest_version_is_the_observer_release():
-    """The one version no release tool writes, so a change here has to be meant. 0.3.0 is the
-    feature release: two new skills, the graph-refiner agent and observer wiring on every hook."""
-    assert _load("plugin/.claude-plugin/plugin.json")["version"] == "0.3.0"
+def test_manifest_version_is_hand_set_and_deliberate():
+    """No release tool writes this version, so a change here has to be meant. 0.2.1 is a patch on
+    0.2.0: four fixes under plugin/hooks and plugin/statusline, plus skill wording."""
+    assert _load("plugin/.claude-plugin/plugin.json")["version"] == "0.2.1"

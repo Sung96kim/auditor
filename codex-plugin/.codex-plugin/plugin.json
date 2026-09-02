@@ -1,6 +1,6 @@
 {
   "name": "auditor",
-  "version": "0.3.0",
+  "version": "0.2.1",
   "description": "Drive the auditor code-audit CLI/MCP from Codex: judge findings, gate PRs, scan for malware, explore the code graph, refine it, and watch it with the observer.",
   "author": {
     "name": "Sung Kim"

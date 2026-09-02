@@ -30,13 +30,16 @@ auditr init --clean-status
 auditr init --json
 ```
 
-## What it writes
-
 - `--root/-r` picks the repo whose config and plugins load, defaulting to a walk up from the
   current directory. It selects the repo `--repo`, `--migrate` and `--clean-status` act on; it
-  never changes where the home itself lives, which is `$AUDITOR_HOME` alone. Every sibling command
-  takes the same flag ([config.md](config.md), [index.md](index.md), [rules.md](rules.md),
-  [plugins.md](plugins.md)).
+  never changes where the home itself lives, which is `$AUDITOR_HOME` alone. `config show`,
+  `config check`, `rules list`, `plugins list`, `index add`, `index list`, `index forget` and
+  every `ignore` subcommand take the same flag ([config.md](config.md), [index.md](index.md),
+  [rules.md](rules.md), [plugins.md](plugins.md), [ignore.md](ignore.md)). `index repos` reads
+  the whole registry and takes none.
+
+## What it writes
+
 - `$AUDITOR_HOME/config.json`: `"$schema": "./config.schema.json"` and `"config_version": 2`, plus
   whatever keys were already there. Defaults are never written out, so a later default change is
   not pinned and a value the user chose stays distinguishable from one init wrote.

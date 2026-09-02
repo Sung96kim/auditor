@@ -3,9 +3,10 @@
 A deterministic code auditor. Three console scripts (`pyproject.toml` `[project.scripts]`):
 `auditr` (CLI), `auditr-mcp` (stdio MCP server) and `auditr-observer` (a stdlib-only client at the
 repo root), the first two also under an `auditor` alias. `auditor/` is the package, `plugin/` the
-Claude Code plugin, `codex-plugin/` its generated Codex mirror, `assets/` the icon and runner
-marks, `tests/` mirrors the package. [docs/architecture.md](docs/architecture.md) explains how the
-pieces fit; read it before restructuring anything.
+Claude Code plugin, `codex-plugin/` its generated Codex mirror, `scripts/` the build tools CI runs,
+`assets/` the icon and runner marks, `tests/` mirrors the package.
+[docs/architecture.md](docs/architecture.md) explains how the pieces fit; read it before
+restructuring anything.
 
 ## Commands
 
@@ -19,11 +20,11 @@ uv run pytest -q                                                             # f
 uv run pytest tests/malware/test_integration.py -v                           # CI integration job; needs clamscan
 uv run auditr scan .                                                         # audit the working tree
 claude plugin validate ./plugin --strict                                     # plugin manifest check (CI, soft-fails)
-uv run cz bump --dry-run                                                     # preview the next version
 ```
 
 CI's `test` job runs the first six in that order, and `tests/test_ci_workflows.py` pins both the
-ordering and the lint paths.
+ordering and the lint paths. Never `--all-extras` locally: it adds only the observer and vectors
+SDK wheels, which nothing in the suite imports, and it reddens `test_drive.py`'s missing-extra test.
 
 The graph UI lives in `auditor/graph/ui` and uses pnpm only, never npm, npx, yarn or bun:
 
@@ -35,19 +36,14 @@ pnpm --dir auditor/graph/ui build                  # rewrites the committed dist
 uv run python -m auditor.graph.ui_inputs --write   # restamps dist/inputs.sha256
 ```
 
-- Never `--all-extras` locally: it adds only the observer and vectors SDK wheels, about 640 MB
-  that nothing in the suite imports, and it reddens `test_drive.py`'s missing-extra test.
-
 ## Layout rules
 
-- `auditor/cli/` is one module per command; `cli/__init__.py` is the composition root that imports
-  command modules for their registration side effects and mounts the sub-apps.
+- `auditor/cli/` is one module per command, mounted by the `cli/__init__.py` composition root.
 - Shared seams stay at the `auditor/` top level (`engine.py`, `config.py`, `models.py`,
   `registry.py`); never bury one inside a feature package.
 - `auditr_observer.py` sits outside the package and imports nothing from `auditor`, because hooks
-  run constantly and `import auditor` costs about 0.17 s. It duplicates thirteen things from
-  `auditor/observer/`, each pinned by a test; [docs/architecture.md](docs/architecture.md) names
-  both the modules and the thirteen. Change one side and change the other.
+  run constantly. It duplicates thirteen things from `auditor/observer/`, each pinned by a test and
+  both named in [docs/architecture.md](docs/architecture.md). Change one side, change the other.
 - `plugin/` is stdlib-only and imports nothing from `auditor`; it drives the installed `auditr`.
   `statusline/auditor_status.py` and `hooks/_common.py` re-implement package helpers on the same
   rule, and `tests/plugin/` pins each pair. Those tests **may** import `auditor` to do it.
@@ -60,7 +56,8 @@ uv run python -m auditor.graph.ui_inputs --write   # restamps dist/inputs.sha256
 
 - Imports at module top, never inside a function; `tests/test_dogfood.py` fails on an inline
   import in the package. Two deferred imports are sanctioned, both measured and documented at the
-  site (`cli/lazy.py`'s graph sub-app, `graph/refine/drive.py::_codex_backend`); do not add a third.
+  site (`cli/lazy.py`'s `_mounted`, which serves the `graph` and `observer` mounts, and
+  `graph/refine/drive.py::_codex_backend`); do not add a third.
 - Everything is typed. Records are pydantic v2 models, frozen where they are values; configuration
   is `pydantic-settings`.
 - Detectors, language auditors and reporters register by subclassing their ABC, so a package
@@ -77,9 +74,8 @@ uv run python -m auditor.graph.ui_inputs --write   # restamps dist/inputs.sha256
   throwaway directory, so no test touches the real shared index. Do not opt out of it.
 - Reuse `tests/_support.py`: the `sample_repo` fixture and `run_audit` / `run_ts_audit` /
   `run_sh_audit`. Function-and-fixture style, `test_*.py`, `test_`-prefixed; parametrize.
-- `tests/test_dogfood.py` scans `auditor/` for `PY-STYLE-INLINE-IMPORT`,
-  `PY-STYLE-IF-FALSE-IMPORT` and any `malware`, `secrets` or `security` finding, and nothing else
-  gates on that scan.
+- `tests/test_dogfood.py` scans `auditor/` for `PY-STYLE-INLINE-IMPORT`, `PY-STYLE-IF-FALSE-IMPORT`
+  and any `malware`, `secrets` or `security` finding, and nothing else gates on that scan.
 - New production code ships with tests; a bug fix ships with a regression test that fails without
   the fix.
 
@@ -88,8 +84,9 @@ uv run python -m auditor.graph.ui_inputs --write   # restamps dist/inputs.sha256
 - A feature change ships with its doc update in the same change: the `docs/references/*.md` page it
   touches, `README.md` when the front page changes, and `docs/architecture.md` when the module
   layout or a pipeline changes.
-- The tracked doc set carries zero em dashes, and the README command table matches
-  `auditr --help`. `tests/test_doc_assets.py` pins both, plus every relative link.
+- `README.md`, `AGENTS.md` and every page under `docs/` carry zero em dashes, and the README
+  command table matches `auditr --help`. `tests/test_doc_assets.py` pins both, plus every relative
+  link on those pages and under `plugin/` and `codex-plugin/`.
 - Document only what exists. `docs/superpowers/` is local, git-ignored working material; never
   link to it from the tracked set.
 

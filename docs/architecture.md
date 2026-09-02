@@ -6,8 +6,9 @@ Paths are relative to the repo root.
 ## Shape of the repo
 
 - `auditor/cli/` is the Typer command tree. `apps.py` owns the root `app`; `cli/__init__.py` is the
-  composition root that imports each command module (registering its `@app.command()`) and mounts
-  the sub-apps (`index`, `ignore`, `config`, `rules`, `plugins`, `self`, `malware`, `graph`).
+  composition root that imports each command module (registering its `@app.command()`) and
+  mounts the sub-apps (`index`, `ignore`, `config`, `rules`, `plugins`, `self`, `malware`,
+  `graph`, `observer`).
 - `auditor/mcp/` is the FastMCP server, same shape: `server.py` owns the `mcp` instance,
   `mcp/__init__.py` imports each `*_tools` module to register its tools.
 - `auditor/languages/<lang>/` is one package per language: `auditor.py` holds the `LanguageAuditor`
@@ -304,11 +305,11 @@ flowchart TB
 ## auditr-mcp
 
 - `auditor/mcp_server.py` re-exports `main` and `mcp` from `auditor/mcp/`. `mcp/server.py` builds
+  the `FastMCP` instance and caps any single tool response at `MAX_TOOL_RESPONSE_BYTES`. See
+  [auditr-mcp.md](references/auditr-mcp.md).
 - The tool modules mirror the CLI: `scan_tools.py`, `rules_tools.py`, `ignore_tools.py`,
   `malware_tools.py`, `refine_tools.py`, `graph_tools.py` and `tuning_tools.py`. Every module
   registers unconditionally.
-  `malware_tools.py`, `refine_tools.py` and `graph_tools.py`. Every module registers
-  unconditionally.
 - Every tool carries a `READ_ONLY`, `MUTATING` or `DESTRUCTIVE` annotation from `mcp/helpers.py`.
   None declare an open world; the tools touch the local repo only.
 - Payloads too large to inline are published through `mcp/artifacts.py` and returned as a
@@ -344,7 +345,7 @@ flowchart TB
   Claude manifest so `name`, `version`, `author`, `homepage`, `repository`, `license` and
   `keywords` cannot drift, then overrides `description`, `skills` and `mcpServers` with the Codex
   wording and paths. `codex-plugin/.mcp.json` launches
-  `uvx --from "auditr[mcp,observer-codex]" auditr-mcp`. See
+  `uvx --python 3.13 --from 'auditr[mcp,observer-codex]' auditr-mcp`. See
   [codex-plugin.md](references/codex-plugin.md).
 - `--check` reports drift instead of writing, and that is the only form a workflow may run.
   `tests/test_ci_workflows.py` fails a workflow that invokes the builder bare, because a write step

@@ -35,7 +35,9 @@ installed decides which of the tables below do anything.
 
 - `--all-extras` resolves every row at once, about 640 MB of agent SDK wheels that nothing in the
   test suite imports, and it reddens `test_drive.py`'s missing-extra test. Name the extras you want.
-- CI installs `dev`, `mcp` and `ts`. The `codex-shapes` job adds `observer-codex` for one test file.
+- CI syncs a different set per job: `test` takes `dev`, `mcp` and `ts`; `codex-shapes` takes
+  `dev`, `mcp` and `observer-codex` in its own runner, with no `ts`; `integration` takes `dev`
+  alone.
 
 ## `[tool.auditor]` in `pyproject.toml`
 

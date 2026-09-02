@@ -17,26 +17,26 @@ _TABLE_HEADER = "| Command | What it does |"
 _TABLE_ROW = re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE)
 
 
-def _doc_files() -> list[Path]:
-    singles = [
-        _ROOT / "README.md",
-        _ROOT / "AGENTS.md",
-        _ROOT / "docs" / "architecture.md",
-        _ROOT / "assets" / "README.md",
-    ]
-    references = sorted((_ROOT / "docs" / "references").glob("*.md"))
-    plugin_docs = sorted((_ROOT / "plugin").rglob("*.md"))
-    codex_docs = sorted((_ROOT / "codex-plugin").rglob("*.md"))
-    return singles + references + plugin_docs + codex_docs
+def _tracked_docs() -> list[Path]:
+    """Every markdown page under docs/, skipping the git-ignored superpowers working material."""
+    docs = _ROOT / "docs"
+    local = docs / "superpowers"
+    return sorted(p for p in docs.rglob("*.md") if local not in p.parents)
 
 
 def _doc_set() -> list[Path]:
     """The writing-repo-docs set: the front page, the agent file and everything under docs/."""
+    return [_ROOT / "README.md", _ROOT / "AGENTS.md", *_tracked_docs()]
+
+
+def _doc_files() -> list[Path]:
+    """Every page the link check reads: the doc set above, plus the asset and plugin READMEs and
+    skill pages, which carry links but sit outside the prose set the em-dash pin covers."""
     return [
-        _ROOT / "README.md",
-        _ROOT / "AGENTS.md",
-        _ROOT / "docs" / "architecture.md",
-        *sorted((_ROOT / "docs" / "references").glob("*.md")),
+        *_doc_set(),
+        _ROOT / "assets" / "README.md",
+        *sorted((_ROOT / "plugin").rglob("*.md")),
+        *sorted((_ROOT / "codex-plugin").rglob("*.md")),
     ]
 
 
@@ -54,8 +54,10 @@ def _local_targets(text: str) -> list[str]:
     return targets
 
 
-_DOC_FILES = _doc_files()
 _DOC_SET = _doc_set()
+_DOC_FILES = _doc_files()
+#: the set as of the S14 doc pass; a page deleted or a directory skipped must fail, not go quiet
+_DOC_SET_FLOOR = 24
 
 
 @pytest.mark.parametrize(
@@ -66,6 +68,14 @@ def test_local_references_resolve(doc: Path):
     missing = [t for t in targets if not (doc.parent / t).resolve().exists()]
     assert not missing, (
         f"{doc.relative_to(_ROOT)}: missing local reference(s) {missing}"
+    )
+
+
+def test_the_doc_set_covers_every_page_it_claims():
+    """The pin is parametrized, so a shrinking set would pass quietly rather than fail."""
+    assert len(_DOC_SET) >= _DOC_SET_FLOOR, (
+        f"the doc set is down to {len(_DOC_SET)} pages, below the pinned floor of "
+        f"{_DOC_SET_FLOOR}: {[str(p.relative_to(_ROOT)) for p in _DOC_SET]}"
     )
 
 

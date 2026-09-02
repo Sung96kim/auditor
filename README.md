@@ -116,9 +116,6 @@ uv run ruff format --check auditor plugin auditr_observer.py tests scripts   # f
 uv run pytest -q                                                             # full suite (CI)
 ```
 
-- No `### Containers`: the shipped image installs only the `mcp` and `ts` extras (`Dockerfile`),
-  so neither `pytest` nor `ruff` is on its `PATH`.
-
 ### CI
 
 ```bash

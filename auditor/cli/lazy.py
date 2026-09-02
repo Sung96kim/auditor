@@ -33,7 +33,7 @@ _ADOPTED: tuple[str, ...] = (
 
 def _mounted(module: str, attribute: str) -> TyperGroup:
     """Import ``module`` and return ``attribute``'s Typer sub-app as a resolved click group."""
-    # The one sanctioned deferred import in the package; everything else imports at module level.
+    # One of the package's two sanctioned deferred imports, and the one both lazy mounts use.
     mod = importlib.import_module(module)
     return get_group(getattr(mod, attribute))
 
