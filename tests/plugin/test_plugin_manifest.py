@@ -52,5 +52,6 @@ def test_manifest_lists_every_agent_file_and_nothing_else():
 
 
 def test_manifest_version_is_the_observer_release():
-    """Spec 14 names plugin 0.2.0, bumped by hand: the release that ships the observer hooks."""
-    assert _load("plugin/.claude-plugin/plugin.json")["version"] == "0.2.0"
+    """The one version no release tool writes, so a change here has to be meant. 0.3.0 is the
+    feature release: two new skills, the graph-refiner agent and observer wiring on every hook."""
+    assert _load("plugin/.claude-plugin/plugin.json")["version"] == "0.3.0"
