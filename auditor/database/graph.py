@@ -2,7 +2,7 @@
 and clusters, and the unresolved queue."""
 
 # auditor: skip-file: PY-OOP-PARALLEL-SIBLING  (data-access layer: each read method is a thin
-# delegation to the shared _fetch helper differing only in its SQL — parallel shape is the query
+# delegation to the shared _fetch helper differing only in its SQL; parallel shape is the query
 # surface, not duplication; the substantive body was already extracted, clearing TWIN-METHODS)
 
 import json

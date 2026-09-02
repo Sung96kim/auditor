@@ -283,13 +283,13 @@ class StructuralResolver:
         # Reachability through re-export surfaces, so a symbol imported via an aggregator
         # resolves to its DEFINING module (Finding 1). Always on: the len==1 gate in
         # _resolve_name means extra reachability can only recover a true edge or drop a
-        # genuinely-ambiguous one — it never invents an edge to a module the caller can't reach.
-        #   • package __init__.py — one level, any import form (conventional re-export surface;
+        # genuinely-ambiguous one. It never invents an edge to a module the caller can't reach.
+        #   • package __init__.py: one level, any import form (conventional re-export surface;
         #     snapshot `base` avoids cascading through non-__init__ imports).
-        #   • star re-exports (`from X import *`) — transitive, any module: a star import puts
+        #   • star re-exports (`from X import *`) are transitive, any module: a star import puts
         #     all of X's public names into this module's namespace, a sound namespace-inclusion
         #     relation to follow to a fixpoint (a plain module's *explicit* imports are NOT
-        #     followed — that would close the whole graph into a hairball).
+        #     followed; that would close the whole graph into a hairball).
         base = {mid: set(imps) for mid, imps in self.imports_by_module.items()}
         star_map = self.star_reexports = self._star_reexport_map()
         for imps in self.imports_by_module.values():
@@ -327,7 +327,7 @@ class StructuralResolver:
         return out
 
     def _resolve_method(self, cls_id: str, method: str) -> str | None:
-        """The method node ``method`` reachable from class ``cls_id`` — own class first, then up
+        """The method node ``method`` reachable from class ``cls_id``: own class first, then up
         the resolvable inheritance chain. ``None`` if no such method node exists."""
         seen: set[str] = set()
         frontier = [cls_id]
@@ -399,7 +399,7 @@ class StructuralResolver:
             if len(bound) == 1:
                 return Resolution(ids=bound, gated=bound, definers=definers, path=path)
         # Cross-module: a call site gives us only the name (`x.get()` → "get"), not the receiver
-        # type, so a name defined elsewhere can't be attributed by name alone — that's what made
+        # type, so a name defined elsewhere can't be attributed by name alone. That's what made
         # every `.get()`/`from_orm()` link to a same-named repo method (false hairball). Use the
         # import graph as the disambiguator: link only to a candidate whose module the caller
         # actually imports, and only when that's unambiguous.

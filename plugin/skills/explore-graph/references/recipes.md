@@ -377,3 +377,26 @@ there is nothing to install and no availability check to run first.
   (`--cluster`), or a symbol's ego-graph (`--symbol`, `--depth` hops around it). Useful for
   dropping a visual into a PR description or design doc instead of describing the shape in
   prose.
+
+## Who changed the graph, and what did they change
+
+```bash
+# every correction recorded against this checkout, newest first
+auditr graph refinements list
+
+# only the ones still waiting on a human
+auditr graph refinements list --status pending
+
+# the runs behind them, newest first, with what each one cost
+auditr graph log
+
+# the runs that looked and decided not to act, which `log` hides by default
+auditr graph log --skipped
+```
+
+- `refinements list` answers "what is different about the graph". `log` answers "who did it, when,
+  and what did it cost". Read them in that order: a surprising refinement is explained by its run.
+- A `skipped` row is an assessment that ran and declined. Its reason is the fastest way to tell a
+  quiet observer from a broken one.
+- Both views take `--json` for a machine, and both page through `LogQuery`, so the CLI and the MCP
+  tools cannot disagree on ordering or on what a time window means.
