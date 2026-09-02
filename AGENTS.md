@@ -88,8 +88,8 @@ uv run python -m auditor.graph.ui_inputs --write   # restamps dist/inputs.sha256
 - A feature change ships with its doc update in the same change: the `docs/references/*.md` page it
   touches, `README.md` when the front page changes, and `docs/architecture.md` when the module
   layout or a pipeline changes.
-- The README command table matches `auditr --help`. `tests/test_doc_assets.py` pins it, plus
-  every relative link.
+- The tracked doc set carries zero em dashes, and the README command table matches
+  `auditr --help`. `tests/test_doc_assets.py` pins both, plus every relative link.
 - Document only what exists. `docs/superpowers/` is local, git-ignored working material; never
   link to it from the tracked set.
 

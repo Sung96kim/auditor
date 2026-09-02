@@ -1,5 +1,5 @@
-"""Every local reference in the tracked doc set must resolve: `<img src>` values and relative
-markdown link targets, resolved against the referencing file's own directory."""
+"""The tracked doc set holds itself honest: every local reference resolves, the README command
+table matches the real CLI, and no page carries an em dash."""
 
 import re
 from pathlib import Path
@@ -12,6 +12,7 @@ from auditor.cli import app as cli_app
 _ROOT = Path(__file__).resolve().parent.parent
 _IMG_SRC = re.compile(r'<img\s+[^>]*\bsrc="([^"]+)"')
 _MD_LINK = re.compile(r"\]\(([^)]+)\)")
+_EM_DASH = "\u2014"
 _TABLE_HEADER = "| Command | What it does |"
 _TABLE_ROW = re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE)
 
@@ -25,7 +26,18 @@ def _doc_files() -> list[Path]:
     ]
     references = sorted((_ROOT / "docs" / "references").glob("*.md"))
     plugin_docs = sorted((_ROOT / "plugin").rglob("*.md"))
-    return singles + references + plugin_docs
+    codex_docs = sorted((_ROOT / "codex-plugin").rglob("*.md"))
+    return singles + references + plugin_docs + codex_docs
+
+
+def _doc_set() -> list[Path]:
+    """The writing-repo-docs set: the front page, the agent file and everything under docs/."""
+    return [
+        _ROOT / "README.md",
+        _ROOT / "AGENTS.md",
+        _ROOT / "docs" / "architecture.md",
+        *sorted((_ROOT / "docs" / "references").glob("*.md")),
+    ]
 
 
 def _is_url(target: str) -> bool:
@@ -43,6 +55,7 @@ def _local_targets(text: str) -> list[str]:
 
 
 _DOC_FILES = _doc_files()
+_DOC_SET = _doc_set()
 
 
 @pytest.mark.parametrize(
@@ -54,6 +67,19 @@ def test_local_references_resolve(doc: Path):
     assert not missing, (
         f"{doc.relative_to(_ROOT)}: missing local reference(s) {missing}"
     )
+
+
+@pytest.mark.parametrize(
+    "doc", _DOC_SET, ids=[str(p.relative_to(_ROOT)) for p in _DOC_SET]
+)
+def test_the_doc_set_carries_no_em_dashes(doc: Path):
+    """An em dash is the loudest tell that a page was machine-written; the set stays at zero."""
+    hits = [
+        n
+        for n, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1)
+        if _EM_DASH in line
+    ]
+    assert not hits, f"{doc.relative_to(_ROOT)}: em dash on line(s) {hits}"
 
 
 def test_the_readme_command_table_lists_every_cli_command():
