@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 
-from _common import auditr_available, emit, read_event
+from _common import auditr_available, emit, observe, read_event
 
 
 def emitted_scan_report(stdout: str) -> bool:
@@ -24,11 +24,22 @@ def emitted_scan_report(stdout: str) -> bool:
     return isinstance(data, dict) and ("files" in data or "totals" in data)
 
 
+#: the whole client-side ladder this event can spend, which is a heartbeat, a repair attach, a
+#: `git status`, up to two `git rev-parse` calls and the Stop batch's own longer budget:
+#: `auditr_observer.HOOK_BUDGETS["stop"]` sums it to 6.2 s and
+#: `tests/plugin/test_hooks_wiring.py` pins this against that sum. Only the last of those runs
+#: after the batch is durable, so this deadline has to cover the git half too (M2, L1).
+OBSERVE_TIMEOUT = 8.0
+
+
 def main() -> None:
-    if os.environ.get("AUDITOR_VERIFY_HOOK") != "1" or not auditr_available():
-        return
     event = read_event()
     if event is None:
+        return
+    # the Stop path set is the only edit path Codex has and it closes Claude's Bash-edit hole,
+    # so it is posted whether or not the opt-in gate is on
+    observe("stop", event, OBSERVE_TIMEOUT)
+    if os.environ.get("AUDITOR_VERIFY_HOOK") != "1" or not auditr_available():
         return
     cwd = event.get("cwd") or "."
     floor = os.environ.get("AUDITOR_VERIFY_SEVERITY", "high")

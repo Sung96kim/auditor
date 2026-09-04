@@ -27,7 +27,9 @@ auditr discover . --config-json '{"exclude":["**/vendor/**"]}'
   `auditr plugins list` prints the registered languages. See [plugins.md](plugins.md).
 - Left out: git-ignored files, the built-in vendor and build directories (`.git`, `.venv`,
   `venv`, `node_modules`, `build`, `dist`, the tool caches, `.auditor`), the configured `exclude`
-  globs, and generated patterns such as `*_pb2.py`, `*.gen.ts`, and `*.d.ts`.
+  globs, generated patterns such as `*_pb2.py`, `*.gen.ts`, and `*.d.ts`, and
+  `.claude/worktrees/*`, since an agent worktree is a second checkout of the same repo and
+  scanning it double counts every finding.
 - Soft-skipped on a directory listing: `migrations/` directories and Alembic version directories.
   Point `discover` straight at one to list its files.
 - Inside a git repo the file list comes from `git ls-files`; outside one it is a tree walk.

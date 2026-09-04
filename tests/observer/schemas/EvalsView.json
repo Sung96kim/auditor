@@ -1,0 +1,114 @@
+{
+  "$defs": {
+    "EvalStratumPayload": {
+      "description": "One `(suite, stratum)` the page shows a lower bound for.",
+      "properties": {
+        "lower_bound_95": {
+          "default": 0.0,
+          "title": "Lower Bound 95",
+          "type": "number"
+        },
+        "n": {
+          "default": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "precision": {
+          "default": 0.0,
+          "title": "Precision",
+          "type": "number"
+        },
+        "proven": {
+          "default": false,
+          "title": "Proven",
+          "type": "boolean"
+        },
+        "stratum": {
+          "title": "Stratum",
+          "type": "string"
+        },
+        "suite": {
+          "title": "Suite",
+          "type": "string"
+        }
+      },
+      "required": [
+        "suite",
+        "stratum"
+      ],
+      "title": "EvalStratumPayload",
+      "type": "object"
+    },
+    "RunnerEvalPayload": {
+      "description": "The latest eval per runner (spec 12.1), with the strata behind it.",
+      "properties": {
+        "measured": {
+          "default": 0,
+          "title": "Measured",
+          "type": "integer"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "proven": {
+          "default": 0,
+          "title": "Proven",
+          "type": "integer"
+        },
+        "runner": {
+          "$ref": "#/$defs/RunnerKind"
+        },
+        "strata": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvalStratumPayload"
+          },
+          "title": "Strata",
+          "type": "array"
+        }
+      },
+      "required": [
+        "runner"
+      ],
+      "title": "RunnerEvalPayload",
+      "type": "object"
+    },
+    "RunnerKind": {
+      "enum": [
+        "claude",
+        "codex",
+        "fake",
+        "none"
+      ],
+      "title": "RunnerKind",
+      "type": "string"
+    }
+  },
+  "description": "The latest eval rows per runner for this repo.",
+  "properties": {
+    "identity": {
+      "title": "Identity",
+      "type": "string"
+    },
+    "repo": {
+      "title": "Repo",
+      "type": "string"
+    },
+    "runners": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RunnerEvalPayload"
+      },
+      "title": "Runners",
+      "type": "array"
+    }
+  },
+  "required": [
+    "repo",
+    "identity"
+  ],
+  "title": "EvalsView",
+  "type": "object"
+}

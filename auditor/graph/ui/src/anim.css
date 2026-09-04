@@ -196,3 +196,70 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ─── Panel state boxes ─────────────────────────────────────────────────────── */
+@keyframes trackSlide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+.state-track {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(124, 124, 255, 0.55);
+  animation: trackSlide 1150ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.state-retry {
+  transition: background 140ms ease, border-color 140ms ease, transform 120ms ease;
+}
+.state-retry:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.state-retry:active {
+  transform: translateY(1px);
+}
+
+/* an indeterminate bar that has stopped must still read as pending, not as a value */
+@media (prefers-reduced-motion: reduce) {
+  .state-track {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+}
+
+/* ─── Panel fields (the repo switcher, the flow symbol box) ─────────────────── */
+.field {
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.field:hover {
+  border-color: rgba(124, 124, 255, 0.35) !important;
+}
+.field:focus {
+  border-color: rgba(124, 124, 255, 0.5) !important;
+  box-shadow: 0 0 0 2px rgba(124, 124, 255, 0.12);
+  outline: none;
+}
+
+/* ─── Run stream row ────────────────────────────────────────────────────────── */
+.run-row {
+  transition: background 120ms ease;
+}
+.run-row:hover {
+  background: rgba(124, 124, 255, 0.1);
+}
+
+/* ─── Flow hub node ─────────────────────────────────────────────────────────── */
+.flow-node {
+  transition: background 130ms ease, border-color 130ms ease;
+}
+.flow-node:hover {
+  background: rgba(124, 124, 255, 0.16) !important;
+  border-color: rgba(124, 124, 255, 0.55) !important;
+}
+
+/* ─── Live column (S10) ─────────────────────────────────────────────────────── */
+.anim-panels {
+  animation: fadeSlideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+}

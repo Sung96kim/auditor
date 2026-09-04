@@ -4,9 +4,17 @@ and functions across files (within the same role, to avoid prod-vs-test noise).
 Cheap by design — a GROUP BY over the shapes table, recomputed each scan; no re-parse.
 """
 
+import tomllib
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
 from auditor import dead_code, fixture_usage, private_usage, settings_cohesion
+from auditor.config import AuditorSettings
 from auditor.database import IndexStore
 from auditor.models import Category, Finding, Severity, VerdictKind
+from auditor.registry import REGISTRY
+from auditor.skips import filter_findings
 
 _CLASS_BASE_KIND = "py-class-base"
 _FIXTURE_DEF_KIND = "pytest-fixture-def"
@@ -36,6 +44,86 @@ _BY_KIND: dict[str, _XKind] = {
 }
 _FALLBACK = _BY_KIND["function"]
 _RULES = [k.rule for k in _BY_KIND.values()]
+
+
+def entry_point_names(root: Path) -> frozenset[str]:
+    """Names referenced by pyproject entry points / scripts (``pkg.mod:attr``) — treated as 'used'
+    so a symbol wired only as an entry point isn't flagged dead."""
+    pp = root / "pyproject.toml"
+    if not pp.exists():
+        return frozenset()
+    project = tomllib.loads(pp.read_text()).get("project", {})
+    targets: list[str] = list(project.get("scripts", {}).values())
+    targets.extend(project.get("gui-scripts", {}).values())
+    for group in project.get("entry-points", {}).values():
+        targets.extend(group.values())
+    names: set[str] = set()
+    for target in targets:
+        mod, _, attr = str(target).partition(":")
+        names.update(seg for seg in mod.split(".") if seg)
+        if attr:
+            names.add(attr.split(".")[0])
+    return frozenset(names)
+
+
+class CrossFileInputs(BaseModel):
+    """What the pass reads from one repo, plus the suppression a scan applies to its findings.
+
+    Derived once per run so the engine and a standalone ``auditor crossfile`` feed the pass the
+    same inputs and report the same count.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    root: Path
+    settings_modules: list[str]
+    settings_cohesion_on: bool
+    entry_points: frozenset[str]
+    respect_skips: bool
+
+    @classmethod
+    def derive(cls, root: Path, settings: AuditorSettings) -> "CrossFileInputs":
+        return cls(
+            root=root,
+            settings_modules=settings.settings_modules,
+            settings_cohesion_on=settings.settings_cohesion,
+            entry_points=entry_point_names(root),
+            respect_skips=settings.respect_skips,
+        )
+
+    async def recompute(self, index: IndexStore) -> dict[str, list[Finding]]:
+        """Run the pass over the index. The findings are pre-suppression: see ``apply_skips``."""
+        return await run(
+            index,
+            settings_modules=self.settings_modules,
+            settings_cohesion_on=self.settings_cohesion_on,
+            entry_point_names=self.entry_points,
+        )
+
+    def recompute_in_memory(  # auditor: skip: PY-TYPING-UNTYPED-DICT  (index shape rows)
+        self, shape_rows: list[dict], roles: dict[str, str]
+    ) -> dict[str, list[Finding]]:
+        """Run the pass over shapes computed in memory, for a scan with no index."""
+        return run_in_memory(
+            shape_rows,
+            roles,
+            settings_modules=self.settings_modules,
+            settings_cohesion_on=self.settings_cohesion_on,
+            entry_point_names=self.entry_points,
+        )
+
+    def apply_skips(
+        self, rel: str, findings: list[Finding]
+    ) -> tuple[list[Finding], int]:
+        """Drop the findings an in-file ``auditor: skip`` directive suppresses, and say how many
+        went. The language comes from the same classifier the scan used for ``rel``."""
+        if not self.respect_skips or not findings:
+            return list(findings), 0
+        lang_cls = REGISTRY.language_for_path(rel)
+        source = (self.root / rel).read_text(encoding="utf-8", errors="replace")
+        return filter_findings(
+            source, findings, language=getattr(lang_cls, "language", None)
+        )
 
 
 async def run(

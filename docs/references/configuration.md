@@ -1,13 +1,43 @@
 # Configuration reference
 
 Committed config lives in `[tool.auditor]` in `pyproject.toml` or in `.auditor/config.toml`;
-env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus `AUDITOR_*` overrides of
-`AuditorSettings`). This page covers both.
+env-driven config lives in `auditor/config.py` (`GlobalPaths`, plus the one `AUDITOR_*` override
+`AuditorSettings` accepts). This page covers both.
 
 - How a value is resolved across those sources is in [config.md](config.md), which is also the
   command that prints the merged result.
-- Every config model sets `extra="forbid"`, so an unknown key fails the load instead of being
-  silently ignored.
+- An unknown key is ignored instead of failing the load, so a key a newer auditor understands does
+  not break an older install on the same repo.
+- The CLI prints the ignored keys once per invocation, from the root callback, on stderr, so
+  machine output on stdout stays parseable. Both families are covered: repo policy and user
+  settings. `auditr config check` and `auditr init` print their own list instead.
+- The MCP server prints one line naming them on stderr, once per repo it is asked about. It reads
+  the repo from a call's `path`, `file` or `root` argument, or from that argument's own default
+  when the call leaves it out.
+- A key with an invalid value still fails: the command prints one line and exits non-zero.
+
+## Install extras
+
+`pyproject.toml`'s `[project.optional-dependencies]` is the source of truth. Which extras are
+installed decides which of the tables below do anything.
+
+| Extra | Pulls | Enables |
+| --- | --- | --- |
+| `mcp` | `fastmcp` | The `auditr-mcp` stdio server. See [auditr-mcp.md](auditr-mcp.md). |
+| `ts` | `tree-sitter`, `tree-sitter-typescript` | The TypeScript/React language auditor. |
+| `dev` | pytest, ruff, commitizen, plus everything in `mcp` and `ts` | The test and lint toolchain. |
+| `graph` | nothing | An empty alias. The graph libraries are core dependencies, about 175 MB of every install; the name is kept so an existing `auditr[graph]` command or `uv tool` receipt keeps resolving. |
+| `observer-claude` | `claude-agent-sdk` | `graph refine` and `graph eval` on the Claude runner. Bundles its own 342 MB `claude` binary. |
+| `observer-codex` | `openai-codex`, `mcp`, `uvicorn` | The same two commands on `--runner codex`. Bundles a 246 MB `codex` binary. `mcp` and `uvicorn` are the loopback MCP server the Codex runner serves its graph tools through, because Codex has no in-process transport. |
+| `observer` | everything in both rows above | Both runners. |
+| `vectors` | `sqlite-vec`, `model2vec` | Nothing yet. No module imports either package; only `VectorsConfig` names the feature. `model2vec` also needs one online model fetch. |
+| `code-mode` | `fastmcp[code-mode]` | The experimental sandboxed tool orchestration, also gated by `AUDITOR_CODE_MODE`. |
+
+- `--all-extras` resolves every row at once, about 640 MB of agent SDK wheels that nothing in the
+  test suite imports, and it reddens `test_drive.py`'s missing-extra test. Name the extras you want.
+- CI syncs a different set per job: `test` takes `dev`, `mcp` and `ts`; `codex-shapes` takes
+  `dev`, `mcp` and `observer-codex` in its own runner, with no `ts`; `integration` takes `dev`
+  alone.
 
 ## `[tool.auditor]` in `pyproject.toml`
 
@@ -32,7 +62,10 @@ security = { min_severity = "high" }
 
 - `extends` (default `"base"`): profile chain root. A built-in name (`base`, `strict`, `pydantic`,
   `all-strict`) or a path to a TOML file.
-- `exclude` (default `[]`): extra globs to skip, added to the built-in defaults.
+- `exclude` (default `[]`): extra globs to skip, added to the built-in defaults. Those
+  defaults are the generated-file patterns (`*.gen.py`, `*_pb2.py`, `*.gen.ts`, `*.d.ts` and
+  friends) plus `.claude/worktrees/*`: an agent worktree is a second checkout of the same
+  repo, so scanning it double counts every finding in it.
 - `resolve_packages` (default `[]`): dotted-name prefixes of dependency packages whose installed
   source the callee resolver may read from the scanned project's environment. Repo-local
   resolution always works; this extends it. Set with no environment found, the scan warns and
@@ -53,11 +86,12 @@ security = { min_severity = "high" }
   reference plugin-contributed rules. No trust gate ([plugins.md](plugins.md)).
 - `trust_local_plugins` (default `false`): load `.auditor/plugins/*.py`, which execute code.
 - `respect_skips` (default `true`): honor in-file `auditor: skip` directives.
+- `observer_allowed` (default `true`): the repo's hard opt-out for the graph observer. It is the
+  third clause of the daemon's attach gate, so `false` refuses every session in this repo.
 - `settings_modules` (default `["config", "settings"]`): module stems or directory names that are a
   blessed home for `BaseSettings` subclasses (`PY-CONFIG-SCATTERED-SETTINGS`).
 - `settings_cohesion` (default `true`): also bless the de-facto home, the module where settings
   classes already cluster.
-- `lint_overlap` (bool, default `false`): accepted and currently unused; no code reads it.
 - `cli_frameworks` (default `["typer", "click"]`): CLI frameworks whose free-function-command idiom
   exempts a module from the OOP orchestrator and cross-file duplicate-function heuristics. Extend
   it for an in-house framework.
@@ -163,7 +197,8 @@ that is otherwise dormant.
 
 ### Semantic graph (`[tool.auditor.graph]`, `GraphConfig`)
 
-Opt-in and needs the `graph` extra ([graph.md](graph.md)).
+Opt-in per repo, but no extra to install: the graph libraries ship in the core distribution
+([graph.md](graph.md)).
 
 - `enabled` (default `false`): make a plain `scan -i` populate graph facts. `auditr graph build`
   extracts them regardless.
@@ -180,6 +215,21 @@ Opt-in and needs the `graph` extra ([graph.md](graph.md)).
   modules and module-to-member ratio before a concept counts as scattered.
 - `naming_verb_distance` (default `0.15`, `ge=0`), `naming_object_jaccard` (default `0.6`, 0 to 1),
   `naming_min_verb_count` (default `20`, `ge=1`): thresholds for the naming-inconsistency detector.
+- `flow_hub_fan_in` (default `40`, `ge=1`): the fan at which `auditr graph flow` collapses a node
+  instead of expanding it. Two counts are compared against it: how many symbols reach the node
+  (dispatch children included) and how many children it would emit. Either one crossing makes it a
+  hub, which is why a helper called from 90 places collapses even though it calls one thing.
+  `--expand-hubs` ignores the floor for one run.
+- `refine_cluster_jaccard` (default `0.5`, 0 to 1): how much of a cluster refinement's recorded
+  member set must still be in one cluster for it to re-attach. Below the floor the refinement goes
+  `stale`.
+- `refine_max_noop_builds` (default `3`, `ge=1`): consecutive builds a refinement may have no
+  effect on before it goes `stale`. A `pinned` refinement counts but never expires.
+- `rebuild_lock_poll_seconds` (default `0.25`, `gt=0`): how often a build blocked on another
+  process's rebuild lock retries.
+- `rebuild_lock_timeout_seconds` (default `120.0`, `gt=0`): how long a caller that will not wait
+  for ever gives another process's build before it refuses. Read by `graph_refine_commit`,
+  `RefinementService.rebuild` and the MCP `graph_build` tool; `auditr graph build` waits instead.
 
 ### Malware scan (`[tool.auditor.malware_scan]`, `MalwareScanConfig`)
 
@@ -259,11 +309,248 @@ resolved before any repo file is read; a cycle is an error.
   repo.
 - `baseline.json`: the conventional path for `scan --write-baseline` and `--baseline`. Nothing
   reads it unless the path is passed. Commit it to adopt the tool on a legacy repo.
-- `.status.json`: severity counts written on every directory scan and read by the plugin status
-  line. Generated and git-ignored; nothing else reads it.
+- Nothing else. The status cache moved to `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`; an
+  older `.auditor/.status.json` is ignored, and `auditr init --clean-status` deletes it.
 
 Generated state does not live here. The incremental index, persistent ignores and graph share one
 database under `$AUDITOR_HOME`.
+
+## User settings (`$AUDITOR_HOME`)
+
+Personal settings are never committed. They live under `$AUDITOR_HOME` (default `~/.auditor`),
+are created by [`auditr init`](init.md), and are modelled by `UserSettings` in
+`auditor/user_settings.py`.
+
+```
+$AUDITOR_HOME/
+  config.json              # global user settings
+  config.schema.json       # generated from the models, for editor completion
+  index.db                 # the shared index
+  models/                  # cache for the optional vector layer
+  observer/                # the daemon's own state
+    lock                   # the singleton flock; whoever holds it is the daemon
+    daemon.json            # {pid, port, home, version, compat}
+    log/observer.log       # the daemon's rotating log
+    locks/                 # the graph rebuild lock's, not the daemon's
+  repos/<repo_dir_key>/    # one dir per repo, keyed by sha1 of the resolved git common dir
+    root.json              # breadcrumb {root, identity, created_at}
+    config.json            # per-repo personal overrides
+    spool.jsonl            # the observer's accepted, unconsumed events for this repo
+    status.json            # the status line's cache
+    status.lock
+```
+
+- Nothing above is created before `auditr init` or a scan needs it. `observer/locks/` appears the
+  first time a graph build takes its rebuild lock, and the daemon adds only `lock`, `daemon.json`
+  and `log/` beside it; it never creates or clears `observer/` itself.
+- `repo_dir_key` is the sha1 of `git rev-parse --path-format=absolute --git-common-dir`, resolved,
+  falling back to the resolved root outside git. Every worktree of one checkout shares the
+  directory, and a symlinked path does not mint a second one.
+- Layers for user keys, later wins: defaults in the models, then `$AUDITOR_HOME/config.json`, then
+  `$AUDITOR_HOME/repos/<key>/config.json`, then `AUDITOR_USER_*`. CLI flags stay above all of it.
+- The two models never share a key. Rule, threshold, exclude, role and `diff_base` keys exist only
+  on `AuditorSettings`; `observer` and `vectors` only on `UserSettings`.
+- An unknown key is ignored and reported on stderr; `auditr config check` lists them with their
+  dotted path.
+- `config_version` is `2`. Version 2 grouped twenty flat `observer` keys into five sub-tables, so a
+  file written by an older release is reported on one stderr line naming every key it holds and
+  where each one moved to. Those keys are reported as moves, never as typos, and nothing is
+  migrated for you: the values behind them are not read until you move them.
+- `auditr init` refuses to stamp version 2 on a file that still holds the old keys. Move them, or
+  pass `--force` to stamp the version and leave the keys where they are.
+
+### `observer` (`ObserverConfig`)
+
+Five keys sit at the top of the table; the rest live in five sub-tables. `auditr graph refine`,
+`auditr graph eval` and `auditr graph refinements prune` read the budget, limits and tuning keys
+called out below. The rest of the table is the observer daemon's own, read by the daemon
+`auditr observer start` runs: see [observer.md](observer.md).
+
+- `enabled` (default `true`) and `worktrees` (default `"main"`, or `"all"`) are two clauses of the
+  attach gate: with `enabled` false no repo attaches, and under `"main"` a linked worktree is
+  refused. `suspects` (default `true`) turns on the loop's suspect drain, spec 8.3's item 3; false
+  skips it, so nothing but an edit batch or a verify pass opens a run. `open_browser` (default
+  `true`) opens the daemon's page once per daemon lifetime, on the first session that attaches.
+
+- `skipped_retention_days` (default `7`): days of assessment-row history kept. Only the gate's
+  own rows are swept; an evicted or stranded run is `skipped` too and is kept whatever its age.
+  `0` is legal and means the next sweep reaps every assessment row, including one written a
+  second ago: the field is `ge=0` and `prune_skipped_runs` compares
+  `started_at < now - days * 86400`.
+
+`observer.budget` (`BudgetConfig`):
+
+- `max_cost_usd_per_day` (default `2.0`): ceiling on spend per day, per repository, over a rolling
+  24 hours scoped to one checkout identity. Assessment rows spent nothing and do not count against
+  it. Read by the assessment gate, which `auditr observer start` calls on every edit batch,
+  suspect drain and verify pass.
+- `max_runs_per_day` (default `40`): ceiling on runs per day, per repository. It is what bounds a
+  model with no entry in the price table, and every fraction rule then reads remaining runs. Same
+  reader.
+- `max_budget_usd_per_run` (default `0.25`): ceiling handed to one run.
+- `max_budget_usd_per_eval` (default `12.00`): ceiling on one `auditr graph eval` invocation,
+  across every suite. The eval stops before opening a run that would cross it. A default
+  `--suite all --sample 80` plans about 40 runs at `max_budget_usd_per_run` each, so the default
+  covers that plan with headroom. The plan line and `--dry-run` show the worst case before any
+  run opens.
+- `low_budget_fraction` (default `0.25`, 0 to 1): remaining daily budget below which only
+  high-value runs proceed. Strictly below: at exactly the fraction the bar has not been crossed.
+  Under it, an edit batch counts only its `bare` and `self` new questions, and with no eval row for
+  the runner about to be used, edit-triggered runs stop outright. `0` is the opt-out and means the
+  rule never fires; a spent ceiling still stops every batch whatever this is set to. Read by the
+  assessment gate.
+- `max_utilization` (default `0.5`, 0 to 1): share of the rate-limit window the observer may take.
+  Read by the SDK runner: a run whose reported utilization reaches it stops as `paused:ratelimit`,
+  the same way one the window rejected outright does. `/api/status` carries it on each repo's rate
+  limit meter.
+
+`observer.limits` (`LimitsConfig`):
+
+- `max_turns` (default `20`): agent turns before a run is cut off.
+- `max_nodes_per_run` (default `12`): graph nodes one run may look at.
+- `max_changes_per_run` (default `25`): proposals one run may commit.
+- `max_open_runs` (default `8`): runs one process may hold staged at once, per repo identity. The
+  oldest is evicted to make room, its `graph_runs` row finished `skipped` and its staging stored as
+  rejections.
+- `stranded_run_seconds` (default `3600`): seconds before a run still open is presumed dead.
+  `auditr graph refinements prune` finishes those as `skipped` with a reason, and so does the
+  observer's own session-start build, which is the first pass after a daemon that died mid-run
+  comes back. Both open statuses are swept, on two windows: a `queued` row past this many seconds,
+  a `running` row past `stranded_running_factor` times as long.
+- `stranded_running_factor` (default `2.0`): how much longer a `running` row is given than a
+  `queued` one before the sweep finishes it, because a `running` row is open for a whole model
+  call. Both callers of the sweep read it; the store itself takes it as a parameter.
+- `max_held_events` (default `500`): events a paused loop holds before the oldest are dropped. The
+  spool is drained even while the loop cannot spend, so the batch is assessed when the pause lifts.
+- `max_deferred_pairs` (default `200`): pairs an edit batch's node cap left behind that the loop
+  carries to the next suspect drain. Newest kept.
+- `max_paths_per_batch` (default `200`): edited paths one batch extracts facts for. A larger batch
+  is truncated to its first paths and logs that it was.
+- `max_queue_rows_per_pass` (default `500`): queue rows one suspect drain reads. The cap only ever
+  takes the first `max_nodes_per_run` distinct nodes off the front, so the rest wait for the next
+  pass.
+- `max_suppressed_rows` (default `500`): refinement rows one suspect pass reads per marker kind,
+  newest first, to build the set of pairs an in-force `unresolvable` or a `redundant` already
+  answers. The pass runs once a tick, so an unbounded read would decode the ledger that often; a
+  pair whose marker falls past the cap becomes drainable again.
+- `max_feed_events` (default `2000`): events one repo's feed holds before the oldest are dropped.
+  The daemon's drain hands batches over from its own thread, so a loop that stopped taking cannot
+  grow the process without end.
+- `read_fanout` (default `16`): edited files one batch reads and extracts at once. A large batch is
+  read a chunk at a time, so the ladder still yields between chunks.
+
+`observer.scheduling` (`SchedulingConfig`). `debounce_seconds` (default `20`) is the quiet window
+the loop collects an edit batch over; the window restarts on every event and the last one wins. It
+restarts at most five times, so an edit stream faster than the window still yields a batch, and `0`
+turns the window off: the batch is then whatever was already waiting when the loop looked.
+`session_expiry_minutes` (default `45`) is how long after its last heartbeat a session still
+counts, and `idle_shutdown_minutes` (default `30.0`, a float) is how long the daemon goes without a
+request before exiting; `0` never exits, and the window is only consulted when no session is
+attached. Both of those are the daemon's, and three more are its own clocks:
+
+- `tick_seconds` (default `1.0`): how long the daemon blocks on its queue before looking at the
+  clock again.
+- `start_timeout_seconds` (default `10.0`): how long `auditr observer start` waits for the child
+  to publish `daemon.json`.
+- `stop_timeout_seconds` (default `10.0`): how long `auditr observer stop` waits for it to go.
+  `auditr-observer` cannot read settings at all, so it carries both numbers as literals and a
+  test pins them against these defaults.
+
+The three the loop reads:
+
+- `cooldown_minutes` (default `60`): minutes a pair a run already named is skipped by the suspect
+  drain. `0` opts out, so every pair is drainable on every pass. Derived from `graph_runs`, because
+  `graph_unresolved` is replaced wholesale by every build.
+
+- `run_on_stale` (default `true`): re-run when an edit stales an existing refinement. Only a
+  refinement anchored on a node the batch itself touched counts, so drift and no-op builds
+  cannot trigger a run. The low budget bar does not narrow this arm, but the two rules that stop
+  a batch outright, a spent day ceiling and a low budget with no eval row, are consulted first.
+- `min_new_unresolved` (default `1`): distinct new unresolved callees an edit batch needs to earn
+  a run. One name asked twice for two reasons is two queue rows and one question. The floor is
+  `1`: a gate that fires on nothing opens a model-calling run for every batch that rebuilds.
+
+Both of the two above are the edit batch's own bars. The suspect drain and the verify pass do not
+read them: each has a cooldown of its own, and that is what brakes it.
+
+The rest of the loop's clocks:
+
+- `verify_cooldown_minutes` (default `60`): minutes between verify runs. A verify run that agrees
+  activates the row and one that disagrees rejects it, but silence leaves it `pending`, which is
+  the common case, so without this window one unsettled row would open a run on every tick. `0`
+  opts out.
+- `ratelimit_pause_minutes` (default `5.0`): how long a rate limit holds the loop when the runner
+  named no reset instant. When it named one, that instant wins.
+- `auth_pause_minutes` (default `15.0`): how long an auth refusal holds the loop before it re-asks
+  the runner. The next run after the hold is the probe, and one that reaches the model clears it.
+- `debounce_restart_cap` (default `5.0`): quiet windows a batch may keep collecting over, as a
+  multiplier on `debounce_seconds` rather than a whole number of restarts, so `2.5` is two and a
+  half windows. Past it the batch is taken whatever is still arriving.
+- `error_backoff_seconds` (default `5.0`) and `max_error_backoff_seconds` (default `300.0`): a pass
+  that raises puts the repo in `paused:error` and its driver waits this long, doubling per
+  consecutive failure up to the ceiling. A pass that finishes clears the count. The ceiling is
+  refused if it is below the first wait, which would make the doubling shrink the wait instead.
+- `host_join_seconds` (default `5.0`): how long a stopping daemon waits for the thread its loops
+  run on. A thread stuck inside a subprocess outlives it and is logged and left behind.
+
+`observer.runner` (`RunnerConfig`):
+
+- `agent` (default `"auto"`): `auto`, `claude` or `codex`. The default for `graph refine --runner`
+  and `graph eval --runner`. `auto` tries Claude, then Codex, then refuses.
+- `model` (default `"haiku"`): `haiku` or `sonnet`, the Claude tier a refinement run uses and the
+  default for `--model`. It does not reach the Codex runner.
+- `codex_model` (default `""`): the Codex model. Empty means the user's own Codex default, in
+  which case the run has no model to file an eval row under and `/api/evals` shows the Codex mark
+  with no model.
+- `codex_prices` (default `{}`): per-model `{input, output}` in USD per million tokens, merged
+  over the shipped table. The shipped table names `gpt-5.1-codex`, `gpt-5.1-codex-mini`,
+  `gpt-5-codex`, `gpt-5` and `gpt-5-mini`. A model neither table names is not an error: that
+  repo's day is bounded by `max_runs_per_day` instead of `max_cost_usd_per_day`, and every
+  "fraction of the day" rule reads remaining runs.
+
+`observer.limits.max_turns` is enforced by the Claude runner only: the Codex turn API carries no
+turn count, no budget and no timeout, and the Codex runner makes exactly one turn per run.
+`observer.budget.max_budget_usd_per_run` binds both, but differently: Claude enforces it during
+the run, and Codex checks the estimated cost after its one turn and aborts the run when it passed.
+`max_nodes_per_run` and `max_changes_per_run` bind both, because the brief carries them rather
+than the SDK.
+
+`observer.tuning` (`TuningConfig`). `mode` (default `"propose"`) is read at propose time, where
+`"off"` refuses a proposal before anything is written, and by the observer's work item 5, which
+skips the trial slot entirely on an off repo. `stopwords_max` (default `20`) is read at propose
+time and again at accept time, and counts only active `stopwords` rows, so a future second knob
+cannot spend a cap whose name says stopwords. See `docs/references/graph.md`, "Tuning". The one the
+tier gate reads:
+
+- `min_precision` (default `0.95`, 0 to just under 1): the Wilson 95 per cent lower bound a
+  stratum's measured precision has to reach before that shape may go active. Read off the latest
+  `graph eval` row per suite and stratum, so a later failing eval takes activation back. At 0.95 a
+  flawless run needs 73 trials to clear it. 1.0 is refused: `wilson_lower(n, n)` is below 1.0 for
+  every finite `n`, so no run of any size could ever meet it. See [graph.md](graph.md).
+- `activation_tiers` (default `{}`): the highest tier each runner may store `active`, as
+  `{"codex": "B"}`. Empty uses the shipped per-runner defaults, which are `B` for Claude and `A`
+  for Codex: spec 10.4's go/no-go has been run for Claude and not for Codex, so a measured Codex
+  stratum still lands `pending` until you raise it here. Keys are `claude` and `codex`, the two
+  names the gate looks up, and values are `A` or `B`. Anything else is a load error rather than a
+  setting that quietly does nothing: `auto` reaches no lookup, and no tier C proposal activates at
+  any ceiling. A config written before this carrying `"auto"` or `"C"` now fails to load and every
+  command says so. Both were already no-ops, so deleting the key restores what you had; `"C"`
+  becomes `"B"` if you meant the highest ceiling the gate can honour.
+
+### `vectors` (`VectorsConfig`)
+
+- `enabled` (default `false`): enable the opt-in `sqlite-vec` plus static-embedding layer.
+- `model` (default `"minishlab/potion-base-8M@bf8b056"`): the pinned model and revision.
+
+### User environment variables
+
+| Form | Example | Notes |
+| --- | --- | --- |
+| One nested field | `AUDITOR_USER_OBSERVER__RUNNER__MODEL=sonnet` | `__` separates levels. |
+| A whole table | `AUDITOR_USER_OBSERVER='{"runner":{"model":"sonnet"}}'` | JSON value, merged over both files. |
+| A top-level field | `AUDITOR_USER_CONFIG_VERSION=1` | Field name uppercased. |
+
+- Both forms deep-merge over the two JSON files, so setting one field leaves its siblings alone.
 
 ## Environment variables
 
@@ -273,22 +560,33 @@ database under `$AUDITOR_HOME`.
 | --- | --- | --- |
 | `AUDITOR_HOME` | `~/.auditor` | Root of all generated global state: `index.db` (the shared index, partitioned by repo, holding cached findings, persistent ignores and graph facts), `bin/` (the checksum-verified osv-scanner download), `osv-db/` (the OSV database). |
 | `AUDITOR_CODE_MODE` | unset (`false`) | Enables the experimental Code Mode transform on the MCP server. A no-op unless the `code-mode` extra is installed ([auditr-mcp.md](auditr-mcp.md)). |
+| `AUDITOR_REFINE_RUN` | unset | Pre-binds the MCP refinement tools to one run id, so a runner-spawned server needs no `run_id` per call ([auditr-mcp.md](auditr-mcp.md)). |
+| `AUDITOR_GRAPH_TOKEN` | unset | The bearer token the Codex refine runner's loopback MCP shim checks. `graph refine --runner codex` generates one per server and puts it in the Codex child's environment, and the `config.toml` it writes names this variable in `bearer_token_env_var`. Setting it yourself does nothing ([graph.md](graph.md)). |
+| `AUDITOR_OBSERVER` | unset (on) | Set to `0`, `f`, `false`, `n`, `no` or `off` to disable the observer entirely: every verb prints a notice and exits 0. Read by `paths.observer_enabled`, which ignores a value it cannot read rather than failing the command. |
+| `AUDITOR_OBSERVER_PORT` | unset (hashed) | The loopback port the daemon binds. Unset, it is `7490 + crc32(resolved $AUDITOR_HOME) % 500`; `0` asks the kernel for any free port. There is no `observer.port` config key: this is env only ([observer.md](observer.md)). |
 
 ### Repo settings (`AuditorSettings`)
 
-Every field above is also settable from the environment under the same `AUDITOR_` prefix.
+The environment reaches one field, not the whole model.
 
-| Form | Example | Notes |
+| Var | Default | Purpose |
 | --- | --- | --- |
-| Scalar field | `AUDITOR_RESPECT_GITIGNORE=false` | Field name uppercased. |
-| List or model field | `AUDITOR_THRESHOLD='{"size":{"max_params":1}}'` | JSON value, parsed and validated like a TOML table. |
+| `AUDITOR_RESPECT_GITIGNORE` | `true` | Set to `false` to scan git-ignored files. Same as `respect_gitignore` in TOML. |
 
+- Every other field is repo policy and is ignored when it appears in the environment: `AUDITOR_RULES`,
+  `AUDITOR_EXCLUDE`, `AUDITOR_TEST_MODE` and the rest read as if unset, with no error. Policy is
+  shared through git and drives CI, so a shell variable must not disable a rule the repo leaves
+  unmentioned. Put them in TOML, or pass `--config-json` for one run.
+- The list is an allow-list in `_NonPolicyEnvSource`, so a field added to `AuditorSettings` is
+  policy until someone puts it there on purpose.
 - The environment is the lowest layer. It is deep-merged under the TOML layers, so an `AUDITOR_*`
   value only reaches keys no profile or repo file sets.
-- `AUDITOR_EXTENDS` never applies: the loader always writes `extends` into the merged config. Use
-  `extends` in TOML or `scan --profile`.
-- Because every profile sets `categories`, `rules` and `roles`, the matching env vars only add keys
-  those tables leave untouched.
+- `AUDITOR_EXTENDS` never applies, and two independent locks keep it that way: `extends` is not on
+  `_NonPolicyEnvSource`'s allow-list, and the loader writes the resolved profile into the merged
+  config as its last step. Use `extends` in TOML or `scan --profile`. `tests/test_config.py`'s
+  `test_env_cannot_choose_a_profile` pins both.
+- Personal settings live under a different prefix entirely, `AUDITOR_USER_*`. See
+  [User settings](#user-settings-auditor_home).
 
 ### Claude Code plugin hooks
 

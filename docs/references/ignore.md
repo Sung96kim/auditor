@@ -70,7 +70,8 @@ auditr ignore list --json
 - `rm` needs an id from `list`, or the rule id plus the exact `--file`/`--line` used at add time.
   A selector that matches nothing exits non-zero.
 - `clear` reports how many rows it removed.
-- `index forget` deletes this repo's ignores along with its cached rows; see [index.md](index.md).
+- `index forget` deletes this repo's ignores along with its cached rows, and refuses without
+  `-y`/`--yes` while any exist; see [index.md](index.md).
 
 ## In-file skip directives
 

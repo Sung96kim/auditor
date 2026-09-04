@@ -57,9 +57,9 @@ auditr scan . -vvv
 - A file is auditable when its extension belongs to a registered language, or when its filename
   matches a manifest the auditor knows. `auditr plugins list` prints the registered languages.
 - Git-ignored files are skipped unless `--include-gitignored`.
-- Vendor and build directories, the default generated-file globs, and soft-skipped migration
-  directories are all dropped before anything is read. The exact sets are in
-  [discover.md](discover.md).
+- Vendor and build directories, the default generated-file globs, agent worktrees under
+  `.claude/worktrees/`, and soft-skipped migration directories are all dropped before anything is
+  read. The exact sets are in [discover.md](discover.md).
 - Every file is classified into a role. Role decides how strictly it is audited; `-t` audits
   test-role files at production strength. See [discover.md](discover.md).
 - Files no language auditor claims still go through a content secret sweep. Binaries and files
@@ -99,7 +99,8 @@ auditr scan . -vvv
   human reports.
 - A bad `-f` fails before the scan starts and lists the accepted formats. `auditr plugins list`
   prints every registered reporter, including plugin-added ones.
-- `-o PATH` writes the rendered report to that path and confirms on stderr.
+- `-o PATH` writes the rendered report to that path and confirms on stderr. Missing parent
+  directories are created.
 - `--serve` renders HTML, binds an ephemeral port on `127.0.0.1`, opens a browser, and holds
   until Ctrl-C. It returns before the gate's exit code is applied, so it never exits non-zero.
 
@@ -153,9 +154,18 @@ auditr scan . -vvv
 
 ## Status file
 
-- A directory scan writes `.auditor/.status.json` under the project root: per-severity counts,
-  whether the repo has auditor configuration, and a write timestamp.
+- A directory scan writes `$AUDITOR_HOME/repos/<repo_dir_key>/status.json`: per-severity counts,
+  whether the repo has auditor configuration, and a write timestamp, all under a `scan` key.
+- Only a full scan of the repo root writes it. `--since` / `--changed` / `--vs-base` and a
+  subdirectory target report part of the tree, so they leave the last full scan's counts in place
+  rather than filing a partial roll-up as the repo's posture.
+- The write happens before baseline filtering, so `--baseline` records what is in the tree, not
+  what the gate chose to show.
+- Nothing is written into the repository. `repo_dir_key` and the rest of the layout are in
+  [configuration.md](configuration.md).
+- The file holds one block per writer and each writer merges only its own, so a second writer's
+  block survives.
 - A single-file `scan` and `report` do not write it.
-- The write is best effort; a read-only filesystem does not fail the scan.
+- The write is best effort; a read-only or missing home does not fail the scan.
 - It is the only thing the Claude Code plugin's status line reads. See
   [claude-code-plugin.md](claude-code-plugin.md).

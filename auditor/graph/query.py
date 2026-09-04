@@ -1,7 +1,45 @@
-"""Read-side query API over the persisted graph (spec §10). Stdlib only."""
+"""Read-side query API over the persisted graph (spec §10). Ranked search needs numpy."""
 
+import heapq
 from collections import Counter
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
+
+from auditor.graph.cache import GraphCache, QueueRow, resolve_ids
+from auditor.graph.flow import (
+    DEFAULT_OPTIONS,
+    FlowOptions,
+    FlowPayload,
+    build_flow,
+)
+from auditor.graph.model import (
+    DEFAULT_SEARCH_LIMIT,
+    LOG_ROW_LIMIT,
+    GraphCluster,
+    row_limit,
+)
+from auditor.graph.payloads import (
+    ClusterMember,
+    ClustersReport,
+    ConceptPayload,
+    LogFilter,
+    LogReport,
+    LogView,
+    NeighborRow,
+    NeighborsReport,
+    RefinementRowPayload,
+    RefinementsReport,
+    RelatedReport,
+    RelatedRow,
+    RunRowPayload,
+    SearchReport,
+    SearchRow,
+    UsageGroup,
+    UsagesPayload,
+)
+from auditor.graph.refine.models import RefinementStatus
+from auditor.graph.textsearch import RELEVANCE_FLOOR
+from auditor.graph.textsearch import score as text_scores
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -16,6 +54,7 @@ _STRUCTURAL = [
     "contains",
     "imports",
 ]
+_STRUCTURAL_KINDS = frozenset(_STRUCTURAL)
 _SEMANTIC = ["name_similar", "usage_similar"]
 
 
@@ -28,22 +67,18 @@ class GraphQuery:
         sorted. A bare name can legitimately match several nodes (same-named symbols)."""
         if await self.index.graph.node(symbol):
             return [symbol]
-        return sorted(
-            n["node_id"]
-            for n in await self.index.graph.nodes()
-            if n["node_id"] == symbol
-            or n["node_id"].endswith(f"::{symbol}")
-            or n["node_id"].endswith(f".{symbol}")
+        return resolve_ids(
+            [n["node_id"] for n in await self.index.graph.nodes()], symbol
         )
 
     async def _resolve(self, symbol: str) -> str | None:
         matches = await self._resolve_all(symbol)
         return matches[0] if matches else None
 
-    async def related(self, symbol: str, limit: int = 10) -> list[dict]:
+    async def related(self, symbol: str, limit: int = 10) -> RelatedReport:
         nid = await self._resolve(symbol)
         if nid is None:
-            return []
+            return RelatedReport(())
         nodes = await self.index.graph.nodes()
         ranks = {n["node_id"]: n["rank"] for n in nodes}
         kinds = {n["node_id"]: n["kind"] for n in nodes}
@@ -51,28 +86,43 @@ class GraphQuery:
         for e in await self.index.graph.edges_of(nid, _SEMANTIC):
             other = e["dst"] if e["src"] == nid else e["src"]
             out.append(
-                {
-                    "id": other,
-                    "kind": kinds.get(other, "?"),
-                    "weight": round(e["weight"], 4),
-                    "rank": round(ranks.get(other, 0.0), 6),
-                }
+                RelatedRow(
+                    id=other,
+                    kind=kinds.get(other, "?"),
+                    weight=round(e["weight"], 4),
+                    rank=round(ranks.get(other, 0.0), 6),
+                )
             )
-        out.sort(key=lambda r: (-r["weight"], -r["rank"], r["id"]))
-        return out[:limit]
+        out.sort(key=lambda r: (-r.weight, -r.rank, r.id))
+        return RelatedReport(tuple(out[:limit]))
 
-    async def neighbors(self, symbol: str, depth: int = 1) -> list[dict]:
+    async def neighbors(self, symbol: str, depth: int = 1) -> NeighborsReport:
+        """Structural neighbours within ``depth`` hops of ``symbol``, breadth-first.
+
+        The whole-partition ``GraphCache`` is loaded only past depth 1: one hop visits a single
+        node, which one indexed ``edges_of`` read serves for a fraction of the load's cost.
+        """
         nid = await self._resolve(symbol)
         if nid is None:
-            return []
-        kinds = {n["node_id"]: n["kind"] for n in await self.index.graph.nodes()}
+            return NeighborsReport(())
+        cache = await GraphCache.load(self.index) if depth > 1 else None
+        kind_of = (
+            {n: row["kind"] for n, row in cache.nodes.items()}
+            if cache is not None
+            else {n["node_id"]: n["kind"] for n in await self.index.graph.nodes()}
+        )
         seen = {nid}
         frontier = [nid]
-        out: list[dict] = []
+        out: list[NeighborRow] = []
         for hop in range(1, depth + 1):
             nxt: list[str] = []
             for cur in frontier:
-                for e in await self.index.graph.edges_of(cur, _STRUCTURAL):
+                edges = (
+                    cache.incident(cur, _STRUCTURAL_KINDS)
+                    if cache is not None
+                    else await self.index.graph.edges_of(cur, _STRUCTURAL)
+                )
+                for e in edges:
                     other, direction = (
                         (e["dst"], "out") if e["src"] == cur else (e["src"], "in")
                     )
@@ -80,42 +130,66 @@ class GraphQuery:
                         seen.add(other)
                         nxt.append(other)
                         out.append(
-                            {
-                                "id": other,
-                                "kind": kinds.get(other, "?"),
-                                "edge": e["kind"],
-                                "direction": direction,
-                                "hops": hop,
-                            }
+                            NeighborRow(
+                                id=other,
+                                kind=kind_of.get(other, "?"),
+                                edge=e["kind"],
+                                direction=direction,
+                                hops=hop,
+                            )
                         )
             frontier = nxt
-        return out
+        return NeighborsReport(tuple(out))
 
-    async def search(self, term: str, limit: int = 20) -> list[dict]:
-        """Find symbols whose id contains ``term`` (case-insensitive), highest-rank first —
-        for locating the exact node before a usages/neighbors query."""
+    async def search(
+        self, term: str, limit: int = DEFAULT_SEARCH_LIMIT
+    ) -> SearchReport:
+        """Symbols whose id contains ``term``, highest-rank first, and only when none does, the
+        symbols whose naming document ranks nearest to it in the build's tf-idf + LSI space.
+
+        A ranked row scores at least ``RELEVANCE_FLOOR``, so ``score == 0.0`` still means the name half.
+        """
+        nodes = await self.index.graph.nodes()
+        kinds = {n["node_id"]: n["kind"] for n in nodes}
+        ranks = {n["node_id"]: (n.get("rank") or 0.0) for n in nodes}
         term_l = term.lower()
-        hits = [
-            n for n in await self.index.graph.nodes() if term_l in n["node_id"].lower()
-        ]
-        hits.sort(key=lambda n: (-(n.get("rank") or 0.0), n["node_id"]))
-        return [
-            {
-                "id": n["node_id"],
-                "kind": n["kind"],
-                "rank": round(n.get("rank") or 0.0, 6),
-            }
-            for n in hits[:limit]
-        ]
+        # the tier gate reads the whole match set, not the truncated page: a `--limit` smaller
+        # than the number of name matches must not hand the question to the ranked half
+        matched = sorted(
+            (nid for nid in kinds if term_l in nid.lower()),
+            key=lambda nid: (-ranks[nid], nid),
+        )
+        named = matched[:limit]
+        # the nodes read above and the fit read here are two independent reads, so a query
+        # racing a build may rank against the fit that predates it; an index built before the
+        # fit was stored has no model at all and never ranks
+        model = None if matched else await self.index.graph.text_model()
+        scores = text_scores(model, term) if model is not None else {}
+        ranked = heapq.nsmallest(
+            limit,
+            (nid for nid in scores if nid in kinds and scores[nid] >= RELEVANCE_FLOOR),
+            key=lambda nid: (-scores[nid], nid),
+        )
+        return SearchReport(
+            tuple(
+                SearchRow(
+                    id=node_id,
+                    kind=kinds[node_id],
+                    rank=round(ranks[node_id], 6),
+                    score=round(scores.get(node_id, 0.0), 6),
+                )
+                for node_id in (*named, *ranked)
+            )
+        )
 
-    async def usages(self, symbol: str, sample: int = 5) -> dict:
+    async def usages(self, symbol: str, sample: int = 5) -> UsagesPayload | None:
         """How ``symbol`` connects: structural edges grouped by kind with full counts and a
         rank-ordered sample, split into ``used_by`` (incoming — who depends on it) and
         ``depends_on`` (outgoing). Picks the highest-rank node when a name is ambiguous and
-        lists the rest under ``ambiguous``. ``{}`` if the symbol isn't found."""
+        lists the rest under ``ambiguous``. ``None`` if the symbol isn't found."""
         matches = await self._resolve_all(symbol)
         if not matches:
-            return {}
+            return None
         nodes = await self.index.graph.nodes()
         rank = {n["node_id"]: (n.get("rank") or 0.0) for n in nodes}
         kind_of = {n["node_id"]: n["kind"] for n in nodes}
@@ -129,36 +203,78 @@ class GraphQuery:
             bucket = used_by if incoming else depends_on
             bucket.setdefault(e["kind"], []).append(other)
 
-        def summarize(b: dict[str, list[str]]) -> dict[str, dict]:
+        def summarize(b: dict[str, list[str]]) -> dict[str, UsageGroup]:
             out = {}
             for k, others in b.items():
                 uniq = sorted(set(others), key=lambda o: (-rank.get(o, 0.0), o))
-                out[k] = {"count": len(uniq), "sample": uniq[:sample]}
+                out[k] = UsageGroup(count=len(uniq), sample=tuple(uniq[:sample]))
             return out
 
         used = summarize(used_by)
         deps = summarize(depends_on)
-        return {
-            "symbol": symbol,
-            "resolved": primary,
-            "kind": kind_of.get(primary),
-            "ambiguous": [m for m in matches if m != primary],
-            "used_by": used,
-            "depends_on": deps,
-            "total_in": sum(v["count"] for v in used.values()),
-            "total_out": sum(v["count"] for v in deps.values()),
-        }
+        return UsagesPayload(
+            symbol=symbol,
+            resolved=primary,
+            kind=kind_of.get(primary),
+            ambiguous=tuple(m for m in matches if m != primary),
+            used_by=used,
+            depends_on=deps,
+            total_in=sum(v.count for v in used.values()),
+            total_out=sum(v.count for v in deps.values()),
+        )
 
-    async def clusters(self) -> list[dict]:
-        return await self.index.graph.clusters()
+    async def _unresolved_by_node(
+        self, node_ids: list[str]
+    ) -> dict[str, list[QueueRow]]:
+        """``graph_unresolved`` rows for ``node_ids`` only, keyed by node id.
 
-    async def concept(self, term: str) -> dict:
+        Scoped to what the walk reached, so a flow over a dozen symbols never pulls the whole
+        partition back.
+        """
+        out: dict[str, list[QueueRow]] = {}
+        for row in await self.index.graph.unresolved(node_ids=node_ids):
+            out.setdefault(row["node_id"], []).append(row)
+        return out
+
+    async def flow(
+        self, symbol: str, options: FlowOptions = DEFAULT_OPTIONS
+    ) -> FlowPayload | None:
+        """A directed code path from ``symbol`` as a nested tree (spec §7).
+
+        Picks the highest-rank node when the name is ambiguous and lists the rest under
+        ``ambiguous``; ``None`` when the symbol is not in the graph.
+        """
+        cache = await GraphCache.load(self.index)
+        matches = resolve_ids(cache.nodes, symbol)
+        if not matches:
+            return None
+        primary = max(matches, key=cache.rank)
+        result = build_flow(cache, primary, options=options)
+        result = result.with_unresolved(
+            await self._unresolved_by_node(result.node_ids())
+        )
+        return FlowPayload.of(
+            result,
+            symbol=symbol,
+            resolved=primary,
+            ambiguous=tuple(m for m in matches if m != primary),
+        )
+
+    async def clusters(self) -> ClustersReport:
+        return ClustersReport(
+            tuple(
+                GraphCluster.model_validate(row)
+                for row in await self.index.graph.clusters()
+            )
+        )
+
+    async def concept(self, term: str) -> ConceptPayload | None:
         """The concept cluster best matching ``term`` — by label first, else by the cluster
-        with the most members whose name contains the term. Returns ``{}`` when nothing
+        with the most members whose name contains the term. Returns ``None`` when nothing
         matches (rather than falling back to the largest cluster)."""
         clusters = await self.index.graph.clusters()
         if not clusters:
-            return {}
+            return None
         term_l = term.lower()
         label_hits = [
             c
@@ -176,14 +292,101 @@ class GraphQuery:
                 if cid is not None and term_l in (n.get("name") or "").lower():
                     counts[cid] += 1
             if not counts:
-                return {}
+                return None
             best_id = counts.most_common(1)[0][0]
             best = next((c for c in clusters if c["cluster_id"] == best_id), None)
             if best is None:
-                return {}
+                return None
         members = await self.index.graph.cluster_members(best["cluster_id"])
-        return {
-            "cluster_id": best["cluster_id"],
-            "label": best["label"],
-            "members": members,
-        }
+        return ConceptPayload(
+            cluster_id=best["cluster_id"],
+            label=best["label"],
+            members=tuple(ClusterMember.model_validate(m) for m in members),
+        )
+
+
+class LogQuery:
+    """The provenance reads for one checkout: the refinements page and the log's two views."""
+
+    def __init__(self, index: "IndexStore") -> None:
+        self.index = index
+
+    async def refinements(
+        self,
+        statuses: Sequence[RefinementStatus] | None = None,
+        limit: int = LOG_ROW_LIMIT,
+    ) -> RefinementsReport:
+        """The recorded corrections, newest first, with the total the same filters match.
+
+        Newest first because a page at the cap otherwise shows the oldest rows, which are the
+        superseded and reverted ones, and hides the `pending` row a human has to accept.
+        """
+        rows = await self.index.refinements.refinements(
+            statuses=statuses, newest_first=True, limit=row_limit(limit)
+        )
+        total = await self.index.refinements.count(statuses=statuses)
+        anchors = await self.index.refinements.anchors([r.refinement_id for r in rows])
+        return RefinementsReport.of(
+            [
+                RefinementRowPayload.of(r, anchors.get(r.refinement_id, ()))
+                for r in rows
+            ],
+            filtered=bool(statuses),
+            total=total,
+        )
+
+    async def _hidden(self, spec: LogFilter) -> int:
+        """How many rows the default runs view left out on its own, under the caller's own window.
+
+        Counted rather than assumed, so an empty page can say "nothing is recorded" instead of
+        offering a flag that would reveal nothing.
+        """
+        if not spec.excluded_run_statuses:
+            return 0
+        return await self.index.runs.count(
+            statuses=list(spec.excluded_run_statuses), since=spec.since
+        )
+
+    async def page(self, spec: LogFilter) -> LogReport:
+        """One page in whichever view the filter chose, newest first in both, with the total the
+        same filters match so a capped page says what it left behind."""
+        if spec.view is LogView.RUNS:
+            runs = await self.index.runs.runs(
+                statuses=spec.run_statuses,
+                exclude=spec.excluded_run_statuses,
+                since=spec.since,
+                limit=spec.limit,
+            )
+            total = await self.index.runs.count(
+                statuses=spec.run_statuses,
+                exclude=spec.excluded_run_statuses,
+                since=spec.since,
+            )
+            counts = await self.index.refinements.counts_by_run(
+                [r.run_id for r in runs]
+            )
+            return LogReport.of(
+                spec,
+                runs=[
+                    RunRowPayload.of(r, refinements=counts.get(r.run_id)) for r in runs
+                ],
+                total=total,
+                hidden=await self._hidden(spec),
+            )
+        rows = await self.index.refinements.refinements(
+            statuses=spec.refinement_statuses,
+            since=spec.since,
+            newest_first=True,
+            limit=spec.limit,
+        )
+        anchors = await self.index.refinements.anchors([r.refinement_id for r in rows])
+        return LogReport.of(
+            spec,
+            refinements=[
+                RefinementRowPayload.of(r, anchors.get(r.refinement_id, ()))
+                for r in rows
+            ],
+            total=await self.index.refinements.count(
+                statuses=spec.refinement_statuses, since=spec.since
+            ),
+        )

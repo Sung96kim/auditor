@@ -1,123 +1,178 @@
-# auditor
+<div align="center">
+  <img src="assets/icon.svg" width="140" alt="auditor logo">
 
-Runs the mechanical half of a code audit (parse, class/function manifest, anti-pattern detectors,
-cached findings) over Python, TypeScript/React, shell, config and data files, and package
-manifests, for coding agents and CI.
+  # auditor
+
+  Runs the mechanical half of a code audit (parse, manifest, anti-pattern detectors, cached
+  findings) over Python, TypeScript/React, shell, config, data and package manifests.
+
+  [![CI](https://github.com/Sung96kim/auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/Sung96kim/auditor/actions/workflows/ci.yml)
+  [![release](https://github.com/Sung96kim/auditor/actions/workflows/release.yml/badge.svg)](https://github.com/Sung96kim/auditor/actions/workflows/release.yml)
+  [![PyPI](https://img.shields.io/pypi/v/auditr)](https://pypi.org/project/auditr/)
+</div>
 
 | Command | What it does |
 | --- | --- |
 | `scan` | Audit a file or directory: filter, scope to a diff, gate CI. |
-| `report` | Audit one file statelessly: manifest plus findings. |
+| `report` | Audit one file statelessly: findings as JSON. |
 | `manifest` | Print one Python file's AST class+function manifest. |
 | `discover` | List auditable files with their classified role. |
 | `aggregate` | Roll the incremental index up into `AUDIT.md`. |
 | `crossfile` | Recompute cross-file duplicate findings from the index. |
 | `index` | Audit scope and cache: `add`, `list`, `repos`, `forget`. |
 | `ignore` | Persistent finding ignores: `add`, `list`, `rm`, `clear`. |
-| `config` | Resolved configuration: `show`. |
+| `config` | Resolved configuration: `show`, `check`. |
+| `init` | Create the user config home under `$AUDITOR_HOME`. |
 | `rules` | Detector registry: `list`. |
 | `plugins` | Loaded detectors, languages, reporters: `list`. |
 | `malware` | Opt-in ClamAV and osv-scanner backends: `status`, `update-dbs`, `install`. |
-| `graph` | Semantic code graph: `build`, `serve`, `search`, `usages`, `related`, `neighbors`, `concept`, `clusters`, `export`. |
+| `graph` | Semantic code graph: `build`, `serve`, `search`, `usages`, `flow`, `refine`, `eval`, `log`, and more. |
+| `observer` | Background daemon for this repo: `start`, `stop`, `status`, `open`, `ensure`. |
 | `self` | Manage the install: `update`. |
 | `version` | Print the installed version. |
 
 ## Setup
 
+### Users
+
 ```bash
-# install the CLI on PATH from PyPI
-uv tool install "auditr[mcp]"
-# install from a checkout
-uv tool install .
-# install from GitHub
-uv tool install git+https://github.com/Sung96kim/auditor
-# or with pip, into the active environment
-pip install "auditr[mcp,ts]"
-# or with pipx, isolated and global like uv tool
-pipx install auditr
-# run it without installing anything
-uvx auditr scan .
-# no local Python; the image bundles the mcp and ts extras
-docker compose run --rm auditor scan .
+uv tool install "auditr[mcp]"     # CLI + MCP server on PATH
+uvx auditr scan .                 # or run without installing
+pipx install auditr               # or pipx, isolated and global
+pip install "auditr[mcp,ts]"      # or into the active environment
 ```
 
 - The PyPI distribution is `auditr`; the commands are `auditr` and `auditr-mcp`, with `auditor`
   and `auditor-mcp` as aliases.
-- Extras gate features: `mcp` for the MCP server, `ts` for TypeScript/React (tree-sitter), `graph`
-  for the semantic graph, `code-mode` for sandboxed tool orchestration.
-- Claude Code plugin: `claude plugin marketplace add Sung96kim/auditor`, then
-  `/plugin install auditor` in a session. See
-  [claude-code-plugin](docs/references/claude-code-plugin.md).
+- Extras gate the optional features, and three pull a bundled agent binary. What each enables,
+  what it costs and which one nothing reads yet:
+  [configuration](docs/references/configuration.md#install-extras).
+- <img src="assets/claude-color.svg" height="16" alt="Claude"> Claude Code plugin:
+  `claude plugin marketplace add Sung96kim/auditor`, then `/plugin install auditor` in a session.
+  See [claude-code-plugin](docs/references/claude-code-plugin.md).
+
+### Developers
+
+```bash
+git clone https://github.com/Sung96kim/auditor && cd auditor
+uv python install 3.13                        # the version CI pins
+uv sync --extra dev --extra mcp --extra ts    # what CI installs
+uv run auditr scan .                          # run the working tree
+```
+
+- Never `--all-extras`: it adds the `observer-*` and `vectors` SDK wheels, about 640 MB that
+  nothing in the suite imports, and it reddens `test_drive.py`'s missing-extra test.
+- `uv tool install .` puts the checkout on PATH.
+
+### Containers
+
+```bash
+docker compose build                     # image with the mcp and ts extras baked in
+docker compose run --rm auditor scan .   # the CLI against ./; set TARGET= for another repo
+docker compose run --rm -T auditor-mcp   # the stdio MCP server
+```
 
 ## Usage
 
+### Users
+
 ```bash
-# audit a directory: severity counts and the worst files
-auditr scan .
-# audit one file, stateless: manifest plus findings
-auditr report src/service.py
-# AST manifest only, no detectors
-auditr manifest src/service.py
-# list auditable files with their classified role
-auditr discover .
-# roll the incremental index up into AUDIT.md
-auditr aggregate . -o AUDIT.md
-# recompute cross-file duplicates from the index
-auditr crossfile .
-# register files as the audit scope
-auditr index add src/service.py
-# mute one rule in one file, stored in the shared index
-auditr ignore add PY-SEC-WEAK-HASH --file src/legacy.py
-# print the resolved configuration
-auditr config show
-# list the detector rules in one category
-auditr rules list --category security
-# show every loaded plugin and where it came from
-auditr plugins list
-# check the opt-in malware backends and their databases
-auditr malware status
-# build the semantic graph (needs the graph extra)
-auditr graph build .
-# check PyPI for a newer release and install it
-auditr self update
-# print the installed version
-auditr version
-# stdio MCP server for agents (needs the mcp extra)
-auditr-mcp
+auditr scan .                                  # severity counts and the worst files
+auditr scan --vs-base --fail-on high           # only what changed, gating CI
+auditr report src/service.py                   # one file, stateless, JSON on stdout
+auditr aggregate . -o AUDIT.md                 # roll the incremental index up
+auditr graph build . && auditr graph serve .   # build the semantic graph, then browse it
+auditr observer start                          # watch this repo in the background
+auditr-mcp                                     # stdio MCP server for agents (needs the mcp extra)
 ```
 
-- `-f json|sarif|md|html` picks the machine output format and `-o` writes it to a file; without
-  `-f`, `scan` prints a human summary and `report` prints JSON.
+### Developers
+
+```bash
+uv run auditr scan .                           # any command above, from a source checkout
+```
+
+### Containers
+
+```bash
+docker compose run --rm auditor scan . --format sarif
+```
+
+- Every flag is on `--help`: `auditr <command> --help`. Every command has a page under
+  [Docs](#docs).
+- `-f json|sarif|md|html` picks the machine format and `-o` writes it to a file. Without `-f`,
+  `scan` prints a human summary and `report` prints JSON.
 - `--fail-on <severity>` exits 1 on any `auto` finding at or above it; `candidate` findings never
   gate. See [scan](docs/references/scan.md).
 
 ## Tests
 
+### Local
+
 ```bash
-# deps for the whole suite
-uv sync --all-extras
-# the tests the CI test job runs (.github/workflows/ci.yml); that job also lints
-uv run pytest -q
+uv run python scripts/build_codex_plugin.py --check                          # mirror drift (CI)
+uv run ruff check auditor plugin auditr_observer.py tests scripts            # lint (CI)
+uv run ruff format --check auditor plugin auditr_observer.py tests scripts   # format check (CI)
+uv run pytest -q                                                             # full suite (CI)
 ```
+
+### CI
+
+```bash
+uv run pytest tests/malware/test_integration.py -v   # the integration job; needs clamscan
+```
+
+- `.github/workflows/ci.yml` runs four jobs on every pull request:
+  - `test`: the four local commands in that order, then `claude plugin validate ./plugin --strict`.
+  - `codex-shapes`: the only job installing `observer-codex`, running `test_codex_client.py`.
+  - `ui`: pnpm install, typecheck, test, build, then a `git diff` on `auditor/graph/ui/dist/`.
+  - `integration`: the malware suite against a real `clamscan`.
 
 ## Docs
 
-- [Architecture](docs/architecture.md): modules, pipeline, shared seams.
-- [Configuration](docs/references/configuration.md): config files, env vars, thresholds.
-- [scan](docs/references/scan.md): scoping, filters, CI gating.
-- [report](docs/references/report.md): single-file stateless audit.
-- [manifest](docs/references/manifest.md): AST class+function manifest.
-- [aggregate](docs/references/aggregate.md): index rollup, AUDIT.md.
-- [crossfile](docs/references/crossfile.md): cross-file duplicate findings.
-- [discover](docs/references/discover.md): discovery defaults, role classification.
-- [index](docs/references/index.md): audit scope, shared cache.
-- [ignore](docs/references/ignore.md): persistent ignore scopes.
-- [config](docs/references/config.md): resolved configuration layers.
-- [rules](docs/references/rules.md): rule registry, category filters.
-- [plugins](docs/references/plugins.md): plugin discovery, load sources.
-- [malware](docs/references/malware.md): ClamAV, osv-scanner, databases.
-- [graph](docs/references/graph.md): graph build, queries, UI.
-- [self](docs/references/self.md): in-place install updates and `version`.
-- [auditr-mcp](docs/references/auditr-mcp.md): MCP tools, compact payloads.
-- [claude-code-plugin](docs/references/claude-code-plugin.md): skills, subagent, hooks.
-- [Python API](docs/references/python-api.md): library entry points, exported models.
+### Orientation
+
+| I want to | Page | Covers |
+| --- | --- | --- |
+| Understand how the pieces fit | [Architecture](docs/architecture.md) | Modules, seams, pipelines |
+| Configure a repo or my account | [Configuration](docs/references/configuration.md) | Config files, env vars, extras |
+
+### Auditing
+
+| I want to | Page | Covers |
+| --- | --- | --- |
+| Audit a repo or gate CI | [scan](docs/references/scan.md) | Scoping, filters, gating, baselines |
+| Audit one file | [report](docs/references/report.md) | Stateless audit, JSON shape |
+| See a file's structure | [manifest](docs/references/manifest.md) | AST class+function manifest |
+| See what a scan would cover | [discover](docs/references/discover.md) | Discovery defaults, roles |
+| Produce a repo-wide rollup | [aggregate](docs/references/aggregate.md) | Index rollup, AUDIT.md |
+| Recompute repo-level findings | [crossfile](docs/references/crossfile.md) | Duplicates, dead code, cohesion |
+
+### State, policy and rules
+
+| I want to | Page | Covers |
+| --- | --- | --- |
+| Manage the shared cache | [index](docs/references/index.md) | Audit scope, partitions, pruning |
+| Suppress a finding | [ignore](docs/references/ignore.md) | Ignore scopes, skip directives |
+| See which config layer won | [config](docs/references/config.md) | Layering, profiles, validation |
+| Set up the user config home | [init](docs/references/init.md) | `$AUDITOR_HOME`, overlays, checks |
+| Look up a rule | [rules](docs/references/rules.md) | Rule ids, categories, verdicts |
+| Add or debug a plugin | [plugins](docs/references/plugins.md) | Discovery, trust, contract |
+
+### Graph and supply chain
+
+| I want to | Page | Covers |
+| --- | --- | --- |
+| Query the semantic code graph | [graph](docs/references/graph.md) | Build, queries, flow, refinement, tuning |
+| Run the background observer | [observer](docs/references/observer.md) | Daemon lifecycle, API, live page |
+| Scan for malware and advisories | [malware](docs/references/malware.md) | ClamAV, osv-scanner, databases |
+
+### Integrations
+
+| I want to | Page | Covers |
+| --- | --- | --- |
+| Drive the auditor from an agent | [auditr-mcp](docs/references/auditr-mcp.md) | MCP tools, compact payloads |
+| Use it inside Claude Code | [claude-code-plugin](docs/references/claude-code-plugin.md) | Skills, subagents, hooks |
+| Use it inside Codex | [codex-plugin](docs/references/codex-plugin.md) | The generated mirror, its MCP config |
+| Call it from Python | [Python API](docs/references/python-api.md) | Entry points, models, index |
+| Keep the install current | [self](docs/references/self.md) | `self update`, `version` |

@@ -1,15 +1,13 @@
-"""``auditor report`` — audit one file statelessly (manifest + findings in one call)."""
+"""``auditor report``: audit one file statelessly (findings as JSON, no index writes)."""
 
 from pathlib import Path
-
-from pydantic import ValidationError
 
 from auditor.cli.apps import app
 from auditor.cli.helpers import (
     check_format,
+    cli_root,
+    config_errors_as_one_line,
     emit,
-    fail,
-    format_config_error,
     parse_config_json,
     require_file,
     run,
@@ -35,11 +33,14 @@ def report(
     show_ignored: ShowIgnored = False,
     config_json: ConfigJson = None,
 ) -> None:
-    """Audit one file (stateless) — manifest + findings in one call."""
+    """Audit one file (stateless): findings only, no index writes."""
     require_file(file)
     check_format(fmt)
     overrides = parse_config_json(config_json)
-    try:
+    cli_root(
+        file, profile=profile, overrides=overrides
+    )  # the notice reports on this root
+    with config_errors_as_one_line():
         results = run(
             audit_target(
                 Path(file),
@@ -49,6 +50,4 @@ def report(
             ),
             f"auditing {file.name}…",
         )
-    except ValidationError as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
     emit(render(results, fmt), output)

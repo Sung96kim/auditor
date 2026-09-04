@@ -1,64 +1,13 @@
 import json
+from pathlib import Path
 
 import pytest
 
-from auditor.database import IndexStore
-from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
-from auditor.graph.viz import build_payload, render_app
+from auditor.graph.viz import build_payload, render_app, render_app_or_status
 
 
-@pytest.fixture
-async def store(tmp_path):
-    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
-    nodes = [
-        GraphNode(
-            id="m.py::Foo",
-            kind=NodeKind.CLASS,
-            name="Foo",
-            module="m.py",
-            qualname="Foo",
-            role="production",
-            rank=0.4,
-            cluster_id=0,
-            line=1,
-        ),
-        GraphNode(
-            id="m.py::Foo.bar",
-            kind=NodeKind.METHOD,
-            name="bar",
-            module="m.py",
-            qualname="Foo.bar",
-            role="production",
-            rank=0.1,
-            cluster_id=0,
-            line=3,
-        ),
-        GraphNode(
-            id="m.py",
-            kind=NodeKind.MODULE,
-            name="m.py",
-            module="m.py",
-            qualname="m",
-            role="production",
-            rank=0.0,
-            cluster_id=None,
-            line=1,
-        ),
-    ]
-    edges = [
-        GraphEdge(
-            src="m.py::Foo", dst="m.py::Foo.bar", kind=EdgeKind.CONTAINS, weight=1.0
-        )
-    ]
-    clusters = [GraphCluster(cluster_id=0, label="foo", member_count=2)]
-    await s.repos.register(0.0)
-    await s.graph.replace(nodes, edges, clusters)
-    yield s
-    await s.aclose()
-
-
-async def test_render_app_injects_payload(store):
-    payload = await build_payload(store)
+async def test_render_app_injects_payload(viz_store):
+    payload = await build_payload(viz_store)
     html = render_app(payload)
     assert "__AUDITOR_GRAPH__" in html
     assert '"m.py::Foo"' in html  # the data is embedded
@@ -66,3 +15,32 @@ async def test_render_app_injects_payload(store):
     # the injected JSON round-trips
     assert html.index("__AUDITOR_GRAPH__") > 0
     assert json.dumps(payload["meta"]["accent"]) in html
+
+
+async def test_the_daemon_degrades_when_no_ui_bundle_was_built(viz_store, monkeypatch):
+    """Spec 8.1: a missing bundle is a plain status document, never a crash."""
+    monkeypatch.setattr("auditor.graph.viz._APP_HTML", Path("/nonexistent/index.html"))
+    payload = await build_payload(viz_store)
+    document = render_app_or_status(payload, bootstrap={"live": True})
+    assert "<html" in document.lower()
+    assert "pnpm build" in document
+    assert str(len(payload["nodes"])) in document
+    assert (
+        "__AUDITOR_OBSERVER__" not in document
+    )  # a plain notice has no app to bootstrap
+
+
+async def test_graph_serve_still_refuses_to_serve_a_page_it_cannot_build(
+    viz_store, monkeypatch
+):
+    """`graph serve` keeps raising: its user can run `pnpm build`, and the daemon's user cannot."""
+    monkeypatch.setattr("auditor.graph.viz._APP_HTML", Path("/nonexistent/index.html"))
+    with pytest.raises(FileNotFoundError):
+        render_app(await build_payload(viz_store))
+
+
+def test_a_document_missing_its_keys_is_a_status_page_not_a_key_error(monkeypatch):
+    """`GraphView.graph` defaults to `{}` and the page at `/` passes it straight through."""
+    monkeypatch.setattr("auditor.graph.viz._APP_HTML", Path("/nonexistent/index.html"))
+    document = render_app_or_status({})
+    assert "0 nodes, 0 edges and 0 clusters" in document

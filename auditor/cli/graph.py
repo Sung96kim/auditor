@@ -1,6 +1,7 @@
-"""``auditor graph`` — semantic-graph commands: build|related|neighbors|concept|clusters|export.
+"""``auditor graph`` — the semantic-graph command group; ``auditr graph --help`` lists the set.
 
-Imported only via a guarded mount in cli/__init__, so the core CLI works without the [graph] extra.
+Imported on the first ``graph`` subcommand by ``cli/lazy.py``, so the rest of the CLI never pays
+this module's numpy/scikit-learn/networkx import.
 """
 
 import shutil
@@ -8,56 +9,85 @@ import subprocess
 import time
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeVar
 
 import typer
 
 from auditor.cli.console import ACCENT, err_console
-from auditor.cli.helpers import present, run, run_staged
+from auditor.cli.graph_refine import register as register_refine
+from auditor.cli.helpers import (
+    cli_root,
+    config_errors_as_one_line,
+    fail,
+    load_settings,
+    open_index,
+    present,
+    run,
+    run_staged,
+)
+from auditor.cli.lazy import GRAPH_HELP
+from auditor.cli.options import (
+    ExportDepth,
+    FlowDepth,
+    FlowExpandHubs,
+    FlowIn,
+    FlowIncludeTests,
+    FlowKinds,
+    FlowLimit,
+    FlowStopAt,
+    FlowSymbol,
+    GraphTarget,
+    SearchLimit,
+)
 from auditor.cli.render import (
     render_graph_build,
     render_graph_clusters,
     render_graph_concept,
+    render_graph_flow,
     render_graph_neighbors,
     render_graph_related,
     render_graph_search,
     render_graph_usages,
 )
-from auditor.config import load_config
-from auditor.database import IndexStore
-from auditor.discovery import find_root
-from auditor.engine import audit_target
+from auditor.config import AuditorSettings
 from auditor.graph.build import GraphBuilder
+from auditor.graph.flow import FlowDirection, FlowOptions
+from auditor.graph.model import (
+    DEFAULT_FLOW_DEPTH,
+    DEFAULT_FLOW_LIMIT,
+    DEFAULT_SEARCH_LIMIT,
+    EdgeKind,
+    enum_values,
+)
+from auditor.graph.payloads import GraphBuildReport
 from auditor.graph.query import GraphQuery
+from auditor.graph.refine.lock import rebuild_lock
+from auditor.graph.scan import autoscan
 from auditor.graph.viz import build_payload, render_app, to_dot
-from auditor.paths import index_db_path, repo_key
 from auditor.serve import ReportServer
 
-graph_app = typer.Typer(
-    no_args_is_help=True, help="Build + query the semantic code graph."
-)
-
-_Target = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
+graph_app = typer.Typer(no_args_is_help=True, help=GRAPH_HELP)
 
 
-GRAPH_OVERRIDE: dict = {"graph": {"enabled": True}}
-
-
-async def _autoscan(root: Path) -> None:
-    """Incremental scan with graph extraction forced on."""
-    await audit_target(root, incremental=True, config_overrides=GRAPH_OVERRIDE)
-
-
-async def _build(root: Path, progress: Callable[[str], None] | None = None) -> dict:
-    settings = load_config(root)
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+async def _build(
+    root: Path,
+    settings: AuditorSettings,
+    progress: Callable[[str], None] | None = None,
+    *,
+    lock_held: bool = False,
+) -> GraphBuildReport:
+    """Rebuild ``root``'s graph. ``lock_held`` when the caller already took the rebuild lock, so
+    a clear plus a rescan plus this build stay one hold."""
+    async with await open_index(root) as index:
         await index.repos.register(time.time())
-        return await GraphBuilder().run(index, settings, progress=progress)
+        return await GraphBuilder().rebuild(
+            index, settings, progress=progress, lock_held=lock_held
+        )
 
 
 @graph_app.command("build")
 def graph_build(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     no_scan: bool = typer.Option(
         False,
         "--no-scan",
@@ -72,45 +102,60 @@ def graph_build(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Build the semantic graph, auto-scanning to extract facts first (use --no-scan to skip)."""
-    root = find_root(target)
+    if rebuild and no_scan:
+        raise typer.BadParameter(
+            "--rebuild discards the cached facts, so --no-scan would build an empty graph and "
+            "clear the queue with it. Drop one of them."
+        )
+    root = cli_root(target)
+    settings = load_settings(root)
 
-    async def do_build(report: Callable[[str], None]) -> dict:
-        if rebuild:
-            report("clearing cached facts…")
-            async with await IndexStore.connect(
-                index_db_path(), repo_key(root)
-            ) as index:
-                await index.graph.clear_facts()
-        if not no_scan:
-            report("scanning repository…")
-            await _autoscan(root)
-        report("building graph…")
-        return await _build(root, report)
+    async def do_build(report: Callable[[str], None]) -> GraphBuildReport:
+        async with await open_index(root) as index:
+            identity = index.partition.identity
+        # one hold across clear, scan and build: a build landing on the half-rescanned graph
+        # cannot tell a file being re-extracted from a symbol that was deleted
+        async with rebuild_lock(
+            identity,
+            waiting=lambda: report("waiting for the observer's rebuild"),
+            poll=settings.graph.rebuild_lock_poll_seconds,
+        ):
+            if rebuild:
+                report("clearing cached facts…")
+                async with await open_index(root) as index:
+                    await index.graph.clear_facts()
+            if not no_scan:
+                report("scanning repository…")
+                await autoscan(root)
+            report("building graph…")
+            return await _build(root, settings, report, lock_held=True)
 
     present(run_staged(do_build, "building graph…"), render_graph_build, as_json=json_)
 
 
-def _query_cmd(
-    fn_name: str,
-) -> Callable[..., Coroutine[Any, Any, Any]]:
-    async def runner(root: Path, **kw: Any) -> Any:
-        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-            return await getattr(GraphQuery(index), fn_name)(**kw)
+_R = TypeVar("_R")
 
-    return runner
+
+async def _query(
+    root: Path, ask: Callable[[GraphQuery], Coroutine[Any, Any, _R]]
+) -> _R:
+    """Open ``root``'s index once and hand ``GraphQuery`` to one typed call, so the payload a
+    command renders is the one its query declares."""
+    async with await open_index(root) as index:
+        return await ask(GraphQuery(index))
 
 
 @graph_app.command("related")
 def graph_related(
     symbol: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     limit: int = 10,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Top semantic neighbors of a symbol (name + usage), ranked."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
-        run(_query_cmd("related")(root, symbol=symbol, limit=limit), "querying…"),
+        run(_query(root, lambda q: q.related(symbol, limit=limit)), "querying…"),
         render_graph_related,
         as_json=json_,
     )
@@ -119,14 +164,14 @@ def graph_related(
 @graph_app.command("neighbors")
 def graph_neighbors(
     symbol: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     depth: int = 1,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Structural neighbors (calls/overrides/...) up to a depth."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
-        run(_query_cmd("neighbors")(root, symbol=symbol, depth=depth), "querying…"),
+        run(_query(root, lambda q: q.neighbors(symbol, depth=depth)), "querying…"),
         render_graph_neighbors,
         as_json=json_,
     )
@@ -135,13 +180,13 @@ def graph_neighbors(
 @graph_app.command("concept")
 def graph_concept(
     term: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Symbols in the concept cluster matching a term."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
-        run(_query_cmd("concept")(root, term=term), "querying…"),
+        run(_query(root, lambda q: q.concept(term)), "querying…"),
         render_graph_concept,
         as_json=json_,
     )
@@ -149,13 +194,13 @@ def graph_concept(
 
 @graph_app.command("clusters")
 def graph_clusters(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List concept clusters (label + size)."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
-        run(_query_cmd("clusters")(root), "querying…"),
+        run(_query(root, lambda q: q.clusters()), "querying…"),
         render_graph_clusters,
         as_json=json_,
     )
@@ -164,14 +209,14 @@ def graph_clusters(
 @graph_app.command("search")
 def graph_search(
     term: str,
-    target: _Target = Path("."),
-    limit: int = 20,
+    target: GraphTarget = Path("."),
+    limit: SearchLimit = DEFAULT_SEARCH_LIMIT,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
-    """Find symbols whose id contains the term (highest-rank first)."""
-    root = find_root(target)
+    """Find symbols by name, or by meaning when no id contains the term (ranked, with a score)."""
+    root = cli_root(target)
     present(
-        run(_query_cmd("search")(root, term=term, limit=limit), "searching…"),
+        run(_query(root, lambda q: q.search(term, limit=limit)), "searching…"),
         render_graph_search,
         as_json=json_,
     )
@@ -180,16 +225,96 @@ def graph_search(
 @graph_app.command("usages")
 def graph_usages(
     symbol: str,
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     sample: int = 5,
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """How a symbol is used/connected: edges grouped by kind with full counts (used_by vs
     depends_on)."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
-        run(_query_cmd("usages")(root, symbol=symbol, sample=sample), "querying…"),
+        run(_query(root, lambda q: q.usages(symbol, sample=sample)), "querying…"),
         render_graph_usages,
+        as_json=json_,
+    )
+
+
+def _split_kinds(raw: str | None) -> list[str]:
+    """Parse --kinds through the one kinds validator every surface shares, so a typo is an error
+    rather than a tree that silently omits the kind.
+
+    The field name is the flag, because this caller is the CLI; `graph_flow` passes ``"kinds"``,
+    which is what its own parameter is called.
+    """
+    try:
+        return (
+            enum_values(
+                [k.strip() for k in (raw or "").split(",") if k.strip()],
+                EdgeKind,
+                "--kinds",
+            )
+            or []
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _flow_options(
+    root: Path,
+    *,
+    inbound: bool,
+    depth: int,
+    limit: int,
+    kinds: str | None,
+    include_tests: bool,
+    expand_hubs: bool,
+    stop_at: list[str] | None,
+) -> FlowOptions:
+    """The CLI half of one flow build, so the tree and the picture are the same walk.
+
+    A comma string is parsed into kinds and rejected here if it names none; the hub floor comes
+    from repo policy. ``FlowOptions.of`` owns the bounds every surface shares.
+    """
+    return FlowOptions.of(
+        direction=FlowDirection.IN if inbound else FlowDirection.OUT,
+        depth=depth,
+        limit=limit,
+        kinds=_split_kinds(kinds),
+        include_tests=include_tests,
+        expand_hubs=expand_hubs,
+        stop_at=stop_at or (),
+        hub_fan_in=load_settings(root).graph.flow_hub_fan_in,
+    )
+
+
+@graph_app.command("flow")
+def graph_flow(
+    symbol: str,
+    target: GraphTarget = Path("."),
+    inbound: FlowIn = False,
+    depth: FlowDepth = DEFAULT_FLOW_DEPTH,
+    limit: FlowLimit = DEFAULT_FLOW_LIMIT,
+    kinds: FlowKinds = None,
+    include_tests: FlowIncludeTests = False,
+    expand_hubs: FlowExpandHubs = False,
+    stop_at: FlowStopAt = None,
+    json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
+) -> None:
+    """Read a code path from a symbol: what it calls, or with --in what reaches it."""
+    root = cli_root(target)
+    options = _flow_options(
+        root,
+        inbound=inbound,
+        depth=depth,
+        limit=limit,
+        kinds=kinds,
+        include_tests=include_tests,
+        expand_hubs=expand_hubs,
+        stop_at=stop_at,
+    )
+    present(
+        run(_query(root, lambda q: q.flow(symbol, options)), "tracing flow…"),
+        render_graph_flow,
         as_json=json_,
     )
 
@@ -199,21 +324,21 @@ async def _serve_html(
 ) -> str:
     """Render the graph UI HTML. Reuses the already-built graph (fast) unless it's missing or
     ``rebuild`` is set — only then does it pay the scan + build cost."""
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         has_graph = bool(await index.graph.nodes())
     if rebuild or not has_graph:
         report("scanning repository…")
-        await _autoscan(root)
+        await autoscan(root)
         report("building graph…")
-        await _build(root, report)
+        await _build(root, load_settings(root), report)
     report("preparing UI…")
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async with await open_index(root) as index:
         return render_app(await build_payload(index))
 
 
 @graph_app.command("serve")
 def graph_serve(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     rebuild: bool = typer.Option(
         False,
         "--rebuild",
@@ -225,11 +350,14 @@ def graph_serve(
 ) -> None:
     """Serve the interactive graph UI. Serves the already-built graph when present (fast); only
     scans + builds when it's missing. Pass --rebuild to force a fresh build."""
-    root = find_root(target)
-    html = run_staged(
-        lambda report: _serve_html(root, rebuild=rebuild, report=report),
-        "preparing graph UI…",
-    )
+    root = cli_root(target)
+    # `graph serve` reaches the loader only inside `_serve_html`, so this is the one guard
+    # between a bad repo config and a traceback (`graph build` fails earlier, in `load_settings`).
+    with config_errors_as_one_line():
+        html = run_staged(
+            lambda report: _serve_html(root, rebuild=rebuild, report=report),
+            "preparing graph UI…",
+        )
     server = ReportServer(html)
     err_console.print(
         f"[{ACCENT}]◆[/] serving graph UI at [bold]{server.url}[/bold]  [dim](Ctrl-C to stop)[/dim]"
@@ -239,21 +367,72 @@ def graph_serve(
 
 @graph_app.command("export")
 def graph_export(
-    target: _Target = Path("."),
+    target: GraphTarget = Path("."),
     fmt: Annotated[str, typer.Option("--format")] = "dot",
     cluster: str | None = None,
     symbol: str | None = None,
-    depth: int = 1,
+    depth: ExportDepth = None,
+    flow: FlowSymbol = None,
+    inbound: FlowIn = False,
+    limit: FlowLimit = DEFAULT_FLOW_LIMIT,
+    kinds: FlowKinds = None,
+    include_tests: FlowIncludeTests = False,
+    expand_hubs: FlowExpandHubs = False,
+    stop_at: FlowStopAt = None,
 ) -> None:
-    """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego."""
-    root = find_root(target)
+    """Export a Graphviz DOT (or SVG via the system graphviz) of the graph/cluster/ego/flow."""
+    root = cli_root(target)
+    if flow is not None and (symbol is not None or cluster is not None):
+        raise typer.BadParameter("--flow cannot be combined with --symbol or --cluster")
+    if symbol is not None and cluster is not None:
+        raise typer.BadParameter("--symbol cannot be combined with --cluster")
+    # --depth is deliberately absent: the ego export uses it too.
+    walk_only = {
+        "--in": inbound,
+        "--limit": limit != DEFAULT_FLOW_LIMIT,
+        "--kinds": kinds is not None,
+        "--include-tests": include_tests,
+        "--expand-hubs": expand_hubs,
+        "--stop-at": bool(stop_at),
+    }
+    if flow is None and (given := [name for name, used in walk_only.items() if used]):
+        raise typer.BadParameter(f"{', '.join(given)}: only valid with --flow")
+    # resolved before the payload build, so a --kinds typo or a bad config costs nothing
+    walk: tuple[str, FlowOptions] | None = (
+        None
+        if flow is None
+        else (
+            flow,
+            _flow_options(
+                root,
+                inbound=inbound,
+                depth=DEFAULT_FLOW_DEPTH if depth is None else depth,
+                limit=limit,
+                kinds=kinds,
+                include_tests=include_tests,
+                expand_hubs=expand_hubs,
+                stop_at=stop_at,
+            ),
+        )
+    )
 
-    async def do_export() -> str:
-        async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
+    async def do_export() -> str | None:
+        """``None`` when --flow named a symbol the graph does not hold."""
+        async with await open_index(root) as index:
             payload = await build_payload(index)
-        return to_dot(payload, cluster=cluster, symbol=symbol, depth=depth)
+            if walk is None:
+                return to_dot(
+                    payload,
+                    cluster=cluster,
+                    symbol=symbol,
+                    depth=1 if depth is None else depth,
+                )
+            tree = await GraphQuery(index).flow(*walk)
+        return to_dot(payload, flow=tree) if tree else None
 
     dot = run(do_export(), "exporting…")
+    if dot is None:
+        fail(f"no such symbol: {flow}")
     if fmt == "dot":
         typer.echo(dot)
         return
@@ -269,3 +448,6 @@ def graph_export(
         typer.echo(out.stdout)
         return
     raise typer.BadParameter("--format must be dot or svg")
+
+
+register_refine(graph_app)

@@ -1,0 +1,29 @@
+{
+  "description": "What `ensure` compares before it attaches: this daemon's home, db, version and wire compat.",
+  "properties": {
+    "compat": {
+      "title": "Compat",
+      "type": "integer"
+    },
+    "db_path": {
+      "title": "Db Path",
+      "type": "string"
+    },
+    "home": {
+      "title": "Home",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "home",
+    "db_path",
+    "version",
+    "compat"
+  ],
+  "title": "HealthPayload",
+  "type": "object"
+}

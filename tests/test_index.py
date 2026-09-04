@@ -2,11 +2,14 @@
 worker under concurrency + high load (direct unit tests)."""
 
 import asyncio
+import re
 import time
 
 import pytest
 
 from auditor.database import IndexStore
+from auditor.database.base import BaseDB
+from auditor.database.findings import FindingRow
 from auditor.models import (
     Category,
     FileRole,
@@ -25,6 +28,24 @@ def _finding(rule="PY-SEC-DANGEROUS-EVAL", sev=Severity.BLOCKING) -> Finding:
         verdict_kind=VerdictKind.AUTO,
         line=2,
         message="eval",
+    )
+
+
+def _saturated_finding() -> Finding:
+    """Every field set to a non-default, so a round trip that drops one is detectable."""
+    return Finding(
+        rule_id="GRAPH-GOD-CONCEPT",
+        category=Category.OOP_COMPOSITION,
+        severity=Severity.SUGGESTION,
+        verdict_kind=VerdictKind.CANDIDATE,
+        line=7,
+        message="x has high fan-out (9)",
+        evidence="m.py::x",
+        suggestion="split responsibilities.",
+        detector="graph",
+        subkind="fan_out",
+        checklist_item=3,
+        standard_refs=("owasp:A01",),
     )
 
 
@@ -213,9 +234,11 @@ async def test_by_rule_prefix(tmp_path):
         await index.findings.add("m.py", [graph_finding, other_finding])
         rows = await index.findings.by_rule_prefix("GRAPH-")
         assert len(rows) == 1
-        assert rows[0]["rule_id"] == "GRAPH-COUPLING-HIGH"
-        assert rows[0]["evidence"] == "m.py::Foo"
+        assert rows[0].rule_id == "GRAPH-COUPLING-HIGH"
+        assert rows[0].evidence == "m.py::Foo"
         assert await index.findings.by_rule_prefix("MISSING-") == []
+    # the row is the auditor's own shape, so a column no reader uses is dead weight
+    assert set(FindingRow.model_fields) == {"rule_id", "subkind", "evidence"}
 
 
 # --- concurrency + high load on the async SQLite worker -----------------------
@@ -312,3 +335,64 @@ async def test_worker_error_isolation_under_load(tmp_path):
             [("h0", "model", "other.py", "D", 1)]
         )  # collide with f0's hash
         assert "h0" in await index.shapes.duplicates()
+
+
+async def test_transaction_commits_every_write_together(tmp_path):
+    async with await IndexStore.connect(tmp_path / "i.db", "/r") as store:
+        await store.transaction(
+            lambda conn: (
+                store.findings.write_add(conn, "a.py", [_finding("PY-A")]),
+                store.findings.write_add(conn, "b.py", [_finding("PY-B")]),
+            )
+        )
+        assert {f.rule_id for f in await store.findings.all()} == {"PY-A", "PY-B"}
+
+
+async def test_transaction_rolls_back_on_failure(tmp_path):
+    """A build that dies halfway must leave the previous state, not a half-written one."""
+
+    def boom(conn):
+        store.findings.write_add(conn, "a.py", [_finding("PY-A")])
+        raise RuntimeError("detector exploded")
+
+    async with await IndexStore.connect(tmp_path / "i.db", "/r") as store:
+        with pytest.raises(RuntimeError, match="detector exploded"):
+            await store.transaction(boom)
+        assert await store.findings.all() == []
+
+
+async def test_transaction_returns_what_the_callable_returns(tmp_path):
+    async with await IndexStore.connect(tmp_path / "i.db", "/r") as store:
+        assert await store.transaction(lambda conn: 7) == 7
+
+
+def test_the_facade_exposes_every_registered_store():
+    """The class docstring's list is the contract: a new store has to appear in the annotations
+    and in the list a reader sees, so neither can drift from the registry."""
+    registered = {store.attr for store in BaseDB._registry}
+    listed = set(re.findall(r"``(\w+)``\s+—", IndexStore.__doc__))
+    assert registered == set(IndexStore.__annotations__) == listed
+
+
+def test_the_saturated_finding_leaves_no_field_at_its_default():
+    """Guards the guard: a field added to Finding without a value here would let the round-trip
+    test below pass with that column dropped."""
+    assert set(Finding.model_fields) == set(
+        _saturated_finding().model_dump(exclude_defaults=True)
+    )
+
+
+async def test_a_finding_round_trips_every_field(tmp_path):
+    """``_row_to_finding`` copies field by field with nothing checking it against the declaration,
+    so a forgotten line reads back as the default with no error."""
+    async with await IndexStore.connect(tmp_path / "index.db", "/repo") as index:
+        await index.findings.add("m.py", [_saturated_finding()])
+        assert (await index.findings.all()) == [_saturated_finding()]
+
+
+async def test_by_rule_prefix_carries_the_subkind(tmp_path):
+    """The column is what graph_overview reads, so a lost value silently empties both hub lists."""
+    async with await IndexStore.connect(tmp_path / "index.db", "/repo") as index:
+        await index.findings.add("m.py", [_saturated_finding()])
+        rows = await index.findings.by_rule_prefix("GRAPH-")
+    assert rows[0].subkind == "fan_out"

@@ -1,0 +1,17 @@
+{
+  "description": "A heartbeat or a detach: whether the daemon knew the session.",
+  "properties": {
+    "ok": {
+      "default": false,
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "title": "SessionAck",
+  "type": "object"
+}

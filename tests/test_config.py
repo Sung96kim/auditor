@@ -1,19 +1,30 @@
 """Config layering + resolution: profile extends chain, pyproject vs .auditor precedence,
 threshold merge, per-rule/category/role resolution, and validation."""
 
-import pytest
+import warnings
 
+import pytest
+from pydantic import BaseModel, ValidationError
+
+import auditor.config as config_module
 from auditor.config import (
     AuditorSettings,
     CategoryConfig,
+    CircularProfile,
+    ConfigError,
     GraphConfig,
+    MalformedConfig,
     OverrideConfig,
     ResolvedConfig,
     RolePolicy,
     RuleConfig,
     Threshold,
+    UnknownProfile,
+    _NonPolicyEnvSource,
     is_configured,
     load_config,
+    unknown_config_keys,
+    unknown_repo_keys,
 )
 from auditor.models import FileRole, Severity, VerdictKind
 
@@ -167,23 +178,70 @@ def test_respect_gitignore_defaults_true_and_is_configurable(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "config_path, content, match",
+    "config_path, content, expected",
     [
-        # `include` was a dead config field; it's removed, so setting it now errors
-        # (extra=forbid) rather than silently no-op-ing.
+        # `include` was a dead config field; it's removed, so setting it is now reported
+        # (extra=ignore, D8) rather than failing every command on the repo.
         (
             "pyproject.toml",
             '[project]\nname="x"\nversion="0"\n[tool.auditor]\ninclude = ["src/**"]\n',
-            "include",
+            ["include"],
         ),
-        (".auditor/config.toml", "[malware_scan]\nbogus = 1\n", "bogus"),
+        (".auditor/config.toml", "[malware_scan]\nbogus = 1\n", ["malware_scan.bogus"]),
     ],
 )
-def test_unknown_config_keys_rejected(tmp_path, config_path, content, match):
+def test_unknown_config_keys_are_reported_not_raised(
+    tmp_path, config_path, content, expected
+):
     path = tmp_path / config_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
-    with pytest.raises(Exception, match=match):
+    settings = load_config(tmp_path)
+    assert settings.unknown_keys == tuple(expected)
+    assert settings.extends == "base"  # the load still succeeds
+    assert unknown_repo_keys(tmp_path) == expected  # same list without a plugin load
+
+
+def test_unknown_config_keys_reports_dotted_paths():
+    raw = {
+        "extends": "base",
+        "include": ["src/**"],
+        "malware_scan": {"bogus": 1, "enabled": True},
+        "rules": {"PY-SEC-SSRF": {"severty": "high"}},
+        "overrides": [{"path": "a/*", "rulez": {}}],
+        "threshold": {"size": {"file_max_linez": 3}},
+    }
+    assert unknown_config_keys(raw, AuditorSettings) == [
+        "include",
+        "malware_scan.bogus",
+        "overrides[0].rulez",
+        "rules.PY-SEC-SSRF.severty",
+        "threshold.size.file_max_linez",
+    ]
+
+
+def test_valid_config_reports_nothing(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="base"\n'
+    )
+    assert load_config(tmp_path).unknown_keys == ()
+
+
+def test_load_config_never_warns(tmp_path):
+    """Regression: unknown keys are a value on the settings, never a `warnings.warn` from the
+    loader. A warning here would land on stdout-adjacent output and corrupt `-f json`."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        settings = load_config(tmp_path)
+    assert settings.extends == "base"
+
+
+def test_invalid_config_still_raises(tmp_path):
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text('respect_skips = "yes-please"\n')
+    with pytest.raises(ValidationError, match="respect_skips"):
         load_config(tmp_path)
 
 
@@ -199,7 +257,7 @@ def test_circular_profile_rejected(tmp_path):
     loop.write_text(f'extends = "{loop}"\n')  # absolute self-reference
     (tmp_path / ".auditor").mkdir()
     (tmp_path / ".auditor" / "config.toml").write_text(f'extends = "{loop}"\n')
-    with pytest.raises(ValueError, match="circular"):
+    with pytest.raises(CircularProfile, match="circular"):
         load_config(tmp_path)
 
 
@@ -235,10 +293,9 @@ def test_overrides_merge_as_highest_layer(tmp_path):
     assert base.sqlalchemy.expire_on_commit is False  # no override -> unchanged
 
 
-def test_overrides_unknown_key_rejected(tmp_path):
+def test_overrides_unknown_key_is_reported(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
-    with pytest.raises(Exception, match="nope"):
-        load_config(tmp_path, overrides={"nope": 1})
+    assert load_config(tmp_path, overrides={"nope": 1}).unknown_keys == ("nope",)
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +335,6 @@ def test_threshold_merged_with_all_unset_returns_self():
     )  # default-constructed; no fields explicitly set via model_validate
     # model_dump(exclude_unset=True) for a default-constructed Threshold is {} → fast-path
     assert t.merged(empty) is t
-
-
-def test_unknown_profile_raises_file_not_found(tmp_path):
-    """load_config with a non-existent profile name raises FileNotFoundError."""
-    with pytest.raises(FileNotFoundError):
-        load_config(tmp_path, profile="no-such-profile")
 
 
 def test_role_mode_script_enables_dangerous_eval():
@@ -407,3 +458,166 @@ def test_is_configured_false_for_pyproject_without_tool_auditor(tmp_path):
 def test_is_configured_false_on_malformed_pyproject(tmp_path):
     (tmp_path / "pyproject.toml").write_text("not valid toml [[[")
     assert is_configured(tmp_path) is False
+
+
+def test_observer_allowed_defaults_true_and_is_configurable(tmp_path):
+    assert AuditorSettings().observer_allowed is True
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nobserver_allowed = false\n'
+    )
+    assert load_config(tmp_path).observer_allowed is False
+
+
+_POLICY_FIELDS = sorted(
+    set(AuditorSettings.model_fields) - _NonPolicyEnvSource.ENV_SETTABLE
+)
+
+
+def test_every_settings_field_is_classified():
+    """The allow-list is the classification, so a name that no longer exists on the model would
+    silently open nothing and hide the drift."""
+    assert not _NonPolicyEnvSource.ENV_SETTABLE - set(AuditorSettings.model_fields)
+
+
+@pytest.mark.parametrize("field", _POLICY_FIELDS)
+def test_env_cannot_set_repo_policy_fields(tmp_path, monkeypatch, field):
+    """Env must not change policy the repo shares through git; it could disable a rule the repo
+    never mentions. Driven from the model, so a new field is covered the day it lands, and the
+    value is deliberately not valid JSON: a policy key must never be parsed at all."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="x"\nversion="0"\n[tool.auditor]\nextends="base"\n'
+    )
+    expected = load_config(tmp_path).model_dump(mode="json")
+    monkeypatch.setenv(f"AUDITOR_{field.upper()}", "1")
+    assert load_config(tmp_path).model_dump(mode="json") == expected
+
+
+def test_env_still_sets_non_policy_keys(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    monkeypatch.setenv("AUDITOR_RESPECT_GITIGNORE", "false")
+    assert load_config(tmp_path).respect_gitignore is False
+
+
+def test_unknown_keys_in_a_union_field_check_every_member():
+    """Only the first member used to be inspected, so a key the second member declares was
+    reported as unknown and a key neither declares was reported against the wrong path."""
+
+    class _Left(BaseModel):
+        shared: int = 0
+        only_left: int = 0
+
+    class _Right(BaseModel):
+        shared: int = 0
+        only_right: int = 0
+
+    class _Holder(BaseModel):
+        field: _Left | _Right = _Left()
+
+    assert unknown_config_keys({"field": {"only_right": 1}}, _Holder) == []
+    assert unknown_config_keys({"field": {"shared": 1}}, _Holder) == []
+    assert unknown_config_keys({"field": {"nope": 1}}, _Holder) == ["field.nope"]
+
+
+@pytest.mark.parametrize(
+    "key, literal, expected",
+    [
+        ("flow_hub_fan_in", "12", 12),
+        ("refine_cluster_jaccard", "0.75", 0.75),
+        ("refine_max_noop_builds", "9", 9),
+        ("rebuild_lock_poll_seconds", "0.05", 0.05),
+    ],
+)
+def test_a_graph_knob_is_repo_configurable(tmp_path, key, literal, expected):
+    """The refinement thresholds are policy, not invariants: spec 5.7 puts them on GraphConfig."""
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname="x"\nversion="0"\n[tool.auditor.graph]\n{key}={literal}\n'
+    )
+    assert getattr(load_config(tmp_path).graph, key) == expected
+
+
+def test_unknown_keys_never_reach_the_dumped_config(tmp_path):
+    """Regression: `config show --json` is a pinned contract, so the field the loader fills must
+    not appear in any dump of the settings."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    settings = load_config(tmp_path)
+    assert settings.unknown_keys == ("malware_scan.bogus",)
+    assert "unknown_keys" not in settings.model_dump(mode="json")
+    assert "unknown_keys" not in settings.model_dump()
+    assert "unknown_keys" not in settings.model_dump_json()
+
+
+def test_load_config_report_is_gone():
+    """The two-entry-point era is over; a straggling import must fail loudly, not resolve."""
+    assert not hasattr(config_module, "load_config_report")
+    assert not hasattr(config_module, "ConfigReport")
+
+
+def test_lint_overlap_is_gone():
+    """It was accepted and never read; a repo that set it now sees it as an unknown key."""
+    assert "lint_overlap" not in AuditorSettings.model_fields
+    assert unknown_config_keys({"lint_overlap": True}, AuditorSettings) == [
+        "lint_overlap"
+    ]
+
+
+def test_unknown_profile_raises_a_named_error(tmp_path):
+    """A profile nothing resolves is a config error, not a missing file: the CLI turns the named
+    error into one line, and a bare FileNotFoundError read as a broken install."""
+    with pytest.raises(UnknownProfile) as caught:
+        load_config(tmp_path, profile="no-such-profile")
+    assert "no-such-profile" in str(caught.value)
+    assert "strict" in str(caught.value)  # the message lists the built-ins
+
+
+@pytest.mark.parametrize(
+    "error",
+    [UnknownProfile, CircularProfile, MalformedConfig],
+    ids=lambda e: e.__name__,
+)
+def test_every_config_error_is_one_catchable_family(error):
+    """The CLI and MCP edges each catch `ConfigError` once. A member that leaves the family (or a
+    base that stops being a ValueError) escapes both guards as a traceback."""
+    assert issubclass(error, ConfigError)
+    assert issubclass(ConfigError, ValueError)
+
+
+def test_a_malformed_repo_toml_is_a_config_error(tmp_path):
+    """A repo TOML that will not parse names the file it is in, instead of raising tomllib's
+    decode error from under the loader."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("nope = = 1\n")
+    with pytest.raises(MalformedConfig, match="is not valid TOML"):
+        load_config(tmp_path)
+
+
+def test_a_malformed_profile_file_is_a_config_error(tmp_path):
+    profile = tmp_path / "p.toml"
+    profile.write_text("not = valid = toml\n")
+    with pytest.raises(MalformedConfig, match="is not valid TOML"):
+        load_config(tmp_path, profile=str(profile))
+
+
+def test_the_loaders_own_output_field_is_not_a_config_key():
+    """`unknown_keys` is filled in by the loader, so a config that spells it is reporting a typo,
+    not setting a key."""
+    assert unknown_config_keys({"unknown_keys": ["x"]}, AuditorSettings) == [
+        "unknown_keys"
+    ]
+
+
+def test_env_cannot_choose_a_profile(tmp_path, monkeypatch):
+    """Regression: `extends` is repo policy. The allow-list keeps it out of the env source and the
+    loader writes the resolved profile last, so neither lock may be removed without this failing.
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    monkeypatch.setenv("AUDITOR_EXTENDS", "strict")
+    assert load_config(tmp_path).extends == "base"
+    assert "extends" not in _NonPolicyEnvSource.ENV_SETTABLE
+
+
+def test_env_can_still_reach_the_one_allowed_field(tmp_path, monkeypatch):
+    """The counterpart: the allow-list is not simply dead."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="0"\n')
+    monkeypatch.setenv("AUDITOR_RESPECT_GITIGNORE", "false")
+    assert load_config(tmp_path).respect_gitignore is False

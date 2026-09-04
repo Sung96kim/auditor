@@ -1,0 +1,3 @@
+# The UI digest hashes bytes across processes, so its inputs must not gain a CR on checkout.
+auditor/graph/ui/** text eol=lf
+*.sha256 text eol=lf

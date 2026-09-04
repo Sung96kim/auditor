@@ -7,6 +7,7 @@ literal line. The rows live in the shared index db (``auditor.database``); this 
 db-free matching logic over them."""
 
 import hashlib
+from collections.abc import Iterable
 
 from pydantic import BaseModel, Field
 
@@ -65,21 +66,20 @@ class IgnoreList(BaseModel):
             ]
         )
 
+    def kept(self, file: str, findings: Iterable[Finding]) -> list[Finding]:
+        """The findings of ``file`` no ignore matches — what a scan of it would report."""
+        return [
+            f for f in findings if not any(rule.matches(file, f) for rule in self.rules)
+        ]
+
     def filter(self, results: list[ScanResult], *, show_ignored: bool = False) -> int:
         """Set each result's ``ignored`` count and drop the matched findings in place (unless
         ``show_ignored``, which leaves them but still counts). Returns the total matched."""
         total = 0
         for result in results:
-            kept: list[Finding] = []
-            matched = 0
-            for finding in result.findings:
-                if any(rule.matches(result.file, finding) for rule in self.rules):
-                    matched += 1
-                    if show_ignored:
-                        kept.append(finding)
-                else:
-                    kept.append(finding)
-            result.ignored = matched
-            result.findings = kept
-            total += matched
+            kept = self.kept(result.file, result.findings)
+            result.ignored = len(result.findings) - len(kept)
+            if not show_ignored:
+                result.findings = kept
+            total += result.ignored
         return total

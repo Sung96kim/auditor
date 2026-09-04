@@ -1,12 +1,16 @@
+import pytest
+
 from auditor.config import AuditorSettings
 from auditor.graph.detectors import (
     GodConcept,
+    GodConceptKind,
     GraphContext,
     NamingInconsistency,
     ScatteredConcept,
     run_graph_detectors,
 )
 from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
+from auditor.languages.python.detectors.graph_rules import GOD_CONCEPT_RULE
 
 
 def _fn(nid, name, module="m.py", role="production", rank=0.0):
@@ -20,6 +24,21 @@ def _fn(nid, name, module="m.py", role="production", rank=0.0):
         rank=rank,
         line=1,
     )
+
+
+def _hub_context(*, fan_out: bool) -> GraphContext:
+    """A one-hub graph: 40 callees make it a fan-out hub, 40 callers make it a bottleneck."""
+    hub = _fn("m.py::hub", "hub")
+    others = [_fn(f"m.py::n{i}", f"n{i}") for i in range(40)]
+    edges = [
+        GraphEdge(
+            src=hub.id if fan_out else other.id,
+            dst=other.id if fan_out else hub.id,
+            kind=EdgeKind.CALLS,
+        )
+        for other in others
+    ]
+    return GraphContext([hub, *others], edges, [], AuditorSettings())
 
 
 def test_god_concept_flags_fan_out_as_decompose():
@@ -170,3 +189,31 @@ def test_god_concept_log_space_not_suppressed_by_mega_outlier():
     ).detect()
     flagged = {f.evidence for _, f in res}
     assert "m.py::mega" in flagged and "m.py::mod" in flagged
+
+
+@pytest.mark.parametrize(
+    ("fan_out", "expected", "phrase"),
+    [
+        (True, GodConceptKind.FAN_OUT, "fan-out"),
+        (False, GodConceptKind.BOTTLENECK, "bottleneck"),
+    ],
+)
+def test_god_concept_records_which_centrality_fired(fan_out, expected, phrase):
+    """Regression: graph_overview classified by substring-matching the prose, so rewording a
+    message silently moved a finding between the two lists."""
+    findings = [f for _module, f in GodConcept(_hub_context(fan_out=fan_out)).detect()]
+    hub = next(f for f in findings if f.evidence == "m.py::hub")
+    assert hub.rule_id == GOD_CONCEPT_RULE
+    assert hub.subkind == expected
+    assert phrase in hub.message
+
+
+def test_a_non_god_concept_finding_has_no_subkind():
+    """The field is opt-in per detector, so every other rule leaves it unset."""
+    nodes = [_cn(f"m{i}.py::f{i}", f"f{i}", f"m{i}.py", 0) for i in range(6)]
+    clusters = [GraphCluster(cluster_id=0, label="widget", member_count=6)]
+    found = ScatteredConcept(
+        GraphContext(nodes, [], clusters, AuditorSettings())
+    ).detect()
+    assert found
+    assert all(f.subkind is None for _module, f in found)

@@ -50,9 +50,10 @@ class ReposDB(BaseDB):
 
     async def forget(self, repo: str | None = None) -> bool:
         """Drop a repo from the shared index entirely — its registry row plus, via ON DELETE
-        CASCADE, every files/file_rules/findings/shapes row. Defaults to this handle's own repo;
-        pass ``repo`` to forget another (e.g. from a default-scoped management connection).
-        Returns whether a registry row was actually removed."""
+        CASCADE, every files/file_rules/findings/shapes/graph row AND its persistent ignores,
+        which no rescan restores. Defaults to this handle's own repo; pass ``repo`` to forget
+        another (e.g. from a default-scoped management connection). Returns whether a registry
+        row was actually removed."""
         target = repo if repo is not None else self.repo
 
         def op(conn: sqlite3.Connection) -> bool:

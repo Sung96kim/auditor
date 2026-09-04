@@ -1,0 +1,22 @@
+{
+  "description": "What `POST /events` answers with, alongside its 202.",
+  "properties": {
+    "accepted": {
+      "default": 0,
+      "title": "Accepted",
+      "type": "integer"
+    },
+    "dropped": {
+      "default": 0,
+      "title": "Dropped",
+      "type": "integer"
+    },
+    "queued_repos": {
+      "default": 0,
+      "title": "Queued Repos",
+      "type": "integer"
+    }
+  },
+  "title": "EventAck",
+  "type": "object"
+}

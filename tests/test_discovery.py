@@ -11,6 +11,9 @@ from auditor.discovery import (
     discover,
     find_root,
     git_changed_files,
+    git_head,
+    git_status_paths,
+    parse_status_z,
 )
 from auditor.registry import REGISTRY
 
@@ -266,3 +269,202 @@ def test_default_base_ref_on_main_branch(tmp_path):
     _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
     ref = default_base_ref(tmp_path)
     assert ref in ("main", "origin/main")
+
+
+@pytest.mark.parametrize(
+    ("rel", "expected"),
+    [
+        ("pkg/mod.py", True),
+        ("pkg/mod.pyc", False),
+        ("README.md", False),
+        (".auditor/cache.py", False),
+        ("node_modules/x/a.py", False),
+        ("gen/thing.gen.py", False),
+        (".claude/worktrees/agent-abc/pkg/mod.py", False),
+        # only the worktrees glob is a default exclude, so the rest of `.claude/` stays auditable
+        (".claude/settings.json", True),
+    ],
+)
+def test_auditable_answers_one_path_the_way_a_scan_would(
+    tmp_path: Path, rel: str, expected: bool
+):
+    """Stage 0 of the assessment (spec 8.6) is this predicate, case by case."""
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x = 1\n")
+    assert FileDiscovery(tmp_path).auditable(path) is expected
+
+
+def test_auditable_agrees_with_files_over_a_real_checkout(tmp_path: Path):
+    """Stage 0 must not drift from `files`, which is the drift that let a gitignored path in."""
+    _git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    for rel in (
+        "pkg/mod.py",
+        "scratch/junk.py",
+        "fresh.py",
+        "notes.md",
+        ".claude/worktrees/agent-abc/pkg/mod.py",
+    ):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n")
+    _git(
+        tmp_path, "add", "pkg", ".gitignore"
+    )  # `fresh.py` stays untracked but not ignored
+    finder = FileDiscovery(tmp_path)
+    scanned = set(finder.files(tmp_path))
+    seen = [p for p in tmp_path.rglob("*") if p.is_file() and ".git/" not in str(p)]
+    assert finder.auditable_paths(seen) == tuple((p in scanned) for p in seen)
+    assert finder.auditable(tmp_path / "scratch/junk.py") is False
+    assert finder.auditable(tmp_path / "fresh.py") is True
+
+
+def test_a_gitignored_path_is_still_the_right_shape(tmp_path: Path):
+    """The two questions are separable, which is what keeps the hook side free of a subprocess."""
+    _git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch/junk.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable_shape("scratch/junk.py") is True
+    assert finder.auditable("scratch/junk.py") is False
+
+
+def test_a_deleted_path_keeps_its_shape_after_the_batched_form_refuses_it(
+    tmp_path: Path,
+):
+    """S8b's `/events` is the caller: a `PostToolUse` path that the edit deleted is exactly the
+    shape stage 0 must admit, and the batched form asks the filesystem instead."""
+    _git(tmp_path, "init")
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable_shape("pkg/gone.py") is True
+    assert finder.auditable_paths(("pkg/gone.py",)) == (False,)
+    assert finder.auditable_paths(("pkg/gone.py",), must_exist=False) == (True,)
+
+
+def test_gitignore_is_not_consulted_when_the_caller_turned_it_off(tmp_path: Path):
+    """`respect_gitignore=False` drops `--exclude-standard` in `files`, and here too."""
+    _git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch/junk.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path, respect_gitignore=False)
+    assert finder.auditable(tmp_path / "scratch/junk.py") is True
+    assert (tmp_path / "scratch/junk.py") in finder.files(tmp_path)
+
+
+def test_outside_a_checkout_the_shape_is_the_whole_answer(tmp_path: Path):
+    """No git means no ignore rules to honour, which is how `files` falls back to `rglob`."""
+    (tmp_path / ".gitignore").write_text("scratch/\n")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch/junk.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path)
+    assert finder.auditable(tmp_path / "scratch/junk.py") is True
+    assert (tmp_path / "scratch/junk.py") in finder.files(tmp_path)
+
+
+def test_auditable_refuses_a_path_outside_the_root(tmp_path: Path):
+    outside = tmp_path.parent / "elsewhere.py"
+    outside.write_text("x = 1\n")
+    assert FileDiscovery(tmp_path).auditable(outside) is False
+
+
+def test_auditable_refuses_a_path_that_is_not_a_file(tmp_path: Path):
+    (tmp_path / "pkg").mkdir()
+    assert FileDiscovery(tmp_path).auditable(tmp_path / "pkg") is False
+    assert FileDiscovery(tmp_path).auditable(tmp_path / "gone.py") is False
+
+
+@pytest.mark.parametrize(
+    ("rel", "expected"),
+    [
+        ("pkg/mod.py", True),
+        ("pkg/gone.py", True),
+        ("notes.md", False),
+        ("node_modules/x/a.py", False),
+        (".claude/worktrees/agent-abc/pkg/mod.py", False),
+        ("../outside.py", False),
+    ],
+)
+def test_auditable_answers_for_a_path_that_may_no_longer_exist(
+    tmp_path: Path, rel: str, expected: bool
+):
+    """Stage 0 asks the shape question, so a deleted path still reaches stage 1 (P13)."""
+    assert FileDiscovery(tmp_path).auditable(rel, must_exist=False) is expected
+
+
+def test_only_must_exist_separates_the_two_readings_of_one_path(tmp_path: Path):
+    """One rule under both settings: a live file answers the same either way."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg/mod.py").write_text("x = 1\n")
+    finder = FileDiscovery(tmp_path)
+    assert (
+        finder.auditable(tmp_path / "pkg/mod.py")
+        is finder.auditable("pkg/mod.py", must_exist=False)
+        is True
+    )
+    assert finder.auditable(tmp_path / "pkg/gone.py") is False
+    assert finder.auditable("pkg/gone.py", must_exist=False) is True
+
+
+def test_agent_worktrees_are_excluded_without_git(tmp_path: Path):
+    """`.claude/` is gitignored in this repo, so the glob only bites a tree git is not listing."""
+    for rel in ("pkg/mod.py", ".claude/worktrees/agent-abc/pkg/mod.py"):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n")
+    found = FileDiscovery(tmp_path, respect_gitignore=False).files(tmp_path)
+    assert [p.name for p in found] == ["mod.py"]
+    assert all(".claude" not in str(p) for p in found)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (" M a.py\0", ("a.py",)),
+        ("D  pkg/b.py\0", ("pkg/b.py",)),
+        ("R  pkg/d.py\0pkg/c.py\0", ("pkg/d.py", "pkg/c.py")),
+        ("C  copy.py\0orig.py\0", ("copy.py", "orig.py")),
+        ("?? new.py\0", ("new.py",)),
+        ("?? a b.py\0", ("a b.py",)),
+        ("", ()),
+        ("\0", ()),
+        (" M a.py\0?? n.py\0", ("a.py", "n.py")),
+    ],
+)
+def test_the_status_z_parser_takes_both_sides_of_a_rename(payload, expected):
+    """A rename spends two NUL fields, so the reader is a cursor and never a split (spec 21)."""
+    assert parse_status_z(payload) == expected
+
+
+def test_the_stop_path_set_is_the_whole_dirty_tree_not_a_delta(git_repo):
+    """Spec 8.2: modified, staged deletions, both sides of a rename, untracked expanded."""
+    (git_repo / "a.py").write_text("x = 1\n")
+    (git_repo / "pkg").mkdir()
+    (git_repo / "pkg" / "c.py").write_text("z = 1\n")
+    _git(git_repo, "add", "-A")
+    _git(git_repo, "commit", "-qm", "two")
+    _git(git_repo, "mv", "pkg/c.py", "pkg/d.py")
+    (git_repo / "a.py").write_text("x = 2\n")
+    (git_repo / "fresh").mkdir()
+    (git_repo / "fresh" / "q.py").write_text("q = 1\n")
+    found = git_status_paths(git_repo)
+    assert found is not None
+    assert set(found) == {"a.py", "pkg/d.py", "pkg/c.py", "fresh/q.py"}
+
+
+def test_git_status_paths_is_none_outside_a_checkout(tmp_path):
+    assert git_status_paths(tmp_path) is None
+
+
+async def test_git_head_names_the_branch_and_the_commit(git_repo):
+    """Spec 8.5's pre-run read: a run is pinned to what this answers, so both halves matter."""
+    branch, commit = await git_head(git_repo)
+    assert branch in {"main", "master"}
+    assert len(commit) == 40
+
+
+async def test_git_head_is_empty_outside_a_checkout(tmp_path):
+    """A path that is not a checkout pins nothing, and must not raise on the way to saying so."""
+    assert await git_head(tmp_path) == (None, None)

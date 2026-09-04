@@ -10,7 +10,14 @@ from pathlib import Path
 
 import typer
 
-from auditor.cli.helpers import fail, open_index, present, run
+from auditor.cli.helpers import (
+    cli_root,
+    fail,
+    load_settings,
+    open_index,
+    present,
+    run,
+)
 from auditor.cli.options import (
     AllowLocalPlugins,
     IgnoreFile,
@@ -21,14 +28,19 @@ from auditor.cli.options import (
     IgnoreSelector,
     RootArg,
 )
+from auditor.cli.payloads import (
+    IgnoreAddReport,
+    IgnoreClearReport,
+    IgnoreListReport,
+    IgnoreRmReport,
+    IgnoreRow,
+)
 from auditor.cli.render import (
     render_ignore_add,
     render_ignore_clear,
     render_ignore_list,
     render_ignore_rm,
 )
-from auditor.config import load_config
-from auditor.discovery import find_root
 from auditor.engine import finding_evidence_at
 from auditor.ignores import evidence_hash
 from auditor.registry import REGISTRY
@@ -52,8 +64,10 @@ def ignore_add(
     """Ignore a rule repo-wide (no scope), in a file (--file), or at one line (--file --line)."""
     if line is not None and file is None:
         fail("--line requires --file")
-    root = find_root(target)
-    load_config(root, allow_local_plugins=allow_local_plugins)
+    root = cli_root(target)
+    load_settings(
+        root, allow_local_plugins=allow_local_plugins
+    )  # registers plugin rules for the id check
     if not force and rule_id not in REGISTRY.rule_ids():
         fail(
             f"unknown rule_id {rule_id!r}; run `auditor rules list` to see rules "
@@ -68,27 +82,27 @@ def ignore_add(
 
 async def _ignore_add(
     root: Path, rule_id: str, file: str | None, line: int | None, reason: str | None
-) -> dict:
+) -> IgnoreAddReport:
     ev_hash: str | None = None
     note: str | None = None
     if line is not None and file is not None:
         evidence = await finding_evidence_at(root, file, rule_id, line)
         if evidence is None:
-            note = "no current finding at that line — stored with literal-line fallback"
+            note = "no current finding at that line; stored with literal-line fallback"
         else:
             ev_hash = evidence_hash(evidence)
     async with await open_index(root) as index:
         ignore_id = await index.ignores.add(
             rule_id, file, line, ev_hash, reason, time.time()
         )
-    return {
-        "id": ignore_id,
-        "rule_id": rule_id,
-        "file": file,
-        "line": line,
-        "reason": reason,
-        "note": note,
-    }
+    return IgnoreAddReport(
+        id=ignore_id,
+        rule_id=rule_id,
+        file=file,
+        line=line,
+        reason=reason,
+        note=note,
+    )
 
 
 @ignore_app.command("list")
@@ -97,15 +111,17 @@ def ignore_list(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """List the ignores recorded for this repo (with their ids)."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
-        run(_ignore_list(root), "reading ignores…"), render_ignore_list, as_json=json_
+        IgnoreListReport(tuple(run(_ignore_list(root), "reading ignores…"))),
+        render_ignore_list,
+        as_json=json_,
     )
 
 
-async def _ignore_list(root: Path) -> list[dict]:
+async def _ignore_list(root: Path) -> list[IgnoreRow]:
     async with await open_index(root) as index:
-        return await index.ignores.list()
+        return [IgnoreRow.model_validate(row) for row in await index.ignores.list()]
 
 
 @ignore_app.command("rm")
@@ -117,11 +133,13 @@ def ignore_rm(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Remove an ignore by id (`ignore rm 7`) or by selector (`ignore rm <rule_id> --file …`)."""
-    root = find_root(target)
+    root = cli_root(target)
     removed = run(_ignore_rm(root, selector, file, line), "removing ignore…")
     if not removed:
         fail(f"no matching ignore for {selector!r}")
-    present({"removed": True, "selector": selector}, render_ignore_rm, as_json=json_)
+    present(
+        IgnoreRmReport(removed=True, selector=selector), render_ignore_rm, as_json=json_
+    )
 
 
 async def _ignore_rm(
@@ -139,9 +157,9 @@ def ignore_clear(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Remove every ignore for this repo."""
-    root = find_root(target)
+    root = cli_root(target)
     present(
-        {"cleared": run(_ignore_clear(root), "clearing ignores…")},
+        IgnoreClearReport(cleared=run(_ignore_clear(root), "clearing ignores…")),
         render_ignore_clear,
         as_json=json_,
     )

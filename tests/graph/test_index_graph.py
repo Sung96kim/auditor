@@ -1,14 +1,26 @@
+import inspect
+import re
+import sqlite3
+
 import pytest
 
 from auditor.database import IndexStore
-from auditor.graph.model import EdgeKind, GraphCluster, GraphEdge, GraphNode, NodeKind
-
-
-@pytest.fixture
-async def store(tmp_path):
-    s = await IndexStore.connect(tmp_path / "i.db", repo="r")
-    yield s
-    await s.aclose()
+from auditor.database.graph import GraphDB
+from auditor.graph.hashes import FileHashes
+from auditor.graph.model import (
+    CallForm,
+    EdgeKind,
+    FactKind,
+    GraphCluster,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+    Provenance,
+    UnresolvedReason,
+    UnresolvedRow,
+)
+from auditor.graph.refine.namespace import under_scope
+from auditor.models import FileRole, IndexEntry
 
 
 def _n(i, **kw):
@@ -17,41 +29,522 @@ def _n(i, **kw):
     )
 
 
-async def test_facts_cache_roundtrip(store):
-    assert await store.graph.facts_hash("m.py") is None
-    await store.graph.set_facts("m.py", '{"path":"m.py"}', "abc")
-    assert await store.graph.facts_hash("m.py") == "abc"
-    assert '{"path":"m.py"}' in await store.graph.all_facts()
+async def test_facts_cache_roundtrip(graph_store):
+    assert await graph_store.graph.facts_hash("m.py") is None
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc")
+    assert await graph_store.graph.facts_hash("m.py") == "abc"
+    assert '{"path":"m.py"}' in await graph_store.graph.all_facts()
 
 
-async def test_clear_facts_forces_reextraction(store):
-    await store.graph.set_facts("a.py", "{}", "h1")
-    await store.graph.set_facts("b.py", "{}", "h2")
-    await store.graph.clear_facts()
-    assert await store.graph.all_facts() == []
-    assert await store.graph.facts_hash("a.py") is None  # so the next scan re-extracts
+async def test_clear_facts_forces_reextraction(graph_store):
+    await graph_store.graph.set_facts("a.py", "{}", "h1")
+    await graph_store.graph.set_facts("b.py", "{}", "h2")
+    await graph_store.graph.clear_facts()
+    assert await graph_store.graph.all_facts() == []
+    assert (
+        await graph_store.graph.facts_hash("a.py") is None
+    )  # so the next scan re-extracts
 
 
-async def test_replace_graph_and_query(store):
+async def test_forget_facts_drops_the_paths_it_is_given_and_leaves_the_rest(
+    graph_store,
+):
+    for path in ("a.py", "b.py", "c.py"):
+        await graph_store.graph.set_facts(path, "{}", f"h-{path}")
+    await graph_store.graph.forget_facts(["a.py", "c.py"])
+    assert await graph_store.graph.facts_hash("a.py") is None
+    assert await graph_store.graph.facts_hash("c.py") is None
+    assert await graph_store.graph.facts_hash("b.py") == "h-b.py"
+
+
+async def test_forget_facts_on_an_empty_batch_touches_nothing(graph_store):
+    """A batch whose removed set is empty is the common case, and it must not open a write."""
+    await graph_store.graph.set_facts("a.py", "{}", "h1")
+    await graph_store.graph.forget_facts([])
+    assert await graph_store.graph.facts_hash("a.py") == "h1"
+
+
+async def test_forget_facts_stays_inside_its_own_repo(graph_store, tmp_path):
+    """`graph_facts` is keyed by `(repo, path)` and one database holds every partition, so a
+    delete that dropped the repo predicate would take another checkout's cache with it."""
+    other = await IndexStore.connect(tmp_path / "i.db", repo="other")
+    try:
+        await graph_store.graph.set_facts("a.py", "{}", "mine")
+        await other.graph.set_facts("a.py", "{}", "theirs")
+        await graph_store.graph.forget_facts(["a.py"])
+        assert await graph_store.graph.facts_hash("a.py") is None
+        assert await other.graph.facts_hash("a.py") == "theirs"
+    finally:
+        await other.aclose()
+
+
+async def test_forget_facts_takes_the_hash_pair_with_it(graph_store):
+    """The spec 5.5 pair lives in the same row, so a build cannot read half a forgotten file."""
+    await graph_store.graph.set_facts(
+        "a.py", "{}", "h1", hashes=FileHashes(truth="t1", facts="f1")
+    )
+    await graph_store.graph.forget_facts(["a.py"])
+    assert await graph_store.graph.hashes("a.py") is None
+
+
+async def test_forget_facts_leaves_the_unresolved_queue_alone(graph_store):
+    """Same reason `prune` does: the queue is node keyed and every build replaces it whole."""
+    await graph_store.graph.set_facts("gone.py", "{}", "h1")
+    await graph_store.graph.replace_unresolved([_row("gone.py::f", "handle")])
+    await graph_store.graph.forget_facts(["gone.py"])
+    assert len(await graph_store.graph.unresolved()) == 1
+
+
+async def test_replace_graph_and_query(graph_store):
     nodes = [_n("a", rank=0.9, cluster_id=1), _n("b", cluster_id=1)]
     edges = [GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS, weight=1.0)]
     clusters = [GraphCluster(cluster_id=1, label="alpha", member_count=2)]
-    await store.graph.replace(nodes, edges, clusters)
-    assert (await store.graph.node("a"))["rank"] == pytest.approx(0.9)
-    assert [e["dst"] for e in await store.graph.edges_of("a", None)] == ["b"]
-    assert {m["id"] for m in await store.graph.cluster_members(1)} == {"a", "b"}
+    await graph_store.graph.replace(nodes, edges, clusters)
+    assert (await graph_store.graph.node("a"))["rank"] == pytest.approx(0.9)
+    assert [e["dst"] for e in await graph_store.graph.edges_of("a", None)] == ["b"]
+    assert {m["id"] for m in await graph_store.graph.cluster_members(1)} == {"a", "b"}
     # replace is idempotent (clears prior rows)
-    await store.graph.replace([_n("a")], [], [])
-    assert await store.graph.node("b") is None
+    await graph_store.graph.replace([_n("a")], [], [])
+    assert await graph_store.graph.node("b") is None
 
 
-async def test_all_edges(store):
+def test_edge_provenance_reads_a_column_the_loader_selects():
+    """`flow._source` degrades to "deterministic" on a missing key, so adding the S4 `provenance`
+    column without widening this SELECT would look like a walk regression."""
+    selected = set(
+        re.search(
+            r"SELECT ([\w, ]+) FROM graph_edges", inspect.getsource(GraphDB.all_edges)
+        )
+        .group(1)
+        .split(", ")
+    )
+    declared = {c.name for c in GraphDB.TABLES["graph_edges"].cols}
+    assert ("provenance" in selected) == ("provenance" in declared)
+
+
+async def test_edges_of_is_ordered_like_all_edges(graph_store):
+    """`neighbors` reads one node at depth 1 and the whole partition above it; unordered rows
+    made the reported ``edge``/``direction`` depend on which path was taken."""
+    nodes = [_n("a"), _n("b"), _n("c")]
+    edges = [
+        GraphEdge(src="a", dst="c", kind=EdgeKind.CALLS, weight=1.0),
+        GraphEdge(src="a", dst="b", kind=EdgeKind.IMPORTS, weight=1.0),
+        GraphEdge(src="b", dst="a", kind=EdgeKind.CALLS, weight=1.0),
+    ]
+    await graph_store.graph.replace(nodes, edges, [])
+    rows = await graph_store.graph.edges_of("a", None)
+    assert [(r["src"], r["dst"], r["kind"]) for r in rows] == [
+        ("a", "b", "imports"),
+        ("a", "c", "calls"),
+        ("b", "a", "calls"),
+    ]
+    assert rows == await graph_store.graph.edges_of("a", None)
+
+
+async def test_all_edges(graph_store):
     nodes = [_n("x"), _n("y"), _n("z")]
     edges = [
         GraphEdge(src="x", dst="y", kind=EdgeKind.CALLS, weight=1.0),
         GraphEdge(src="y", dst="z", kind=EdgeKind.IMPORTS, weight=0.5),
     ]
-    await store.graph.replace(nodes, edges, [])
-    all_e = await store.graph.all_edges()
+    await graph_store.graph.replace(nodes, edges, [])
+    all_e = await graph_store.graph.all_edges()
     assert len(all_e) == 2
     assert {(e["src"], e["dst"]) for e in all_e} == {("x", "y"), ("y", "z")}
+
+
+def _row(node_id: str, name: str, **kw) -> UnresolvedRow:
+    return UnresolvedRow(
+        node_id=node_id,
+        fact_kind=kw.pop("fact_kind", FactKind.CALLEE),
+        name=name,
+        reason=kw.pop("reason", UnresolvedReason.UNIMPORTABLE_NAME),
+        **kw,
+    )
+
+
+async def test_unresolved_roundtrip_decodes_json_columns(graph_store):
+    await graph_store.graph.replace_unresolved(
+        [
+            _row(
+                "m.py::f",
+                "handle",
+                receiver_root="svc",
+                call_form=CallForm.ATTR,
+                candidates=("a.py::handle",),
+                definers=("a.py::handle", "b.py::handle"),
+                resolution_path=("pkg/__init__.py",),
+                priority=3,
+                externally_bound=True,
+            )
+        ]
+    )
+    (row,) = await graph_store.graph.unresolved()
+    assert row["node_id"] == "m.py::f"
+    assert row["fact_kind"] == "callee"
+    assert row["call_form"] == "attr"
+    assert row["receiver_root"] == "svc"
+    assert row["candidates"] == ["a.py::handle"]
+    assert row["definers"] == ["a.py::handle", "b.py::handle"]
+    assert row["resolution_path"] == ["pkg/__init__.py"]
+    assert row["externally_bound"] is True
+    assert "repo" not in row
+
+
+async def test_unresolved_orders_by_priority_then_node_and_name(graph_store):
+    await graph_store.graph.replace_unresolved(
+        [
+            _row("z.py::f", "late", priority=4),
+            _row("a.py::f", "b_name", priority=1),
+            _row("a.py::f", "a_name", priority=1),
+        ]
+    )
+    rows = await graph_store.graph.unresolved()
+    assert [(r["node_id"], r["name"]) for r in rows] == [
+        ("a.py::f", "a_name"),
+        ("a.py::f", "b_name"),
+        ("z.py::f", "late"),
+    ]
+
+
+async def test_an_externally_bound_row_sinks_below_an_equal_priority_real_one(
+    graph_store,
+):
+    """Those rows are display only, so they must not push a briefable row off the first page."""
+    await graph_store.graph.replace_unresolved(
+        [
+            _row("a.py::f", "dimmed", priority=2, externally_bound=True),
+            _row("z.py::f", "real", priority=2),
+        ]
+    )
+    rows = await graph_store.graph.unresolved()
+    assert [r["name"] for r in rows] == ["real", "dimmed"]
+    kept = await graph_store.graph.unresolved(external=False)
+    assert [r["name"] for r in kept] == ["real"]
+
+
+async def test_unresolved_filters_and_limit(graph_store):
+    await graph_store.graph.replace_unresolved(
+        [
+            _row("a.py::f", "one", reason=UnresolvedReason.AMBIGUOUS_NAME, priority=1),
+            _row("b.py::g", "two"),
+            _row("c.py::h", "three"),
+        ]
+    )
+    by_reason = await graph_store.graph.unresolved(reasons=["ambiguous_name"])
+    assert [r["name"] for r in by_reason] == ["one"]
+    by_node = await graph_store.graph.unresolved(node_ids=["b.py::g", "c.py::h"])
+    assert {r["name"] for r in by_node} == {"two", "three"}
+    assert len(await graph_store.graph.unresolved(limit=2)) == 2
+
+
+async def test_unresolved_applies_the_limit_after_both_filters(graph_store):
+    """The limit has to count rows the caller sees; filtering in Python after an unbounded read
+    also means the whole partition lands in memory."""
+    await graph_store.graph.replace_unresolved(
+        [
+            _row(
+                "a.py::f",
+                "one",
+                call_form=CallForm.ATTR,
+                reason=UnresolvedReason.AMBIGUOUS_NAME,
+            ),
+            _row("b.py::g", "two", call_form=CallForm.BARE),
+            _row("c.py::h", "three", call_form=CallForm.BARE),
+            _row("d.py::i", "four", call_form=CallForm.BARE),
+        ]
+    )
+    assert [r["name"] for r in await graph_store.graph.unresolved(limit=2)] == [
+        "one",
+        "two",
+    ]
+    rows = await graph_store.graph.unresolved(call_forms=["bare"], limit=2)
+    assert [r["name"] for r in rows] == ["two", "three"]
+
+
+_SCOPED_QUEUE = (
+    ("auditor/cli/graph.py::run", "one"),
+    ("auditor/cli.py::run", "two"),
+    ("auditor/client.py::run", "three"),
+    ("auditor/cli", "four"),
+    ("helper.py::f", "five"),
+)
+
+
+@pytest.fixture
+async def scoped_queue(graph_store):
+    """A queue whose ids sit either side of every boundary `under_scope` draws."""
+    await graph_store.graph.replace_unresolved(
+        [_row(node_id, name) for node_id, name in _SCOPED_QUEUE]
+    )
+    return graph_store
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        ("auditor/cli", {"one", "four"}),
+        ("auditor/cli.py", {"two"}),
+        ("auditor", {"one", "two", "three", "four"}),
+        ("helper.py", {"five"}),
+        ("", {"one", "two", "three", "four", "five"}),
+        (None, {"one", "two", "three", "four", "five"}),
+        ("nothing", set()),
+    ],
+)
+async def test_a_prefix_matches_on_path_and_symbol_boundaries(
+    scoped_queue, prefix, expected
+):
+    """`auditor/cli` must not take `auditor/client.py`, and must take `auditor/cli` itself."""
+    rows = await scoped_queue.graph.unresolved(prefix=prefix)
+    assert {r["name"] for r in rows} == expected
+
+
+@pytest.mark.parametrize("prefix", ["auditor/cli", "auditor", "helper.py"])
+async def test_the_prefix_filter_agrees_with_under_scope(scoped_queue, prefix):
+    """The SQL and the service's own scope check answer the same question, so a run cannot brief
+    a row it would then refuse."""
+    every = await scoped_queue.graph.unresolved()
+    assert await scoped_queue.graph.unresolved(prefix=prefix) == [
+        r for r in every if under_scope(r["node_id"], prefix)
+    ]
+
+
+async def test_the_limit_applies_after_the_prefix(scoped_queue):
+    rows = await scoped_queue.graph.unresolved(prefix="auditor", limit=2)
+    assert len(rows) == 2
+    assert {r["name"] for r in rows} <= {"one", "two", "three", "four"}
+
+
+async def test_a_prefix_holding_like_wildcards_matches_literally(graph_store):
+    """`_` and `%` are LIKE wildcards, so an unescaped prefix would take a sibling directory."""
+    await graph_store.graph.replace_unresolved(
+        [_row("a_b/m.py::f", "real"), _row("axb/m.py::f", "decoy")]
+    )
+    rows = await graph_store.graph.unresolved(prefix="a_b")
+    assert [r["name"] for r in rows] == ["real"]
+
+
+@pytest.mark.parametrize("prefix", ["auditor/cli", "auditor", "helper.py", "", None])
+async def test_count_unresolved_counts_what_unresolved_returns(scoped_queue, prefix):
+    assert await scoped_queue.graph.count_unresolved(prefix) == len(
+        await scoped_queue.graph.unresolved(prefix=prefix, limit=None)
+    )
+
+
+async def test_count_unresolved_ignores_the_external_rows_when_asked(graph_store):
+    await graph_store.graph.replace_unresolved(
+        [_row("a.py::f", "real"), _row("a.py::g", "dimmed", externally_bound=True)]
+    )
+    assert await graph_store.graph.count_unresolved() == 2
+    assert await graph_store.graph.count_unresolved(external=False) == 1
+
+
+async def test_replace_unresolved_swaps_the_whole_queue(graph_store):
+    await graph_store.graph.replace_unresolved([_row("a.py::f", "gone")])
+    await graph_store.graph.replace_unresolved([_row("b.py::g", "kept")])
+    assert [r["name"] for r in await graph_store.graph.unresolved()] == ["kept"]
+
+
+async def test_same_node_and_name_under_two_reasons_both_persist(graph_store):
+    """The build emits a generic-label and a singleton-cluster row for the same cluster head, so
+    the reason is part of the key."""
+    await graph_store.graph.replace_unresolved(
+        [
+            _row(
+                "m.py::f",
+                "cluster-3",
+                fact_kind=FactKind.NODE,
+                reason=UnresolvedReason.GENERIC_LABEL,
+            ),
+            _row(
+                "m.py::f",
+                "cluster-3",
+                fact_kind=FactKind.NODE,
+                reason=UnresolvedReason.SINGLETON_CLUSTER,
+            ),
+        ]
+    )
+    assert len(await graph_store.graph.unresolved()) == 2
+
+
+async def test_replace_unresolved_tolerates_a_duplicate_key(graph_store):
+    """A build must not abort because two row sources agreed on a key; last write wins."""
+    dup = _row("m.py::f", "handle")
+    await graph_store.graph.replace_unresolved([dup, dup])
+    assert len(await graph_store.graph.unresolved()) == 1
+
+
+async def test_replace_tolerates_a_duplicate_node_and_cluster_key(graph_store):
+    """Same hardening on the node/cluster swap: a repeated key is a last write, not an
+    IntegrityError that takes the whole build down. `graph_edges` has no key to collide on."""
+    node = _n("x")
+    cluster = GraphCluster(cluster_id=1, label="user", member_count=1)
+    await graph_store.graph.replace([node, node], [], [cluster, cluster])
+    assert len(await graph_store.graph.nodes()) == 1
+    assert len(await graph_store.graph.clusters()) == 1
+
+
+async def test_facts_returns_the_cached_json_or_none(graph_store):
+    assert await graph_store.graph.facts("m.py") is None
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc")
+    assert await graph_store.graph.facts("m.py") == '{"path":"m.py"}'
+
+
+async def test_prune_leaves_the_unresolved_queue_alone(graph_store):
+    """The queue is node-keyed and rebuilt wholesale by every build, so it is deliberately not in
+    prune's per-path delete list. `gone.py` has to be a real indexed file or prune has nothing to
+    prune and the test passes for the wrong reason."""
+    await graph_store.files.upsert(
+        IndexEntry(
+            path="gone.py",
+            sha256="abc",
+            lines=1,
+            language="python",
+            role=FileRole.PRODUCTION,
+            last_scanned=1.0,
+        )
+    )
+    await graph_store.graph.set_facts("gone.py", "{}", "h1")
+    await graph_store.graph.replace_unresolved([_row("gone.py::f", "handle")])
+    assert await graph_store.prune(set()) == [
+        "gone.py"
+    ]  # the file row and its facts go
+    assert await graph_store.graph.facts("gone.py") is None
+    assert len(await graph_store.graph.unresolved()) == 1  # the queue row stays
+
+
+async def test_set_facts_stores_and_returns_the_file_hashes(graph_store):
+    assert await graph_store.graph.hashes("m.py") is None
+    hashes = FileHashes(truth="t1", facts="f1")
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc", hashes)
+    assert await graph_store.graph.hashes("m.py") == hashes
+
+
+async def test_set_facts_without_hashes_stores_nothing_to_compare(graph_store):
+    """Callers that hold no parsed facts (ad-hoc writes, tests) leave the columns NULL."""
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc")
+    assert await graph_store.graph.hashes("m.py") is None
+    assert (
+        await graph_store.graph.facts_hash("m.py") == "abc"
+    )  # content hash still there
+
+
+async def test_a_later_write_without_hashes_keeps_the_stored_pair(graph_store):
+    """The three-argument call is the one an ad-hoc writer makes; it must not erase the anchors
+    every refinement for that file is pinned to."""
+    hashes = FileHashes(truth="t1", facts="f1")
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "abc", hashes)
+    await graph_store.graph.set_facts("m.py", '{"path":"m.py"}', "def")
+    assert await graph_store.graph.hashes("m.py") == hashes
+    assert await graph_store.graph.facts_hash("m.py") == "def"
+
+
+async def test_a_half_written_hash_pair_reads_as_absent(graph_store):
+    """A read degrades to a miss rather than raising a ValidationError, the way every other
+    cache read here does."""
+    await graph_store.graph.set_facts(
+        "m.py", "{}", "abc", FileHashes(truth="t1", facts="f1")
+    )
+    await graph_store._worker.run(
+        lambda c: c.execute(
+            "UPDATE graph_facts SET facts_sha = NULL WHERE path = 'm.py'"
+        )
+    )
+    assert await graph_store.graph.hashes("m.py") is None
+
+
+async def test_edges_round_trip_their_provenance(graph_store):
+    edges = [
+        GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS),
+        GraphEdge(
+            src="a",
+            dst="c",
+            kind=EdgeKind.CALLS,
+            provenance=Provenance.REFINED,
+            confirmed=True,
+        ),
+    ]
+    await graph_store.graph.replace([_n("a"), _n("b"), _n("c")], edges, [])
+    by_dst = {e["dst"]: e for e in await graph_store.graph.all_edges()}
+    assert by_dst["b"]["provenance"] == "deterministic"
+    assert by_dst["b"]["confirmed"] == 0
+    assert by_dst["c"]["provenance"] == "refined"
+    assert by_dst["c"]["confirmed"] == 1
+    # edges_of has to carry it too: `graph neighbors` and the flow tree both read that shape
+    hop = {
+        e["dst"]: e["provenance"] for e in await graph_store.graph.edges_of("a", None)
+    }
+    assert hop == {"b": "deterministic", "c": "refined"}
+
+
+async def test_a_repeated_edge_key_collapses_to_one_row(graph_store):
+    """The unique index is what lets a refinement overwrite a deterministic edge in place."""
+    await graph_store.graph.replace(
+        [_n("a"), _n("b")],
+        [
+            GraphEdge(src="a", dst="b", kind=EdgeKind.CALLS),
+            GraphEdge(
+                src="a", dst="b", kind=EdgeKind.CALLS, provenance=Provenance.REFINED
+            ),
+        ],
+        [],
+    )
+    rows = await graph_store.graph.all_edges()
+    assert len(rows) == 1
+    assert rows[0]["provenance"] == "refined"  # last write wins
+
+
+async def test_node_and_cluster_provenance_round_trip(graph_store):
+    await graph_store.graph.replace(
+        [_n("a", cluster_id=1, refined=True, annotation="the retry path")],
+        [],
+        [
+            GraphCluster(
+                cluster_id=1,
+                label="retry",
+                member_count=1,
+                label_provenance=Provenance.REFINED,
+            )
+        ],
+    )
+    node = await graph_store.graph.node("a")
+    assert (node["refined"], node["annotation"]) == (1, "the retry path")
+    (cluster,) = await graph_store.graph.clusters()
+    assert cluster["label_provenance"] == "refined"
+    (member,) = await graph_store.graph.cluster_members(1)
+    assert (member["refined"], member["annotation"]) == (1, "the retry path")
+
+
+async def test_definers_answers_from_the_name_index(graph_store):
+    """`definers` runs once per proposal in a commit, so it may not scan the partition."""
+    await graph_store.graph.replace([_n("handle"), _n("other")], [], [])
+    assert await graph_store.graph.definers("handle") == ["handle"]
+    plan = await graph_store._worker.run(
+        lambda c: [
+            dict(r)
+            for r in c.execute(
+                "EXPLAIN QUERY PLAN SELECT node_id FROM graph_nodes "
+                "WHERE repo = ? AND name = ?",
+                ("r", "handle"),
+            )
+        ]
+    )
+    assert "graph_nodes_name" in " ".join(str(row["detail"]) for row in plan)
+
+
+async def test_a_database_made_before_the_name_index_gains_it_on_connect(tmp_path):
+    """Every declared statement runs on every connect, so a new index needs no version bump."""
+    db = tmp_path / "i.db"
+    async with await IndexStore.connect(db, repo="r") as store:
+        await store._worker.run(lambda c: c.execute("DROP INDEX graph_nodes_name"))
+        names = await store._worker.run(_index_names)
+        assert "graph_nodes_name" not in names
+    async with await IndexStore.connect(db, repo="r") as store:
+        assert "graph_nodes_name" in await store._worker.run(_index_names)
+
+
+def _index_names(conn: sqlite3.Connection) -> set[str]:
+    return {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }

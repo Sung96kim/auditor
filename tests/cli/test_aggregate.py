@@ -10,3 +10,12 @@ def test_incremental_scan_then_aggregate(sample_repo, tmp_path):
     res = invoke("aggregate", src, "-o", str(out))
     assert res.exit_code == 0
     assert out.exists() and "consolidated report" in out.read_text()
+
+
+def test_aggregate_creates_missing_output_directory(sample_repo, tmp_path):
+    src = str(sample_repo / "src")
+    assert invoke("scan", src, "--incremental").exit_code == 0
+    out = tmp_path / "reports" / "nested" / "AUDIT.md"
+    res = invoke("aggregate", src, "-o", str(out))
+    assert res.exit_code == 0, res.output
+    assert "consolidated report" in out.read_text()

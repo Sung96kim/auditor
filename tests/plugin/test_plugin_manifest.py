@@ -42,3 +42,16 @@ def test_mcp_config_runs_auditr_mcp():
 def test_settings_json_is_valid_and_enables_subagent_statusline():
     settings = _load("plugin/settings.json")
     assert settings["subagentStatusLine"] is True
+
+
+def test_manifest_lists_every_agent_file_and_nothing_else():
+    """A plugin agent is loaded from this list, so an unlisted file is a file nobody runs."""
+    m = _load("plugin/.claude-plugin/plugin.json")
+    listed = {Path(entry).name for entry in m["agents"]}
+    assert listed == {p.name for p in (ROOT / "plugin" / "agents").glob("*.md")}
+
+
+def test_manifest_version_is_hand_set_and_deliberate():
+    """No release tool writes this version, so a change here has to be meant. 0.2.1 is a patch on
+    0.2.0: four fixes under plugin/hooks and plugin/statusline, plus skill wording."""
+    assert _load("plugin/.claude-plugin/plugin.json")["version"] == "0.2.1"

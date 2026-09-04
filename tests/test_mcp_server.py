@@ -4,6 +4,7 @@ import json
 import subprocess
 
 import pytest
+from _support import BROKEN_CONFIGS, write_broken_config, write_plugin_repo
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddleware
@@ -19,7 +20,7 @@ from auditor.malware.dbs import DbUpdateReport
 from auditor.mcp import code_mode
 from auditor.mcp.artifacts import publish
 from auditor.mcp.server import MAX_TOOL_RESPONSE_BYTES
-from auditor.mcp_server import _GRAPH_OK, mcp
+from auditor.mcp_server import mcp
 from auditor.models import (
     Category,
     FileRole,
@@ -28,6 +29,21 @@ from auditor.models import (
     Severity,
     VerdictKind,
 )
+
+_GRAPH_TOOLS = {
+    "graph_build",
+    "graph_related",
+    "graph_neighbors",
+    "graph_flow",
+    "graph_concept",
+    "graph_clusters",
+    "graph_search",
+    "graph_usages",
+    "graph_overview",
+    "graph_unresolved",
+    "graph_refine",
+    "graph_refine_brief",
+}
 
 
 @pytest.mark.parametrize(
@@ -67,6 +83,40 @@ async def test_rules_list_tool():
     result = await mcp.call_tool("rules_list", {"category": "security"})
     data = _structured(result)
     assert data and all(r["category"] == "security" for r in data)
+    assert all(r["source"] == "built-in" for r in data)
+
+
+async def test_rules_list_tool_includes_repo_plugin_rules(tmp_path, restore_registry):
+    """The catalogue agents read covers the repo's plugin rules, with the file they came from."""
+    repo = write_plugin_repo(tmp_path)
+    rows = _structured(await mcp.call_tool("rules_list", {"root": str(repo)}))
+    house = [r for r in rows if r["rule_id"] == "HOUSE-NO-PRINT"]
+    assert house and house[0]["source"].endswith("house_rules.py")
+
+
+async def test_rules_list_tool_rejects_an_invalid_config(tmp_path):
+    """A repo config that fails validation is a tool error, not a pydantic traceback."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text(
+        'extends = "base"\n[rules]\nNO-SUCH-RULE = { enabled = false }\n'
+    )
+    with pytest.raises(ToolError, match="invalid config"):
+        await mcp.call_tool("rules_list", {"root": str(tmp_path)})
+
+
+@pytest.mark.parametrize("kind", sorted(BROKEN_CONFIGS))
+@pytest.mark.parametrize(
+    "tool, argument", [("discover", "path"), ("rules_list", "root")]
+)
+async def test_a_config_that_cannot_be_used_is_a_tool_error(
+    tmp_path, kind, tool, argument
+):
+    """The MCP edge catches the same family the CLI does: a bad profile, a cycle and unparseable
+    TOML reach the client as one line instead of a traceback on the server's stderr."""
+    phrase = write_broken_config(tmp_path, kind)
+    with pytest.raises(ToolError, match="invalid config") as caught:
+        await mcp.call_tool(tool, {argument: str(tmp_path)})
+    assert phrase in str(caught.value)
 
 
 async def test_report_tool(sample_repo):
@@ -271,7 +321,11 @@ async def test_scan_tool_config_override(sample_repo):
 async def test_scan_tool_bad_config_errors(sample_repo):
     with pytest.raises(ToolError, match="invalid config"):
         await mcp.call_tool(
-            "scan", {"path": str(sample_repo / "src"), "config": {"nope": 1}}
+            "scan",
+            {
+                "path": str(sample_repo / "src"),
+                "config": {"respect_gitignore": "nope"},
+            },
         )
 
 
@@ -669,7 +723,6 @@ async def test_malware_install_backend_absent_never_shells_out(monkeypatch):
     assert data["clamav_command"] == fake_command
 
 
-@pytest.mark.skipif(not _GRAPH_OK, reason="graph extra not installed")
 async def test_graph_search_and_usages_tools(sample_repo):
     """graph_search locates symbols and graph_usages returns grouped connectivity with full
     counts — exercised through the real MCP call path."""
@@ -706,7 +759,31 @@ def test_mcp_server_shim_reexports_package_objects():
     assert auditor.mcp_server.main is auditor.mcp.main
 
 
+async def test_every_graph_tool_registers_unconditionally():
+    """The graph libraries are core dependencies, so no import guard may hide these tools."""
+    names = {t.name for t in await mcp.list_tools()}
+    assert names >= _GRAPH_TOOLS, sorted(_GRAPH_TOOLS - names)
+
+
 # --- output-volume hardening ------------------------------------------------------------
+
+
+#: the refinement tools and what each one advertises: (readOnlyHint, idempotentHint). `abort` is
+#: mutating and not destructive on purpose (it drops staging that was never written), and the two
+#: that open or stage work of their own are not idempotent, so a retried timeout is visible.
+_REFINE_ANNOTATIONS = {
+    # opens a run and commits it, so a silent retry costs money twice and lands a second set
+    "graph_refine": (False, False),
+    "graph_refine_begin": (False, False),
+    # writes the run's prompt the first time it is read, and nothing on a re-read
+    "graph_refine_brief": (False, True),
+    "graph_refine_propose": (False, False),
+    "graph_refine_commit": (False, True),
+    "graph_refine_abort": (False, True),
+    "graph_refine_status": (True, True),
+    "graph_refinements": (True, True),
+    "graph_log": (True, True),
+}
 
 
 async def test_tool_annotations_read_only_vs_mutating():
@@ -718,8 +795,21 @@ async def test_tool_annotations_read_only_vs_mutating():
     assert tools["ignore_remove"].annotations.destructiveHint is True
     assert tools["malware_update_dbs"].annotations.readOnlyHint is False
     assert tools["malware_install"].annotations.readOnlyHint is False
-    if "graph_build" in tools:  # only when the graph extra is installed
-        assert tools["graph_build"].annotations.readOnlyHint is False
+    assert tools["graph_build"].annotations.readOnlyHint is False
+
+
+@pytest.mark.parametrize("name", sorted(_REFINE_ANNOTATIONS))
+async def test_the_refinement_tools_advertise_what_they_do(name: str):
+    """A client decides whether to prompt from these, and `graph_refine_abort` being destructive
+    would contradict the reference page: destructive means a row is deleted, and abort drops
+    staging that was never written. A tool that writes may not advertise `readOnlyHint`, whatever
+    else it does."""
+    read_only, idempotent = _REFINE_ANNOTATIONS[name]
+    annotations = {t.name: t.annotations for t in await mcp.list_tools()}[name]
+    assert annotations.readOnlyHint is read_only
+    assert annotations.idempotentHint is idempotent
+    assert annotations.destructiveHint is not True
+    assert annotations.openWorldHint is False
 
 
 def test_response_limiting_middleware_registered():

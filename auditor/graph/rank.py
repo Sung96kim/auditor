@@ -1,5 +1,7 @@
 """In-house PageRank over the structural graph (spec §9d). Needs numpy."""
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from auditor.graph.model import GraphEdge
@@ -8,8 +10,8 @@ _STRUCTURAL = ("calls", "overrides", "references_type")
 
 
 def pagerank(
-    node_ids: list[str],
-    edges: list[GraphEdge],
+    node_ids: Sequence[str],
+    edges: Sequence[GraphEdge],
     *,
     kinds: tuple[str, ...] = _STRUCTURAL,
     damping: float = 0.85,

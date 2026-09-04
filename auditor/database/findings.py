@@ -5,28 +5,32 @@
 # surface, not duplication; the substantive body was already extracted, clearing TWIN-METHODS)
 
 import sqlite3
-from typing import ClassVar
+from typing import Any, ClassVar
+
+from pydantic import BaseModel, ConfigDict
 
 from auditor.database.base import BaseDB, Column, Index, Table
 from auditor.models import Finding
 
 
-def _finding_to_row(repo: str, path: str, f: Finding) -> tuple:
-    return (
-        repo,
-        path,
-        f.rule_id,
-        str(f.category),
-        f.severity.value,
-        f.verdict_kind.value,
-        f.line,
-        f.message,
-        f.evidence,
-        f.suggestion,
-        f.detector,
-        f.checklist_item,
-        ",".join(f.standard_refs),
-    )
+def _finding_values(repo: str, path: str, f: Finding) -> dict[str, Any]:
+    """One finding as a column name -> value mapping, so the insert cannot transpose columns."""
+    return {
+        "repo": repo,
+        "path": path,
+        "rule_id": f.rule_id,
+        "category": str(f.category),
+        "severity": f.severity.value,
+        "verdict_kind": f.verdict_kind.value,
+        "line": f.line,
+        "message": f.message,
+        "evidence": f.evidence,
+        "suggestion": f.suggestion,
+        "detector": f.detector,
+        "subkind": f.subkind,
+        "checklist_item": f.checklist_item,
+        "standard_refs": ",".join(f.standard_refs),
+    }
 
 
 def _row_to_finding(row: sqlite3.Row) -> Finding:
@@ -40,11 +44,23 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
         evidence=row["evidence"],
         suggestion=row["suggestion"],
         detector=row["detector"],
+        subkind=row["subkind"],
         checklist_item=row["checklist_item"],
         standard_refs=(
             tuple(row["standard_refs"].split(",")) if row["standard_refs"] else ()
         ),
     )
+
+
+class FindingRow(BaseModel):
+    """One finding as the rule-prefix reader sees it: the fields a cross-cutting consumer needs
+    without materialising the whole record."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_id: str
+    subkind: str | None = None
+    evidence: str = ""
 
 
 class FindingsDB(BaseDB):
@@ -73,6 +89,7 @@ class FindingsDB(BaseDB):
                 Column(name="evidence", type="TEXT", not_null=True, default="''"),
                 Column(name="suggestion", type="TEXT"),
                 Column(name="detector", type="TEXT"),
+                Column(name="subkind", type="TEXT"),
                 Column(name="checklist_item", type="INTEGER"),
                 Column(name="standard_refs", type="TEXT", not_null=True, default="''"),
             ),
@@ -137,7 +154,7 @@ class FindingsDB(BaseDB):
         rule_ids = [rid for rid, _, _ in results]
         fr_rows = [(self.repo, path, rid, fp, when) for rid, fp, _ in results]
         f_rows = [
-            _finding_to_row(self.repo, path, f) for _, _, fs in results for f in fs
+            _finding_values(self.repo, path, f) for _, _, fs in results for f in fs
         ]
         placeholders = ",".join("?" for _ in rule_ids)
 
@@ -150,15 +167,11 @@ class FindingsDB(BaseDB):
                 fr_rows,
             )
             conn.execute(
-                f"DELETE FROM findings WHERE repo = ? AND path = ? AND rule_id IN ({placeholders})",  # noqa: S608
+                f"DELETE FROM findings WHERE repo = ? AND path = ? AND rule_id IN ({placeholders})",  # noqa: S608  (placeholders only)
                 (self.repo, path, *rule_ids),
             )
-            t = self.TABLES["findings"]
-            cols = ", ".join(t.insert_columns())
-            conn.executemany(
-                f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
-                f_rows,
-            )
+            insert, binds = self.insert_many_sql("findings", f_rows)
+            conn.executemany(insert, binds)
             conn.commit()
 
         await self._worker.run(op)
@@ -172,7 +185,7 @@ class FindingsDB(BaseDB):
         when: float,
     ) -> None:
         """Store a rule's result for a file: ledger row + replace its findings (atomic)."""
-        rows = [_finding_to_row(self.repo, path, f) for f in findings]
+        rows = [_finding_values(self.repo, path, f) for f in findings]
 
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
@@ -186,12 +199,8 @@ class FindingsDB(BaseDB):
                 "DELETE FROM findings WHERE repo = ? AND path = ? AND rule_id = ?",
                 (self.repo, path, rule_id),
             )
-            t = self.TABLES["findings"]
-            cols = ", ".join(t.insert_columns())
-            conn.executemany(
-                f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
-                rows,
-            )
+            insert, binds = self.insert_many_sql("findings", rows)
+            conn.executemany(insert, binds)
             conn.commit()
 
         await self._worker.run(op)
@@ -221,41 +230,49 @@ class FindingsDB(BaseDB):
 
         return await self._worker.run(op)
 
-    async def add(self, path: str, findings: list[Finding]) -> None:
-        rows = [_finding_to_row(self.repo, path, f) for f in findings]
+    def write_add(
+        self, conn: sqlite3.Connection, path: str, findings: list[Finding]
+    ) -> None:
+        """Append one path's findings on an open connection, without committing."""
+        rows = [_finding_values(self.repo, path, f) for f in findings]
+        self._ensure_repo(conn)
+        insert, binds = self.insert_many_sql("findings", rows)
+        conn.executemany(insert, binds)
 
+    async def add(self, path: str, findings: list[Finding]) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            t = self.TABLES["findings"]
-            cols = ", ".join(t.insert_columns())
-            conn.executemany(
-                f"INSERT INTO findings ({cols}) VALUES ({t.placeholders()})",  # noqa: S608
-                rows,
-            )
+            self.write_add(conn, path, findings)
             conn.commit()
 
         await self._worker.run(op)
 
-    async def by_rule_prefix(self, prefix: str) -> list[dict]:
+    async def by_rule_prefix(self, prefix: str) -> list[FindingRow]:
+        """Every finding whose rule id starts with ``prefix``, narrowed to the columns a
+        cross-cutting reader needs."""
         return [
-            dict(r)
+            FindingRow.model_validate(dict(r))
             for r in await self._fetch(
-                "SELECT rule_id, message, evidence FROM findings "
+                "SELECT rule_id, subkind, evidence FROM findings "
                 "WHERE repo = ? AND rule_id LIKE ? ORDER BY rule_id",
                 (f"{prefix}%",),
             )
         ]
 
-    async def clear_for_rules(self, rule_ids: list[str]) -> None:
+    def write_clear_for_rules(
+        self, conn: sqlite3.Connection, rule_ids: list[str]
+    ) -> None:
+        """Drop this repo's findings for ``rule_ids`` on an open connection, without committing."""
         if not rule_ids:
             return
         placeholders = ",".join("?" for _ in rule_ids)
+        conn.execute(
+            f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",  # noqa: S608  (placeholders only)
+            (self.repo, *rule_ids),
+        )
 
+    async def clear_for_rules(self, rule_ids: list[str]) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                f"DELETE FROM findings WHERE repo = ? AND rule_id IN ({placeholders})",
-                (self.repo, *rule_ids),
-            )
+            self.write_clear_for_rules(conn, rule_ids)
             conn.commit()
 
         await self._worker.run(op)

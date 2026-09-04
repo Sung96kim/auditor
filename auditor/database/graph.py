@@ -1,19 +1,71 @@
-"""GraphDB: table store for graph_facts, graph_nodes, graph_edges, and graph_clusters tables."""
+"""GraphDB: the ``graph_*`` table store. Cached per-file facts, the materialized nodes, edges
+and clusters, and the unresolved queue."""
 
 # auditor: skip-file: PY-OOP-PARALLEL-SIBLING  (data-access layer: each read method is a thin
-# delegation to the shared _fetch helper differing only in its SQL — parallel shape is the query
+# delegation to the shared _fetch helper differing only in its SQL; parallel shape is the query
 # surface, not duplication; the substantive body was already extracted, clearing TWIN-METHODS)
 
+import json
+import logging
 import sqlite3
+from collections.abc import Sequence
 from typing import Any, ClassVar
 
-from auditor.database.base import BaseDB, Column, Index, Table
-from auditor.graph.model import GraphCluster, GraphEdge, GraphNode
+from auditor.database.base import BaseDB, Column, Index, Table, immediate
+from auditor.graph.hashes import FileHashes
+from auditor.graph.model import (
+    TEST_ROLES,
+    GraphCluster,
+    GraphEdge,
+    GraphNode,
+    NodeKind,
+    UnresolvedRow,
+)
+from auditor.graph.textmodel import TEXT_MODEL_KIND, TextModel
+
+logger = logging.getLogger(__name__)
+
+_SET_FACTS_SQL = (
+    "INSERT INTO graph_facts (repo, path, facts_json, content_hash, truth_sha, facts_sha) "
+    "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
+    "facts_json=excluded.facts_json, content_hash=excluded.content_hash, "
+    "truth_sha=COALESCE(excluded.truth_sha, graph_facts.truth_sha), "
+    "facts_sha=COALESCE(excluded.facts_sha, graph_facts.facts_sha)"
+)
+_FORGET_FACTS_SQL = "DELETE FROM graph_facts WHERE repo = ? AND path = ?"
+
+
+def _facts_bind(
+    repo: str,
+    path: str,
+    facts_json: str,
+    content_hash: str,
+    hashes: FileHashes | None,
+) -> tuple[Any, ...]:
+    """One row's binds for ``_SET_FACTS_SQL``, so the single and the batched writer share them."""
+    return (
+        repo,
+        path,
+        facts_json,
+        content_hash,
+        hashes.truth if hashes else None,
+        hashes.facts if hashes else None,
+    )
+
+
+def _decode_unresolved(row: sqlite3.Row) -> dict[str, Any]:
+    """One queue row as a payload dict: JSON columns decoded, the flag a bool, ``repo`` dropped."""
+    out = dict(row)
+    out.pop("repo", None)
+    for col in ("candidates", "definers", "resolution_path"):
+        out[col] = json.loads(out.pop(f"{col}_json"))
+    out["externally_bound"] = bool(out["externally_bound"])
+    return out
 
 
 class GraphDB(BaseDB):
-    """Table store for the ``graph_facts``, ``graph_nodes``, ``graph_edges``, and
-    ``graph_clusters`` tables."""
+    """Table store for the ``graph_*`` tables: the cached per-file facts, the materialized nodes,
+    edges and clusters, and the unresolved queue. ``TABLES`` below is the list that does not rot."""
 
     attr: ClassVar[str] = "graph"
     TABLES: ClassVar[dict[str, Table]] = {
@@ -22,6 +74,8 @@ class GraphDB(BaseDB):
                 Column(name="path", type="TEXT", not_null=True, primary_key=True),
                 Column(name="facts_json", type="TEXT", not_null=True),
                 Column(name="content_hash", type="TEXT", not_null=True),
+                Column(name="truth_sha", type="TEXT"),
+                Column(name="facts_sha", type="TEXT"),
             ),
         ),
         "graph_nodes": Table(
@@ -36,9 +90,13 @@ class GraphDB(BaseDB):
                 Column(name="cluster_id", type="INTEGER"),
                 Column(name="abstractness", type="REAL", not_null=True, default="0"),
                 Column(name="text_sparse", type="INTEGER", not_null=True, default="0"),
+                Column(name="refined", type="INTEGER", not_null=True, default="0"),
+                Column(name="annotation", type="TEXT"),
             ),
             indexes=(
                 Index(name="graph_nodes_cluster", columns=("repo", "cluster_id")),
+                # `definers` filters on the name, once per proposal in a commit
+                Index(name="graph_nodes_name", columns=("repo", "name")),
             ),
         ),
         "graph_edges": Table(
@@ -47,10 +105,22 @@ class GraphDB(BaseDB):
                 Column(name="dst", type="TEXT", not_null=True),
                 Column(name="kind", type="TEXT", not_null=True),
                 Column(name="weight", type="REAL", not_null=True, default="1"),
+                Column(
+                    name="provenance",
+                    type="TEXT",
+                    not_null=True,
+                    default="'deterministic'",
+                ),
+                Column(name="confirmed", type="INTEGER", not_null=True, default="0"),
             ),
             indexes=(
                 Index(name="graph_edges_src", columns=("repo", "src")),
                 Index(name="graph_edges_dst", columns=("repo", "dst")),
+                Index(
+                    name="graph_edges_key",
+                    columns=("repo", "src", "dst", "kind"),
+                    unique=True,
+                ),
             ),
         ),
         "graph_clusters": Table(
@@ -60,22 +130,99 @@ class GraphDB(BaseDB):
                 ),
                 Column(name="label", type="TEXT", not_null=True),
                 Column(name="member_count", type="INTEGER", not_null=True),
+                Column(
+                    name="label_provenance",
+                    type="TEXT",
+                    not_null=True,
+                    default="'deterministic'",
+                ),
+            ),
+        ),
+        "graph_text_model": Table(
+            cols=(
+                Column(name="kind", type="TEXT", not_null=True, primary_key=True),
+                Column(name="node_ids", type="TEXT", not_null=True),
+                Column(name="vocabulary", type="TEXT", not_null=True),
+                Column(name="components", type="INTEGER", not_null=True),
+                Column(name="projection", type="BLOB", not_null=True),
+                Column(name="doc_vectors", type="BLOB", not_null=True),
+            ),
+        ),
+        "graph_unresolved": Table(
+            cols=(
+                Column(name="node_id", type="TEXT", not_null=True, primary_key=True),
+                Column(name="name", type="TEXT", not_null=True, primary_key=True),
+                Column(name="reason", type="TEXT", not_null=True, primary_key=True),
+                Column(name="fact_kind", type="TEXT", not_null=True),
+                Column(name="receiver_root", type="TEXT"),
+                Column(name="call_form", type="TEXT", not_null=True, default="'bare'"),
+                Column(
+                    name="candidates_json", type="TEXT", not_null=True, default="'[]'"
+                ),
+                Column(
+                    name="definers_json", type="TEXT", not_null=True, default="'[]'"
+                ),
+                Column(
+                    name="resolution_path_json",
+                    type="TEXT",
+                    not_null=True,
+                    default="'[]'",
+                ),
+                Column(name="priority", type="INTEGER", not_null=True, default="4"),
+                Column(
+                    name="externally_bound", type="INTEGER", not_null=True, default="0"
+                ),
+            ),
+            indexes=(
+                Index(name="graph_unresolved_priority", columns=("repo", "priority")),
+                Index(name="graph_unresolved_reason", columns=("repo", "reason")),
             ),
         ),
     }
 
-    async def set_facts(self, path: str, facts_json: str, content_hash: str) -> None:
+    async def set_facts(
+        self,
+        path: str,
+        facts_json: str,
+        content_hash: str,
+        hashes: FileHashes | None = None,
+    ) -> None:
+        """Cache one file's facts. ``hashes`` is the spec 5.5 pair, which the assessment compares
+        against a re-extraction; a caller without parsed facts leaves it out, which keeps whatever
+        pair is already stored rather than erasing it."""
+        binds = _facts_bind(self.repo, path, facts_json, content_hash, hashes)
+
         def op(conn: sqlite3.Connection) -> None:
             self._ensure_repo(conn)
-            conn.execute(
-                "INSERT INTO graph_facts (repo, path, facts_json, content_hash) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(repo, path) DO UPDATE SET "
-                "facts_json=excluded.facts_json, content_hash=excluded.content_hash",
-                (self.repo, path, facts_json, content_hash),
-            )
+            conn.execute(_SET_FACTS_SQL, binds)
             conn.commit()
 
         await self._worker.run(op)
+
+    async def replace_facts(
+        self,
+        *,
+        removed: Sequence[str],
+        written: Sequence[tuple[str, str, str, FileHashes | None]],
+    ) -> None:
+        """Forget the paths one edit batch removed and cache the rest, as a single commit.
+
+        One transaction because stage 1's short circuit compares against what this wrote: a crash
+        between the delete and the writes leaves the next rebuild reading two different edits.
+        """
+        if not removed and not written:
+            return
+        drops = [(self.repo, path) for path in removed]
+        rows = [_facts_bind(self.repo, *one) for one in written]
+
+        def op(conn: sqlite3.Connection) -> None:
+            self._ensure_repo(conn)
+            if drops:
+                conn.executemany(_FORGET_FACTS_SQL, drops)
+            if rows:
+                conn.executemany(_SET_FACTS_SQL, rows)
+
+        await self._worker.run(immediate(op))
 
     async def clear_facts(self) -> None:
         """Drop all cached per-file facts for this repo, forcing re-extraction on the next scan
@@ -87,30 +234,65 @@ class GraphDB(BaseDB):
 
         await self._worker.run(op)
 
+    async def forget_facts(self, paths: Sequence[str]) -> None:
+        """Drop these files' cached facts, for paths that are gone (spec 8.6's removed outcome).
+
+        One transaction for the batch, the way :meth:`IndexStore.prune` does it in bulk: a batch
+        carries every path a debounce window removed, and forgetting them one await at a time
+        leaves a crash halfway through with the graph half forgotten. Nothing else is keyed by
+        path: the spec 5.5 pair is two columns of this row, and `graph_unresolved` is node keyed.
+        """
+        if not paths:
+            return
+        binds = [(self.repo, p) for p in paths]
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.executemany(_FORGET_FACTS_SQL, binds)
+            conn.commit()
+
+        await self._worker.run(op)
+
     async def facts_hash(self, path: str) -> str | None:
-        row = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?",
-                (self.repo, path),
-            ).fetchone()
+        row = await self._fetch_one(
+            "SELECT content_hash FROM graph_facts WHERE repo = ? AND path = ?", (path,)
         )
         return row["content_hash"] if row else None
 
     async def all_facts(self) -> list[str]:
-        rows = await self._worker.run(
-            lambda c: c.execute(
-                "SELECT facts_json FROM graph_facts WHERE repo = ? ORDER BY path",
-                (self.repo,),
-            ).fetchall()
+        rows = await self._fetch(
+            "SELECT facts_json FROM graph_facts WHERE repo = ? ORDER BY path"
         )
         return [r["facts_json"] for r in rows]
 
-    async def replace(
+    async def facts(self, path: str) -> str | None:
+        """The cached ``FileGraphFacts`` JSON for one file, or ``None`` when it isn't indexed."""
+        row = await self._fetch_one(
+            "SELECT facts_json FROM graph_facts WHERE repo = ? AND path = ?", (path,)
+        )
+        return row["facts_json"] if row else None
+
+    async def hashes(self, path: str) -> FileHashes | None:
+        """The cached spec 5.5 pair for one file, or ``None`` unless both halves are stored.
+
+        A half-written pair degrades to a miss, the way every other read here does, rather than
+        raising a ValidationError out of a cache lookup.
+        """
+        row = await self._fetch_one(
+            "SELECT truth_sha, facts_sha FROM graph_facts WHERE repo = ? AND path = ?",
+            (path,),
+        )
+        if row is None or row["truth_sha"] is None or row["facts_sha"] is None:
+            return None
+        return FileHashes(truth=row["truth_sha"], facts=row["facts_sha"])
+
+    def write_graph(
         self,
-        nodes: list[GraphNode],
-        edges: list[GraphEdge],
-        clusters: list[GraphCluster],
+        conn: sqlite3.Connection,
+        nodes: Sequence[GraphNode],
+        edges: Sequence[GraphEdge],
+        clusters: Sequence[GraphCluster],
     ) -> None:
+        """Swap this repo's graph on an open connection, without committing."""
         node_rows = [
             (
                 self.repo,
@@ -124,33 +306,106 @@ class GraphDB(BaseDB):
                 n.cluster_id,
                 n.abstractness,
                 int(n.text_sparse),
+                int(n.refined),
+                n.annotation,
             )
             for n in nodes
         ]
-        edge_rows = [(self.repo, e.src, e.dst, e.kind.value, e.weight) for e in edges]
+        edge_rows = [
+            (
+                self.repo,
+                e.src,
+                e.dst,
+                e.kind.value,
+                e.weight,
+                e.provenance.value,
+                int(e.confirmed),
+            )
+            for e in edges
+        ]
         clu_rows = [
-            (self.repo, c.cluster_id, c.label, c.member_count) for c in clusters
+            (self.repo, c.cluster_id, c.label, c.member_count, c.label_provenance.value)
+            for c in clusters
         ]
 
+        self._ensure_repo(conn)
+        for t in ("graph_nodes", "graph_edges", "graph_clusters"):
+            conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608  (table name comes from a fixed tuple)
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_nodes (repo, node_id, kind, name, module, "
+            "role, line, rank, cluster_id, abstractness, text_sparse, refined, annotation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            node_rows,
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_edges (repo, src, dst, kind, weight, provenance, confirmed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            edge_rows,
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_clusters (repo, cluster_id, label, member_count, label_provenance) "
+            "VALUES (?, ?, ?, ?, ?)",
+            clu_rows,
+        )
+
+    def write_text_model(
+        self,
+        conn: sqlite3.Connection,
+        model: TextModel | None,
+    ) -> None:
+        """Swap this repo's stored naming fit on an open connection, without committing.
+
+        A build that fitted nothing clears the row rather than leaving the last build's fit to be
+        ranked against node ids this build may no longer have. ``_ensure_repo`` is redundant when
+        :meth:`write_graph` ran first on this connection and load-bearing when it did not: nothing
+        enforces the order, and the repo row is this table's foreign key parent.
+        """
+        self._ensure_repo(conn)
+        conn.execute(
+            "DELETE FROM graph_text_model WHERE repo = ? AND kind = ?",
+            (self.repo, TEXT_MODEL_KIND),
+        )
+        if model is None:
+            return
+        sql, binds = self.insert_sql(
+            "graph_text_model", {"repo": self.repo, **model.values()}
+        )
+        conn.execute(sql, binds)
+
+    async def text_model(self) -> TextModel | None:
+        """This repo's stored naming fit, or ``None`` when no build has written a usable one.
+
+        A torn row answers ``None`` too, logged once: this table is a cache, so a query degrades
+        to the name half instead of raising, and the next ``graph build`` rewrites the row.
+        """
+        row = await self._fetch_one(
+            "SELECT * FROM graph_text_model WHERE repo = ? AND kind = ?",
+            (TEXT_MODEL_KIND,),
+        )
+        if row is None:
+            return None
+        try:
+            model = TextModel.of_row(row)
+        except (TypeError, ValueError) as exc:
+            reason: object = exc
+        else:
+            if model.usable:
+                return model
+            reason = "the stored blobs do not match the shape the row declares"
+        logger.warning("ignoring a malformed %s fit: %s", TEXT_MODEL_KIND, reason)
+        return None
+
+    async def replace(
+        self,
+        nodes: Sequence[GraphNode],
+        edges: Sequence[GraphEdge],
+        clusters: Sequence[GraphCluster],
+    ) -> None:
         def op(conn: sqlite3.Connection) -> None:
-            self._ensure_repo(conn)
-            for t in ("graph_nodes", "graph_edges", "graph_clusters"):
-                conn.execute(f"DELETE FROM {t} WHERE repo = ?", (self.repo,))  # noqa: S608
-            conn.executemany(
-                "INSERT INTO graph_nodes (repo, node_id, kind, name, module, role, line, "
-                "rank, cluster_id, abstractness, text_sparse) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                node_rows,
-            )
-            conn.executemany(
-                "INSERT INTO graph_edges (repo, src, dst, kind, weight) VALUES (?, ?, ?, ?, ?)",
-                edge_rows,
-            )
-            conn.executemany(
-                "INSERT INTO graph_clusters (repo, cluster_id, label, member_count) "
-                "VALUES (?, ?, ?, ?)",
-                clu_rows,
-            )
+            self.write_graph(conn, nodes, edges, clusters)
+            # a fit describes the node set it was built from, so replacing the nodes clears it
+            # (`replace` is the fixture entry point; the build writes through `Snapshot.apply`)
+            self.write_text_model(conn, None)
             conn.commit()
 
         await self._worker.run(op)
@@ -161,6 +416,33 @@ class GraphDB(BaseDB):
         )
         return dict(row) if row else None
 
+    async def module_ids(self) -> list[str]:
+        """Every module node id in this partition, which is what decides whether an import source
+        names a repo module (spec 9.2's externally-bound rule)."""
+        return [
+            r["node_id"]
+            for r in await self._fetch(
+                "SELECT node_id FROM graph_nodes WHERE repo = ? AND kind = ? ORDER BY node_id",
+                (NodeKind.MODULE.value,),
+            )
+        ]
+
+    async def definers(self, name: str) -> list[str]:
+        """Every non-test node in this partition whose short name is ``name`` (spec 9.2).
+
+        The role filter is the resolver's: a proposal may not point at a test stub, and a proposal
+        with no queue row behind it has nowhere else to learn what defines the name.
+        """
+        placeholders = ",".join("?" for _ in TEST_ROLES)
+        return [
+            r["node_id"]
+            for r in await self._fetch(
+                "SELECT node_id FROM graph_nodes WHERE repo = ? AND name = ? "
+                f"AND role NOT IN ({placeholders}) ORDER BY node_id",  # noqa: S608  (placeholders only)
+                (name, *TEST_ROLES),
+            )
+        ]
+
     async def nodes(self) -> list[dict[str, Any]]:
         return [
             dict(r)
@@ -169,21 +451,37 @@ class GraphDB(BaseDB):
             )
         ]
 
+    async def count_nodes(self) -> int:
+        """How many nodes this repo's partition holds, for the status line's `graph` segment.
+
+        A reader of its own rather than `len(await nodes())`, which decodes every row in the
+        graph for one number and runs on every observer tick.
+        """
+        row = await self._fetch_one(
+            "SELECT COUNT(*) AS n FROM graph_nodes WHERE repo = ?"
+        )
+        return int(row["n"]) if row else 0
+
     async def edges_of(
         self, node_id: str, kinds: list[str] | None
     ) -> list[dict[str, Any]]:
-        sql = "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? AND (src = ? OR dst = ?)"
+        sql = (
+            "SELECT src, dst, kind, weight, provenance, confirmed FROM graph_edges "
+            "WHERE repo = ? AND (src = ? OR dst = ?)"
+        )
         params: list[Any] = [node_id, node_id]
         if kinds:
             sql += f" AND kind IN ({','.join('?' for _ in kinds)})"
             params += kinds
+        # same ORDER BY as all_edges, so a caller reading one node sees the whole-partition order
+        sql += " ORDER BY src, dst, kind"
         return [dict(r) for r in await self._fetch(sql, tuple(params))]
 
     async def cluster_members(self, cluster_id: int) -> list[dict[str, Any]]:
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT node_id AS id, name, module, rank FROM graph_nodes "
+                "SELECT node_id AS id, name, module, rank, refined, annotation FROM graph_nodes "
                 "WHERE repo = ? AND cluster_id = ? ORDER BY rank DESC, node_id",
                 (cluster_id,),
             )
@@ -193,7 +491,7 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT cluster_id, label, member_count FROM graph_clusters "
+                "SELECT cluster_id, label, member_count, label_provenance FROM graph_clusters "
                 "WHERE repo = ? ORDER BY member_count DESC, cluster_id"
             )
         ]
@@ -202,6 +500,118 @@ class GraphDB(BaseDB):
         return [
             dict(r)
             for r in await self._fetch(
-                "SELECT src, dst, kind, weight FROM graph_edges WHERE repo = ? ORDER BY src, dst, kind"
+                "SELECT src, dst, kind, weight, provenance, confirmed FROM graph_edges "
+                "WHERE repo = ? ORDER BY src, dst, kind"
             )
         ]
+
+    def write_unresolved(
+        self, conn: sqlite3.Connection, rows: Sequence[UnresolvedRow]
+    ) -> None:
+        """Swap this repo's whole unresolved queue on an open connection, without committing."""
+        values = [
+            (
+                self.repo,
+                r.node_id,
+                r.name,
+                r.reason.value,
+                r.fact_kind.value,
+                r.receiver_root,
+                r.call_form.value,
+                json.dumps(list(r.candidates)),
+                json.dumps(list(r.definers)),
+                json.dumps(list(r.resolution_path)),
+                r.priority,
+                int(r.externally_bound),
+            )
+            for r in rows
+        ]
+        self._ensure_repo(conn)
+        conn.execute("DELETE FROM graph_unresolved WHERE repo = ?", (self.repo,))
+        conn.executemany(
+            "INSERT OR REPLACE INTO graph_unresolved (repo, node_id, name, reason, "
+            "fact_kind, receiver_root, call_form, candidates_json, definers_json, "
+            "resolution_path_json, priority, externally_bound) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            values,
+        )
+
+    async def replace_unresolved(self, rows: Sequence[UnresolvedRow]) -> None:
+        """Swap this repo's whole unresolved queue for ``rows``; every build rebuilds it."""
+
+        def op(conn: sqlite3.Connection) -> None:
+            self.write_unresolved(conn, rows)
+            conn.commit()
+
+        await self._worker.run(op)
+
+    @staticmethod
+    def _scope_clause(prefix: str | None) -> tuple[str, list[Any]]:
+        """The WHERE tail that keeps only rows under ``prefix``, on a path or a symbol boundary.
+
+        The same rule `graph.refine.namespace.under_scope` applies in Python, so the reader and the
+        service's scope check cannot drift. An empty prefix filters nothing.
+        """
+        if not prefix:
+            return "", []
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return (
+            " AND (node_id = ? OR node_id LIKE ? ESCAPE '\\' OR node_id LIKE ? ESCAPE '\\')",
+            [prefix, f"{escaped}/%", f"{escaped}::%"],
+        )
+
+    def _queue_where(
+        self, *, external: bool, prefix: str | None
+    ) -> tuple[str, list[Any]]:
+        """The WHERE tail both queue readers share, so a scope means one thing to the count and
+        to the rows it counts."""
+        sql = ""
+        params: list[Any] = []
+        if not external:
+            sql += " AND externally_bound = 0"
+        scope_sql, scope_params = self._scope_clause(prefix)
+        return sql + scope_sql, params + scope_params
+
+    async def unresolved(
+        self,
+        node_ids: list[str] | None = None,
+        reasons: list[str] | None = None,
+        call_forms: list[str] | None = None,
+        limit: int | None = None,
+        *,
+        external: bool = True,
+        prefix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Queue rows in drain order: priority, then the externally bound rows, then node id and
+        name. Every filter and the limit run in SQL, so the limit counts rows the caller sees."""
+        sql = "SELECT * FROM graph_unresolved WHERE repo = ?"
+        params: list[Any] = []
+        for col, values in (
+            ("node_id", node_ids),
+            ("reason", reasons),
+            ("call_form", call_forms),
+        ):
+            if values:
+                sql += f" AND {col} IN ({','.join('?' for _ in values)})"
+                params += values
+        tail, tail_params = self._queue_where(external=external, prefix=prefix)
+        sql += tail
+        params += tail_params
+        sql += " ORDER BY priority, externally_bound, node_id, name"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [_decode_unresolved(r) for r in await self._fetch(sql, tuple(params))]
+
+    async def count_unresolved(
+        self, prefix: str | None = None, *, external: bool = True
+    ) -> int:
+        """How many queue rows a scope holds, so a capped brief can say what it left behind.
+
+        A reader of its own rather than a flag on `unresolved`: that one decodes every row it
+        returns, which on a real repo is the whole queue for one number.
+        """
+        sql = "SELECT COUNT(*) AS n FROM graph_unresolved WHERE repo = ?"
+        tail, params = self._queue_where(external=external, prefix=prefix)
+        row = await self._fetch_one(sql + tail, tuple(params))
+        return int(row["n"]) if row else 0

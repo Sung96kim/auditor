@@ -1,0 +1,1193 @@
+"""The identity-keyed stores: ``RunsDB``, ``RefinementsDB``, ``TuningDB`` and ``EvalsDB``.
+
+Keyed by ``repo_identity`` rather than by the repo partition, so a forgotten partition never takes
+another worktree's work with it, and preserved across a ``SCHEMA_VERSION`` bump. They share this
+module because they share the row decoders and the ``IN`` clause helper below.
+"""
+
+import json
+import logging
+import sqlite3
+import time
+from collections.abc import Callable, Sequence
+from typing import Any, ClassVar
+
+from pydantic import ValidationError
+
+from auditor.database.base import BaseDB, Column, Index, Table, immediate
+from auditor.graph.model import DAY_SECONDS
+from auditor.graph.refine.models import (
+    ACTIVE_STATUSES,
+    STOPWORDS_KEY,
+    STORED_ROW,
+    Anchor,
+    EvalMetrics,
+    EvalRow,
+    NodePair,
+    ProducerKind,
+    PruneOutcome,
+    Refinement,
+    RefinementCounts,
+    RefinementKind,
+    RefinementOutcome,
+    RefinementStatus,
+    Run,
+    RunnerKind,
+    RunOutcome,
+    RunStatus,
+    RunUsage,
+    Spend,
+    TriggerDetail,
+    TriggerKind,
+    TuningMetrics,
+    TuningRow,
+    TuningStatus,
+)
+from auditor.user_settings import STRANDED_RUNNING_FACTOR
+
+logger = logging.getLogger(__name__)
+
+
+class NoSuchRun(RuntimeError):
+    """An update named a run this checkout's identity does not own.
+
+    The identity tables are shared, so an UPDATE that matched nothing means the row belongs to
+    another checkout (or never existed); silently updating nothing would lose that.
+    """
+
+
+def _run_from_row(row: sqlite3.Row) -> Run:
+    """One row as a `Run`, rebuilding the sub-models the insert spread into flat columns."""
+    data = dict(row)
+    data["trigger_detail"] = json.loads(data["trigger_detail"])
+    data["tool_trace"] = json.loads(data["tool_trace"])
+    data["usage"] = {field: data.pop(field) for field in RunUsage.model_fields}
+    return Run.model_validate(data)
+
+
+def _refinement_from_row(row: sqlite3.Row) -> Refinement:
+    data = dict(row)
+    for column in ("target", "payload", "evidence"):
+        data[column] = json.loads(data[column])
+    return Refinement.model_validate(data, context={STORED_ROW: True})
+
+
+def _usage_values(usage: RunUsage) -> dict[str, Any]:
+    """The usage columns; SQLite has no boolean, so the estimated flag lands as 0 or 1."""
+    return {**usage.model_dump(), "cost_estimated": int(usage.cost_estimated)}
+
+
+def _run_values(run: Run) -> dict[str, Any]:
+    """One run as a column name -> value mapping, so the insert cannot transpose two columns."""
+    return {
+        "run_id": run.run_id,
+        "repo_identity": run.repo_identity,
+        "origin_partition": run.origin_partition,
+        "partition_prefix": run.partition_prefix,
+        "client": run.client.value,
+        "producer": run.producer.value,
+        "runner": run.runner.value,
+        "trigger_kind": run.trigger_kind.value,
+        "trigger_detail": run.trigger_detail.model_dump_json(),
+        "session_id": run.session_id,
+        "agent_name": run.agent_name,
+        "branch": run.branch,
+        "commit_sha": run.commit_sha,
+        "dirty": int(run.dirty),
+        "model": run.model,
+        "prompt": run.prompt,
+        "system_prompt_sha": run.system_prompt_sha,
+        "tool_trace": json.dumps([call.model_dump() for call in run.tool_trace]),
+        **_usage_values(run.usage),
+        "sdk_session_id": run.sdk_session_id,
+        "status": run.status.value,
+        "summary": run.summary,
+        "error": run.error,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "updated_at": run.started_at,
+    }
+
+
+def _outcome_values(outcome: RunOutcome, *, now: float) -> dict[str, Any]:
+    """A terminal state as a column name -> value mapping, one key per ``RunOutcome`` field."""
+    values = {field: getattr(outcome, field) for field in RunOutcome.model_fields}
+    values.pop("usage")
+    values["status"] = outcome.status.value
+    values["tool_trace"] = json.dumps(
+        [call.model_dump() for call in outcome.tool_trace]
+    )
+    values["finished_at"] = outcome.finished_at if outcome.finished_at else now
+    values["updated_at"] = now
+    return values | _usage_values(outcome.usage)
+
+
+def _refinement_values(refinement: Refinement) -> dict[str, Any]:
+    return {
+        "run_id": refinement.run_id,
+        "repo_identity": refinement.repo_identity,
+        "kind": refinement.kind.value,
+        "target": refinement.target.model_dump_json(exclude_defaults=True),
+        "payload": refinement.payload.model_dump_json(exclude_defaults=True),
+        "reason": refinement.reason,
+        "evidence": json.dumps([e.model_dump() for e in refinement.evidence]),
+        "confidence": refinement.confidence,
+        "tier": refinement.tier.value,
+        "status": refinement.status.value,
+        "drifted": int(refinement.drifted),
+        "noop_builds": refinement.noop_builds,
+        "supersedes": refinement.supersedes,
+        "attempts": refinement.attempts,
+        "created_at": refinement.created_at,
+        "status_at": refinement.status_at,
+    }
+
+
+def _eval_rows(rows: Sequence[sqlite3.Row]) -> list[EvalRow]:
+    """Readable rows as `EvalRow`s, rebuilding each metrics block from its flat columns.
+
+    A row this build cannot read, an unknown stratum being the one way that happens, is logged and
+    dropped: `service._policy` is on the `propose` path, where a traceback would take down every
+    correction rather than one measurement.
+    """
+    out: list[EvalRow] = []
+    for row in rows:
+        data = dict(row)
+        data["metrics"] = {field: data.pop(field) for field in EvalMetrics.model_fields}
+        try:
+            out.append(EvalRow.model_validate(data))
+        except ValidationError as exc:
+            logger.warning("skipping unreadable graph_evals row: %s", exc)
+    return out
+
+
+def _tuning_rows(rows: Sequence[sqlite3.Row]) -> list[TuningRow]:
+    """``graph_tuning`` rows as models, with the metrics column decoded out of its JSON string."""
+    return [
+        TuningRow.model_validate(dict(r) | {"metrics": json.loads(r["metrics"])})
+        for r in rows
+    ]
+
+
+def _in_clause(column: str, values: Sequence[object]) -> str:
+    return f" AND {column} IN ({','.join('?' for _ in values)})"
+
+
+def _inserted_id(cursor: sqlite3.Cursor) -> int:
+    """The autoincrement key the insert just assigned, named rather than cast off ``int | None``.
+
+    SQLite populates it on every successful autoincrement insert, so the raise is a contract
+    statement: an ``int(None)`` here would have been a TypeError with no name on it (S11 L3).
+    """
+    if cursor.lastrowid is None:
+        raise RuntimeError("the insert assigned no rowid")
+    return cursor.lastrowid
+
+
+class RunsDB(BaseDB):
+    """Table store for ``graph_runs``: one row per decision, model call or not (spec 5.3).
+
+    Reads bind the handle's identity; writes address a globally unique id and bind the identity
+    too, so neither can reach another checkout's rows.
+    """
+
+    attr: ClassVar[str] = "runs"
+    TABLES: ClassVar[dict[str, Table]] = {
+        "graph_runs": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(name="run_id", type="TEXT", not_null=True, primary_key=True),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(
+                    name="origin_partition", type="TEXT", not_null=True, default="''"
+                ),
+                Column(
+                    name="partition_prefix", type="TEXT", not_null=True, default="''"
+                ),
+                Column(name="client", type="TEXT", not_null=True, default="'cli'"),
+                Column(name="producer", type="TEXT", not_null=True, default="'cli'"),
+                Column(name="runner", type="TEXT", not_null=True, default="'none'"),
+                Column(
+                    name="trigger_kind", type="TEXT", not_null=True, default="'manual'"
+                ),
+                Column(
+                    name="trigger_detail", type="TEXT", not_null=True, default="'{}'"
+                ),
+                Column(name="session_id", type="TEXT"),
+                Column(name="agent_name", type="TEXT"),
+                Column(name="branch", type="TEXT"),
+                Column(name="commit_sha", type="TEXT"),
+                Column(name="dirty", type="INTEGER", not_null=True, default="0"),
+                Column(name="model", type="TEXT"),
+                Column(name="prompt", type="TEXT"),
+                Column(name="system_prompt_sha", type="TEXT"),
+                Column(name="tool_trace", type="TEXT", not_null=True, default="'[]'"),
+                Column(name="cost_usd", type="REAL", not_null=True, default="0"),
+                Column(
+                    name="cost_estimated", type="INTEGER", not_null=True, default="0"
+                ),
+                Column(name="input_tokens", type="INTEGER", not_null=True, default="0"),
+                Column(
+                    name="output_tokens", type="INTEGER", not_null=True, default="0"
+                ),
+                Column(name="num_turns", type="INTEGER", not_null=True, default="0"),
+                Column(name="sdk_session_id", type="TEXT"),
+                Column(name="status", type="TEXT", not_null=True, default="'queued'"),
+                Column(name="summary", type="TEXT"),
+                Column(name="error", type="TEXT"),
+                Column(name="started_at", type="REAL", not_null=True, default="0"),
+                Column(name="finished_at", type="REAL"),
+                #: every writer below stamps this, so a reader can see an in-place update
+                Column(name="updated_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_runs_identity", columns=("repo_identity", "started_at")
+                ),
+            ),
+        ),
+    }
+
+    async def add_run(self, run: Run) -> str:
+        sql, binds = self.insert_sql("graph_runs", _run_values(run))
+
+        def op(conn: sqlite3.Connection) -> str:
+            conn.execute(sql, binds)
+            conn.commit()
+            return run.run_id
+
+        return await self._worker.run(op)
+
+    async def finish_run(self, run_id: str, outcome: RunOutcome) -> None:
+        """Stamp a run's terminal state. Cost is recorded even for `aborted` (spec 5.3).
+
+        Raises:
+            NoSuchRun: no run with this id belongs to this checkout's identity, so the row that
+                would have been stamped terminal is still open somewhere and nothing said so.
+        """
+        values = _outcome_values(outcome, now=time.time())
+        assignments = ", ".join(f"{column}=?" for column in values)
+        sql = (
+            f"UPDATE graph_runs SET {assignments} "  # noqa: S608  (columns come from RunOutcome)
+            "WHERE run_id=? AND repo_identity=?"
+        )
+        binds = (*values.values(), run_id, self.partition.identity)
+
+        def op(conn: sqlite3.Connection) -> int:
+            changed = conn.execute(sql, binds).rowcount
+            conn.commit()
+            return changed
+
+        if await self._worker.run(op) == 0:
+            raise NoSuchRun(f"no run {run_id} on this checkout")
+
+    async def set_running(self, run_id: str) -> None:
+        """Stamp a queued run `running`, so a row with a model burning turns says so (spec 5.3).
+
+        Silent for a run that is not queued: `terminate` and the registry's eviction both close a
+        row without asking, and a producer that lost the race must not raise over the status.
+        """
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE graph_runs SET status = ?, updated_at = ? "
+                "WHERE run_id = ? AND repo_identity = ? AND status = ?",
+                (
+                    RunStatus.RUNNING.value,
+                    time.time(),
+                    run_id,
+                    self.partition.identity,
+                    RunStatus.QUEUED.value,
+                ),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+    async def targeted_since(self, since: float) -> frozenset[NodePair]:
+        """Every pair a run of this identity named since ``since``: spec 8.3's cooldown set.
+
+        Read off ``trigger_detail`` rather than a table of its own, because `graph_unresolved` is
+        replaced by every build and a column on it would be wiped with the rows.
+        """
+        rows = await self._fetch_by_identity(
+            "SELECT trigger_detail FROM graph_runs "
+            "WHERE repo_identity = ? AND started_at >= ?",
+            (since,),
+        )
+        out: set[NodePair] = set()
+        for row in rows:
+            raw = row["trigger_detail"]
+            if not raw:
+                continue
+            try:
+                detail = TriggerDetail.model_validate_json(raw)
+            except ValidationError:
+                continue
+            out.update(detail.targets)
+        return frozenset(out)
+
+    async def opened_since(self, trigger: TriggerKind, since: float) -> int:
+        """How many runs of this trigger this identity opened since ``since`` (spec 8.3).
+
+        One aggregate rather than a filter on :meth:`runs`, which decodes rows for a count: the
+        verify pass asks this once a tick and needs a number, not a page.
+        """
+        row = await self._fetch_one_by_identity(
+            "SELECT COUNT(*) AS n FROM graph_runs "
+            "WHERE repo_identity = ? AND trigger_kind = ? AND started_at >= ?",
+            (trigger.value, since),
+        )
+        return int(row["n"]) if row else 0
+
+    async def record_prompt(
+        self, run_id: str, *, prompt: str, system_prompt_sha: str
+    ) -> None:
+        """Record the brief a run was given, and the hash of the rules it was given with it.
+
+        Written mid-run: `add_run` happens before the brief exists, and a run that dies after it
+        must still show what it was asked (Invariant 2).
+
+        Raises:
+            NoSuchRun: no run with this id belongs to this checkout's identity.
+        """
+        sql = (
+            "UPDATE graph_runs SET prompt = ?, system_prompt_sha = ?, updated_at = ? "
+            "WHERE run_id = ? AND repo_identity = ?"
+        )
+        binds = (
+            prompt,
+            system_prompt_sha,
+            time.time(),
+            run_id,
+            self.partition.identity,
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            changed = conn.execute(sql, binds).rowcount
+            conn.commit()
+            return changed
+
+        if await self._worker.run(op) == 0:
+            raise NoSuchRun(f"no run {run_id} on this checkout")
+
+    async def run(self, run_id: str) -> Run | None:
+        row = await self._fetch_one_by_identity(
+            "SELECT * FROM graph_runs WHERE repo_identity = ? AND run_id = ?", (run_id,)
+        )
+        return _run_from_row(row) if row else None
+
+    @staticmethod
+    def _filter(
+        statuses: Sequence[RunStatus] | None,
+        exclude: Sequence[RunStatus] | None,
+        since: float | None,
+    ) -> tuple[str, list[Any]]:
+        """The WHERE tail a page and its total share, so the two cannot narrow differently."""
+        sql = ""
+        params: list[Any] = []
+        if statuses:
+            sql += _in_clause("status", statuses)
+            params += [s.value for s in statuses]
+        if exclude:
+            placeholders = ",".join("?" for _ in exclude)
+            sql += f" AND status NOT IN ({placeholders})"  # noqa: S608  (placeholders only)
+            params += [s.value for s in exclude]
+        if since is not None:
+            sql += " AND started_at >= ?"
+            params.append(since)
+        return sql, params
+
+    async def runs(
+        self,
+        *,
+        statuses: Sequence[RunStatus] | None = None,
+        exclude: Sequence[RunStatus] | None = None,
+        since: float | None = None,
+        limit: int | None = None,
+    ) -> list[Run]:
+        """Runs newest first. Every filter and the limit run in SQL, so ``limit`` counts rows the
+        caller sees and a time window is applied before it, not after."""
+        where, params = self._filter(statuses, exclude, since)
+        sql = f"SELECT * FROM graph_runs WHERE repo_identity = ?{where}"  # noqa: S608
+        sql += " ORDER BY started_at DESC, run_id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [
+            _run_from_row(r) for r in await self._fetch_by_identity(sql, tuple(params))
+        ]
+
+    async def count(
+        self,
+        *,
+        statuses: Sequence[RunStatus] | None = None,
+        exclude: Sequence[RunStatus] | None = None,
+        since: float | None = None,
+    ) -> int:
+        """How many runs the same filters match, so a page at the limit says how much it left."""
+        where, params = self._filter(statuses, exclude, since)
+        row = await self._fetch_one_by_identity(
+            f"SELECT COUNT(*) AS n FROM graph_runs WHERE repo_identity = ?{where}",  # noqa: S608
+            tuple(params),
+        )
+        return int(row["n"]) if row else 0
+
+    async def last_change(self) -> float:
+        """When this checkout's ledger last moved, insert or in-place update alike.
+
+        A run is written once and then mutated: `set_running` and `finish_run` move neither the
+        row count nor the newest start, so a tag built from those two cannot see a run finish.
+        """
+        row = await self._fetch_one_by_identity(
+            "SELECT COALESCE(MAX(updated_at), 0.0) AS at "
+            "FROM graph_runs WHERE repo_identity = ?"
+        )
+        return float(row["at"]) if row else 0.0
+
+    async def spend_since(self, since: float) -> Spend:
+        """What this checkout's model-calling runs cost since ``since`` (spec 8.4).
+
+        One aggregate rather than a filter on :meth:`runs`, which decodes a whole day of the
+        ledger for two numbers. Only the rows the observer wrote to record a decision it declined
+        to act on are excluded; a run an agent drove through the MCP tools also has no runner of
+        its own, and it did call a model.
+        """
+        row = await self._fetch_one_by_identity(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) AS cost_usd, COUNT(*) AS runs "
+            "FROM graph_runs WHERE repo_identity = ? AND started_at >= ? "
+            "AND NOT (runner = ? AND producer = ?)",
+            (since, RunnerKind.NONE.value, ProducerKind.OBSERVER.value),
+        )
+        if row is None:
+            return Spend()
+        return Spend(cost_usd=float(row["cost_usd"]), runs=int(row["runs"]))
+
+    async def finish_stranded_runs(
+        self,
+        *,
+        older_than: float,
+        running_factor: float = STRANDED_RUNNING_FACTOR,
+        now: float | None = None,
+    ) -> int:
+        """Finish this identity's runs still open after their own window (spec 5.3, 8.5).
+
+        Both open statuses, on two windows: a `queued` row is open for milliseconds, while a
+        `running` row is open for a whole model call, so it gets ``running_factor`` times as long
+        before a live run is stamped under its own runner.
+        """
+        stamp = time.time() if now is None else now
+        running_than = older_than * running_factor
+        sql = (
+            "UPDATE graph_runs SET status = ?, error = ?, finished_at = ?, updated_at = ? "
+            "WHERE repo_identity = ? AND status = ? AND started_at < ?"
+        )
+        windows = (
+            (RunStatus.QUEUED, older_than),
+            (RunStatus.RUNNING, running_than),
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            changed = 0
+            for status, window in windows:
+                changed += conn.execute(
+                    sql,
+                    (
+                        RunStatus.SKIPPED.value,
+                        f"stranded: no commit within {int(window)} s",
+                        stamp,
+                        stamp,
+                        self.partition.identity,
+                        status.value,
+                        stamp - window,
+                    ),
+                ).rowcount
+            conn.commit()
+            return max(changed, 0)
+
+        return await self._worker.run(op)
+
+    async def prune_skipped_runs(
+        self, retention_days: int, *, now: float | None = None
+    ) -> PruneOutcome:
+        """Drop this identity's assessment-only rows older than ``retention_days`` (spec 5.1).
+
+        The gate's own rows alone: the observer's, no runner, and a reason on the assessment
+        rather than in ``error``, which is the only record an evicted or stranded run has.
+        """
+        cutoff = (time.time() if now is None else now) - retention_days * DAY_SECONDS
+        identity = self.partition.identity
+        eligible = (
+            "SELECT run_id FROM graph_runs WHERE repo_identity = ? AND status = ? "
+            "AND started_at < ? AND runner = ? AND producer = ? AND error IS NULL "
+            "AND json_extract(trigger_detail, '$.assessment') IS NOT NULL "
+            # neither table has an ON DELETE, so a row owning either is kept rather than orphaned
+            "AND run_id NOT IN (SELECT run_id FROM graph_tuning WHERE repo_identity = ?) "
+            "AND run_id NOT IN (SELECT run_id FROM graph_refinements "
+            "WHERE repo_identity = ? AND status != ?)"
+        )
+        binds = (
+            identity,
+            RunStatus.SKIPPED.value,
+            cutoff,
+            RunnerKind.NONE.value,
+            ProducerKind.OBSERVER.value,
+            identity,
+            identity,
+            RefinementStatus.REJECTED.value,
+        )
+
+        def op(conn: sqlite3.Connection) -> PruneOutcome:
+            doomed = [(identity, r[0]) for r in conn.execute(eligible, binds)]
+            if not doomed:
+                return PruneOutcome()
+            dropped = conn.executemany(
+                "DELETE FROM graph_refinements WHERE repo_identity = ? AND run_id = ?",
+                doomed,
+            ).rowcount
+            conn.executemany(
+                "DELETE FROM graph_runs WHERE repo_identity = ? AND run_id = ?", doomed
+            )
+            conn.commit()
+            return PruneOutcome(
+                removed_runs=len(doomed), removed_refinements=max(dropped, 0)
+            )
+
+        return await self._worker.run(op)
+
+
+class RefinementsDB(BaseDB):
+    """Table store for ``graph_refinements`` and ``graph_refinement_anchors`` (spec 5.4, 5.5).
+
+    Reads bind the handle's identity; writes address a globally unique id and bind the identity
+    too, so neither can reach another checkout's rows.
+    """
+
+    attr: ClassVar[str] = "refinements"
+    TABLES: ClassVar[dict[str, Table]] = {
+        "graph_refinements": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="refinement_id",
+                    type="INTEGER",
+                    primary_key=True,
+                    autoincrement=True,
+                ),
+                Column(
+                    name="run_id",
+                    type="TEXT",
+                    not_null=True,
+                    references="graph_runs (run_id)",
+                ),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(name="kind", type="TEXT", not_null=True),
+                Column(name="target", type="TEXT", not_null=True, default="'{}'"),
+                Column(name="payload", type="TEXT", not_null=True, default="'{}'"),
+                Column(name="reason", type="TEXT", not_null=True, default="''"),
+                Column(name="evidence", type="TEXT", not_null=True, default="'[]'"),
+                Column(name="confidence", type="REAL", not_null=True, default="0"),
+                Column(name="tier", type="TEXT", not_null=True, default="'C'"),
+                Column(name="status", type="TEXT", not_null=True, default="'pending'"),
+                Column(name="drifted", type="INTEGER", not_null=True, default="0"),
+                Column(name="noop_builds", type="INTEGER", not_null=True, default="0"),
+                Column(name="supersedes", type="INTEGER"),
+                Column(name="attempts", type="INTEGER", not_null=True, default="0"),
+                Column(name="created_at", type="REAL", not_null=True, default="0"),
+                Column(name="status_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_refinements_identity",
+                    columns=("repo_identity", "status"),
+                ),
+            ),
+        ),
+        "graph_refinement_anchors": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="refinement_id",
+                    type="INTEGER",
+                    not_null=True,
+                    primary_key=True,
+                    references="graph_refinements (refinement_id) ON DELETE CASCADE",
+                ),
+                Column(name="node_id", type="TEXT", not_null=True, primary_key=True),
+                Column(name="path", type="TEXT", not_null=True),
+                Column(name="truth_sha", type="TEXT", not_null=True),
+                Column(name="file_sha", type="TEXT", not_null=True, default="''"),
+            ),
+            indexes=(
+                Index(name="graph_anchors_refinement", columns=("refinement_id",)),
+            ),
+        ),
+    }
+
+    def write_refinement(
+        self,
+        conn: sqlite3.Connection,
+        refinement: Refinement,
+        anchors: Sequence[Anchor] = (),
+    ) -> int:
+        """Insert one refinement and its anchors on the open connection, without committing.
+
+        The caller's transaction owns the commit, so one commit's whole batch lands together or
+        not at all; `write_outcomes` below is the same arrangement for a build.
+        """
+        sql, binds = self.insert_sql(
+            "graph_refinements", _refinement_values(refinement)
+        )
+        new_id = _inserted_id(conn.execute(sql, binds))
+        anchor_sql, anchor_binds = self.insert_many_sql(
+            "graph_refinement_anchors",
+            [
+                {
+                    "refinement_id": new_id,
+                    "node_id": a.node_id,
+                    "path": a.path,
+                    "truth_sha": a.truth_sha,
+                    "file_sha": a.file_sha,
+                }
+                for a in anchors
+            ],
+            or_replace=True,
+        )
+        conn.executemany(anchor_sql, anchor_binds)
+        return new_id
+
+    async def add_refinement(
+        self, refinement: Refinement, anchors: Sequence[Anchor] = ()
+    ) -> int:
+        """Insert one refinement and its anchors together; returns the assigned id."""
+
+        def op(conn: sqlite3.Connection) -> int:
+            new_id = self.write_refinement(conn, refinement, anchors)
+            conn.commit()
+            return new_id
+
+        return await self._worker.run(op)
+
+    @staticmethod
+    def _filter(
+        statuses: Sequence[RefinementStatus] | None,
+        kinds: Sequence[RefinementKind] | None,
+        since: float | None,
+        ids: Sequence[int] | None = None,
+    ) -> tuple[str, list[Any]]:
+        """The WHERE tail a page and its total share, so the two cannot narrow differently."""
+        sql = ""
+        params: list[Any] = []
+        if statuses:
+            sql += _in_clause("status", statuses)
+            params += [s.value for s in statuses]
+        if kinds:
+            sql += _in_clause("kind", kinds)
+            params += [k.value for k in kinds]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            sql += f" AND refinement_id IN ({placeholders})"  # noqa: S608  (placeholders only)
+            params += list(ids)
+        if since is not None:
+            sql += " AND created_at >= ?"
+            params.append(since)
+        return sql, params
+
+    async def count(
+        self,
+        *,
+        statuses: Sequence[RefinementStatus] | None = None,
+        kinds: Sequence[RefinementKind] | None = None,
+        since: float | None = None,
+    ) -> int:
+        """How many refinements the same filters match, so a page at the limit says how much it
+        left behind rather than looking like the whole list."""
+        where, params = self._filter(statuses, kinds, since)
+        row = await self._fetch_one_by_identity(
+            f"SELECT COUNT(*) AS n FROM graph_refinements WHERE repo_identity = ?{where}",  # noqa: S608
+            tuple(params),
+        )
+        return int(row["n"]) if row else 0
+
+    async def refinements(
+        self,
+        *,
+        statuses: Sequence[RefinementStatus] | None = None,
+        kinds: Sequence[RefinementKind] | None = None,
+        since: float | None = None,
+        ids: Sequence[int] | None = None,
+        newest_first: bool = False,
+        limit: int | None = None,
+    ) -> list[Refinement]:
+        """Refinements oldest first, or newest first for a log page. Every filter and the limit
+        run in SQL, so a time window is applied before the limit rather than after it.
+
+        Newest first orders on ``created_at`` before the id, because ``since`` filters on
+        ``created_at``: a backdated row would otherwise page ahead of rows inside the window.
+        """
+        where, params = self._filter(statuses, kinds, since, ids)
+        sql = f"SELECT * FROM graph_refinements WHERE repo_identity = ?{where}"  # noqa: S608
+        sql += (
+            " ORDER BY created_at DESC, refinement_id DESC"
+            if newest_first
+            else " ORDER BY created_at, refinement_id"
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [
+            _refinement_from_row(r)
+            for r in await self._fetch_by_identity(sql, tuple(params))
+        ]
+
+    async def active(self) -> list[Refinement]:
+        """The refinements a build applies: `active` plus `pinned` (spec 5.7)."""
+        return await self.refinements(statuses=sorted(ACTIVE_STATUSES))
+
+    async def refinement(self, refinement_id: int) -> Refinement | None:
+        """One row by id, so a caller never renders a refinement it did not read."""
+        row = await self._fetch_one_by_identity(
+            "SELECT * FROM graph_refinements WHERE repo_identity = ? AND refinement_id = ?",
+            (refinement_id,),
+        )
+        return _refinement_from_row(row) if row else None
+
+    async def of_run(self, run_id: str) -> list[Refinement]:
+        """Every refinement one run owns, rejected ones included (spec 9.2)."""
+        return [
+            _refinement_from_row(r)
+            for r in await self._fetch_by_identity(
+                "SELECT * FROM graph_refinements WHERE repo_identity = ? AND run_id = ? "
+                "ORDER BY refinement_id",
+                (run_id,),
+            )
+        ]
+
+    async def counts_by_run(
+        self, run_ids: Sequence[str]
+    ) -> dict[str, RefinementCounts]:
+        """What each run produced, split by fate, for the run log's last column.
+
+        Split in SQL rather than counted twice: a run's rejections are rows it owns, and a column
+        that added them to its corrections would credit a run with work it refused.
+        """
+        if not run_ids:
+            return {}
+        placeholders = ",".join("?" for _ in run_ids)
+        rows = await self._fetch_by_identity(
+            "SELECT run_id, status, COUNT(*) AS n FROM graph_refinements "
+            "WHERE repo_identity = ? "
+            f"AND run_id IN ({placeholders}) GROUP BY run_id, status",  # noqa: S608  (placeholders only)
+            tuple(run_ids),
+        )
+        counts: dict[str, RefinementCounts] = {}
+        for row in rows:
+            found = counts.get(row["run_id"], RefinementCounts())
+            counts[row["run_id"]] = found.plus(
+                RefinementStatus(row["status"]), int(row["n"])
+            )
+        return counts
+
+    async def anchors(
+        self, refinement_ids: Sequence[int]
+    ) -> dict[int, tuple[Anchor, ...]]:
+        """The anchors of ``refinement_ids`` that belong to this identity, by refinement id."""
+        if not refinement_ids:
+            return {}
+        placeholders = ",".join("?" for _ in refinement_ids)
+        # the anchor rows carry no identity of their own, so they are scoped through their parent
+        rows = await self._fetch_by_identity(
+            "SELECT * FROM graph_refinement_anchors WHERE refinement_id IN "
+            "(SELECT refinement_id FROM graph_refinements WHERE repo_identity = ?) "
+            f"AND refinement_id IN ({placeholders}) "  # noqa: S608  (placeholders only)
+            "ORDER BY refinement_id, node_id",
+            tuple(refinement_ids),
+        )
+        out: dict[int, list[Anchor]] = {}
+        for row in rows:
+            anchor = Anchor.model_validate(dict(row))
+            out.setdefault(anchor.refinement_id, []).append(anchor)
+        return {rid: tuple(anchors) for rid, anchors in out.items()}
+
+    async def set_status(
+        self, refinement_id: int, status: RefinementStatus, *, now: float | None = None
+    ) -> None:
+        stamp = time.time() if now is None else now
+        identity = self.partition.identity
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE graph_refinements SET status=?, status_at=? "
+                "WHERE refinement_id=? AND repo_identity=?",
+                (status.value, stamp, refinement_id, identity),
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+    async def set_statuses(
+        self,
+        refinement_ids: Sequence[int],
+        status: RefinementStatus,
+        *,
+        from_status: RefinementStatus | None = None,
+        now: float | None = None,
+    ) -> None:
+        """Move several refinements to one status as a single write.
+
+        A commit whose build failed takes its own inserts back; doing it row by row would leave a
+        window where half of them are still live. ``from_status`` makes the move conditional, so
+        a row a human changed under the caller keeps the status the human gave it.
+        """
+        if not refinement_ids:
+            return
+        stamp = time.time() if now is None else now
+        identity = self.partition.identity
+        guard = " AND status=?" if from_status is not None else ""
+        tail = (from_status.value,) if from_status is not None else ()
+        binds = [(status.value, stamp, rid, identity, *tail) for rid in refinement_ids]
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.executemany(
+                "UPDATE graph_refinements SET status=?, status_at=? "
+                f"WHERE refinement_id=? AND repo_identity=?{guard}",  # noqa: S608
+                binds,
+            )
+            conn.commit()
+
+        await self._worker.run(op)
+
+    def write_outcomes(
+        self,
+        conn: sqlite3.Connection,
+        outcomes: Sequence[RefinementOutcome],
+        now: float,
+    ) -> None:
+        """Apply one build's verdicts on the open connection, without committing.
+
+        The build's transaction owns the commit, so a graph and its provenance land together;
+        ``GraphWrite.apply`` is the caller that needs it.
+        """
+        identity = self.partition.identity
+        for outcome in outcomes:
+            conn.execute(
+                "UPDATE graph_refinements SET noop_builds=?, drifted=? "
+                "WHERE refinement_id=? AND repo_identity=?",
+                (
+                    outcome.noop_builds,
+                    int(outcome.drifted),
+                    outcome.refinement_id,
+                    identity,
+                ),
+            )
+            if outcome.status is not None:
+                conn.execute(
+                    "UPDATE graph_refinements SET status=?, status_at=? "
+                    "WHERE refinement_id=? AND repo_identity=?",
+                    (outcome.status.value, now, outcome.refinement_id, identity),
+                )
+
+    async def apply_outcomes(
+        self, outcomes: Sequence[RefinementOutcome], *, now: float | None = None
+    ) -> None:
+        stamp = time.time() if now is None else now
+
+        def op(conn: sqlite3.Connection) -> None:
+            self.write_outcomes(conn, outcomes, stamp)
+            conn.commit()
+
+        await self._worker.run(op)
+
+
+class TuningDB(BaseDB):
+    """Table store for ``graph_tuning``: the proposed knob changes (spec 5.8)."""
+
+    attr: ClassVar[str] = "tuning"
+    TABLES: ClassVar[dict[str, Table]] = {
+        "graph_tuning": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="tuning_id",
+                    type="INTEGER",
+                    primary_key=True,
+                    autoincrement=True,
+                ),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(name="key", type="TEXT", not_null=True),
+                Column(name="value_json", type="TEXT", not_null=True),
+                Column(name="token", type="TEXT", not_null=True, default="''"),
+                Column(
+                    name="run_id",
+                    type="TEXT",
+                    not_null=True,
+                    references="graph_runs (run_id)",
+                ),
+                Column(name="reason", type="TEXT", not_null=True, default="''"),
+                Column(name="status", type="TEXT", not_null=True, default="'pending'"),
+                Column(name="metrics", type="TEXT", not_null=True, default="'{}'"),
+                Column(name="created_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_tuning_identity", columns=("repo_identity", "status")
+                ),
+            ),
+        ),
+    }
+
+    async def add_tuning(self, row: TuningRow) -> int:
+        sql, binds = self.insert_sql(
+            "graph_tuning",
+            {
+                "repo_identity": row.repo_identity,
+                "key": row.key,
+                "value_json": row.value_json,
+                "token": row.token,
+                "run_id": row.run_id,
+                "reason": row.reason,
+                "status": row.status.value,
+                "metrics": row.metrics.model_dump_json(),
+                "created_at": row.created_at,
+            },
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            cur = conn.execute(sql, binds)
+            conn.commit()
+            return _inserted_id(cur)
+
+        return await self._worker.run(op)
+
+    async def tuning(
+        self, *, statuses: Sequence[TuningStatus] | None = None
+    ) -> list[TuningRow]:
+        sql = "SELECT * FROM graph_tuning WHERE repo_identity = ?"
+        params: list[Any] = []
+        if statuses:
+            sql += _in_clause("status", statuses)
+            params += [s.value for s in statuses]
+        sql += " ORDER BY tuning_id"
+        return _tuning_rows(await self._fetch_by_identity(sql, tuple(params)))
+
+    async def supersede_and_add(
+        self, row: TuningRow, decide: Callable[[Sequence[TuningRow]], Sequence[int]]
+    ) -> int:
+        """Decide this proposal against the rows it will land beside, and insert it, in one
+        transaction.
+
+        ``decide`` names the rows the new one retires, or raises to refuse it, and it reads the
+        rows inside the insert's own ``BEGIN IMMEDIATE`` so two processes proposing at once
+        cannot both pass a check neither of them leaves standing (S11 M2). One commit for both
+        halves because they are one decision: a failing insert must not leave the older row
+        superseded with nothing standing in for it (S11 L3).
+        """
+        identity = self.partition.identity
+        sql, binds = self.insert_sql(
+            "graph_tuning",
+            {
+                "repo_identity": row.repo_identity,
+                "key": row.key,
+                "value_json": row.value_json,
+                "token": row.token,
+                "run_id": row.run_id,
+                "reason": row.reason,
+                "status": row.status.value,
+                "metrics": row.metrics.model_dump_json(),
+                "created_at": row.created_at,
+            },
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            live = _tuning_rows(
+                conn.execute(
+                    "SELECT * FROM graph_tuning WHERE repo_identity = ? "
+                    "ORDER BY tuning_id",
+                    (identity,),
+                ).fetchall()
+            )
+            for tuning_id in decide(live):
+                conn.execute(
+                    "UPDATE graph_tuning SET status=? "
+                    "WHERE tuning_id=? AND repo_identity=?",
+                    (TuningStatus.SUPERSEDED.value, tuning_id, identity),
+                )
+            return _inserted_id(conn.execute(sql, binds))
+
+        return await self._worker.run(immediate(op))
+
+    async def set_tuning_metrics(
+        self,
+        tuning_id: int,
+        metrics: TuningMetrics,
+        status: TuningStatus,
+        *,
+        expected: Sequence[TuningStatus],
+    ) -> bool:
+        """Write one trial's metrics and the status its verdict earns while the row still reads
+        one of ``expected``, and say whether that write landed.
+
+        Conditional because a trial is tens of seconds long and a human can accept or revert the
+        row inside that window: an unconditional write puts their decision back to `pending` with
+        nothing anywhere saying so (S11 H2). Metrics and status go together because a guard that
+        refused and the row that says so are one fact: a reader that saw the metrics without the
+        status would see a refusal it could still accept.
+        """
+        identity = self.partition.identity
+        blob = metrics.model_dump_json()
+        allowed = [s.value for s in expected]
+
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "UPDATE graph_tuning SET metrics=?, status=? "
+                "WHERE tuning_id=? AND repo_identity=?"
+                + (_in_clause("status", allowed) if allowed else ""),
+                (blob, status.value, tuning_id, identity, *allowed),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+        return await self._worker.run(op)
+
+    async def activate(
+        self, tuning_id: int, *, expected: TuningStatus, cap: int
+    ) -> bool:
+        """Move one row to `active` while it still reads ``expected`` and fewer than ``cap``
+        stopword rows are active, and say whether that write landed.
+
+        The cap is counted inside the write's own statement rather than read first: two accepts
+        landing together both pass a check-then-write and take the count past the bound
+        ``stopwords_max`` exists to hold (S11 M2).
+        """
+        identity = self.partition.identity
+
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(
+                "UPDATE graph_tuning SET status=? "
+                "WHERE tuning_id=? AND repo_identity=? AND status=? AND ("
+                " SELECT COUNT(*) FROM graph_tuning WHERE repo_identity=? AND status=?"
+                " AND key=?) < ?",
+                (
+                    TuningStatus.ACTIVE.value,
+                    tuning_id,
+                    identity,
+                    expected.value,
+                    identity,
+                    TuningStatus.ACTIVE.value,
+                    STOPWORDS_KEY,
+                    cap,
+                ),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+        return await self._worker.run(op)
+
+    async def set_tuning_status(
+        self,
+        tuning_id: int,
+        status: TuningStatus,
+        *,
+        expected: Sequence[TuningStatus] | None = None,
+    ) -> bool:
+        """Move one row, optionally only while it still reads one of ``expected``, and say
+        whether that write landed. ``None`` skips the check entirely; the one production
+        caller (`TuningLedger._move`) always passes `expected`, so today only test fixture
+        setup takes this branch (S11 L4)."""
+        identity = self.partition.identity
+        allowed = [s.value for s in expected or ()]
+        sql = (
+            "UPDATE graph_tuning SET status=? WHERE tuning_id=? AND repo_identity=?"
+            + (_in_clause("status", allowed) if allowed else "")
+        )
+
+        def op(conn: sqlite3.Connection) -> bool:
+            cur = conn.execute(sql, (status.value, tuning_id, identity, *allowed))
+            conn.commit()
+            return cur.rowcount > 0
+
+        return await self._worker.run(op)
+
+
+class EvalsDB(BaseDB):
+    """Table store for ``graph_evals``: one suite stratum's measured accuracy (spec 5.8, 10.2)."""
+
+    attr: ClassVar[str] = "evals"
+    TABLES: ClassVar[dict[str, Table]] = {
+        "graph_evals": Table(
+            repo_fk=False,
+            cache=False,
+            cols=(
+                Column(
+                    name="eval_id", type="INTEGER", primary_key=True, autoincrement=True
+                ),
+                Column(name="repo_identity", type="TEXT", not_null=True),
+                Column(name="runner", type="TEXT", not_null=True),
+                Column(name="model", type="TEXT", not_null=True),
+                Column(name="suite", type="TEXT", not_null=True),
+                Column(name="stratum", type="TEXT", not_null=True),
+                Column(name="n", type="INTEGER", not_null=True, default="0"),
+                Column(name="correct", type="INTEGER", not_null=True, default="0"),
+                Column(name="precision", type="REAL", not_null=True, default="0"),
+                Column(name="recall", type="REAL", not_null=True, default="0"),
+                Column(name="false_add_rate", type="REAL", not_null=True, default="0"),
+                Column(
+                    name="false_removal_rate", type="REAL", not_null=True, default="0"
+                ),
+                Column(name="lower_bound_95", type="REAL", not_null=True, default="0"),
+                Column(name="cost_usd", type="REAL", not_null=True, default="0"),
+                Column(name="num_turns", type="INTEGER", not_null=True, default="0"),
+                Column(name="created_at", type="REAL", not_null=True, default="0"),
+            ),
+            indexes=(
+                Index(
+                    name="graph_evals_identity",
+                    columns=("repo_identity", "runner", "model"),
+                ),
+            ),
+        ),
+    }
+
+    async def add_eval(self, row: EvalRow) -> int:
+        sql, binds = self.insert_sql(
+            "graph_evals",
+            {
+                "repo_identity": row.repo_identity,
+                "runner": row.runner.value,
+                "model": row.model,
+                "suite": row.suite,
+                "stratum": row.stratum,
+                **row.metrics.model_dump(),
+                "cost_usd": row.cost_usd,
+                "num_turns": row.num_turns,
+                "created_at": row.created_at,
+            },
+        )
+
+        def op(conn: sqlite3.Connection) -> int:
+            cur = conn.execute(sql, binds)
+            conn.commit()
+            return _inserted_id(cur)
+
+        return await self._worker.run(op)
+
+    async def latest(self, runner: RunnerKind, model: str) -> list[EvalRow]:
+        """The newest row per ``(suite, stratum)`` for this runner and model (spec 10.3).
+
+        A correlated subquery rather than a window function, which no query in this store uses;
+        the tiebreak is ``eval_id``, this table's own autoincrement key, not ``rowid``.
+        """
+        sql = (
+            "SELECT * FROM graph_evals AS e "
+            "WHERE e.repo_identity = ? AND e.runner = ? AND e.model = ? AND e.eval_id = ("
+            "  SELECT l.eval_id FROM graph_evals AS l"
+            "  WHERE l.repo_identity = e.repo_identity AND l.runner = e.runner"
+            "   AND l.model = e.model AND l.suite = e.suite AND l.stratum = e.stratum"
+            "  ORDER BY l.created_at DESC, l.eval_id DESC LIMIT 1"
+            ") ORDER BY e.suite, e.stratum"
+        )
+        return _eval_rows(await self._fetch_by_identity(sql, (runner.value, model)))

@@ -11,17 +11,22 @@ from mcp.types import ResourceLink
 from pydantic import ValidationError
 
 from auditor.aggregate import AuditAggregator
-from auditor.config import load_config
-from auditor.database import IndexStore
+from auditor.config import ConfigError
 from auditor.discovery import FileDiscovery, find_root, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity, gate_tripped
 from auditor.malware.tools import resolve_tool
 from auditor.mcp.artifacts import publish
-from auditor.mcp.helpers import READ_ONLY, validate_detail
+from auditor.mcp.helpers import (
+    READ_ONLY,
+    config_error,
+    tool_config,
+    tool_repo,
+    tool_repo_at,
+    validate_detail,
+)
 from auditor.mcp.server import mcp
 from auditor.models import ManifestEntry, ScanResult
-from auditor.paths import index_db_path, repo_key
 from auditor.registry import REGISTRY
 from auditor.reporters.json_reporter import payload as json_payload
 from auditor.roles import RoleClassifier
@@ -49,7 +54,7 @@ def _report_or_link(
             body,
             mime_type="application/json",
             name=f"{kind}-full.json",
-            description=f"Full {kind} report — {findings} findings across {len(results)} "
+            description=f"Full {kind} report: {findings} findings across {len(results)} "
             f"files ({len(body)} bytes). Read this resource for the complete record.",
         )
     return json_payload(results, detail=detail, limit=limit)
@@ -75,7 +80,7 @@ async def scan(
 ) -> dict | ResourceLink:
     """Audit a file or directory → ``{files, totals}`` (plus ``gate``/``omitted`` when set).
 
-    - ``since`` (git ref): scope output to files changed vs the ref — the whole repo is still
+    - ``since`` (git ref): scope output to files changed vs the ref; the whole repo is still
       scanned so cross-file rules hold. ``isolated``: one file, no index, no cross-file.
       ``incremental``: reuse/update the shared cache so only changed files re-parse.
     - ``severity`` (blocking|high|medium|low|suggestion) / ``rule`` (str or list): keep only
@@ -83,11 +88,11 @@ async def scan(
       ``show_ignored``: include persistent ignores.
     - ``profile`` (base|strict|pydantic|all-strict) and ``config`` (dict of overrides): tune rules.
       ``strict_tests``: audit test files at full production strength. ``malware=true``: opt-in
-      malware pass (needs a backend — see malware_status/malware_install).
+      malware pass (needs a backend: see malware_status/malware_install).
     - ``detail`` (summary|compact|full, default compact) + ``limit`` (compact, default 50: worst-N,
       rest under ``omitted``): size control. ``full`` returns a ResourceLink; recover dropped
       ``evidence`` with finding_detail.
-    - ``fail_on`` (blocking|high|medium|low|suggestion): adds ``gate: {fail_on, tripped}`` — auto
+    - ``fail_on`` (blocking|high|medium|low|suggestion): adds ``gate: {fail_on, tripped}``, auto
       findings only, for CI."""
     if not Path(path).exists():
         raise ToolError(f"no such path: {path}")
@@ -107,7 +112,7 @@ async def scan(
             or resolve_tool("osv-scanner")
         ):
             raise ToolError(
-                "malware scan requested but neither ClamAV nor osv-scanner is installed — "
+                "malware scan requested but neither ClamAV nor osv-scanner is installed; "
                 "run malware_install (or `auditor malware install`)"
             )
         merged = dict(config or {})
@@ -126,12 +131,8 @@ async def scan(
             show_ignored=show_ignored,
             cross_file=not isolated,
         )
-    except ValidationError as exc:
-        err = exc.errors()[0]
-        loc = ".".join(str(p) for p in err["loc"])
-        raise ToolError(
-            f"invalid config: {loc + ': ' if loc else ''}{err['msg']}"
-        ) from exc
+    except (ConfigError, ValidationError) as exc:
+        raise config_error(exc) from exc
     gate = None
     if fail_on is not None:
         gate = {"fail_on": fail_on, "tripped": gate_tripped(results, fail_on)}
@@ -164,8 +165,8 @@ async def report(
     detail: str = "compact",
     limit: int | None = 50,
 ) -> dict | ResourceLink:
-    """Audit a single file statelessly (manifest + findings). ``detail``: summary|compact|full
-    (default compact — hoists rule metadata, slims findings, drops evidence; use finding_detail
+    """Audit a single file statelessly (findings only). ``detail``: summary|compact|full
+    (default compact: hoists rule metadata, slims findings, drops evidence; use finding_detail
     to recover a finding's evidence). ``limit`` (compact only, default 50) caps to the worst-N
     findings with the surplus under `omitted`. ``detail='full'`` is returned as a ResourceLink to
     fetch on demand rather than inline."""
@@ -179,20 +180,21 @@ async def report(
 
 @mcp.tool(annotations=READ_ONLY)
 async def finding_detail(file: str, rule_id: str, line: int) -> dict:
-    """Full record for one finding — `evidence`, `suggestion`, `standard_refs`, etc. — that the
+    """Full record for one finding (`evidence`, `suggestion`, `standard_refs`, etc.) that the
     compact `scan`/`report` output omits. Reads the persisted index first; falls back to a fresh
     single-file re-scan so it works whether or not the scan was incremental. The index record may
     reflect a prior scan if the file was edited since it was indexed."""
     path = _require_file(file)
     root = find_root(path)
-    try:
-        rel = str(path.resolve().relative_to(root.resolve()))
-    except ValueError:
-        rel = str(path)
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        for f in await index.findings.cached(rel, rule_id):
+    async with tool_repo_at(root) as repo:
+        try:
+            rel = str(path.resolve().relative_to(repo.root.resolve()))
+        except ValueError:
+            rel = str(path)
+        for f in await repo.index.findings.cached(rel, rule_id):
             if f.line == line:
                 return f.model_dump(mode="json")
+    # outside the handle: `audit_target` opens its own connection on the same database file
     results = await audit_target(path, root=root, apply_ignores=False)
     for r in results:
         for f in r.findings:
@@ -230,10 +232,10 @@ def discover(
     """List auditable files under a path with their classified role. Returns {total, shown,
     roles, files}: ``roles`` is a role→count histogram (a cheap overview without the full list),
     ``total`` the full match count, ``files`` the (capped) listing. ``role`` filters to one role
-    (e.g. 'source'|'test'); ``limit`` caps ``files`` — the list can be enormous on a big repo, so
+    (e.g. 'source'|'test'); ``limit`` caps ``files``: the list can be enormous on a big repo, so
     it is unbounded only when you ask for it (limit=null)."""
     root = find_root(Path(path))
-    settings = load_config(root)
+    settings = tool_config(root)
     classifier = RoleClassifier(settings.role_globs)
     discovery = FileDiscovery(
         root,
@@ -263,11 +265,11 @@ def discover(
 @mcp.tool(annotations=READ_ONLY)
 async def aggregate(path: str = ".") -> ResourceLink:
     """Roll up the index into a consolidated AUDIT.md (run scan with incremental=True first).
-    The report is large, so it is returned as a ResourceLink — read that resource for the
+    The report is large, so it is returned as a ResourceLink; read that resource for the
     markdown rather than receiving it inline."""
-    root = find_root(Path(path))
-    async with await IndexStore.connect(index_db_path(), repo_key(root)) as index:
-        markdown = await AuditAggregator(index).markdown()
+    async with tool_repo(path) as repo:
+        markdown = await AuditAggregator(repo.index).markdown()
+        root = repo.root
     return publish(
         "audit",
         str(root),

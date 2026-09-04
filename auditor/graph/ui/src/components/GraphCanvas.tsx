@@ -1,15 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Sigma from "sigma";
 import type { NodeHoverDrawingFunction } from "sigma/rendering";
 import { animateNodes } from "sigma/utils";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import type Graph from "graphology";
 import { createNodeBorderProgram } from "@sigma/node-border";
-import { EdgeCurvedArrowProgram } from "@sigma/edge-curve";
+import { EdgeCurvedArrowProgram, createEdgeCurveProgram } from "@sigma/edge-curve";
 import { graphlib, layout as dagreLayout } from "@dagrejs/dagre";
 import type { GraphPayload } from "../types";
 import { THEME } from "../theme";
 import { buildGraphologyGraph, type View } from "../graph/buildGraph";
+import { EDGE_TYPES, edgeKey, refinedEdgeType } from "../graph/refined";
 import { easeInOutCubic, lerp, makeTween, tickTween, type TweenState } from "../graph/anim";
 import { labelBox, nodeAtPoint, type LabelBox } from "../graph/labelHit";
 
@@ -31,11 +32,36 @@ interface GraphCanvasProps {
   onBackground: () => void;
   selectedNodeId?: string | null;
   overlayOn?: boolean;
+  /** spec 12.1: the node ids a refinement touched, drawn with the accent border. */
+  refinedNodes?: Set<string>;
+  /** the refined edges, keyed by `edgeKey`; an unconfirmed one is drawn dashed. */
+  refinedEdges?: Set<string>;
+  unconfirmedEdges?: Set<string>;
 }
 
 interface SelectionState {
   id: string | null;
   neighbors: Set<string>;
+}
+
+/** One program per name `refinedEdgeType` can return, because sigma throws on an unknown one.
+ *
+ * Exported so a test can hold the two lists together: jsdom has no WebGL, so nothing here is
+ * ever rendered under vitest and a missing program is invisible to the whole suite.
+ */
+export const EDGE_PROGRAMS = {
+  [EDGE_TYPES.drawn]: EdgeCurvedArrowProgram,
+  [EDGE_TYPES.provisional]: createEdgeCurveProgram({ arrowHead: null }),
+};
+
+/** Whether a container is worth building a renderer in.
+ *
+ * Exported so both answers can be held to something: jsdom has no WebGL, so the positive arm
+ * cannot be reached by rendering the component, and a guard that never lets go would turn the
+ * canvas off everywhere with nothing to say so.
+ */
+export function hasRoom(box: { clientWidth: number; clientHeight: number }): boolean {
+  return box.clientWidth > 0 && box.clientHeight > 0;
 }
 
 const drawDarkNodeHover: NodeHoverDrawingFunction = (context, data, settings) => {
@@ -123,10 +149,15 @@ export default function GraphCanvas({
   onBackground,
   selectedNodeId = null,
   overlayOn = false,
+  refinedNodes,
+  refinedEdges,
+  unconfirmedEdges,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
+  //: null until the container has been measured once; false while it has no room to draw in
+  const [room, setRoom] = useState<boolean | null>(null);
 
   const onSelectRef = useRef(onSelect);
   const onDrillRef = useRef(onDrill);
@@ -150,6 +181,14 @@ export default function GraphCanvas({
   const findingsSetRef = useRef<Set<string>>(new Set());
   const overlayOnRef = useRef<boolean>(overlayOn);
   overlayOnRef.current = overlayOn;
+  // the refinement overlay is read through refs for the same reason `overlayOn` is:
+  // a reducer must see the current sets without rebuilding sigma
+  const refinedNodesRef = useRef<Set<string>>(refinedNodes ?? new Set());
+  refinedNodesRef.current = refinedNodes ?? new Set();
+  const refinedEdgesRef = useRef<Set<string>>(refinedEdges ?? new Set());
+  refinedEdgesRef.current = refinedEdges ?? new Set();
+  const unconfirmedEdgesRef = useRef<Set<string>>(unconfirmedEdges ?? new Set());
+  unconfirmedEdgesRef.current = unconfirmedEdges ?? new Set();
 
   function stopRaf(): void {
     if (rafRef.current !== null) {
@@ -185,9 +224,27 @@ export default function GraphCanvas({
     rafRef.current = requestAnimationFrame(tick);
   }
 
+  /** The container's own room, watched, because a zero-width one is not sigma's to survive.
+   *
+   * Sigma throws `Container has no width` from inside its render loop, and a throw from there
+   * is a render error: the root boundary answers it by replacing the whole page, panels that
+   * have nothing to do with the graph included. So the canvas is measured before it is built,
+   * and a container with no room gets a sentence instead of a renderer.
+   */
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const measure = () => setRoom(hasRoom(container));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || room !== true) return;
 
     const oldPositions = new Map<string, { x: number; y: number }>();
     if (graphRef.current) {
@@ -375,10 +432,11 @@ export default function GraphCanvas({
       edgeLabelFont: LABEL_FONT,
       defaultDrawNodeHover: drawDarkNodeHover,
       nodeProgramClasses: { circle: NodeBorderProg },
-      edgeProgramClasses: { line: EdgeCurvedArrowProgram },
+      edgeProgramClasses: EDGE_PROGRAMS,
       nodeReducer: (node, data) => {
         const ep = easeInOutCubic(entranceTweenRef.current.progress);
         const hasFinding = overlayOnRef.current && findingsSet.has(node);
+        const isRefined = refinedNodesRef.current.has(node);
         const sel = selectionRef.current;
 
         const pulseAmp = 0.15;
@@ -422,7 +480,11 @@ export default function GraphCanvas({
           }
         } else {
           const baseSize = (data.size as number) ?? 8;
-          const finalColor = hasFinding ? "#EF4444" : (data.color as string ?? THEME.accent);
+          const finalColor = hasFinding
+            ? "#EF4444"
+            : isRefined
+              ? THEME.accent
+              : (data.color as string ?? THEME.accent);
           resolved = {
             ...data,
             color: finalColor,
@@ -468,6 +530,17 @@ export default function GraphCanvas({
           return { ...data, label: kind, color: THEME.accent, size: 3.4, zIndex: 2 };
         }
         if (sel.id === null) {
+          const key = edgeKey(g.source(edge), g.target(edge), kind);
+          // spec 12.1: a refined edge is the overlay, and one nobody confirmed is provisional
+          if (refinedEdgesRef.current.has(key)) {
+            return {
+              ...data,
+              label: labelAllEdges ? kind : "",
+              color: THEME.accent + (unconfirmedEdgesRef.current.has(key) ? "88" : "CC"),
+              size: 2.4,
+              type: refinedEdgeType(!unconfirmedEdgesRef.current.has(key)),
+            };
+          }
           // give edges real thickness so the directional arrowheads are visible
           return {
             ...data,
@@ -651,7 +724,7 @@ export default function GraphCanvas({
       sigmaRef.current = null;
       graphRef.current = null;
     };
-  }, [payload, view]);
+  }, [payload, view, room]);
 
   useEffect(() => {
     const sigma = sigmaRef.current;
@@ -706,15 +779,41 @@ export default function GraphCanvas({
           backgroundColor: THEME.bgCanvas,
         }}
       />
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(0,0,0,0.55) 100%)",
-          pointerEvents: "none",
-          borderRadius: "0.5rem",
-        }}
-      />
+      {room === false ? (
+        <div
+          role="status"
+          style={{
+            alignItems: "center",
+            background: THEME.bgCanvas,
+            color: "#94a3b8",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: "12px",
+            gap: "6px",
+            inset: 0,
+            justifyContent: "center",
+            padding: "12px",
+            position: "absolute",
+            textAlign: "center",
+          }}
+        >
+          <span style={{ color: "#c8d3e0", fontSize: "13px" }}>
+            No room to draw the graph
+          </span>
+          <span>widen the window, or collapse a panel beside it</span>
+        </div>
+      ) : (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(0,0,0,0.55) 100%)",
+            pointerEvents: "none",
+            borderRadius: "0.5rem",
+          }}
+        />
+      )}
     </div>
   );
 }

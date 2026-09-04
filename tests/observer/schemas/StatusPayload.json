@@ -1,0 +1,376 @@
+{
+  "$defs": {
+    "BudgetPayload": {
+      "description": "One day's budget as the page's meter draws it, derived numbers included (recon Q12).",
+      "properties": {
+        "evaluated": {
+          "default": false,
+          "title": "Evaluated",
+          "type": "boolean"
+        },
+        "exhausted": {
+          "default": false,
+          "title": "Exhausted",
+          "type": "boolean"
+        },
+        "low": {
+          "default": false,
+          "title": "Low",
+          "type": "boolean"
+        },
+        "low_budget_fraction": {
+          "default": 0.0,
+          "title": "Low Budget Fraction",
+          "type": "number"
+        },
+        "max_cost_usd_per_day": {
+          "default": 0.0,
+          "title": "Max Cost Usd Per Day",
+          "type": "number"
+        },
+        "max_runs_per_day": {
+          "default": 0,
+          "title": "Max Runs Per Day",
+          "type": "integer"
+        },
+        "priced": {
+          "default": true,
+          "title": "Priced",
+          "type": "boolean"
+        },
+        "remaining_fraction": {
+          "default": 0.0,
+          "title": "Remaining Fraction",
+          "type": "number"
+        },
+        "runs": {
+          "default": 0,
+          "title": "Runs",
+          "type": "integer"
+        },
+        "spent_usd": {
+          "default": 0.0,
+          "title": "Spent Usd",
+          "type": "number"
+        }
+      },
+      "title": "BudgetPayload",
+      "type": "object"
+    },
+    "ClientKind": {
+      "enum": [
+        "claude-code",
+        "codex",
+        "cli"
+      ],
+      "title": "ClientKind",
+      "type": "string"
+    },
+    "EvalStratumPayload": {
+      "description": "One `(suite, stratum)` the page shows a lower bound for.",
+      "properties": {
+        "lower_bound_95": {
+          "default": 0.0,
+          "title": "Lower Bound 95",
+          "type": "number"
+        },
+        "n": {
+          "default": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "precision": {
+          "default": 0.0,
+          "title": "Precision",
+          "type": "number"
+        },
+        "proven": {
+          "default": false,
+          "title": "Proven",
+          "type": "boolean"
+        },
+        "stratum": {
+          "title": "Stratum",
+          "type": "string"
+        },
+        "suite": {
+          "title": "Suite",
+          "type": "string"
+        }
+      },
+      "required": [
+        "suite",
+        "stratum"
+      ],
+      "title": "EvalStratumPayload",
+      "type": "object"
+    },
+    "RateLimitPayload": {
+      "description": "The rate limit meter: the share the observer may take, and whether it is holding.",
+      "properties": {
+        "max_utilization": {
+          "default": 0.0,
+          "title": "Max Utilization",
+          "type": "number"
+        },
+        "paused": {
+          "default": false,
+          "title": "Paused",
+          "type": "boolean"
+        },
+        "resumes_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resumes At"
+        }
+      },
+      "title": "RateLimitPayload",
+      "type": "object"
+    },
+    "RepoPayload": {
+      "description": "One repo in the switcher, with the meters that belong to it.",
+      "properties": {
+        "attached": {
+          "default": false,
+          "title": "Attached",
+          "type": "boolean"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetPayload"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "identity": {
+          "title": "Identity",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/RateLimitPayload"
+        },
+        "queued": {
+          "default": false,
+          "title": "Queued",
+          "type": "boolean"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "repo_dir_key": {
+          "title": "Repo Dir Key",
+          "type": "string"
+        },
+        "sessions": {
+          "default": 0,
+          "title": "Sessions",
+          "type": "integer"
+        },
+        "state": {
+          "default": "",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "identity",
+        "repo_dir_key"
+      ],
+      "title": "RepoPayload",
+      "type": "object"
+    },
+    "RunnerEvalPayload": {
+      "description": "The latest eval per runner (spec 12.1), with the strata behind it.",
+      "properties": {
+        "measured": {
+          "default": 0,
+          "title": "Measured",
+          "type": "integer"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "proven": {
+          "default": 0,
+          "title": "Proven",
+          "type": "integer"
+        },
+        "runner": {
+          "$ref": "#/$defs/RunnerKind"
+        },
+        "strata": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvalStratumPayload"
+          },
+          "title": "Strata",
+          "type": "array"
+        }
+      },
+      "required": [
+        "runner"
+      ],
+      "title": "RunnerEvalPayload",
+      "type": "object"
+    },
+    "RunnerKind": {
+      "enum": [
+        "claude",
+        "codex",
+        "fake",
+        "none"
+      ],
+      "title": "RunnerKind",
+      "type": "string"
+    },
+    "SessionPayload": {
+      "description": "One attached session as `/api/status` shows it.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/ClientKind"
+        },
+        "last_seen": {
+          "default": 0.0,
+          "title": "Last Seen",
+          "type": "number"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "started_at": {
+          "default": 0.0,
+          "title": "Started At",
+          "type": "number"
+        }
+      },
+      "required": [
+        "session_id",
+        "repo",
+        "client"
+      ],
+      "title": "SessionPayload",
+      "type": "object"
+    },
+    "VectorStatusPayload": {
+      "description": "The opt-in vector layer's state (spec 22); off until S13 and reported so the badge can say so.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "ready": {
+          "default": false,
+          "title": "Ready",
+          "type": "boolean"
+        }
+      },
+      "title": "VectorStatusPayload",
+      "type": "object"
+    }
+  },
+  "description": "The state badge, the meters and the counters the page polls every 3 s.",
+  "properties": {
+    "compat": {
+      "title": "Compat",
+      "type": "integer"
+    },
+    "drained_events": {
+      "default": 0,
+      "title": "Drained Events",
+      "type": "integer"
+    },
+    "evals": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RunnerEvalPayload"
+      },
+      "title": "Evals",
+      "type": "array"
+    },
+    "home": {
+      "title": "Home",
+      "type": "string"
+    },
+    "idle_seconds": {
+      "default": 0.0,
+      "title": "Idle Seconds",
+      "type": "number"
+    },
+    "queued_repos": {
+      "default": 0,
+      "title": "Queued Repos",
+      "type": "integer"
+    },
+    "repos": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RepoPayload"
+      },
+      "title": "Repos",
+      "type": "array"
+    },
+    "sessions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SessionPayload"
+      },
+      "title": "Sessions",
+      "type": "array"
+    },
+    "started_at": {
+      "default": 0.0,
+      "title": "Started At",
+      "type": "number"
+    },
+    "state": {
+      "default": "idle",
+      "title": "State",
+      "type": "string"
+    },
+    "uptime_seconds": {
+      "default": 0.0,
+      "title": "Uptime Seconds",
+      "type": "number"
+    },
+    "vectors": {
+      "$ref": "#/$defs/VectorStatusPayload"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "home",
+    "version",
+    "compat"
+  ],
+  "title": "StatusPayload",
+  "type": "object"
+}

@@ -166,7 +166,11 @@ class ManifestEntry(BaseModel):
 
 class Finding(BaseModel):
     """A single audit finding. ``rule_id`` is the primary key referenced by config,
-    the index ``findings`` table, and cross-file dedup."""
+    the index ``findings`` table, and cross-file dedup.
+
+    ``subkind`` is a detector's own discriminator for a rule that reports two shapes under one id.
+    It is not part of the id, so a baseline entry and an ``auditor: skip`` directive keep resolving.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -179,6 +183,7 @@ class Finding(BaseModel):
     evidence: str = ""
     suggestion: str | None = None
     detector: str | None = None
+    subkind: str | None = None
     checklist_item: int | None = None
     standard_refs: tuple[str, ...] = ()
 
@@ -233,3 +238,14 @@ class IndexEntry(BaseModel):
     last_scanned: float
     counts: dict[Severity, int] = Field(default_factory=dict)
     doc_path: str | None = None
+
+
+class Partition(BaseModel):
+    """The identity every worktree of one checkout shares, and the partition root's path inside
+    that checkout. Identity rows key on ``identity`` and store ids prefixed by ``prefix``, so two
+    partitions of one checkout never collide."""
+
+    model_config = ConfigDict(frozen=True)
+
+    identity: str
+    prefix: str = ""

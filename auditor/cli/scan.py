@@ -5,16 +5,17 @@ CI-gate / serve options, and a concise human summary by default (machine formats
 from pathlib import Path
 
 import typer
-from pydantic import ValidationError
 
 from auditor.baseline import Baseline
 from auditor.cli.apps import app
 from auditor.cli.console import err_console
 from auditor.cli.helpers import (
     check_format,
+    cli_root,
+    config_errors_as_one_line,
     emit,
     fail,
-    format_config_error,
+    load_settings,
     parse_config_json,
     require_exists,
     run_live,
@@ -50,8 +51,8 @@ from auditor.cli.options import (
     WriteBaseline,
 )
 from auditor.cli.summary import print_summary
-from auditor.config import is_configured, load_config
-from auditor.discovery import default_base_ref, find_root, git_changed_files
+from auditor.config import is_configured
+from auditor.discovery import default_base_ref, git_changed_files
 from auditor.engine import audit_target
 from auditor.gate import check_severity as _check_severity
 from auditor.gate import gate_tripped as _gate_tripped
@@ -121,15 +122,14 @@ def _diff_report_only(
     since: str | None,
     changed: bool,
     vs_base: bool,
-    root: Path | None = None,
+    root: Path,
 ) -> set[str] | None:
     """Resolve the git diff ref (--since / --changed / --vs-base) and return the changed-file
     set to scope the output to, or None if no diff mode was requested. Exits cleanly on error.
     """
-    root = root or find_root(target)
     ref: str | None = None
     if vs_base:
-        ref = load_config(root).diff_base or default_base_ref(root)
+        ref = load_settings(root).diff_base or default_base_ref(root)
         if ref is None:
             fail(
                 "no base branch found (tried main/master/develop/development); "
@@ -186,11 +186,6 @@ def scan(
         check_format(fmt)  # fail fast on a bad --format, before the scan
     configure_logging(verbose)
 
-    report_only = _diff_report_only(target, since, changed, vs_base, root)
-    root = root or find_root(target)
-    if report_only is not None and not no_index:
-        incremental = True  # whole-repo scan stays fast via the cache
-
     overrides = parse_config_json(config_json)
     if malware is not None:
         if malware and not (
@@ -200,14 +195,18 @@ def scan(
         ):
             fail(
                 "malware scan requested but neither ClamAV nor osv-scanner is "
-                "installed — run `auditor malware install`"
+                "installed; run `auditor malware install`"
             )
         merged = dict(overrides or {})
         merged["malware_scan"] = {**merged.get("malware_scan", {}), "enabled": malware}
         overrides = merged
+    root = cli_root(target, root, profile=profile, overrides=overrides)
+    report_only = _diff_report_only(target, since, changed, vs_base, root)
+    if report_only is not None and not no_index:
+        incremental = True  # whole-repo scan stays fast via the cache
     # "." renders as ".…" against the ellipsis — show the directory's name instead.
     target_label = target.resolve().name if str(target) == "." else target
-    try:
+    with config_errors_as_one_line():
         results = run_live(
             lambda report: audit_target(
                 target,
@@ -229,17 +228,18 @@ def scan(
             f"auditing {target_label}",
             spinner=not verbose,
         )
-    except ValidationError as exc:
-        fail(f"invalid config — {format_config_error(exc)}")
 
     if write_baseline is not None:
         recorded = Baseline.from_results(results).write(write_baseline)
         err_console.print(
-            f"[bold]Wrote baseline[/bold] {write_baseline} — {recorded} finding(s) recorded"
+            f"[bold]Wrote baseline[/bold] {write_baseline}: {recorded} finding(s) recorded"
         )
         return
 
-    if target.is_dir():
+    # Only a full, unscoped run describes the repo's posture; a subtree or diff scan would file
+    # its partial roll-up as the whole repo's. Deliberately before baseline filtering: the
+    # baseline is a gate on what to report, not a statement about what is in the tree.
+    if report_only is None and target.is_dir() and target.resolve() == root.resolve():
         write_status(root, results, configured=is_configured(root))
 
     hidden = 0

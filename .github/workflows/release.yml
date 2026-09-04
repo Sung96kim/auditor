@@ -33,11 +33,16 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.13
-      - run: uv sync --all-extras
+      # Explicit extras, never --all-extras: the observer SDKs bundle ~640MB of CLI binaries
+      # that nothing in the suite imports, and `vectors` needs an online model fetch.
+      - run: uv sync --extra dev --extra mcp --extra ts
 
-      # Gate: never release red code.
-      - run: uv run ruff check auditor tests
-      - run: uv run ruff format --check auditor tests
+      # Gate: never release red code. The Codex mirror is checked, never rewritten: a repair
+      # here would ride into `cz bump`'s `git commit -a` unreviewed, and would disarm the one
+      # test that exists to catch a stale mirror.
+      - run: uv run python scripts/build_codex_plugin.py --check
+      - run: uv run ruff check auditor plugin auditr_observer.py tests scripts
+      - run: uv run ruff format --check auditor plugin auditr_observer.py tests scripts
       - run: uv run pytest -q
 
       - name: Configure git identity

@@ -21,8 +21,7 @@ class Reporter(ABC):
         if cls.__dict__.get("abstract"):
             return
         if getattr(cls, "format", None):
-            source = getattr(cls, "_plugin_source", "built-in")
-            REGISTRY.register_reporter(cls, source=source)
+            REGISTRY.register_reporter(cls)
 
     @abstractmethod
     def render(self, results: list[ScanResult]) -> str:

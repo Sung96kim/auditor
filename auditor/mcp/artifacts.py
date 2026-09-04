@@ -56,6 +56,6 @@ def _artifact(key: str) -> str:
     body = _STORE.get(key)
     if body is None:
         raise ValueError(
-            f"no such artifact: {key!r} (it may have expired — re-run the tool that produced it)"
+            f"no such artifact: {key!r} (it may have expired; re-run the tool that produced it)"
         )
     return body

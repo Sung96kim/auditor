@@ -5,6 +5,18 @@ from typing import Annotated
 
 import typer
 
+from auditor.graph.model import (
+    DEFAULT_FLOW_DEPTH,
+    LOG_ROW_LIMIT,
+    MAX_FLOW_DEPTH,
+    MAX_FLOW_LIMIT,
+    MAX_LOG_ROWS,
+    MAX_SEARCH_LIMIT,
+    QUEUE_ROW_LIMIT,
+    CallForm,
+    UnresolvedReason,
+)
+from auditor.graph.refine.models import ALL_SUITES, RefinementStatus
 from auditor.models import RuleId
 
 ScanTarget = Annotated[Path, typer.Argument(help="File or directory to audit.")]
@@ -28,7 +40,14 @@ Output = Annotated[
 Format = Annotated[
     str | None, typer.Option("-f", "--format", help="json | sarif | md | html.")
 ]
-RootArg = Annotated[Path, typer.Option("-r", "--root")]
+RootArg = Annotated[
+    Path,
+    typer.Option(
+        "-r",
+        "--root",
+        help="Repo whose config and plugins load (default: walk up from here).",
+    ),
+]
 AggregateOut = Annotated[Path, typer.Option("-o", "--out", help="Write AUDIT.md here.")]
 
 Incremental = Annotated[
@@ -41,7 +60,7 @@ Isolated = Annotated[
     bool,
     typer.Option(
         "--isolated",
-        help="Single file only — skip the index + cross-file pass (faster standalone check).",
+        help="Single file only: skip the index + cross-file pass (faster standalone check).",
     ),
 ]
 StrictTests = Annotated[
@@ -195,5 +214,219 @@ Malware = Annotated[
         "--malware/--no-malware",
         help="Run the opt-in malware scan (ClamAV content + osv-scanner dependency "
         "passes) for this run, overriding [tool.auditor.malware_scan] enabled.",
+    ),
+]
+
+
+# --- `config` / `init` options ---
+UserConfig = Annotated[
+    bool,
+    typer.Option("--user", help="Show the resolved user settings ($AUDITOR_HOME)."),
+]
+InitRepo = Annotated[
+    bool,
+    typer.Option(
+        "--repo", help="Also write the per-repo settings file and breadcrumb."
+    ),
+]
+InitCheck = Annotated[
+    bool,
+    typer.Option("--check", help="Report only: write nothing, list unknown keys."),
+]
+InitMigrate = Annotated[
+    bool,
+    typer.Option("--migrate", help="Point a moved repo's breadcrumb at its new root."),
+]
+CleanStatus = Annotated[
+    bool,
+    typer.Option(
+        "--clean-status", help="Delete a leftover <repo>/.auditor/.status.json."
+    ),
+]
+InitForce = Annotated[
+    bool,
+    typer.Option(
+        "--force", help="Stamp the current version on a settings file that predates it."
+    ),
+]
+
+
+# --- `graph` sub-app options ---
+GraphTarget = Annotated[Path, typer.Argument(help="Repo root (default: .)")]
+RefineRunner = Annotated[
+    str | None,
+    typer.Option(
+        "--runner", help="auto, claude or codex; the configured runner when omitted."
+    ),
+]
+RefineModel = Annotated[
+    str | None,
+    typer.Option("--model", help="haiku or sonnet; the configured model when omitted."),
+]
+#: trials per stratum a bare `auditr graph eval` draws, which is what sizes the default plan
+EVAL_SAMPLE_DEFAULT = 80
+EvalSample = Annotated[
+    int,
+    typer.Option("--sample", min=1, max=500, help="Trials per stratum."),
+]
+EvalSeed = Annotated[
+    int, typer.Option("--seed", help="Seed the draw, so a run repeats exactly.")
+]
+EvalSuiteOption = Annotated[
+    str,
+    typer.Option(
+        "--suite",
+        help=f"{', '.join(suite.value for suite in ALL_SUITES)}, or all.",
+    ),
+]
+QueueReason = Annotated[
+    list[UnresolvedReason] | None,
+    typer.Option("--reason", help="Only these queue reasons (repeatable)."),
+]
+QueueCallForm = Annotated[
+    list[CallForm] | None,
+    typer.Option("--call-form", help="Only these call forms (repeatable)."),
+]
+QueueLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit", min=1, help=f"Cap the rows shown (default {QUEUE_ROW_LIMIT})."
+    ),
+]
+QueueExternal = Annotated[
+    bool,
+    typer.Option(
+        "--external/--no-external",
+        help="Show rows bound to a non-repo import (dimmed, sorted last).",
+    ),
+]
+
+
+RefinementId = Annotated[
+    int, typer.Argument(help="Refinement id, from `auditr graph refinements list`.")
+]
+RefinementStatusFilter = Annotated[
+    list[RefinementStatus] | None,
+    typer.Option("--status", help="Only these refinement statuses (repeatable)."),
+]
+TuningId = Annotated[
+    str,
+    typer.Argument(
+        help="Tuning id, or the stopword itself, from `auditr graph tuning list`."
+    ),
+]
+TuningToken = Annotated[
+    str | None,
+    typer.Option(
+        "--token",
+        help="The confirmation word on the row; omit it to be shown the one to repeat.",
+    ),
+]
+RowLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit",
+        min=1,
+        max=MAX_LOG_ROWS,
+        help=f"Cap the rows shown (default {LOG_ROW_LIMIT}, at most {MAX_LOG_ROWS}).",
+    ),
+]
+
+LogRefinements = Annotated[
+    bool,
+    typer.Option(
+        "--refinements/--runs",
+        help="Show the corrections instead of the decisions that made them.",
+    ),
+]
+LogStatus = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--status",
+        help="Only these statuses, validated against the view shown (repeatable).",
+    ),
+]
+LogSince = Annotated[
+    str | None,
+    typer.Option(
+        "--since",
+        help="Only rows after a duration (90s, 45m, 2h, 7d) or an ISO date.",
+    ),
+]
+LogSkipped = Annotated[
+    bool,
+    typer.Option(
+        "--skipped",
+        help="Include assessment-only runs, hidden by default (runs view only).",
+    ),
+]
+
+# --- `graph search` options ---
+SearchLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit",
+        min=1,
+        max=MAX_SEARCH_LIMIT,
+        help="Cap on rows returned, by name or by rank.",
+    ),
+]
+
+# --- `graph flow` options ---
+FlowIn = Annotated[
+    bool,
+    typer.Option(
+        "--in", help="Reverse the walk: what reaches the symbol, not what it reaches."
+    ),
+]
+FlowDepth = Annotated[
+    int,
+    typer.Option(
+        "--depth",
+        min=0,
+        max=MAX_FLOW_DEPTH,
+        help="Hops to follow from the symbol.",
+    ),
+]
+FlowLimit = Annotated[
+    int,
+    typer.Option(
+        "--limit",
+        min=1,
+        max=MAX_FLOW_LIMIT,
+        help="Cap on nodes emitted; shallow levels complete first.",
+    ),
+]
+FlowKinds = Annotated[
+    str | None,
+    typer.Option(
+        "--kinds",
+        help="Extra edge kinds to follow, comma separated, e.g. --kinds inherits,references_type.",
+    ),
+]
+FlowIncludeTests = Annotated[
+    bool,
+    typer.Option(
+        "--include-tests", help="Keep test and test-support symbols in the tree."
+    ),
+]
+FlowExpandHubs = Annotated[
+    bool, typer.Option("--expand-hubs", help="Expand hubs instead of eliding them.")
+]
+FlowStopAt = Annotated[
+    list[str] | None,
+    typer.Option("--stop-at", help="Module glob to stop expanding at (repeatable)."),
+]
+FlowSymbol = Annotated[
+    str | None,
+    typer.Option("--flow", help="Export the flow tree from this symbol instead."),
+]
+ExportDepth = Annotated[
+    int | None,
+    typer.Option(
+        "--depth",
+        min=0,
+        max=MAX_FLOW_DEPTH,
+        help=f"Hops for --symbol (default 1) or --flow (default {DEFAULT_FLOW_DEPTH}).",
     ),
 ]

@@ -38,7 +38,14 @@ class AuditAggregator:
         return _render(await self._results())
 
     async def write(self, out_path: Path) -> Path:
-        out_path.write_text(await self.markdown())
+        """Render the report to ``out_path`` as UTF-8, creating missing parent directories.
+
+        Raises:
+            OSError: the path is not writable (a parent that is a file, a directory, a read-only
+                tree). The CLI turns this into a one-line error.
+        """
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(await self.markdown(), encoding="utf-8")
         return out_path
 
 

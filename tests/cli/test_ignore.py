@@ -6,20 +6,6 @@ from pathlib import Path
 import pytest
 from _support import PLUGIN_FILE, cli_json, invoke
 
-from auditor.registry import REGISTRY
-
-
-@pytest.fixture
-def _restore_registry():
-    """`ignore add` loads the repo's plugins (mutating the global registry); restore around it."""
-    detectors = dict(REGISTRY._detectors)
-    categories = set(REGISTRY._plugin_categories)
-    sources = dict(REGISTRY._sources)
-    yield
-    REGISTRY._detectors = detectors
-    REGISTRY._plugin_categories = categories
-    REGISTRY._sources = sources
-
 
 @pytest.fixture
 def repo(tmp_path) -> Path:
@@ -131,7 +117,7 @@ def test_add_unknown_rule_with_force(repo):
     ] == ["ACME-PLUGIN-RULE"]
 
 
-def test_add_plugin_rule_without_force(tmp_path, _restore_registry):
+def test_add_plugin_rule_without_force(tmp_path, restore_registry):
     """A repo's plugin-contributed rule validates like a built-in — no --force needed,
     because `ignore add` loads the repo's config (which registers its plugins)."""
     root = tmp_path / "r"
@@ -195,3 +181,20 @@ def test_ignored_finding_does_not_trip_the_gate(repo):
         invoke("scan", str(repo), "--fail-on", "high", "--root", str(repo)).exit_code
         == 0
     )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("ignore", "add", "PY-SEC-HARDCODED-SECRET"),
+        ("ignore", "rm", "1"),
+        ("ignore", "clear"),
+    ],
+)
+def test_ignore_commands_warn_about_unknown_config_keys(repo, restore_registry, args):
+    """Every other config-loading command warns once; these three were silent, so a typo in the
+    repo's policy surfaced nowhere for anyone driving ignores."""
+    (repo / ".auditor").mkdir(exist_ok=True)
+    (repo / ".auditor" / "config.toml").write_text("[malware_scan]\nbogus = 1\n")
+    result = invoke(*args, "--root", str(repo))
+    assert "unknown config key: malware_scan.bogus" in " ".join(result.output.split())

@@ -1,13 +1,15 @@
 """Visualization data contract: build the graph payload the UI consumes.
 
-Stdlib only — pure mapping over the persisted graph (auditor/graph/ui/ renders it).
+Pure mapping over the persisted graph (auditor/graph/ui/ renders it). Stdlib, plus the flow
+models, so the DOT export reads the walk result rather than a dump of it.
 """
 
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from auditor.graph.model import NodeKind
+from auditor.graph.flow import FlowNode, FlowPayload
+from auditor.graph.model import NodeKind, Provenance
 
 if TYPE_CHECKING:
     from auditor.database import IndexStore
@@ -36,8 +38,32 @@ async def _findings_by_node(index: "IndexStore") -> dict[str, list[str]]:
     """Map node_id -> [graph rule_ids]. Graph findings store the symbol id in ``evidence``."""
     out: dict[str, list[str]] = {}
     for f in await index.findings.by_rule_prefix("GRAPH-"):
-        out.setdefault(f["evidence"], []).append(f["rule_id"])
+        out.setdefault(f.evidence, []).append(f.rule_id)
     return out
+
+
+def _meta(node_cap: int | None) -> dict:
+    """The document's `meta` block, so the empty page and a built one cannot disagree."""
+    return {"theme": "dark", "accent": "#7C7CFF", "node_cap": node_cap}
+
+
+def empty_payload() -> dict:
+    """The document the page renders when the query named no repo: real ``meta``, no rows.
+
+    An object with no ``meta`` is what made the daemon's own no-repo page throw on first render.
+    """
+    return {"meta": _meta(None), "clusters": [], "nodes": [], "edges": []}
+
+
+def _script(name: str, value: object) -> str:
+    """One injected global, with every ``<`` escaped so no string in it can steer the parser.
+
+    The opener rather than the closer: ``</script`` ends the element, and ``<!--<script`` opens
+    the tokenizer's double-escaped state, where the real ``</script>`` no longer closes it and
+    the rest of the document becomes script text. One rule covers both.
+    """
+    blob = json.dumps(value).replace("<", "\\u003c")
+    return f"<script>window.{name}={blob};</script>"
 
 
 async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> dict:
@@ -75,6 +101,8 @@ async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> 
                 "cluster": n["cluster_id"],
                 "role": n["role"],
                 "findings": findings_by_node.get(nid, []),
+                "refined": bool(n["refined"]),
+                "annotation": n["annotation"],
             }
         )
 
@@ -90,6 +118,8 @@ async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> 
                     "target": e["dst"],
                     "kind": e["kind"],
                     "weight": round(e["weight"], 4),
+                    "provenance": e["provenance"],
+                    "confirmed": bool(e["confirmed"]),
                 }
             )
 
@@ -104,18 +134,19 @@ async def build_payload(index: "IndexStore", *, node_cap: int | None = None) -> 
     ]
 
     return {
-        "meta": {"theme": "dark", "accent": "#7C7CFF", "node_cap": node_cap},
+        "meta": _meta(node_cap),
         "clusters": clusters,
         "nodes": nodes,
         "edges": edges,
     }
 
 
-def render_app(payload: dict) -> str:
+def render_app(payload: dict, *, bootstrap: dict | None = None) -> str:
     """Inject ``payload`` into the built UI HTML and return the result.
 
     The global ``window.__AUDITOR_GRAPH__`` is injected immediately before
-    ``</body>`` so the app bundle can read it at startup.
+    ``</body>`` so the app bundle can read it at startup. ``bootstrap`` is the daemon's own
+    second global, absent for `graph serve`, which is what puts the page in static mode.
     """
     if not _APP_HTML.exists():
         raise FileNotFoundError(
@@ -123,11 +154,97 @@ def render_app(payload: dict) -> str:
             "Run `pnpm build` inside auditor/graph/ui/ first."
         )
     html = _APP_HTML.read_text(encoding="utf-8")
-    blob = json.dumps(payload).replace("</", "<\\/")  # avoid </script> breakage
-    inject = f"<script>window.__AUDITOR_GRAPH__={blob};</script>"
+    inject = _script("__AUDITOR_GRAPH__", payload)
+    if bootstrap is not None:
+        inject += _script("__AUDITOR_OBSERVER__", bootstrap)
     if "</body>" in html:
         return html.replace("</body>", inject + "</body>", 1)
     return html + inject
+
+
+_STATUS_DOC = """<!doctype html>
+<html><head><meta charset="utf-8"><title>auditor observer</title></head>
+<body><h1>auditor observer</h1>
+<p>The graph holds {nodes} nodes, {edges} edges and {clusters} clusters.</p>
+<p>No UI bundle is built. Run `pnpm build` inside auditor/graph/ui/ to get the live page.</p>
+</body></html>
+"""
+
+
+def render_app_or_status(payload: dict, *, bootstrap: dict | None = None) -> str:
+    """The built UI with ``payload`` injected, or a plain status document when no bundle exists.
+
+    `graph serve` keeps :func:`render_app`, which raises: its user can run `pnpm build` and the
+    daemon's user is a hook that cannot (spec 8.1). A document missing a key counts it as zero,
+    because the caller that passes an empty one is the page with no repo named.
+    """
+    if _APP_HTML.exists():
+        return render_app(payload, bootstrap=bootstrap)
+    return _STATUS_DOC.format(
+        nodes=len(payload.get("nodes", ())),
+        edges=len(payload.get("edges", ())),
+        clusters=len(payload.get("clusters", ())),
+    )
+
+
+def _dot_provenance(provenance: str | None) -> str:
+    """The style a `refined` edge carries in both DOT exports, so an overlay edge cannot read as
+    one the resolver produced. Empty for everything else."""
+    return ' style="dashed"' if provenance == Provenance.REFINED.value else ""
+
+
+_FLOW_DOT_STYLE = {
+    "hub": ' color="magenta" peripheries=2',
+    "stopped": ' color="cyan" style="rounded,dashed"',
+    "cycle": ' color="orange"',
+    "seen_ref": ' style="rounded,dotted"',
+}
+
+
+def _flow_declare(node: FlowNode, nodes: dict[str, dict]) -> str:
+    """One DOT node line carrying the tree's ⊕/⊣/↺ marks and its unresolved count, so a pruned
+    branch cannot read as an ordinary leaf."""
+    label = nodes.get(node.id, {}).get("label") or node.id.split("::")[-1]
+    if node.unresolved:
+        label = f"{label}\\n? {len(node.unresolved)}"
+    marks = "".join(a for mark, a in _FLOW_DOT_STYLE.items() if getattr(node, mark))
+    return f'  "{node.id}" [label="{label}"{marks}];'
+
+
+def _flow_dot(flow: FlowPayload, nodes: dict[str, dict]) -> str:
+    """A flow tree as DOT: one ``rank=same`` row per depth, edges labelled by relation, nodes
+    carrying the same marks the tree renderer shows."""
+    declared: dict[str, str] = {}
+    levels: dict[int, list[str]] = {}
+    links: set[tuple[str, str, str, str]] = set()
+
+    def walk(node: FlowNode) -> None:
+        if node.id not in declared:  # a revisited node keeps its first-seen row
+            declared[node.id] = _flow_declare(node, nodes)
+            levels.setdefault(node.depth, []).append(node.id)
+        for child in node.children:
+            links.add((node.id, child.id, child.edge or "", child.source))
+            walk(child)
+
+    walk(flow.root)
+    cut = ", truncated" if flow.truncated else ""
+    lines = [
+        "digraph flow {",
+        f"  // {flow.direction.value}, at most {flow.limit} nodes{cut}",
+        "  rankdir=LR;",
+        "  node [shape=box, style=rounded];",
+    ]
+    lines.extend(declared[nid] for nid in sorted(declared))
+    for level in sorted(levels):
+        lines.append(
+            "  { rank=same; " + " ".join(f'"{n}";' for n in levels[level]) + " }"
+        )
+    for src, dst, kind, provenance in sorted(links):
+        lines.append(
+            f'  "{src}" -> "{dst}" [label="{kind}"{_dot_provenance(provenance)}];'
+        )
+    lines.append("}")
+    return "\n".join(lines)
 
 
 def to_dot(
@@ -136,14 +253,18 @@ def to_dot(
     cluster: str | None = None,
     symbol: str | None = None,
     depth: int = 1,
+    flow: FlowPayload | None = None,
 ) -> str:
     """Return a deterministic Graphviz DOT string for the payload.
 
     Default: overview (all kept nodes).
     ``cluster``: members of the cluster with that label.
     ``symbol``: BFS ego graph from matching node(s) to ``depth``.
+    ``flow``: a ``GraphQuery.flow`` payload, ranked one row per depth.
     """
     nodes = {n["id"]: n for n in payload["nodes"]}
+    if flow is not None:
+        return _flow_dot(flow, nodes)
     edges = payload["edges"]
     keep: set[str]
     if symbol is not None:
@@ -184,6 +305,9 @@ def to_dot(
         (e for e in edges if e["source"] in keep and e["target"] in keep),
         key=lambda e: (e["source"], e["target"], e["kind"]),
     ):
-        lines.append(f'  "{e["source"]}" -> "{e["target"]}" [label="{e["kind"]}"];')
+        lines.append(
+            f'  "{e["source"]}" -> "{e["target"]}" '
+            f'[label="{e["kind"]}"{_dot_provenance(e.get("provenance"))}];'
+        )
     lines.append("}")
     return "\n".join(lines)

@@ -27,7 +27,7 @@ auditr report path/to/file.py --show-ignored
   asked for.
 - A bad `-f` fails before the file is read and lists the accepted formats.
 - `-o PATH` writes the report to that path and confirms on stderr; without it the report goes to
-  stdout.
+  stdout. Missing parent directories are created.
 - `--config-json` merges a JSON object over the resolved config as the highest layer. See
   [configuration.md](configuration.md).
 
@@ -41,7 +41,7 @@ auditr report path/to/file.py --show-ignored
   directives behave exactly as in `scan`.
 - Persistent ignores still apply. The shared index is opened only when it already exists, so a
   first run on a fresh machine creates nothing. See [ignore.md](ignore.md).
-- No `.auditor/.status.json` is written; see [scan.md](scan.md) for which runs update it.
+- No status file is written; see [scan.md](scan.md) for which runs update it.
 - The AST class and function manifest is a separate command: [manifest.md](manifest.md).
 
 ## Evidence

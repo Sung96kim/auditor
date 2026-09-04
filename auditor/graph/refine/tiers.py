@@ -1,0 +1,201 @@
+"""Activation tiers (spec 9.2's table and spec 10.3's gate).
+
+A tier is a property of the proposal's shape; whether that tier activates is a property of what the
+eval suites have measured on this repo for this runner and model. With no eval row, spec 10.3 says
+`resolve_ambiguous` and every tier B proposal behave as tier C, which is where every repo starts.
+"""
+
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+
+from pydantic import BaseModel, ConfigDict
+
+from auditor.graph.model import UnresolvedRow
+from auditor.graph.refine.models import (
+    BOUNDED_FORMS,
+    PRECISION_SUITES,
+    EvalRow,
+    EvalSuite,
+    Proposal,
+    RefinementKind,
+    RefinementStatus,
+    RunnerKind,
+    Stratum,
+    Tier,
+)
+from auditor.user_settings import RunnerConfig, TuningConfig
+
+#: tier A kinds that need no measurement: none of them can add an edge (spec 10.3)
+ALWAYS_ACTIVE = frozenset(
+    {
+        RefinementKind.CONFIRM_EDGE,
+        RefinementKind.RELABEL_CLUSTER,
+        RefinementKind.ANNOTATE_NODE,
+        RefinementKind.UNRESOLVABLE,
+    }
+)
+
+#: the same two call forms the add suite draws its truths from, so the gate and the eval cannot
+#: drift on what tier B is measured over (spec 10.1)
+_BOUNDED_FORMS = frozenset(BOUNDED_FORMS)
+
+#: suites judged by their precision bound, versus suites judged by having produced no false add
+_PRECISION_SUITES = frozenset(suite.value for suite in PRECISION_SUITES)
+
+
+#: the highest tier a runner may store `active` here before spec 10.4's go/no-go has been run for
+#: it. Claude's tier B numbers were measured in S7; Codex has none, so a Codex tier B proposal
+#: stays `pending` even where an eval row clears, until a user raises this in their own config.
+#: Every kind is named: `FAKE` and `NONE` inheriting `B` gave the unmeasured a higher ceiling
+#: than the Codex runner deliberately holds at `A`.
+ACTIVATION_TIERS: Mapping[RunnerKind, Tier] = MappingProxyType(
+    {
+        RunnerKind.CLAUDE: Tier.B,
+        RunnerKind.CODEX: Tier.A,
+        RunnerKind.FAKE: Tier.A,
+        RunnerKind.NONE: Tier.A,
+    }
+)
+#: what a `RunnerKind` the table forgets defaults to, which is the floor rather than Claude's tier
+DEFAULT_ACTIVATION = Tier.A
+
+
+def eval_model(
+    runner: RunnerKind, config: RunnerConfig, requested: str | None = None
+) -> str:
+    """The model a run of this runner is filed under, which every `(runner, model)` key needs.
+
+    One resolver for the loop's gate, the page's roster and the run row itself: they disagreed, so
+    a Codex run read Claude's eval rows and was stored under a Claude tier. ``requested`` is
+    `RefinementJob.model`, a Claude tier by type, so it binds Claude alone (spec 14).
+    """
+    if runner is RunnerKind.CODEX:
+        return config.codex_model
+    return requested or config.model
+
+
+def activation_tier(runner: RunnerKind, config: TuningConfig) -> Tier:
+    """The highest tier this runner's measured proposals may go active at (spec 10.4).
+
+    The user's own `activation_tiers` first, then the shipped per-runner default: a runner whose
+    accuracy nobody has measured here should not inherit the tier another runner earned.
+    """
+    named = config.activation_tiers.get(runner.value)
+    if named is not None:
+        return Tier(named)
+    return ACTIVATION_TIERS.get(runner, DEFAULT_ACTIVATION)
+
+
+class TierPolicy(BaseModel):
+    """One repo's activation policy for one runner and model, per eval stratum."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: the highest tier this runner may activate at here (spec 10.4)
+    ceiling: Tier = DEFAULT_ACTIVATION
+    #: every ``(suite, stratum)`` this runner and model has an eval row for
+    measured: frozenset[tuple[EvalSuite, Stratum]] = frozenset()
+    #: the subset of them that met the suite's own gate
+    proven: frozenset[tuple[EvalSuite, Stratum]] = frozenset()
+
+    @classmethod
+    def of(
+        cls,
+        evals: Sequence[EvalRow],
+        *,
+        min_precision: float,
+        runner: RunnerKind,
+        model: str,
+        ceiling: Tier = DEFAULT_ACTIVATION,
+    ) -> "TierPolicy":
+        """What this runner and model measured here, and which strata cleared their own gate.
+
+        ``evals`` is expected to hold one row per ``(suite, stratum)``, the newest, which is what
+        `EvalsDB.latest` answers with; a later failing row un-proves a stratum (spec 10.3).
+        """
+        rows = [row for row in evals if row.runner is runner and row.model == model]
+        keyed = [(key, row) for row in rows if (key := _key(row)) is not None]
+        return cls(
+            ceiling=ceiling,
+            measured=frozenset(key for key, _ in keyed),
+            proven=frozenset(key for key, row in keyed if _clears(row, min_precision)),
+        )
+
+    def tier(
+        self, proposal: Proposal, *, row: UnresolvedRow | None, verified: bool
+    ) -> Tier:
+        """Spec 9.2's tier column: the kind decides it, except the kinds a verifier answers for,
+        whose call form, definer count and verifier result do."""
+        if proposal.kind in ALWAYS_ACTIVE:
+            return Tier.A
+        if proposal.kind is RefinementKind.RESOLVE_AMBIGUOUS:
+            return Tier.A if verified else Tier.C
+        if proposal.kind is not RefinementKind.ADD_EDGE or row is None:
+            return Tier.C
+        bounded = (
+            verified
+            and row.call_form in _BOUNDED_FORMS
+            and len(row.definers) == 1
+            and not row.externally_bound
+        )
+        return Tier.B if bounded else Tier.C
+
+    def status(
+        self, kind: RefinementKind, tier: Tier, *, stratum: Stratum | None = None
+    ) -> RefinementStatus:
+        """The status a proposal of this kind and tier is stored under (spec 10.3).
+
+        ``stratum`` is the add suite's stratum for this proposal's own shape; without one every
+        stratum the suite measured has to clear, which is the conservative reading.
+        """
+        if tier is Tier.A and kind in ALWAYS_ACTIVE:
+            return RefinementStatus.ACTIVE
+        if tier is Tier.A and self._cleared(EvalSuite.DECOY):
+            return RefinementStatus.ACTIVE
+        if (
+            tier is Tier.B
+            and self.ceiling is Tier.B
+            and self._cleared(EvalSuite.ADD, stratum)
+            and self._cleared(EvalSuite.COLLISION)
+        ):
+            return RefinementStatus.ACTIVE
+        return RefinementStatus.PENDING
+
+    def _cleared(self, suite: EvalSuite, stratum: Stratum | None = None) -> bool:
+        """Whether a suite's gate is met here: the stratum matching the proposal, or every
+        stratum the suite measured when there is none to match.
+
+        A control suite is stored under one stratum, ``all``, so "every stratum it measured" and
+        "its one row" are the same question (spec 10.2).
+        """
+        # `.value` is redundant on a `StrEnum` and kept anyway: it is what makes a bare string
+        # here raise rather than quietly answer False, which is M2's guarantee
+        rows = {pair for pair in self.measured if pair[0] == suite.value}
+        if not rows:
+            return False
+        if stratum is None:
+            return rows <= self.proven
+        return (suite.value, stratum) in self.proven
+
+
+def _key(row: EvalRow) -> tuple[EvalSuite, Stratum] | None:
+    """The ``(suite, stratum)`` a stored row measures, or ``None`` for a suite this build retired.
+
+    `EvalRow.suite` is a bare `str` on the way out of the database, and a policy cannot reason
+    about a suite whose gate it no longer carries, so an unknown one is dropped rather than kept
+    as a member nothing can ever query.
+    """
+    try:
+        return EvalSuite(row.suite), row.stratum
+    except ValueError:
+        return None
+
+
+def _clears(row: EvalRow, min_precision: float) -> bool:
+    """Whether one stratum met its gate: a precision suite on its Wilson lower bound, a control
+    on having produced no false add, and neither on a run of no trials (spec 10.2)."""
+    if row.metrics.n <= 0:
+        return False
+    if row.suite in _PRECISION_SUITES:
+        return row.metrics.lower_bound_95 >= min_precision
+    return row.metrics.false_add_rate == 0.0

@@ -14,6 +14,8 @@ EXPECTED_SKILLS = {
     "explore-graph",
     "malware-scan",
     "aggregate-report",
+    "refine-graph",
+    "graph-observer",
 }
 
 #: skills scoped to specific files in the target repo (carry a `paths` glob)
@@ -24,7 +26,13 @@ CODE_FACING_SKILLS = {
     "explore-graph",
 }
 #: skills that operate on the repo as a whole, not a file scope — no `paths` key
-REPO_LEVEL_SKILLS = {"setup-auditor", "malware-scan", "aggregate-report"}
+REPO_LEVEL_SKILLS = {
+    "setup-auditor",
+    "malware-scan",
+    "aggregate-report",
+    "refine-graph",
+    "graph-observer",
+}
 
 
 def _frontmatter(md: Path) -> dict:
@@ -73,10 +81,18 @@ def test_judge_findings_runs_as_forked_reviewer_subagent():
     assert fm.get("agent") == "auditor-reviewer"
 
 
-def test_agent_frontmatter():
-    fm = _frontmatter(AGENT_DIR / "auditor-reviewer.md")
-    assert fm["name"] == "auditor-reviewer"
+EXPECTED_AGENTS = {"auditor-reviewer", "graph-refiner"}
+
+
+def test_all_agents_present():
+    assert {p.stem for p in AGENT_DIR.glob("*.md")} == EXPECTED_AGENTS
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_AGENTS))
+def test_agent_frontmatter(name):
+    fm = _frontmatter(AGENT_DIR / f"{name}.md")
+    assert fm["name"] == name
     assert fm.get("description")
     assert fm.get("tools") == "Read, Grep, Glob, Bash, mcp__auditor__*"
     assert fm.get("model") == "inherit"
-    assert fm.get("color") == "blue"
+    assert fm.get("color") in {"blue", "green"}

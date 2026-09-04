@@ -1,14 +1,14 @@
 {
   "name": "auditor",
   "displayName": "Auditor",
-  "version": "0.1.3",
-  "description": "Drive the auditor code-audit CLI/MCP from Claude Code: judge findings, gate PRs, scan for malware, explore the code graph.",
+  "version": "0.2.1",
+  "description": "Drive the auditor code-audit CLI/MCP from Claude Code: judge findings, gate PRs, scan for malware, explore the code graph, refine it, and watch it with the observer.",
   "author": { "name": "Sung Kim" },
   "homepage": "https://github.com/Sung96kim/auditor",
   "repository": "https://github.com/Sung96kim/auditor",
   "license": "MIT",
   "keywords": ["audit", "code-quality", "security", "static-analysis"],
   "skills": "./skills/",
-  "agents": ["./agents/auditor-reviewer.md"],
+  "agents": ["./agents/auditor-reviewer.md", "./agents/graph-refiner.md"],
   "mcpServers": "./.mcp.json"
 }

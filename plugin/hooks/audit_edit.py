@@ -10,9 +10,14 @@ import os
 import subprocess
 from pathlib import Path
 
-from _common import SEVERITY_RANK, auditr_available, emit_context, read_event
+from _common import SEVERITY_RANK, auditr_available, emit_context, observe, read_event
 
 SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".sh", ".bash"}
+#: the shell-out cost is measured once in docs/references/claude-code-plugin.md; this is the
+#: deadline that has to cover it, the client's two `git rev-parse` budgets and its own 200 ms
+#: socket budget, which `auditr_observer.HOOK_BUDGETS["post-tool-use"]` sums to 1.2 s. The git
+#: calls run before the batch reaches the spool, so a kill inside one loses the edit outright.
+OBSERVE_TIMEOUT = 2.0
 
 
 def changed_file(event: dict) -> Path | None:
@@ -85,10 +90,13 @@ def summarize(result: dict, floor: int) -> str | None:
 
 
 def main() -> None:
-    if os.environ.get("AUDITOR_AUTOHOOK") == "0" or not auditr_available():
-        return
     event = read_event()
     if event is None:
+        return
+    # the observer half is not the audit half: AUDITOR_AUTOHOOK gates the audit, and
+    # AUDITOR_OBSERVER gates this, inside the client
+    observe("post-tool-use", event, OBSERVE_TIMEOUT)
+    if os.environ.get("AUDITOR_AUTOHOOK") == "0" or not auditr_available():
         return
     file = changed_file(event)
     if file is None:

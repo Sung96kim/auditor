@@ -1,3 +1,5 @@
+import pytest
+
 from auditor.graph.extract import extract_file_facts
 
 SRC = '''
@@ -140,10 +142,11 @@ def test_param_default_call_captured_in_callees():
     assert "make_default" in f.callees
 
 
-def test_typed_calls_capture_receiver_type_and_method():
-    """typed_calls pairs an annotated-receiver method call with the receiver's declared type
-    (`svc: FooService` → svc.do_thing() gives ("FooService", "do_thing")) and self-calls with
-    the enclosing class. Resolution uses these to disambiguate same-named methods (Finding 2)."""
+def test_typed_calls_capture_receiver_var_type_and_method():
+    """typed_calls pairs an annotated-receiver method call with the receiver variable and its
+    declared type (`svc: FooService` → svc.do_thing() gives ("svc", "FooService", "do_thing"))
+    and self-calls with the enclosing class. Resolution uses these to disambiguate same-named
+    methods (Finding 2); the variable is what a settled non-repo receiver is keyed by."""
     src = (
         "def handler(svc: FooService = Depends(FooService)):\n"
         "    return svc.do_thing(1)\n"
@@ -154,8 +157,8 @@ def test_typed_calls_capture_receiver_type_and_method():
         "        return 1\n"
     )
     ids = _by_id(extract_file_facts("m.py", src, "production"))
-    assert ("FooService", "do_thing") in ids["m.py::handler"].typed_calls
-    assert ("A", "g") in ids["m.py::A.f"].typed_calls
+    assert ("svc", "FooService", "do_thing") in ids["m.py::handler"].typed_calls
+    assert ("self", "A", "g") in ids["m.py::A.f"].typed_calls
 
 
 def test_param_types_cover_all_arg_kinds_including_keyword_only():
@@ -256,3 +259,165 @@ def test_extract_module_imports_absolute_and_relative():
     bindings = dict(m.import_bindings)
     assert bindings["z"] == "x.y"
     assert bindings["t"] == "pkg.sub"
+
+
+_ATTR_CALL_SHAPES = [
+    (
+        "plain_receiver",
+        "def f(obj):\n    return obj.method()\n",
+        "m.py::f",
+        ("obj", "method", True),
+    ),
+    (
+        "self_receiver",
+        "class A:\n    def f(self):\n        return self.method()\n",
+        "m.py::A.f",
+        ("self", "method", True),
+    ),
+    (
+        "chained_receiver",
+        "def f(a):\n    return a.b.method()\n",
+        "m.py::f",
+        ("a", "method", False),
+    ),
+    (
+        "call_receiver",
+        "def f():\n    return build().method()\n",
+        "m.py::f",
+        (None, "method", False),
+    ),
+    (
+        "positional_default",
+        "def f(x=cfg.load()):\n    return x\n",
+        "m.py::f",
+        ("cfg", "load", True),
+    ),
+    (
+        "keyword_only_default",
+        "def f(*, x=cfg.load()):\n    return x\n",
+        "m.py::f",
+        ("cfg", "load", True),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("src", "node_id", "expected"),
+    [c[1:] for c in _ATTR_CALL_SHAPES],
+    ids=[c[0] for c in _ATTR_CALL_SHAPES],
+)
+def test_attr_callees_record_receiver_root_method_and_directness(
+    src, node_id, expected
+):
+    """attr_callees pairs each attribute call's method with the root name its receiver chains from
+    and whether the receiver is that root itself, so the queue can tell `self.m()` from
+    `self.dep.m()` from `re.search()`. `callees` keeps recording the bare method name."""
+    fn = _by_id(extract_file_facts("m.py", src, "production"))[node_id]
+    assert expected in fn.attr_callees
+    assert expected[1] in fn.callees
+
+
+def test_bare_call_records_a_bare_callee_only():
+    """A bare-Name call has no receiver, so it lands in callees and bare_callees."""
+    fn = _by_id(
+        extract_file_facts("m.py", "def f():\n    return helper()\n", "production")
+    )["m.py::f"]
+    assert fn.callees == ("helper",)
+    assert fn.bare_callees == ("helper",)
+    assert fn.attr_callees == ()
+
+
+def test_a_name_called_both_ways_records_both_forms():
+    """`handle()` and `job.handle()` in one body: `callees` dedupes them to one name, so the two
+    call forms have to be recorded apart for the queue to prefer the bare one."""
+    fn = _by_id(
+        extract_file_facts(
+            "m.py", "def f(job):\n    return handle() or job.handle()\n", "production"
+        )
+    )["m.py::f"]
+    assert fn.callees == ("handle",)
+    assert fn.bare_callees == ("handle",)
+    assert ("job", "handle", True) in fn.attr_callees
+
+
+def test_builtin_attribute_call_is_not_an_attr_callee():
+    """`x.dict()` is excluded from callees, so it must be excluded from attr_callees too."""
+    fn = _by_id(
+        extract_file_facts("m.py", "def f(x):\n    return x.dict()\n", "production")
+    )["m.py::f"]
+    assert fn.attr_callees == ()
+
+
+def test_local_names_hold_every_form_the_function_binds():
+    """The bare-row gate reads these: a bare call or class reference naming one of them is naming
+    the binding, not a repo symbol. Every parameter form counts, not only the positional ones."""
+    src = (
+        "def f(pos, /, job, *rest, kw, kwd=None, **extra):\n"
+        "    handler = job\n"
+        "    for item in job:\n"
+        "        pass\n"
+        "    with job as ctx:\n"
+        "        pass\n"
+        "    try:\n"
+        "        import mod\n"
+        "        from pkg import thing as alias\n"
+        "    except ValueError as exc:\n"
+        "        print(exc)\n"
+        "    def inner(nested):\n"
+        "        return nested\n"
+        "    class Local:\n"
+        "        pass\n"
+        "    cb = lambda lam: lam\n"
+        "    return handler, inner, Local, cb\n"
+    )
+    fn = _by_id(extract_file_facts("m.py", src, "production"))["m.py::f"]
+    assert set(fn.local_names) == {
+        "pos",
+        "job",
+        "rest",
+        "kw",
+        "kwd",
+        "extra",
+        "handler",
+        "item",
+        "ctx",
+        "mod",
+        "alias",
+        "exc",
+        "inner",
+        "nested",
+        "Local",
+        "cb",
+        "lam",
+    }
+
+
+def test_module_node_records_aliases_of_imported_callables():
+    """`_RX = re.compile(...)` hides an imported object behind a module-level name; the pair is
+    recorded so the resolver can mark calls on `_RX` externally bound."""
+    src = (
+        "import re\n"
+        "from .util import build\n"
+        "_RX = re.compile('x')\n"
+        "CLIENT = build()\n"
+        "PLAIN = 1\n"
+    )
+    mod = _by_id(extract_file_facts("pkg/m.py", src, "production"))["pkg/m.py"]
+    assert ("_RX", "re") in mod.external_aliases
+    assert ("CLIENT", "build") in mod.external_aliases
+    assert [alias for alias, _ in mod.external_aliases] == ["_RX", "CLIENT"]
+
+
+def test_fact_tuples_union_across_same_id_definitions():
+    """Same-id nodes merge by unioning fact tuples, and the new call-form fields are in that set."""
+    src = (
+        "class Thing:\n"
+        "    def label(self):\n"
+        "        return self.first()\n"
+        "    def label(cls):\n"
+        "        return cls.second() or third()\n"
+    )
+    label = _by_id(extract_file_facts("m.py", src, "production"))["m.py::Thing.label"]
+    assert ("self", "first", True) in label.attr_callees
+    assert ("cls", "second", True) in label.attr_callees
+    assert label.bare_callees == ("third",)

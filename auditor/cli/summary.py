@@ -65,7 +65,7 @@ def print_summary(results: list[ScanResult]) -> None:
     stats = _summary_stats(results)
     if not stats.findings:
         console.print(
-            f"[green]✓ clean[/green] — {len(results)} files, no findings"
+            f"[green]✓ clean[/green]: {len(results)} files, no findings"
             + _ignored_note(stats)
         )
         return

@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from auditor.cli import app
 from auditor.cli import graph as gmod
+from auditor.config import load_config
 from auditor.database import IndexStore
 from auditor.engine import audit_target
 from auditor.paths import index_db_path, repo_key
@@ -73,12 +74,12 @@ async def test_serve_reuses_existing_graph_without_rebuild(
         incremental=True,
         config_overrides={"graph": {"enabled": True}},
     )
-    await gmod._build(no_graph_config_repo)
+    await gmod._build(no_graph_config_repo, load_config(no_graph_config_repo))
 
     def boom(*_a, **_k):
         raise AssertionError("serve must not rebuild when the graph already exists")
 
-    monkeypatch.setattr(gmod, "_autoscan", boom)
+    monkeypatch.setattr(gmod, "autoscan", boom)
     monkeypatch.setattr(gmod, "_build", boom)
     html = await gmod._serve_html(
         no_graph_config_repo, rebuild=False, report=lambda _m: None

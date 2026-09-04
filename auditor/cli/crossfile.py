@@ -4,13 +4,13 @@ from pathlib import Path
 
 import typer
 
-from auditor import crossfile as crossfile_pass
 from auditor.cli.apps import app
-from auditor.cli.helpers import open_index, present, run
+from auditor.cli.helpers import cli_root, load_settings, open_index, present, run
 from auditor.cli.options import DirTarget
+from auditor.cli.payloads import CrossfileReport
 from auditor.cli.render import render_crossfile
-from auditor.config import load_config
-from auditor.discovery import find_root
+from auditor.crossfile import CrossFileInputs
+from auditor.ignores import IgnoreList
 
 
 @app.command()
@@ -19,17 +19,18 @@ def crossfile(
     json_: bool = typer.Option(False, "--json", help="Emit raw JSON."),
 ) -> None:
     """Recompute cross-file duplicate findings from the index."""
-    root = find_root(target)
+    root = cli_root(target)
     count = run(_crossfile(root), "cross-file pass…")
-    present({"cross_file_findings": count}, render_crossfile, as_json=json_)
+    present(CrossfileReport(cross_file_findings=count), render_crossfile, as_json=json_)
 
 
 async def _crossfile(root: Path) -> int:
-    settings = load_config(root)
+    inputs = CrossFileInputs.derive(root, load_settings(root))
     async with await open_index(root) as index:
-        per_file = await crossfile_pass.run(
-            index,
-            settings_modules=settings.settings_modules,
-            settings_cohesion_on=settings.settings_cohesion,
-        )
-        return sum(len(v) for v in per_file.values())
+        per_file = await inputs.recompute(index)
+        ignores = IgnoreList.from_rows(await index.ignores.list())
+        total = 0
+        for rel, findings in per_file.items():
+            kept, _ = inputs.apply_skips(rel, findings)
+            total += len(ignores.kept(rel, kept))
+        return total

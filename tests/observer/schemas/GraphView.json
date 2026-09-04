@@ -1,0 +1,36 @@
+{
+  "description": "The visualization document `viz.build_payload` owns, unchanged, plus which repo it is.\n\nLeft an open object on purpose (P12): `auditor/graph/ui/` is written against that contract and\na second declaration of it here is a second thing to keep in step.",
+  "properties": {
+    "graph": {
+      "additionalProperties": true,
+      "title": "Graph",
+      "type": "object"
+    },
+    "identity": {
+      "title": "Identity",
+      "type": "string"
+    },
+    "node_cap": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Node Cap"
+    },
+    "repo": {
+      "title": "Repo",
+      "type": "string"
+    }
+  },
+  "required": [
+    "repo",
+    "identity"
+  ],
+  "title": "GraphView",
+  "type": "object"
+}

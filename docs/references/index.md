@@ -19,6 +19,9 @@ auditr index repos
 # drop this repo's rows from the shared index
 auditr index forget
 
+# same, when the repo has persistent ignores the cascade would delete too
+auditr index forget --yes
+
 # act on another checkout instead of the working directory
 auditr index list -r ../other-repo
 
@@ -49,10 +52,14 @@ auditr index list --json
   in, so they do not show up in `list` yet.
 - `list` returns one row per scanned file: path, content hash, line count, language, role, last
   scan time, per-severity finding counts, and the doc path when one is recorded.
+- The pretty table's `findings` column is the total across every severity for that file.
 - `repos` lists each registered repo with its name and last-scan time.
 - `forget` deletes this repo's registry row. Everything that references it cascades with it: the
   cached files, findings, shapes, and graph rows, and the repo's persistent ignores
   ([ignore.md](ignore.md)). It is not undone by a rescan.
+- Because the ignores are authored state and not cache, `forget` refuses when the repo has any
+  and prints how many, plus the `auditr ignore list -r ...` command that reviews them. Pass
+  `-y`/`--yes` to confirm; a repo with no ignores needs no flag.
 
 ## Populating and pruning
 
@@ -61,4 +68,9 @@ auditr index list --json
 - A scan prunes indexed files under the scanned prefix that no longer exist or are now excluded,
   so a subdirectory scan never evicts files outside it.
 - The derived tables are a cache. On a schema-version bump they are dropped and rebuilt by the
-  next scan, while the repo registry and the persistent ignores are preserved.
+  next scan.
+- Preserved across that bump: the repo registry, the persistent ignores, and the identity tables
+  (`graph_runs`, `graph_refinements`, `graph_refinement_anchors`, `graph_tuning`, `graph_evals`).
+  A column added to one of them is reconciled with `ALTER TABLE` on the next connect.
+- The identity tables key on the checkout, not on the repo partition, so every worktree of one
+  checkout shares them and `forget` cannot cascade into them.

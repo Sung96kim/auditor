@@ -5,8 +5,12 @@ html, body, #root {
   width: 100%;
   height: 100%;
 }
+html {
+  /* the UA draws its own controls: the select, the range track and the checkboxes follow this */
+  color-scheme: dark;
+}
 body {
-  background: #0B0E14;          /* THEME.bgApp — no flash/gap behind the app */
+  background: #0B0E14;          /* THEME.bgApp, so there is no flash or gap behind the app */
   overflow: hidden;            /* app manages its own scrolling */
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: #E6EDF5;
@@ -35,4 +39,10 @@ body {
 }
 *::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* keyboard focus is visible on every control the panels ship, not only the search box */
+:focus-visible {
+  outline: 2px solid rgba(124, 124, 255, 0.55);
+  outline-offset: 2px;
 }

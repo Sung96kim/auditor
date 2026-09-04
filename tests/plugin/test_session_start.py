@@ -7,7 +7,7 @@ SCRIPT = Path(__file__).resolve().parents[2] / "plugin" / "hooks" / "session_sta
 
 
 def _run(payload: dict, path_has_auditr: bool, tmp_path: Path) -> str:
-    env = {"PATH": "/usr/bin"}
+    env = {"PATH": "/usr/bin", "AUDITOR_OBSERVER": "0"}
     if path_has_auditr:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir(exist_ok=True)
@@ -82,3 +82,64 @@ def test_silent_on_non_dict_json(tmp_path):
     )
     assert proc.stdout.strip() == ""
     assert proc.returncode == 0
+
+
+def _run_with(payload: dict, path: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env={"PATH": path},
+    )
+
+
+def test_delegates_the_attach_to_the_observer_client(recorder):
+    stub = recorder("auditr-observer")
+    payload = {"cwd": "/repo", "session_id": "s1"}
+    assert _run_with(payload, stub.path()).returncode == 0
+    assert stub.calls() == [
+        {
+            "argv": ["hook", "session-start", "--client", "claude-code"],
+            "stdin": json.dumps(payload),
+        }
+    ]
+
+
+def test_says_once_that_the_observer_client_is_not_installed():
+    """No `uvx` ladder (P28): a hook budget cannot absorb a package resolve, so the honest answer
+    is one line on stderr, from the one hook that runs once per session."""
+    done = _run_with({"cwd": "/repo", "session_id": "s1"}, "/usr/bin")
+    assert done.returncode == 0
+    assert done.stdout.strip() == ""
+    assert "auditr-observer" in done.stderr
+
+
+def test_the_observer_runs_even_when_auditr_itself_is_absent(recorder, tmp_path):
+    """The two halves are independent: `auditr` gates the context line, not the attach.
+
+    Both sides of that claim, because only the absent one is what the delegation test above
+    already covers: with `auditr` on PATH the same payload attaches *and* emits a context line,
+    so the attach is what stays constant while the context line comes and goes.
+    """
+    stub = recorder("auditr-observer")
+    absent = _run_with({"cwd": "/repo", "session_id": "s1"}, stub.path())
+    assert absent.stdout.strip() == ""
+    assert len(stub.calls()) == 1
+
+    (stub.bin_dir / "auditr").write_text("#!/bin/sh\nexit 0\n")
+    (stub.bin_dir / "auditr").chmod(0o755)
+    present = _run_with({"cwd": str(tmp_path), "session_id": "s1"}, stub.path())
+    assert "additionalContext" in present.stdout
+    assert len(stub.calls()) == 2
+
+
+def test_the_context_line_is_appended_to_never_substituted(tmp_path):
+    """Spec 13.1: the shipped sentence survives, and the graph surfaces are added after it."""
+    (tmp_path / ".auditor").mkdir()
+    (tmp_path / ".auditor" / "config.toml").write_text("")
+    out = _run({"cwd": str(tmp_path)}, path_has_auditr=True, tmp_path=tmp_path)
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "/auditor:judge-findings" in ctx and "/auditor:audit-changes" in ctx
+    assert ctx.index("/auditor:judge-findings") < ctx.index("/auditor:explore-graph")
+    assert "/auditor:graph-observer" in ctx

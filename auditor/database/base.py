@@ -10,15 +10,42 @@ import queue
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
+from auditor.models import Partition
+
 _LOCK_RETRIES = 60
 _LOCK_BACKOFF = 0.05
+
+_T = TypeVar("_T")
+
+
+def immediate(
+    fn: Callable[[sqlite3.Connection], _T],
+) -> Callable[[sqlite3.Connection], _T]:
+    """Wrap one worker op so everything it writes lands as a single IMMEDIATE commit.
+
+    IMMEDIATE rather than the DEFERRED begin pysqlite would take at the first write, so an ``fn``
+    that reads before it writes holds the write lock from that first read. ``fn`` must not commit.
+    """
+
+    @functools.wraps(fn)
+    def op(conn: sqlite3.Connection) -> _T:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            result = fn(conn)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        return result
+
+    return op
 
 
 class Column(BaseModel):
@@ -53,6 +80,19 @@ REPO_FK = Column(
 )
 
 
+class UnmigratableColumn(RuntimeError):
+    """A ``cache=False`` table declares a column SQLite cannot add to an existing table.
+
+    Raised by ``IndexStore._migrate_identity_tables``, which runs on every connect for every repo,
+    so the fix is always to change the declaration rather than the database.
+    """
+
+    def __init__(self, table: str, column: str, why: str) -> None:
+        super().__init__(f"{table}.{column} cannot be added by ALTER TABLE: {why}")
+        self.table = table
+        self.column = column
+
+
 class Index(BaseModel):
     """Declarative index on a table."""
 
@@ -82,17 +122,28 @@ class Table(BaseModel):
         lead = ("repo",) if (self.repo_fk and body) else ()
         return (*lead, *body)
 
+    def declared_columns(self) -> tuple[Column, ...]:
+        """Every column object in DDL order, the repo FK first when ``repo_fk``."""
+        return (REPO_FK, *self.cols) if self.repo_fk else self.cols
+
     def insert_columns(self) -> tuple[str, ...]:
         """Column names for an INSERT — repo prepended when repo_fk; autoincrement cols excluded."""
-        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
-        return tuple(c.name for c in cols if not c.autoincrement)
+        return tuple(c.name for c in self.declared_columns() if not c.autoincrement)
+
+    def column_names(self) -> tuple[str, ...]:
+        """Every declared column, in DDL order — the repo FK first when ``repo_fk``."""
+        return tuple(c.name for c in self.declared_columns())
 
     def placeholders(self) -> str:
         return ", ".join("?" * len(self.insert_columns()))
 
-    def render(self, name: str) -> str:
-        """The CREATE TABLE/INDEX statements for this table under ``name``."""
-        cols = [REPO_FK, *self.cols] if self.repo_fk else list(self.cols)
+    def statements(self, name: str) -> tuple[str, ...]:
+        """The CREATE TABLE and CREATE INDEX statements for this table under ``name``.
+
+        One statement per element, so a caller can run them inside a transaction;
+        ``executescript`` would commit first.
+        """
+        cols = self.declared_columns()
         body = ",\n    ".join(c.render() for c in cols)
         pk = self.pk_names()
         single_auto = len(pk) == 1 and any(
@@ -100,9 +151,14 @@ class Table(BaseModel):
         )
         if pk and not single_auto:
             body += f",\n    PRIMARY KEY ({', '.join(pk)})"
-        stmts = [f"CREATE TABLE IF NOT EXISTS {name} (\n    {body}\n);"]
-        stmts += [ix.render(name) for ix in self.indexes]
-        return "\n".join(stmts)
+        return (
+            f"CREATE TABLE IF NOT EXISTS {name} (\n    {body}\n);",
+            *(ix.render(name) for ix in self.indexes),
+        )
+
+    def render(self, name: str) -> str:
+        """The CREATE TABLE/INDEX statements for this table under ``name``, as one script."""
+        return "\n".join(self.statements(name))
 
 
 def retry_on_locked(fn: Any) -> Any:
@@ -126,7 +182,7 @@ def retry_on_locked(fn: Any) -> Any:
     return wrapper
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 8
 DEFAULT_REPO = (
     "."  # single-partition fallback when no repo is given (unit tests, ad-hoc dbs)
 )
@@ -196,9 +252,48 @@ class BaseDB:
         if not cls.__dict__.get("facade"):
             BaseDB._registry.append(cls)
 
-    def __init__(self, worker: "SqliteWorker", repo: str) -> None:
+    def __init__(
+        self, worker: "SqliteWorker", repo: str, partition: Partition | None = None
+    ) -> None:
         self._worker = worker
         self.repo = repo
+        # outside git the identity is the partition key itself (spec 5.2)
+        self.partition = (
+            partition if partition is not None else Partition(identity=repo)
+        )
+
+    def insert_sql(
+        self, table_name: str, values: Mapping[str, Any]
+    ) -> tuple[str, tuple[Any, ...]]:
+        """SQL and binds for one row, ordered by the table declaration rather than by the caller.
+
+        Raises KeyError naming the columns when ``values`` and the declaration disagree, so a
+        column added to or reordered in TABLES cannot silently write a transposed row.
+        """
+        sql, binds = self.insert_many_sql(table_name, (values,))
+        return sql, binds[0]
+
+    def insert_many_sql(
+        self,
+        table_name: str,
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        or_replace: bool = False,
+    ) -> tuple[str, list[tuple[Any, ...]]]:
+        """:meth:`insert_sql` for an ``executemany``: one statement and one bind tuple per row."""
+        table = self.TABLES[table_name]
+        cols = table.insert_columns()
+        binds = []
+        for values in rows:
+            if set(cols) != values.keys():
+                raise KeyError(
+                    f"{table_name}: missing {sorted(set(cols) - values.keys())}, "
+                    f"unknown {sorted(values.keys() - set(cols))}"
+                )
+            binds.append(tuple(values[c] for c in cols))
+        verb = "INSERT OR REPLACE INTO" if or_replace else "INSERT INTO"
+        sql = f"{verb} {table_name} ({', '.join(cols)}) VALUES ({table.placeholders()})"  # noqa: S608  (table and column names come from the Table declaration)
+        return sql, binds
 
     def _ensure_repo(self, conn: sqlite3.Connection) -> None:
         name = Path(self.repo).name or self.repo
@@ -221,4 +316,21 @@ class BaseDB:
         """:meth:`_fetch` for a single row (or ``None``); binds ``self.repo`` first, as above."""
         return await self._worker.run(
             lambda c: c.execute(sql, (self.repo, *params)).fetchone()
+        )
+
+    async def _fetch_by_identity(
+        self, sql: str, params: tuple[Any, ...] = ()
+    ) -> list[sqlite3.Row]:
+        """:meth:`_fetch` for the identity tables: binds ``self.partition.identity`` as the first
+        ``?``, so the first placeholder in ``sql`` must be the identity."""
+        return await self._worker.run(
+            lambda c: c.execute(sql, (self.partition.identity, *params)).fetchall()
+        )
+
+    async def _fetch_one_by_identity(
+        self, sql: str, params: tuple[Any, ...] = ()
+    ) -> sqlite3.Row | None:
+        """:meth:`_fetch_by_identity` for a single row (or ``None``)."""
+        return await self._worker.run(
+            lambda c: c.execute(sql, (self.partition.identity, *params)).fetchone()
         )
