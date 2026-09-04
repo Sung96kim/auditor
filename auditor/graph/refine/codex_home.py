@@ -102,6 +102,8 @@ class CodexHome(BaseModel):
             "",
             "[features]",
             "codex_hooks = false",
+            # builtin codex_apps would add a second MCP server and trip Invariant 4's exact-server guard.
+            "apps = false",
             "",
             f"[projects.{json.dumps(str(self.root))}]",
             'trust_level = "trusted"',

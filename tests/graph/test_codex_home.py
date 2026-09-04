@@ -38,7 +38,13 @@ def test_the_config_states_every_fact_invariant_4_needs(home):
     data = parsed(home)
     assert data["model"] == "gpt-5.1-codex"
     assert data["features"]["codex_hooks"] is False
+    assert data["features"]["apps"] is False
     assert data["projects"][str(home.root)]["trust_level"] == "trusted"
+
+
+def test_the_builtin_apps_server_is_turned_off_so_invariant_4_sees_one_server(home):
+    """A real 0.147 run registers codex_apps by default; Invariant 4 refuses any server but graph."""
+    assert parsed(home)["features"]["apps"] is False
 
 
 def test_there_is_exactly_one_mcp_server_and_it_is_this_run_s_shim(home):
